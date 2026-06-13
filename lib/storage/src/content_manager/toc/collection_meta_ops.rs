@@ -397,14 +397,15 @@ impl TableOfContent {
                 "Can't handle resharding, this is a single node deployment",
             ));
         };
+        let collection_config = collection.config_snapshot().await;
+        reject_private_oram_resharding_until_supported(
+            &collection_id,
+            &collection_config.params,
+            &operation,
+        )?;
 
         match operation {
             ReshardingOperation::Start(key) => {
-                let collection_config = collection.config_snapshot().await;
-                reject_private_oram_resharding_start_until_supported(
-                    &collection_id,
-                    &collection_config.params,
-                )?;
                 if collection_params_require_crypto_runtime_transfer_parity(
                     &collection_config.params,
                 ) {
@@ -736,8 +737,16 @@ impl TableOfContent {
         &self,
         operation: SetShardReplicaState,
     ) -> Result<(), StorageError> {
-        self.get_collection_unchecked(&operation.collection_name)
-            .await?
+        let collection = self
+            .get_collection_unchecked(&operation.collection_name)
+            .await?;
+        let collection_config = collection.config_snapshot().await;
+        reject_private_oram_resharding_replica_state_until_supported(
+            &operation.collection_name,
+            &collection_config.params,
+            &operation,
+        )?;
+        collection
             .set_shard_replica_state(
                 operation.shard_id,
                 operation.peer_id,
@@ -853,11 +862,14 @@ fn reject_private_oram_shard_transfer_until_supported(
     )))
 }
 
-fn reject_private_oram_resharding_start_until_supported(
+fn reject_private_oram_resharding_until_supported(
     collection_id: &str,
     params: &CollectionParams,
+    operation: &ReshardingOperation,
 ) -> Result<(), StorageError> {
-    if !collection_params_use_private_oram_bucket_store(params) {
+    if !collection_params_use_private_oram_bucket_store(params)
+        || matches!(operation, ReshardingOperation::Abort(_))
+    {
         return Ok(());
     }
 
@@ -866,6 +878,35 @@ fn reject_private_oram_resharding_start_until_supported(
          encrypted ORAM bucket migration and consensus-backed epoch/root ownership are not \
          implemented; keep the private ORAM collection on the current shard layout",
     )))
+}
+
+fn reject_private_oram_resharding_replica_state_until_supported(
+    collection_id: &str,
+    params: &CollectionParams,
+    operation: &SetShardReplicaState,
+) -> Result<(), StorageError> {
+    if !collection_params_use_private_oram_bucket_store(params)
+        || !replica_state_operation_touches_resharding_state(operation)
+    {
+        return Ok(());
+    }
+
+    Err(StorageError::bad_input(format!(
+        "private ORAM resharding replica state progress is not supported for collection \
+         {collection_id}: encrypted ORAM bucket migration and consensus-backed epoch/root \
+         ownership are not implemented; abort resharding or keep the private ORAM collection on \
+         the current shard layout",
+    )))
+}
+
+fn replica_state_operation_touches_resharding_state(operation: &SetShardReplicaState) -> bool {
+    matches!(
+        operation.state,
+        ReplicaState::Resharding | ReplicaState::ReshardingScaleDown
+    ) || matches!(
+        operation.from_state,
+        Some(ReplicaState::Resharding | ReplicaState::ReshardingScaleDown)
+    )
 }
 
 fn collection_params_use_private_oram_bucket_store(params: &CollectionParams) -> bool {
@@ -976,22 +1017,29 @@ mod tests {
         CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
         EncryptionSelector,
     };
+    use collection::operations::cluster_ops::ReshardingDirection;
     use collection::operations::types::PeerMetadata;
+    use collection::shards::replica_set::replica_set_state::ReplicaState;
+    use collection::shards::resharding::ReshardKey;
     use collection::shards::shard::PeerId;
     use collection::shards::transfer::{
         ShardTransfer, ShardTransferKey, ShardTransferMethod, ShardTransferRestart,
     };
+    use uuid::Uuid;
 
     use super::{
         PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING,
         collection_params_require_crypto_runtime_transfer_parity,
-        reject_private_oram_resharding_start_until_supported,
+        reject_private_oram_resharding_replica_state_until_supported,
+        reject_private_oram_resharding_until_supported,
         reject_private_oram_shard_transfer_until_supported,
         validate_encrypted_create_shard_key_crypto_runtime_parity,
         validate_encrypted_resharding_crypto_runtime_parity,
         validate_encrypted_transfer_crypto_runtime_parity,
     };
-    use crate::content_manager::collection_meta_ops::ShardTransferOperations;
+    use crate::content_manager::collection_meta_ops::{
+        ReshardingOperation, SetShardReplicaState, ShardTransferOperations,
+    };
 
     #[test]
     fn encrypted_collection_requires_transfer_parity_enforcement() {
@@ -1151,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_consensus_resharding_start_fails_closed_until_bucket_migration_exists() {
+    fn private_oram_consensus_resharding_progress_fails_closed_until_bucket_migration_exists() {
         let private_hnsw_params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
@@ -1188,22 +1236,81 @@ mod tests {
             }),
             ..CollectionParams::empty()
         };
+        let key = ReshardKey {
+            uuid: Uuid::from_u128(99),
+            direction: ReshardingDirection::Up,
+            peer_id: 2,
+            shard_id: 1,
+            shard_key: None,
+        };
+        let progressing_operations = [
+            ReshardingOperation::Start(key.clone()),
+            ReshardingOperation::CommitRead(key.clone()),
+            ReshardingOperation::CommitWrite(key.clone()),
+            ReshardingOperation::Finish(key.clone()),
+        ];
 
         for (label, params) in [
             ("private HNSW ORAM", private_hnsw_params),
             ("private result ORAM", private_result_params),
         ] {
-            let err = reject_private_oram_resharding_start_until_supported("docs", &params)
-                .expect_err("private ORAM resharding start must fail closed");
+            for operation in &progressing_operations {
+                let err =
+                    reject_private_oram_resharding_until_supported("docs", &params, operation)
+                        .expect_err("private ORAM resharding progress must fail closed");
+                assert!(
+                    err.to_string().contains("private ORAM resharding")
+                        && err.to_string().contains("encrypted ORAM bucket migration"),
+                    "unexpected {label} resharding error for {operation:?}: {err}",
+                );
+            }
+
+            reject_private_oram_resharding_until_supported(
+                "docs",
+                &params,
+                &ReshardingOperation::Abort(key.clone()),
+            )
+            .expect("abort must remain available to clean up unsupported private ORAM resharding");
+
+            let replica_progress = SetShardReplicaState {
+                collection_name: "docs".to_string(),
+                shard_id: 1,
+                peer_id: 2,
+                state: ReplicaState::Active,
+                from_state: Some(ReplicaState::Resharding),
+            };
+            let err = reject_private_oram_resharding_replica_state_until_supported(
+                "docs",
+                &params,
+                &replica_progress,
+            )
+            .expect_err("private ORAM resharding replica-state progress must fail closed");
             assert!(
-                err.to_string().contains("private ORAM resharding")
+                err.to_string()
+                    .contains("private ORAM resharding replica state progress")
                     && err.to_string().contains("encrypted ORAM bucket migration"),
-                "unexpected {label} resharding error: {err}",
+                "unexpected {label} replica-state error: {err}",
             );
         }
 
-        reject_private_oram_resharding_start_until_supported("docs", &CollectionParams::empty())
-            .expect("ordinary collection resharding guard must stay open");
+        reject_private_oram_resharding_until_supported(
+            "docs",
+            &CollectionParams::empty(),
+            &ReshardingOperation::Start(key.clone()),
+        )
+        .expect("ordinary collection resharding guard must stay open");
+        reject_private_oram_resharding_replica_state_until_supported(
+            "docs",
+            &CollectionParams::empty(),
+            &SetShardReplicaState {
+                collection_name: "docs".to_string(),
+                shard_id: 1,
+                peer_id: 2,
+                state: ReplicaState::Active,
+                from_state: Some(ReplicaState::Resharding),
+            },
+        )
+        .expect("ordinary collection replica-state guard must stay open");
     }
 
     #[test]

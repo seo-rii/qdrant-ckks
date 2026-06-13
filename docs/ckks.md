@@ -1140,10 +1140,12 @@ those private indexes as collection-level encrypted ORAM buckets, and shard
 transfer does not yet copy bucket files or move epoch/root ownership through
 consensus, so transfer start operations fail closed instead of producing a
 partial private index on the receiver.
-Resharding start is blocked for the same collection shape. The current
-resharding data path migrates point payload/vector records through a shard proxy,
-but it does not migrate collection-local private ORAM bucket stores or establish
-consensus-backed epoch/root ownership for the new shard layout.
+Resharding start and progress operations are blocked for the same collection
+shape. The current resharding data path migrates point payload/vector records
+through a shard proxy, but it does not migrate collection-local private ORAM
+bucket stores or establish consensus-backed epoch/root ownership for the new
+shard layout. `AbortResharding` remains allowed for cleanup, while commit,
+finish, and replica-state progress from resharding states fail closed.
 Manual shard snapshot creation, streaming, partial snapshot manifests, and shard
 snapshot recovery fail closed for the same reason: shard snapshots do not yet
 carry the collection-local private ORAM bucket store with epoch/root parity. Use
@@ -1152,10 +1154,11 @@ shard-level bucket parity is implemented.
 Automatic dead-replica shard transfer recovery also skips private ORAM bucket
 store collections for the same reason; parity alone is insufficient until bucket
 movement and epoch/root ownership are consensus-backed. As a final guard,
-existing consensus transfer records for private ORAM collections are
-rejected before the local transfer task starts moving shard data or the transfer
-progresses replica state. `Abort` remains allowed so unsupported transfer records
-can be cleaned up without moving encrypted ORAM buckets.
+existing consensus transfer and resharding progress records for private ORAM
+collections are rejected before the local transfer task starts moving shard data,
+the transfer progresses replica state, or resharding commits hash-ring or
+replica-state progress. `Abort` remains allowed so unsupported transfer and
+resharding records can be cleaned up without moving encrypted ORAM buckets.
 Distributed private HNSW ORAM sessions themselves fail closed in this MVP until
 epoch/root CAS is backed by consensus rather than node-local files.
 

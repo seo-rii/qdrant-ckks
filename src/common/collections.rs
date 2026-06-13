@@ -312,6 +312,16 @@ pub async fn do_update_collection_cluster(
         .await?;
 
     let collection_state = collection.state().await;
+    reject_private_oram_cluster_transfer_until_supported(
+        &collection_name,
+        &collection_state.config,
+        &operation,
+    )?;
+    reject_private_oram_cluster_resharding_until_supported(
+        &collection_name,
+        &collection_state.config,
+        &operation,
+    )?;
     let peer_metadata_by_id = consensus_state.persistent.read().peer_metadata_by_id();
     validate_encrypted_cluster_data_movement_parity(
         &collection_name,
@@ -324,16 +334,6 @@ pub async fn do_update_collection_cluster(
         consensus_state.persistent.read().this_peer_id(),
         &get_all_peer_ids(),
         &peer_metadata_by_id,
-    )?;
-    reject_private_oram_cluster_transfer_until_supported(
-        &collection_name,
-        &collection_state.config,
-        &operation,
-    )?;
-    reject_private_oram_cluster_resharding_until_supported(
-        &collection_name,
-        &collection_state.config,
-        &operation,
     )?;
 
     match operation {
@@ -1140,7 +1140,7 @@ fn reject_private_oram_cluster_resharding_until_supported(
     config: &CollectionConfigInternal,
     operation: &ClusterOperations,
 ) -> Result<(), StorageError> {
-    if !matches!(operation, ClusterOperations::StartResharding(_))
+    if !cluster_operation_progresses_resharding(operation)
         || !collection_uses_private_oram_bucket_store(config)
     {
         return Ok(());
@@ -1154,6 +1154,17 @@ fn reject_private_oram_cluster_resharding_until_supported(
              private ORAM collection on the current shard layout",
         ),
     })
+}
+
+fn cluster_operation_progresses_resharding(operation: &ClusterOperations) -> bool {
+    matches!(
+        operation,
+        ClusterOperations::StartResharding(_)
+            | ClusterOperations::FinishMigratingPoints(_)
+            | ClusterOperations::CommitReadHashRing(_)
+            | ClusterOperations::CommitWriteHashRing(_)
+            | ClusterOperations::FinishResharding(_)
+    )
 }
 
 fn cluster_operation_starts_shard_transfer(operation: &ClusterOperations) -> bool {
@@ -1398,15 +1409,51 @@ mod tests {
         ]
     }
 
-    fn private_oram_start_resharding_operation() -> ClusterOperations {
-        ClusterOperations::StartResharding(
-            collection::operations::cluster_ops::StartReshardingOperation {
-                start_resharding: StartResharding {
-                    uuid: Some(Uuid::from_u128(99)),
-                    direction: ReshardingDirection::Up,
-                    peer_id: Some(2),
-                    shard_key: None,
+    fn private_oram_resharding_progress_operations() -> Vec<ClusterOperations> {
+        vec![
+            ClusterOperations::StartResharding(
+                collection::operations::cluster_ops::StartReshardingOperation {
+                    start_resharding: StartResharding {
+                        uuid: Some(Uuid::from_u128(99)),
+                        direction: ReshardingDirection::Up,
+                        peer_id: Some(2),
+                        shard_key: None,
+                    },
                 },
+            ),
+            ClusterOperations::FinishMigratingPoints(
+                collection::operations::cluster_ops::FinishMigratingPointsOperation {
+                    finish_migrating_points:
+                        collection::operations::cluster_ops::FinishMigratingPoints {
+                            shard_id: Some(1),
+                            peer_id: Some(2),
+                        },
+                },
+            ),
+            ClusterOperations::CommitReadHashRing(
+                collection::operations::cluster_ops::CommitReadHashRingOperation {
+                    commit_read_hash_ring:
+                        collection::operations::cluster_ops::CommitReadHashRing {},
+                },
+            ),
+            ClusterOperations::CommitWriteHashRing(
+                collection::operations::cluster_ops::CommitWriteHashRingOperation {
+                    commit_write_hash_ring:
+                        collection::operations::cluster_ops::CommitWriteHashRing {},
+                },
+            ),
+            ClusterOperations::FinishResharding(
+                collection::operations::cluster_ops::FinishReshardingOperation {
+                    finish_resharding: collection::operations::cluster_ops::FinishResharding {},
+                },
+            ),
+        ]
+    }
+
+    fn private_oram_abort_resharding_operation() -> ClusterOperations {
+        ClusterOperations::AbortResharding(
+            collection::operations::cluster_ops::AbortReshardingOperation {
+                abort_resharding: collection::operations::cluster_ops::AbortResharding {},
             },
         )
     }
@@ -1527,9 +1574,7 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_resharding_guard_blocks_start_until_bucket_migration_supported() {
-        let operation = private_oram_start_resharding_operation();
-
+    fn private_oram_resharding_guard_blocks_progress_until_bucket_migration_supported() {
         for (label, config) in [
             ("private HNSW ORAM", private_hnsw_collection_config()),
             (
@@ -1537,16 +1582,19 @@ mod tests {
                 private_result_oram_collection_config(),
             ),
         ] {
-            let err =
-                reject_private_oram_cluster_resharding_until_supported("docs", &config, &operation)
-                    .unwrap_err();
-            assert!(
-                err.to_string().contains("encrypted ORAM bucket migration")
-                    && err
-                        .to_string()
-                        .contains("consensus-backed epoch/root ownership"),
-                "unexpected {label} resharding error: {err}",
-            );
+            for operation in private_oram_resharding_progress_operations() {
+                let err = reject_private_oram_cluster_resharding_until_supported(
+                    "docs", &config, &operation,
+                )
+                .unwrap_err();
+                assert!(
+                    err.to_string().contains("encrypted ORAM bucket migration")
+                        && err
+                            .to_string()
+                            .contains("consensus-backed epoch/root ownership"),
+                    "unexpected {label} resharding error for {operation:?}: {err}",
+                );
+            }
         }
     }
 
@@ -1573,6 +1621,20 @@ mod tests {
             &abort_transfer,
         )
         .expect("private result ORAM transfer cleanup abort must remain allowed");
+
+        let abort_resharding = private_oram_abort_resharding_operation();
+        reject_private_oram_cluster_resharding_until_supported(
+            "docs",
+            &private_hnsw_collection_config(),
+            &abort_resharding,
+        )
+        .expect("private HNSW ORAM resharding cleanup abort must remain allowed");
+        reject_private_oram_cluster_resharding_until_supported(
+            "docs",
+            &private_result_oram_collection_config(),
+            &abort_resharding,
+        )
+        .expect("private result ORAM resharding cleanup abort must remain allowed");
     }
 
     #[test]
