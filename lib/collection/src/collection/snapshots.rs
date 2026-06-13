@@ -1663,6 +1663,36 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn private_hnsw_oram_snapshot_source_dir_rejects_nested_symlink_without_target_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-snapshot-source-nested-symlink")
+            .tempdir()
+            .unwrap();
+        let buckets_dir = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("buckets");
+        fs::create_dir_all(&buckets_dir).unwrap();
+        fs::write(temp_dir.path().join("outside-hnsw-bucket"), b"outside").unwrap();
+        std::os::unix::fs::symlink(
+            temp_dir.path().join("outside-hnsw-bucket"),
+            buckets_dir.join("00000000.bucket"),
+        )
+        .unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("private HNSW ORAM snapshot source contains a symlink"));
+        assert!(!rendered.contains("outside-hnsw-bucket"));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("00000000.bucket"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn private_result_oram_snapshot_source_dir_rejects_symlink_without_target_leak() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-snapshot-source-symlink")
