@@ -1454,7 +1454,7 @@ fn validate_bucket_read_request(
             "private result ORAM read_buckets request is empty",
         ));
     }
-    let max_bucket_ids = u64::from(manifest.oram.path_batch_size)
+    let expected_bucket_ids = u64::from(manifest.oram.path_batch_size)
         .checked_mul(u64::from(manifest.oram.tree_height).saturating_add(1))
         .ok_or_else(|| {
             StorageError::bad_request("private result ORAM read_buckets budget is invalid")
@@ -1470,11 +1470,6 @@ fn validate_bucket_read_request(
             "private result ORAM read_buckets must contain whole ORAM paths",
         ));
     }
-    if u64::try_from(bucket_ids.len()).unwrap_or(u64::MAX) > max_bucket_ids {
-        return Err(StorageError::bad_request(
-            "private result ORAM read_buckets request exceeds fixed path budget",
-        ));
-    }
     for &bucket_id in bucket_ids {
         if bucket_id >= manifest.bucket_count {
             return Err(StorageError::bad_request(
@@ -1484,6 +1479,11 @@ fn validate_bucket_read_request(
     }
     for path in bucket_ids.chunks(path_len) {
         validate_bucket_read_path_shape(path)?;
+    }
+    if u64::try_from(bucket_ids.len()).unwrap_or(u64::MAX) != expected_bucket_ids {
+        return Err(StorageError::bad_request(
+            "private result ORAM read_buckets request must match fixed path budget",
+        ));
     }
     Ok(())
 }
@@ -1822,6 +1822,11 @@ mod private_result_oram_tests {
 
         let deduped = validate_bucket_read_request(&manifest, &[0, 1, 3, 4]).unwrap_err();
         assert!(deduped.to_string().contains("whole ORAM paths"));
+
+        let under_budget = validate_bucket_read_request(&manifest, &[0, 1, 3]).unwrap_err();
+        let rendered = under_budget.to_string();
+        assert!(rendered.contains("fixed path budget"));
+        assert!(!rendered.contains("3"), "{rendered}");
 
         let malformed_path = validate_bucket_read_request(&manifest, &[0, 2, 3]).unwrap_err();
         let rendered = malformed_path.to_string();

@@ -1546,6 +1546,30 @@ mod private_result_oram_grpc_tests {
                     .contains(&fixture.buckets[0].ciphertext)
             );
 
+            let under_budget_bucket_ids = vec![0, 1, 3];
+            let under_budget_read = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: under_budget_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(
+                        fixture.read_signature(&under_budget_bucket_ids),
+                    )),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(under_budget_read.code(), Code::InvalidArgument);
+            assert!(under_budget_read.message().contains("fixed path budget"));
+            assert!(
+                !under_budget_read
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
+            );
+
             let unknown_read_session_sentinel = "read-session-id-sentinel";
             let unknown_read = PrivateResultOram::read_private_result_oram_buckets(
                 &service,

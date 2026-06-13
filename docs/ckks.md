@@ -917,8 +917,9 @@ token batch through the client-held token-position map into session
 `read_buckets` bucket-id sequences that preserve shared path bucket duplicates,
 so ORAM path volume is not reduced by deduplicating overlapping paths. Server
 read validation accepts duplicate bucket ids but rejects empty,
-non-whole-path-shaped, non-canonical Path ORAM heap paths, or over-budget
-batches. The crypto crate also exposes canonical `read_buckets`
+non-whole-path-shaped, non-canonical Path ORAM heap paths, or batches that do
+not exactly match the configured fixed path budget. The crypto crate also
+exposes canonical `read_buckets`
 message/sign/verify helpers that bind collection/key lineage, index epoch,
 root hash, bucket count, and the exact padded bucket-id sequence; REST and gRPC
 `read_buckets` handlers now require that signature before encrypted buckets are

@@ -1274,6 +1274,21 @@ mod private_result_oram_rest_tests {
             );
             assert!(!deduped_path_error.contains(&fixture.buckets[0].ciphertext));
 
+            let under_budget_bucket_ids = vec![0, 1, 3];
+            let under_budget_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: under_budget_bucket_ids.clone(),
+                    read_signature: fixture.read_signature(&under_budget_bucket_ids),
+                },
+                StatusCode::BAD_REQUEST,
+                "fixed path budget"
+            );
+            assert!(!under_budget_error.contains(&fixture.buckets[0].ciphertext));
+
             let unknown_read_session_sentinel = "read-session-id-sentinel";
             let unknown_read_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
