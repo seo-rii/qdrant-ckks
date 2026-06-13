@@ -1650,6 +1650,57 @@ mod tests {
                 .to_string(),
             dynamic_close_session_status_map,
         );
+        let mut result_read_status_map = HashMap::new();
+        result_read_status_map.insert(
+            200u16,
+            OperationDurationStatistics {
+                count: 2,
+                ..Default::default()
+            },
+        );
+        rest_methods.insert(
+            "POST /collections/{collection_name}/private-result-oram/oram/read_buckets".to_string(),
+            result_read_status_map,
+        );
+        let mut dynamic_result_read_status_map = HashMap::new();
+        dynamic_result_read_status_map.insert(
+            200u16,
+            OperationDurationStatistics {
+                count: 1,
+                ..Default::default()
+            },
+        );
+        rest_methods.insert(
+            "POST /collections/docs/private-result-oram/oram/read_buckets/bucket-id-sentinel"
+                .to_string(),
+            dynamic_result_read_status_map,
+        );
+        let mut result_close_status_map = HashMap::new();
+        result_close_status_map.insert(
+            200u16,
+            OperationDurationStatistics {
+                count: 1,
+                ..Default::default()
+            },
+        );
+        rest_methods.insert(
+            "POST /collections/{collection_name}/private-result-oram/session/{session_id}/close"
+                .to_string(),
+            result_close_status_map,
+        );
+        let mut dynamic_result_close_status_map = HashMap::new();
+        dynamic_result_close_status_map.insert(
+            200u16,
+            OperationDurationStatistics {
+                count: 1,
+                ..Default::default()
+            },
+        );
+        rest_methods.insert(
+            "POST /collections/docs/private-result-oram/session/result-session-id-sentinel/close"
+                .to_string(),
+            dynamic_result_close_status_map,
+        );
         rest_per_collection.insert("docs".to_string(), rest_methods);
 
         let rest_telemetry = WebApiTelemetry {
@@ -1668,8 +1719,16 @@ mod tests {
         assert!(rest_output.contains(
             "endpoint=\"/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close\"",
         ));
+        assert!(rest_output.contains(
+            "endpoint=\"/collections/{collection_name}/private-result-oram/oram/read_buckets\"",
+        ));
+        assert!(rest_output.contains(
+            "endpoint=\"/collections/{collection_name}/private-result-oram/session/{session_id}/close\"",
+        ));
         assert!(!rest_output.contains("leaf-label-sentinel"));
+        assert!(!rest_output.contains("bucket-id-sentinel"));
         assert!(!rest_output.contains("session-id-sentinel"));
+        assert!(!rest_output.contains("result-session-id-sentinel"));
 
         let mut grpc_per_collection = HashMap::new();
         let mut grpc_methods = HashMap::new();
