@@ -33,5 +33,32 @@ else
     exit 1
 fi
 
+PRIVATE_ORAM_GRPC_METHODS=(
+    "/qdrant.PrivateHnswOram/GetPrivateHnswManifest"
+    "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest"
+    "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets"
+    "/qdrant.PrivateHnswOram/OpenPrivateHnswSession"
+    "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths"
+    "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths"
+    "/qdrant.PrivateHnswOram/ClosePrivateHnswSession"
+    "/qdrant.PrivateResultOram/GetPrivateResultOramManifest"
+    "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest"
+    "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets"
+    "/qdrant.PrivateResultOram/OpenPrivateResultOramSession"
+    "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets"
+    "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets"
+    "/qdrant.PrivateResultOram/ClosePrivateResultOramSession"
+)
+
+for PRIVATE_ORAM_GRPC_METHOD in "${PRIVATE_ORAM_GRPC_METHODS[@]}"; do
+    if ! awk -v method="$PRIVATE_ORAM_GRPC_METHOD" \
+        'index($0, method) { found = 1 } END { exit found ? 0 : 1 }' \
+        ./lib/api/src/grpc/qdrant.rs
+    then
+        echo "ERROR: Missing private ORAM gRPC method: $PRIVATE_ORAM_GRPC_METHOD"
+        exit 1
+    fi
+done
+
 # Cleanup
 rm -f ./lib/api/src/grpc/{.diff.qdrant.rs,proto/.build-trigger.proto}
