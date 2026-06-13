@@ -8563,7 +8563,7 @@ async fn ckks_vector_search_points_matrix(
                 offset: 0,
                 params: None,
                 with_vector: WithVector::Bool(false),
-                with_payload: WithPayloadInterface::Bool(true),
+                with_payload: encrypted_vector_sidecar_payload_selector(),
             },
             read_consistency,
             shard_selection.clone(),
