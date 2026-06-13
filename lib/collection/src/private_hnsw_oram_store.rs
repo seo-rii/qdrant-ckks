@@ -1072,7 +1072,54 @@ fn validate_upload_bundle_with_signature(
 }
 
 fn private_hnsw_client_error(err: qdrant_sec::PrivateHnswClientError) -> CollectionError {
-    CollectionError::bad_request(err.to_string())
+    use qdrant_sec::PrivateHnswClientError;
+
+    let message = match err {
+        PrivateHnswClientError::TooManyNeighbors { .. } => {
+            "private HNSW node block has too many neighbors"
+        }
+        PrivateHnswClientError::UnsupportedBlockVersion(_) => {
+            "private HNSW node block uses unsupported version"
+        }
+        PrivateHnswClientError::UnsupportedVectorEncoding(_) => {
+            "private HNSW node block uses unsupported vector encoding"
+        }
+        PrivateHnswClientError::BucketCiphertextSizeMismatch { .. } => {
+            "private HNSW bucket ciphertext length does not match expected fixed length"
+        }
+        PrivateHnswClientError::UnsupportedBucketCiphertextVersion(_) => {
+            "private HNSW bucket uses unsupported ciphertext version"
+        }
+        PrivateHnswClientError::OramInitialPlacementOverflow { .. } => {
+            "private HNSW ORAM initial placement overflowed path"
+        }
+        PrivateHnswClientError::UnsupportedClientStateSnapshotVersion(_) => {
+            "private HNSW ORAM client state snapshot uses unsupported version"
+        }
+        PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(_) => {
+            "private HNSW ORAM client state uses unsupported ciphertext version"
+        }
+        PrivateHnswClientError::BucketOutOfRange { .. } => {
+            "private HNSW ORAM bucket is out of range"
+        }
+        PrivateHnswClientError::DuplicateBucket { .. } => {
+            "private HNSW ORAM upload contains duplicate bucket"
+        }
+        PrivateHnswClientError::MissingBucket { .. } => {
+            "private HNSW ORAM upload is missing a configured bucket"
+        }
+        PrivateHnswClientError::DuplicateUpdatedBucket { .. } => {
+            "private HNSW ORAM commit bucket appears more than once"
+        }
+        PrivateHnswClientError::StaleBucketEpoch { .. } => {
+            "private HNSW ORAM commit bucket has stale epoch"
+        }
+        PrivateHnswClientError::UnsupportedBucketVersion(_) => {
+            "private HNSW ORAM bucket uses unsupported version"
+        }
+        other => return CollectionError::bad_request(other.to_string()),
+    };
+    CollectionError::bad_request(message)
 }
 
 fn private_hnsw_oram_error(err: qdrant_sec::PrivateHnswOramError) -> CollectionError {
@@ -1384,6 +1431,73 @@ mod tests {
             BASE64URL_NOPAD.encode(bytes),
             BASE64URL_NOPAD.encode(Sha256::digest(bytes).as_ref()),
         )
+    }
+
+    #[test]
+    fn private_hnsw_client_error_mapping_redacts_structured_values() {
+        let cases = [
+            (
+                private_hnsw_client_error(PrivateHnswClientError::TooManyNeighbors {
+                    actual: 777_777,
+                    limit: 888_888,
+                }),
+                vec!["777777", "888888"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::BucketCiphertextSizeMismatch {
+                    bucket_id: 777_777,
+                    expected_bytes: 888_888,
+                    actual_bytes: 999_999,
+                }),
+                vec!["777777", "888888", "999999"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::OramInitialPlacementOverflow {
+                    leaf: 777_777,
+                }),
+                vec!["777777"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::BucketOutOfRange {
+                    bucket_id: 777_777,
+                    bucket_count: 888_888,
+                }),
+                vec!["777777", "888888"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::DuplicateBucket {
+                    bucket_id: 777_777,
+                }),
+                vec!["777777"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::MissingBucket {
+                    bucket_id: 777_777,
+                }),
+                vec!["777777"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::DuplicateUpdatedBucket {
+                    bucket_id: 777_777,
+                }),
+                vec!["777777"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::StaleBucketEpoch {
+                    bucket_id: 777_777,
+                    expected_epoch: 888_888,
+                    actual_epoch: 999_999,
+                }),
+                vec!["777777", "888888", "999999"],
+            ),
+        ];
+
+        for (err, needles) in cases {
+            let rendered = err.to_string();
+            for needle in needles {
+                assert!(!rendered.contains(needle), "{rendered}");
+            }
+        }
     }
 
     fn fixture_store(temp: &TempDir) -> PrivateHnswOramStore {
