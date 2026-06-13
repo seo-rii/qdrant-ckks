@@ -717,6 +717,9 @@ async fn download_shard_snapshot(
         .toc(&auth, &pass)
         .get_collection(&collection_pass)
         .await?;
+    collection
+        .validate_private_oram_shard_snapshot_allowed("shard snapshot download")
+        .await?;
     let snapshots_storage_manager = collection.get_snapshots_storage_manager()?;
     let snapshot_path = collection
         .shards_holder()

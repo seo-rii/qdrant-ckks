@@ -1152,11 +1152,11 @@ collection-local private ORAM buckets or transferring epoch/root ownership.
 Replica removal is also blocked: `drop_replica` and direct replica-set remove
 meta-ops would change local shard ownership without a private ORAM bucket
 ownership protocol.
-Manual shard snapshot creation, streaming, partial snapshot manifests, and shard
-snapshot recovery fail closed for the same reason: shard snapshots do not yet
-carry the collection-local private ORAM bucket store with epoch/root parity. Use
-collection snapshot/restore preflight for private ORAM collections until
-shard-level bucket parity is implemented.
+Manual shard snapshot creation, streaming, download, partial snapshot manifests,
+and shard snapshot recovery fail closed for the same reason: shard snapshots do
+not yet carry the collection-local private ORAM bucket store with epoch/root
+parity. Use collection snapshot/restore preflight for private ORAM collections
+until shard-level bucket parity is implemented.
 Automatic dead-replica shard transfer recovery also skips private ORAM bucket
 store collections for the same reason; parity alone is insufficient until bucket
 movement and epoch/root ownership are consensus-backed. As a final guard,

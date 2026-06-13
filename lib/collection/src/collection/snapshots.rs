@@ -1646,6 +1646,7 @@ mod tests {
         for operation_name in [
             "shard snapshot creation",
             "shard snapshot streaming",
+            "shard snapshot download",
             "shard snapshot recovery",
             "partial shard snapshot manifest",
         ] {
