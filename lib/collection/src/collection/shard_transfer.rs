@@ -613,5 +613,6 @@ mod tests {
         assert!(rendered.contains("encrypted ORAM bucket transfer"));
         assert!(rendered.contains("consensus-backed epoch/root"));
         assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("private_result_oram"));
     }
 }
