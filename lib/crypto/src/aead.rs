@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
@@ -342,6 +343,34 @@ pub struct AeadCipher {
     rk_id: String,
     rk_epoch: Option<u64>,
     key: SecretKey,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct AeadCipherMetadataKey {
+    key_id: String,
+    material_fingerprint: String,
+    rk_id: String,
+    rk_epoch: Option<u64>,
+}
+
+impl AeadCipherMetadataKey {
+    fn from_cipher(cipher: &AeadCipher) -> Self {
+        Self {
+            key_id: cipher.key_id.clone(),
+            material_fingerprint: cipher.material_fingerprint.clone(),
+            rk_id: cipher.rk_id.clone(),
+            rk_epoch: cipher.rk_epoch,
+        }
+    }
+
+    fn from_envelope(envelope: &EncryptedEnvelope) -> Self {
+        Self {
+            key_id: envelope.key_id.clone(),
+            material_fingerprint: envelope.material_fingerprint.clone(),
+            rk_id: envelope.rk_id.clone(),
+            rk_epoch: envelope.rk_epoch,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -706,6 +735,7 @@ impl AeadCipher {
 pub struct AeadKeyring {
     active: AeadCipher,
     retired: Vec<AeadCipher>,
+    retired_by_metadata: HashMap<AeadCipherMetadataKey, usize>,
 }
 
 impl AeadKeyring {
@@ -713,10 +743,15 @@ impl AeadKeyring {
         Self {
             active,
             retired: Vec::new(),
+            retired_by_metadata: HashMap::new(),
         }
     }
 
     pub fn with_retired(mut self, retired: AeadCipher) -> Self {
+        let metadata = AeadCipherMetadataKey::from_cipher(&retired);
+        self.retired_by_metadata
+            .entry(metadata)
+            .or_insert(self.retired.len());
         self.retired.push(retired);
         self
     }
@@ -769,10 +804,10 @@ impl AeadKeyring {
                 .decrypt_with_aad_suffix(envelope, context, aad_suffix);
         }
 
-        for retired in &self.retired {
-            if retired.matches_envelope_metadata(envelope)? {
-                return retired.decrypt_with_aad_suffix(envelope, context, aad_suffix);
-            }
+        let retired_metadata = AeadCipherMetadataKey::from_envelope(envelope);
+        if let Some(&retired_index) = self.retired_by_metadata.get(&retired_metadata) {
+            return self.retired[retired_index]
+                .decrypt_with_aad_suffix(envelope, context, aad_suffix);
         }
 
         Err(EncryptionError::KeyMismatch)

@@ -450,6 +450,35 @@ fn keyring_encrypts_with_active_key_and_decrypts_retired_key() {
 }
 
 #[test]
+fn keyring_decrypts_matching_retired_key_after_unrelated_retired_keys() {
+    let context = payload_context("42");
+    let matching_retired = test_cipher("tenant-a:payload-old", 44, "tenant-a/payload-old@v1");
+    let retired_envelope = matching_retired
+        .encrypt(b"older rotation window", context)
+        .unwrap();
+    let mut keyring = AeadKeyring::new(test_cipher(
+        "tenant-a:payload-new",
+        45,
+        "tenant-a/payload-new@v1",
+    ));
+
+    for index in 0..8 {
+        let key_id = format!("tenant-a:payload-unrelated-{index}");
+        let fingerprint = format!("tenant-a/payload-unrelated@v{index}");
+        keyring = keyring.with_retired(test_cipher(&key_id, 46 + index, &fingerprint));
+    }
+    keyring = keyring.with_retired(matching_retired);
+
+    assert_eq!(
+        keyring
+            .decrypt(&retired_envelope, context)
+            .unwrap()
+            .as_slice(),
+        b"older rotation window",
+    );
+}
+
+#[test]
 fn keyring_requires_matching_fingerprint_before_decrypt() {
     let context = payload_context("42");
     let envelope = test_cipher("tenant-a:payload", 31, "tenant-a/payload@old")
