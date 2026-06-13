@@ -1664,9 +1664,15 @@ fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> Storage
 
 #[cfg(test)]
 mod private_result_oram_tests {
+    use collection::config::{CollectionParams, CryptoMigrationState, WalConfig};
+    use collection::optimizers_builder::OptimizersConfig;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+    use segment::types::HnswConfig;
     use serde_json::json;
+    use uuid::Uuid;
 
     use super::*;
+    use crate::settings::CryptoSettings;
 
     const SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v1";
 
@@ -1940,6 +1946,50 @@ mod private_result_oram_tests {
         registry.release_upload("collection-private-result-test");
     }
 
+    #[test]
+    fn recovered_snapshot_signature_preflight_verifies_manifest_signature() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-recovered-signature")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut manifest = read_shape_manifest();
+        manifest.collection_id = uuid.to_string();
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[11; 32]).unwrap();
+        let signature = qdrant_sec::sign_private_result_oram_manifest(&key_pair, &manifest)
+            .expect("fixture manifest should sign");
+        let settings = recovered_snapshot_settings(&manifest, key_pair.public_key().as_ref());
+        let config = recovered_snapshot_config(uuid);
+        let store = PrivateResultOramStore::new(temp_dir.path());
+        store.write_manifest(&manifest, &signature).unwrap();
+
+        validate_recovered_private_result_oram_snapshot_signatures(
+            &settings,
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
+
+        let mut tampered_signature = signature.clone();
+        tampered_signature.sig = BASE64URL_NOPAD.encode(&[9; 64]);
+        store
+            .write_manifest(&manifest, &tampered_signature)
+            .unwrap();
+        let err = validate_recovered_private_result_oram_snapshot_signatures(
+            &settings,
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("manifest signature verification failed"));
+        assert!(!rendered.contains(&tampered_signature.sig));
+        assert!(!rendered.contains(&manifest.root_hash));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_BINDING));
+    }
+
     fn read_shape_manifest() -> PrivateResultOramManifest {
         PrivateResultOramManifest {
             version: 1,
@@ -1964,6 +2014,77 @@ mod private_result_oram_tests {
             owner_signing_key_id: SIGNING_KEY_ID.to_string(),
             created_at_unix: 1_700_000_000,
         }
+    }
+
+    fn recovered_snapshot_config(uuid: Uuid) -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params: CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a/private-result-rk".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "docs_body_private_result".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "docs_private_result_oram".to_string(),
+                        binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: OptimizersConfig {
+                deleted_threshold: 0.1,
+                vacuum_min_vector_number: 1000,
+                default_segment_number: 0,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: None,
+                indexing_threshold: Some(100_000),
+                flush_interval_sec: 60,
+                max_optimization_threads: Some(0),
+                prevent_unoptimized: None,
+            },
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(uuid),
+            metadata: None,
+        }
+    }
+
+    fn recovered_snapshot_settings(
+        manifest: &PrivateResultOramManifest,
+        public_key: &[u8],
+    ) -> Settings {
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto = CryptoSettings {
+            zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+            instances: HashMap::from([(
+                "docs_private_result_oram".to_string(),
+                CryptoInstanceConfig {
+                    provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                    materials: HashMap::new(),
+                    backend_ref: None,
+                    options: json!({
+                        KEY_ID_OPTION: manifest.key_id,
+                        EXPECTED_RK_ID_OPTION: manifest.rk_id,
+                        MIN_RK_EPOCH_OPTION: manifest.rk_epoch,
+                        MAX_RK_EPOCH_OPTION: manifest.rk_epoch,
+                        ORAM_OPTION: manifest.oram,
+                        SIGNATURE_PUBLIC_KEYS_OPTION: {
+                            SIGNING_KEY_ID: BASE64URL_NOPAD.encode(public_key),
+                        },
+                    }),
+                },
+            )]),
+            ..CryptoSettings::default()
+        };
+        settings
     }
 
     fn fixture_runtime_context(
