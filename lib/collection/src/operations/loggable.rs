@@ -262,6 +262,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "private_key_b64"
                         | "secret_key"
                         | "secret_key_b64"
+                        | "read_path"
+                        | "read_paths"
                         | "paths"
                         | "bucket_commitment"
                         | "bucket_commitments"
@@ -370,6 +372,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "wrappingkeyb64"
                         | "pathlabel"
                         | "pathlabels"
+                        | "readpath"
+                        | "readpaths"
                         | "bucketcommitment"
                         | "bucketcommitments"
                         | "bucketid"
@@ -986,9 +990,21 @@ mod tests {
         }
         assert!(serialized.contains("[redacted]"));
 
+        let mut read_paths_aliases = json!({
+            "read_paths": ["qdrant-sec-private-hnsw-read-path-log-sentinel"],
+            "readPaths": ["qdrant-sec-private-hnsw-camel-read-path-log-sentinel"],
+        });
+        redact_sensitive_log_fields(&mut read_paths_aliases);
+        let read_paths_serialized = serde_json::to_string(&read_paths_aliases).unwrap();
+        assert!(!read_paths_serialized.contains("qdrant-sec-private-hnsw-read-path-log-sentinel"));
+        assert!(
+            !read_paths_serialized.contains("qdrant-sec-private-hnsw-camel-read-path-log-sentinel")
+        );
+
         let mut first = json!({
             "read_buckets": {
                 "session_id": "private-oram-session-a",
+                "read_paths": ["read-path-a"],
                 "bucket_ids": [1, 2, 3],
                 "bucket_commitments": ["bucket-commitment-a"],
                 "read_signature": "read-signature-a",
@@ -1003,6 +1019,7 @@ mod tests {
         let mut second = json!({
             "read_buckets": {
                 "session_id": "private-oram-session-b",
+                "read_paths": ["read-path-b"],
                 "bucket_ids": [9, 10, 11],
                 "bucket_commitments": ["bucket-commitment-b", "bucket-commitment-c"],
                 "read_signature": "read-signature-b",
