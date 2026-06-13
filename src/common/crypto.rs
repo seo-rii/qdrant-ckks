@@ -2632,6 +2632,7 @@ fn sanitized_crypto_backend_policy(backend: &CryptoBackendConfig) -> serde_json:
     json!({
         "kind": backend.kind,
         "program": backend.program,
+        "checked_spawn_hardening": openfhe_checked_spawn_hardening_level(),
         "sha256_b64": fixed_base64url_policy_fingerprint(backend.sha256_b64.as_deref()),
         "signature_public_key_b64": fixed_base64url_policy_fingerprint(
             backend.signature_public_key_b64.as_deref(),
@@ -2640,6 +2641,14 @@ fn sanitized_crypto_backend_policy(backend: &CryptoBackendConfig) -> serde_json:
         "size": backend.size,
         "timeout_ms": backend.timeout_ms,
     })
+}
+
+fn openfhe_checked_spawn_hardening_level() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "linux_proc_fd_no_follow"
+    } else {
+        "path_revalidation_only"
+    }
 }
 
 fn fixed_base64url_policy_fingerprint(value: Option<&str>) -> serde_json::Value {
@@ -12620,6 +12629,10 @@ mod tests {
             "backend fingerprint view must not serialize raw pin strings",
         );
         assert!(sanitized_backend.contains("base64url-fixed-policy"));
+        assert!(
+            sanitized_backend.contains(openfhe_checked_spawn_hardening_level()),
+            "backend fingerprint view must bind checked spawn hardening level",
+        );
 
         let mut peer_with_oversized_pin = settings.clone();
         let oversized_pin_b64 = "A".repeat(10_000);
