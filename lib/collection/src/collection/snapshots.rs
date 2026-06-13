@@ -1966,6 +1966,145 @@ mod tests {
         );
     }
 
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_current_epoch_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-bad-current-epoch")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let store = PrivateResultOramStore::new(temp_dir.path());
+        store
+            .compare_and_swap_epoch(
+                &crate::private_result_oram_store::PrivateResultOramEpochState {
+                    index_epoch: manifest.index_epoch,
+                    root_hash: manifest.root_hash.clone(),
+                },
+                &crate::private_result_oram_store::PrivateResultOramEpochState {
+                    index_epoch: manifest.index_epoch + 1,
+                    root_hash: BASE64URL_NOPAD.encode(&[8; 32]),
+                },
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("current epoch/root"));
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_bucket_commitment_root_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-bad-bucket-commitment")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let store = PrivateResultOramStore::new(temp_dir.path());
+        let max_ciphertext_bytes =
+            private_result_restore_max_bucket_ciphertext_bytes(&manifest).unwrap();
+        let mut bucket = store
+            .read_bucket(
+                1,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                max_ciphertext_bytes,
+            )
+            .unwrap();
+        let replacement_bytes = vec![77; 32];
+        bucket.ciphertext = BASE64URL_NOPAD.encode(&replacement_bytes);
+        bucket.ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest(&replacement_bytes).as_ref());
+        bucket.bucket_commitment = private_result_oram_bucket_commitment(
+            PrivateResultOramBucketCommitmentContext {
+                collection_id: &manifest.collection_id,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id: bucket.bucket_id,
+                index_epoch: bucket.index_epoch,
+            },
+            &bucket.ciphertext_sha256,
+        )
+        .unwrap();
+        store
+            .write_bucket(
+                &bucket,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                max_ciphertext_bytes,
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("bucket commitments"));
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_bucket_commitment_context_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-bad-bucket-context")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let store = PrivateResultOramStore::new(temp_dir.path());
+        let max_ciphertext_bytes =
+            private_result_restore_max_bucket_ciphertext_bytes(&manifest).unwrap();
+        let mut bucket = store
+            .read_bucket(
+                0,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                max_ciphertext_bytes,
+            )
+            .unwrap();
+        bucket.bucket_commitment = BASE64URL_NOPAD.encode(&[99; 32]);
+        store
+            .write_bucket(
+                &bucket,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                max_ciphertext_bytes,
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("bucket commitment context"));
+        assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+    }
+
     fn assert_private_result_oram_restore_preflight_rejects_missing_bucket(missing_bucket_id: u64) {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-restore-missing-bucket")
