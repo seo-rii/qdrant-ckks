@@ -1824,14 +1824,21 @@ mod private_result_oram_tests {
         assert!(deduped.to_string().contains("whole ORAM paths"));
 
         let malformed_path = validate_bucket_read_request(&manifest, &[0, 2, 3]).unwrap_err();
-        assert!(malformed_path.to_string().contains("valid ORAM paths"));
+        let rendered = malformed_path.to_string();
+        assert!(rendered.contains("valid ORAM paths"));
+        assert!(!rendered.contains("2"), "{rendered}");
+        assert!(!rendered.contains("3"), "{rendered}");
 
         let over_budget =
             validate_bucket_read_request(&manifest, &[0, 1, 3, 0, 1, 4, 0, 2, 5]).unwrap_err();
-        assert!(over_budget.to_string().contains("fixed path budget"));
+        let rendered = over_budget.to_string();
+        assert!(rendered.contains("fixed path budget"));
+        assert!(!rendered.contains("5"), "{rendered}");
 
         let out_of_range = validate_bucket_read_request(&manifest, &[0, 1, 7]).unwrap_err();
-        assert!(out_of_range.to_string().contains("out of range"));
+        let rendered = out_of_range.to_string();
+        assert!(rendered.contains("out of range"));
+        assert!(!rendered.contains("7"), "{rendered}");
     }
 
     #[test]
