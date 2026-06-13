@@ -1239,6 +1239,26 @@ mod private_result_oram_rest_tests {
                 "{malformed_read_signature_error}"
             );
 
+            let read_signature_alg_sentinel = "rsa-pss-result-read-sentinel";
+            let mut unsupported_read_signature = fixture.read_signature(&read_bucket_ids);
+            unsupported_read_signature.alg = read_signature_alg_sentinel.to_string();
+            let unsupported_read_signature_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: unsupported_read_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "request validation failed"
+            );
+            assert!(
+                !unsupported_read_signature_error.contains(read_signature_alg_sentinel),
+                "{unsupported_read_signature_error}"
+            );
+
             let deduped_bucket_ids = vec![0, 1, 3, 4];
             let deduped_path_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
@@ -1540,6 +1560,28 @@ mod private_result_oram_rest_tests {
             assert!(
                 !malformed_commit_signature_error.contains(commit_signature_body_sentinel),
                 "{malformed_commit_signature_error}"
+            );
+
+            let commit_signature_alg_sentinel = "rsa-pss-result-commit-sentinel";
+            let mut unsupported_commit_signature = commit_signature.clone();
+            unsupported_commit_signature.alg = commit_signature_alg_sentinel.to_string();
+            let unsupported_commit_signature_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: vec![updated_bucket.clone()],
+                    commit_signature: unsupported_commit_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "request validation failed"
+            );
+            assert!(
+                !unsupported_commit_signature_error.contains(commit_signature_alg_sentinel),
+                "{unsupported_commit_signature_error}"
             );
 
             let commit_result = post_json_ok!(

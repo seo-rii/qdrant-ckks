@@ -1494,6 +1494,34 @@ mod private_result_oram_grpc_tests {
                     .contains(signature_body_sentinel)
             );
 
+            let read_signature_alg_sentinel = "rsa-pss-result-read-sentinel";
+            let mut unsupported_read_signature = fixture.read_signature(&read_bucket_ids);
+            unsupported_read_signature.alg = read_signature_alg_sentinel.to_string();
+            let unsupported_read_signature = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(unsupported_read_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(unsupported_read_signature.code(), Code::InvalidArgument);
+            assert!(
+                unsupported_read_signature
+                    .message()
+                    .contains("request validation failed")
+            );
+            assert!(
+                !unsupported_read_signature
+                    .message()
+                    .contains(read_signature_alg_sentinel)
+            );
+
             let deduped_bucket_ids = vec![0, 1, 3, 4];
             let deduped_path_read = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
@@ -1973,6 +2001,37 @@ mod private_result_oram_grpc_tests {
                 !malformed_commit_signature
                     .message()
                     .contains(commit_signature_body_sentinel)
+            );
+
+            let commit_signature_alg_sentinel = "rsa-pss-result-commit-sentinel";
+            let mut unsupported_commit_signature = commit_signature.clone();
+            unsupported_commit_signature.alg = commit_signature_alg_sentinel.to_string();
+            let unsupported_commit_signature =
+                PrivateResultOram::commit_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: session.session_id.clone(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: fixture.manifest.root_hash.clone(),
+                        new_root_hash: new_root_hash.clone(),
+                        updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
+                        commit_signature: Some(signature_to_proto(unsupported_commit_signature)),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(unsupported_commit_signature.code(), Code::InvalidArgument);
+            assert!(
+                unsupported_commit_signature
+                    .message()
+                    .contains("request validation failed")
+            );
+            assert!(
+                !unsupported_commit_signature
+                    .message()
+                    .contains(commit_signature_alg_sentinel)
             );
 
             let committed = PrivateResultOram::commit_private_result_oram_buckets(
