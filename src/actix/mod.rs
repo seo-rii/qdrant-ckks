@@ -411,9 +411,33 @@ mod tests {
         );
         assert_eq!(
             redact_private_oram_access_path(
+                "/collections/docs/private-result-oram/session/bad/session-id-sentinel/close"
+            ),
+            "/collections/docs/private-result-oram/session/{session_id}/close"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
                 "/collections/docs/private-hnsw/text/oram/read_paths?leaf=query-sentinel"
             ),
             "/collections/docs/private-hnsw/text/oram/read_paths?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-hnsw/text/oram/commit?old_root=root-sentinel"
+            ),
+            "/collections/docs/private-hnsw/text/oram/commit?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-result-oram/oram/read_buckets?bucket_ids=bucket-sentinel"
+            ),
+            "/collections/docs/private-result-oram/oram/read_buckets?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-result-oram/oram/commit?updated_buckets=bucket-sentinel"
+            ),
+            "/collections/docs/private-result-oram/oram/commit?[redacted]"
         );
         assert_eq!(
             redact_private_oram_access_path("/collections/docs/points/scroll?offset=7"),
