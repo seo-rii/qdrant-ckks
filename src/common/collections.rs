@@ -330,6 +330,11 @@ pub async fn do_update_collection_cluster(
         &collection_state.config,
         &operation,
     )?;
+    reject_private_oram_cluster_resharding_until_supported(
+        &collection_name,
+        &collection_state.config,
+        &operation,
+    )?;
 
     match operation {
         ClusterOperations::MoveShard(MoveShardOperation { move_shard }) => {
@@ -1130,6 +1135,27 @@ fn reject_private_oram_cluster_transfer_until_supported(
     })
 }
 
+fn reject_private_oram_cluster_resharding_until_supported(
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    operation: &ClusterOperations,
+) -> Result<(), StorageError> {
+    if !matches!(operation, ClusterOperations::StartResharding(_))
+        || !collection_uses_private_oram_bucket_store(config)
+    {
+        return Ok(());
+    }
+
+    Err(StorageError::BadRequest {
+        description: format!(
+            "cannot start resharding for private ORAM collection {collection_name}: \
+             encrypted ORAM bucket migration and consensus-backed epoch/root ownership are not \
+             implemented for resharding; use collection snapshot/restore preflight or keep the \
+             private ORAM collection on the current shard layout",
+        ),
+    })
+}
+
 fn cluster_operation_starts_shard_transfer(operation: &ClusterOperations) -> bool {
     matches!(
         operation,
@@ -1372,6 +1398,19 @@ mod tests {
         ]
     }
 
+    fn private_oram_start_resharding_operation() -> ClusterOperations {
+        ClusterOperations::StartResharding(
+            collection::operations::cluster_ops::StartReshardingOperation {
+                start_resharding: StartResharding {
+                    uuid: Some(Uuid::from_u128(99)),
+                    direction: ReshardingDirection::Up,
+                    peer_id: Some(2),
+                    shard_key: None,
+                },
+            },
+        )
+    }
+
     fn private_hnsw_collection_config() -> CollectionConfigInternal {
         CollectionConfigInternal {
             params: collection::config::CollectionParams {
@@ -1483,6 +1522,30 @@ mod tests {
             assert!(
                 err.to_string().contains("encrypted ORAM bucket transfer"),
                 "unexpected error for {operation:?}: {err}",
+            );
+        }
+    }
+
+    #[test]
+    fn private_oram_resharding_guard_blocks_start_until_bucket_migration_supported() {
+        let operation = private_oram_start_resharding_operation();
+
+        for (label, config) in [
+            ("private HNSW ORAM", private_hnsw_collection_config()),
+            (
+                "private result ORAM",
+                private_result_oram_collection_config(),
+            ),
+        ] {
+            let err =
+                reject_private_oram_cluster_resharding_until_supported("docs", &config, &operation)
+                    .unwrap_err();
+            assert!(
+                err.to_string().contains("encrypted ORAM bucket migration")
+                    && err
+                        .to_string()
+                        .contains("consensus-backed epoch/root ownership"),
+                "unexpected {label} resharding error: {err}",
             );
         }
     }

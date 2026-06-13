@@ -1140,6 +1140,10 @@ those private indexes as collection-level encrypted ORAM buckets, and shard
 transfer does not yet copy bucket files or move epoch/root ownership through
 consensus, so transfer start operations fail closed instead of producing a
 partial private index on the receiver.
+Resharding start is blocked for the same collection shape. The current
+resharding data path migrates point payload/vector records through a shard proxy,
+but it does not migrate collection-local private ORAM bucket stores or establish
+consensus-backed epoch/root ownership for the new shard layout.
 Manual shard snapshot creation, streaming, partial snapshot manifests, and shard
 snapshot recovery fail closed for the same reason: shard snapshots do not yet
 carry the collection-local private ORAM bucket store with epoch/root parity. Use

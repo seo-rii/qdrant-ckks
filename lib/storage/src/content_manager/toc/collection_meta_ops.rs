@@ -401,6 +401,10 @@ impl TableOfContent {
         match operation {
             ReshardingOperation::Start(key) => {
                 let collection_config = collection.config_snapshot().await;
+                reject_private_oram_resharding_start_until_supported(
+                    &collection_id,
+                    &collection_config.params,
+                )?;
                 if collection_params_require_crypto_runtime_transfer_parity(
                     &collection_config.params,
                 ) {
@@ -849,6 +853,21 @@ fn reject_private_oram_shard_transfer_until_supported(
     )))
 }
 
+fn reject_private_oram_resharding_start_until_supported(
+    collection_id: &str,
+    params: &CollectionParams,
+) -> Result<(), StorageError> {
+    if !collection_params_use_private_oram_bucket_store(params) {
+        return Ok(());
+    }
+
+    Err(StorageError::bad_input(format!(
+        "private ORAM resharding is not supported for collection {collection_id}: \
+         encrypted ORAM bucket migration and consensus-backed epoch/root ownership are not \
+         implemented; keep the private ORAM collection on the current shard layout",
+    )))
+}
+
 fn collection_params_use_private_oram_bucket_store(params: &CollectionParams) -> bool {
     params.encryption.as_ref().is_some_and(|encryption| {
         encryption.rules.iter().any(|rule| {
@@ -966,6 +985,7 @@ mod tests {
     use super::{
         PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING,
         collection_params_require_crypto_runtime_transfer_parity,
+        reject_private_oram_resharding_start_until_supported,
         reject_private_oram_shard_transfer_until_supported,
         validate_encrypted_create_shard_key_crypto_runtime_parity,
         validate_encrypted_resharding_crypto_runtime_parity,
@@ -1128,6 +1148,62 @@ mod tests {
             },
         )
         .expect("abort must remain available to clean up unsupported transfer records");
+    }
+
+    #[test]
+    fn private_oram_consensus_resharding_start_fails_closed_until_bucket_migration_exists() {
+        let private_hnsw_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/vector-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "text_private_hnsw".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["text".to_string()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let private_result_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/result-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_private_result_oram".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_private_result_oram_v1".to_string(),
+                    binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        for (label, params) in [
+            ("private HNSW ORAM", private_hnsw_params),
+            ("private result ORAM", private_result_params),
+        ] {
+            let err = reject_private_oram_resharding_start_until_supported("docs", &params)
+                .expect_err("private ORAM resharding start must fail closed");
+            assert!(
+                err.to_string().contains("private ORAM resharding")
+                    && err.to_string().contains("encrypted ORAM bucket migration"),
+                "unexpected {label} resharding error: {err}",
+            );
+        }
+
+        reject_private_oram_resharding_start_until_supported("docs", &CollectionParams::empty())
+            .expect("ordinary collection resharding guard must stay open");
     }
 
     #[test]
