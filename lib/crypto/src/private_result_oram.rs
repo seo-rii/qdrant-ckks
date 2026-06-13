@@ -5142,6 +5142,13 @@ mod tests {
             Err(PrivateResultOramError::BucketOversized)
         );
 
+        let mut malformed_root = decoded.clone();
+        malformed_root.manifest.root_hash = "AAAA".to_string();
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&malformed_root),
+            Err(PrivateResultOramError::InvalidManifestField("root_hash"))
+        );
+
         let mut wrong_root = manifest;
         wrong_root.root_hash = commitment(99);
         assert_eq!(
