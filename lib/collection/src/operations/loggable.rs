@@ -860,6 +860,20 @@ mod tests {
                 "payloadFetchToken": "qdrant-sec-private-hnsw-camel-payload-token-log-sentinel"
             },
             "private_result_oram": {
+                "session_id": "qdrant-sec-private-result-session-id-log-sentinel",
+                "sessionId": "qdrant-sec-private-result-camel-session-id-log-sentinel",
+                "bucket_ids": ["qdrant-sec-private-result-bucket-id-log-sentinel"],
+                "bucketIds": ["qdrant-sec-private-result-camel-bucket-id-log-sentinel"],
+                "bucket_commitments": ["qdrant-sec-private-result-bucket-commitment-log-sentinel"],
+                "bucketCommitments": ["qdrant-sec-private-result-camel-bucket-commitment-log-sentinel"],
+                "updated_buckets": [{
+                    "bucket_id": "qdrant-sec-private-result-updated-bucket-id-log-sentinel",
+                    "bucket_commitment": "qdrant-sec-private-result-updated-bucket-commitment-log-sentinel"
+                }],
+                "updatedBuckets": [{
+                    "bucketId": "qdrant-sec-private-result-camel-updated-bucket-id-log-sentinel",
+                    "bucketCommitment": "qdrant-sec-private-result-camel-updated-bucket-commitment-log-sentinel"
+                }],
                 "payload_fetch_tokens": ["qdrant-sec-private-result-payload-token-log-sentinel"],
                 "payloadFetchToken": "qdrant-sec-private-result-camel-payload-token-log-sentinel",
                 "fetch_tokens": ["qdrant-sec-private-result-fetch-token-log-sentinel"],
@@ -916,6 +930,16 @@ mod tests {
             "qdrant-sec-private-hnsw-camel-point-token-log-sentinel",
             "qdrant-sec-private-hnsw-payload-token-log-sentinel",
             "qdrant-sec-private-hnsw-camel-payload-token-log-sentinel",
+            "qdrant-sec-private-result-session-id-log-sentinel",
+            "qdrant-sec-private-result-camel-session-id-log-sentinel",
+            "qdrant-sec-private-result-bucket-id-log-sentinel",
+            "qdrant-sec-private-result-camel-bucket-id-log-sentinel",
+            "qdrant-sec-private-result-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-result-camel-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-result-updated-bucket-id-log-sentinel",
+            "qdrant-sec-private-result-updated-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-result-camel-updated-bucket-id-log-sentinel",
+            "qdrant-sec-private-result-camel-updated-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-payload-token-log-sentinel",
             "qdrant-sec-private-result-camel-payload-token-log-sentinel",
             "qdrant-sec-private-result-fetch-token-log-sentinel",
