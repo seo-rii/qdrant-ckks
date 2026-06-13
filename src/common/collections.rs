@@ -322,6 +322,11 @@ pub async fn do_update_collection_cluster(
         &collection_state.config,
         &operation,
     )?;
+    reject_private_oram_cluster_shard_key_change_until_supported(
+        &collection_name,
+        &collection_state.config,
+        &operation,
+    )?;
     let peer_metadata_by_id = consensus_state.persistent.read().peer_metadata_by_id();
     validate_encrypted_cluster_data_movement_parity(
         &collection_name,
@@ -1167,6 +1172,33 @@ fn cluster_operation_progresses_resharding(operation: &ClusterOperations) -> boo
     )
 }
 
+fn reject_private_oram_cluster_shard_key_change_until_supported(
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    operation: &ClusterOperations,
+) -> Result<(), StorageError> {
+    if !cluster_operation_changes_shard_keys(operation)
+        || !collection_uses_private_oram_bucket_store(config)
+    {
+        return Ok(());
+    }
+
+    Err(StorageError::BadRequest {
+        description: format!(
+            "cannot change shard keys for private ORAM collection {collection_name}: \
+             collection-local ORAM bucket migration and consensus-backed epoch/root ownership are \
+             not implemented for shard-key layout changes",
+        ),
+    })
+}
+
+fn cluster_operation_changes_shard_keys(operation: &ClusterOperations) -> bool {
+    matches!(
+        operation,
+        ClusterOperations::CreateShardingKey(_) | ClusterOperations::DropShardingKey(_)
+    )
+}
+
 fn cluster_operation_starts_shard_transfer(operation: &ClusterOperations) -> bool {
     matches!(
         operation,
@@ -1195,7 +1227,9 @@ fn collection_uses_private_oram_bucket_store(config: &CollectionConfigInternal) 
 mod tests {
     use std::collections::HashSet;
 
-    use collection::operations::cluster_ops::{CreateShardingKey, CreateShardingKeyOperation};
+    use collection::operations::cluster_ops::{
+        CreateShardingKey, CreateShardingKeyOperation, DropShardingKey, DropShardingKeyOperation,
+    };
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, VECTOR_OPENFHE_CKKS_PROVIDER};
 
@@ -1458,6 +1492,25 @@ mod tests {
         )
     }
 
+    fn private_oram_shard_key_change_operations() -> Vec<ClusterOperations> {
+        vec![
+            ClusterOperations::CreateShardingKey(CreateShardingKeyOperation {
+                create_sharding_key: CreateShardingKey {
+                    shard_key: "tenant-a".into(),
+                    shards_number: None,
+                    replication_factor: None,
+                    placement: Some(vec![1, 2]),
+                    initial_state: None,
+                },
+            }),
+            ClusterOperations::DropShardingKey(DropShardingKeyOperation {
+                drop_sharding_key: DropShardingKey {
+                    shard_key: "tenant-a".into(),
+                },
+            }),
+        ]
+    }
+
     fn private_hnsw_collection_config() -> CollectionConfigInternal {
         CollectionConfigInternal {
             params: collection::config::CollectionParams {
@@ -1595,6 +1648,60 @@ mod tests {
                     "unexpected {label} resharding error for {operation:?}: {err}",
                 );
             }
+        }
+    }
+
+    #[test]
+    fn private_oram_shard_key_guard_blocks_layout_changes_until_bucket_migration_supported() {
+        for (label, config) in [
+            ("private HNSW ORAM", private_hnsw_collection_config()),
+            (
+                "private result ORAM",
+                private_result_oram_collection_config(),
+            ),
+        ] {
+            for operation in private_oram_shard_key_change_operations() {
+                let err = reject_private_oram_cluster_shard_key_change_until_supported(
+                    "docs", &config, &operation,
+                )
+                .expect_err("private ORAM shard-key layout changes must fail closed");
+                assert!(
+                    err.to_string().contains("shard-key layout changes")
+                        && err
+                            .to_string()
+                            .contains("consensus-backed epoch/root ownership"),
+                    "unexpected {label} shard-key error for {operation:?}: {err}",
+                );
+            }
+        }
+
+        for operation in private_oram_shard_key_change_operations() {
+            reject_private_oram_cluster_shard_key_change_until_supported(
+                "docs",
+                &CollectionConfigInternal {
+                    params: collection::config::CollectionParams::empty(),
+                    hnsw_config: Default::default(),
+                    optimizer_config: collection::optimizers_builder::OptimizersConfig {
+                        deleted_threshold: 0.1,
+                        vacuum_min_vector_number: 1000,
+                        default_segment_number: 0,
+                        max_segment_size: None,
+                        #[expect(deprecated)]
+                        memmap_threshold: None,
+                        indexing_threshold: Some(100_000),
+                        flush_interval_sec: 60,
+                        max_optimization_threads: Some(0),
+                        prevent_unoptimized: None,
+                    },
+                    wal_config: collection::config::WalConfig::default(),
+                    quantization_config: None,
+                    strict_mode_config: None,
+                    uuid: Some(Uuid::from_u128(13)),
+                    metadata: None,
+                },
+                &operation,
+            )
+            .expect("ordinary collection shard-key layout changes must stay open");
         }
     }
 

@@ -778,6 +778,11 @@ impl TableOfContent {
             .get_collection_unchecked(&operation.collection_name)
             .await?;
         let collection_config = collection.config_snapshot().await;
+        reject_private_oram_shard_key_change_until_supported(
+            &operation.collection_name,
+            &collection_config.params,
+            "create_shard_key",
+        )?;
         if collection_params_require_crypto_runtime_transfer_parity(&collection_config.params) {
             validate_encrypted_create_shard_key_crypto_runtime_parity(
                 &operation.collection_name,
@@ -795,10 +800,16 @@ impl TableOfContent {
     }
 
     async fn drop_shard_key(&self, operation: DropShardKey) -> Result<(), StorageError> {
-        self.get_collection_unchecked(&operation.collection_name)
-            .await?
-            .drop_shard_key(operation.shard_key)
+        let collection = self
+            .get_collection_unchecked(&operation.collection_name)
             .await?;
+        let collection_config = collection.config_snapshot().await;
+        reject_private_oram_shard_key_change_until_supported(
+            &operation.collection_name,
+            &collection_config.params,
+            "drop_shard_key",
+        )?;
+        collection.drop_shard_key(operation.shard_key).await?;
         Ok(())
     }
 
@@ -907,6 +918,22 @@ fn replica_state_operation_touches_resharding_state(operation: &SetShardReplicaS
         operation.from_state,
         Some(ReplicaState::Resharding | ReplicaState::ReshardingScaleDown)
     )
+}
+
+fn reject_private_oram_shard_key_change_until_supported(
+    collection_id: &str,
+    params: &CollectionParams,
+    operation: &str,
+) -> Result<(), StorageError> {
+    if !collection_params_use_private_oram_bucket_store(params) {
+        return Ok(());
+    }
+
+    Err(StorageError::bad_input(format!(
+        "private ORAM {operation} is not supported for collection {collection_id}: \
+         collection-local ORAM bucket migration and consensus-backed epoch/root ownership are not \
+         implemented for shard-key layout changes",
+    )))
 }
 
 fn collection_params_use_private_oram_bucket_store(params: &CollectionParams) -> bool {
@@ -1032,6 +1059,7 @@ mod tests {
         collection_params_require_crypto_runtime_transfer_parity,
         reject_private_oram_resharding_replica_state_until_supported,
         reject_private_oram_resharding_until_supported,
+        reject_private_oram_shard_key_change_until_supported,
         reject_private_oram_shard_transfer_until_supported,
         validate_encrypted_create_shard_key_crypto_runtime_parity,
         validate_encrypted_resharding_crypto_runtime_parity,
@@ -1311,6 +1339,78 @@ mod tests {
             },
         )
         .expect("ordinary collection replica-state guard must stay open");
+    }
+
+    #[test]
+    fn private_oram_consensus_shard_key_changes_fail_closed_until_bucket_migration_exists() {
+        let private_hnsw_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/vector-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "text_private_hnsw".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["text".to_string()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let private_result_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/result-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_private_result_oram".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_private_result_oram_v1".to_string(),
+                    binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        for (label, params) in [
+            ("private HNSW ORAM", private_hnsw_params),
+            ("private result ORAM", private_result_params),
+        ] {
+            for operation in ["create_shard_key", "drop_shard_key"] {
+                let err = reject_private_oram_shard_key_change_until_supported(
+                    "docs", &params, operation,
+                )
+                .expect_err("private ORAM shard-key changes must fail closed");
+                assert!(
+                    err.to_string().contains("shard-key layout changes")
+                        && err
+                            .to_string()
+                            .contains("consensus-backed epoch/root ownership"),
+                    "unexpected {label} {operation} error: {err}",
+                );
+            }
+        }
+
+        reject_private_oram_shard_key_change_until_supported(
+            "docs",
+            &CollectionParams::empty(),
+            "create_shard_key",
+        )
+        .expect("ordinary collection create_shard_key must stay open");
+        reject_private_oram_shard_key_change_until_supported(
+            "docs",
+            &CollectionParams::empty(),
+            "drop_shard_key",
+        )
+        .expect("ordinary collection drop_shard_key must stay open");
     }
 
     #[test]

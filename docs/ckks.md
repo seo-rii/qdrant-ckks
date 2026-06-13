@@ -1146,6 +1146,9 @@ through a shard proxy, but it does not migrate collection-local private ORAM
 bucket stores or establish consensus-backed epoch/root ownership for the new
 shard layout. `AbortResharding` remains allowed for cleanup, while commit,
 finish, and replica-state progress from resharding states fail closed.
+Shard-key layout changes are blocked for the same reason: `create_sharding_key`
+and `drop_sharding_key` would add or remove shard placement without migrating
+collection-local private ORAM buckets or transferring epoch/root ownership.
 Manual shard snapshot creation, streaming, partial snapshot manifests, and shard
 snapshot recovery fail closed for the same reason: shard snapshots do not yet
 carry the collection-local private ORAM bucket store with epoch/root parity. Use
