@@ -66,8 +66,9 @@ implementation.
 | Metadata encryption | `metadata/aes-256-gcm@v1` supports selected JSON string metadata values with `metadata-value/v1`; these values use the same server-side AEAD envelope, fail closed for plaintext indexing/filtering, and participate in `encrypted_payload:"decrypted"` reads under the same `payload_decrypt` access policy. `metadata_keys` selectors also support client-generated exact-match blind-index token fields with `metadata-exact-match-token/v1`. | Client-side metadata value encryption should use `payload/client-aead@v1` on the metadata field plus a separate blind-index token field for exact match. Qdrant stores opaque blind-index tokens and never computes them. | CKKS vector metadata sealing is separate from payload metadata value encryption. |
 
 `vector/private-hnsw-oram@v1` is stricter than the generic encrypted
-data-movement policy above: manual shard transfer starts and automatic
-dead-replica shard transfer recovery both fail closed until encrypted ORAM
+data-movement policy above: shard transfer starts, resharding progress,
+shard-key layout changes, replica removal, shard snapshot export/recovery, and
+automatic dead-replica shard transfer recovery fail closed until encrypted ORAM
 bucket movement and epoch/root ownership are consensus-backed.
 
 ## Payload text
