@@ -959,6 +959,45 @@ mod private_result_oram_grpc_tests {
                     .contains(bucket_upload_root_sentinel)
             );
 
+            let mut hash_mismatch_buckets = fixture.buckets.clone();
+            hash_mismatch_buckets[0].ciphertext =
+                BASE64URL_NOPAD.encode(b"private-result-upload-ciphertext-sentinel");
+            let hash_mismatch_ciphertext = hash_mismatch_buckets[0].ciphertext.clone();
+            let bucket_upload_hash_mismatch_err =
+                PrivateResultOram::upload_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        buckets: hash_mismatch_buckets
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                bucket_upload_hash_mismatch_err.code(),
+                Code::InvalidArgument
+            );
+            assert!(
+                bucket_upload_hash_mismatch_err
+                    .message()
+                    .contains("bucket ciphertext validation failed")
+            );
+            assert!(
+                !bucket_upload_hash_mismatch_err
+                    .message()
+                    .contains("private-result-upload-ciphertext-sentinel")
+            );
+            assert!(
+                !bucket_upload_hash_mismatch_err
+                    .message()
+                    .contains(&hash_mismatch_ciphertext)
+            );
+
             let bucket_epoch = PrivateResultOram::upload_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::UploadPrivateResultOramBucketsRequest {
