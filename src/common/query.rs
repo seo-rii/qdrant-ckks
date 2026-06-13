@@ -1436,7 +1436,7 @@ async fn ckks_vector_search_points_with_scoring(
                     offset: next_offset,
                     limit: Some(BATCH_SIZE),
                     filter: filter.clone(),
-                    with_payload: Some(WithPayloadInterface::Bool(true)),
+                    with_payload: Some(encrypted_vector_sidecar_payload_selector()),
                     with_vector: WithVector::Bool(false),
                     order_by: None,
                 },
@@ -3633,6 +3633,23 @@ fn encrypted_vector_from_payload(
         })
 }
 
+fn encrypted_vector_sidecar_path() -> JsonPath {
+    JsonPath {
+        first_key: ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string(),
+        rest: Vec::new(),
+    }
+}
+
+fn encrypted_vector_sidecar_payload_selector() -> WithPayloadInterface {
+    WithPayloadInterface::Fields(vec![encrypted_vector_sidecar_path()])
+}
+
+fn encrypted_vector_sidecar_and_group_payload_selector(
+    group_by: &JsonPath,
+) -> WithPayloadInterface {
+    WithPayloadInterface::Fields(vec![encrypted_vector_sidecar_path(), group_by.clone()])
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn do_search_point_groups(
     toc: &TableOfContent,
@@ -3847,7 +3864,9 @@ async fn try_ckks_vector_search_groups(
         params: request.params.clone(),
         limit: usize::MAX,
         offset: Some(0),
-        with_payload: Some(WithPayloadInterface::Bool(true)),
+        with_payload: Some(encrypted_vector_sidecar_and_group_payload_selector(
+            &group_by,
+        )),
         with_vector: Some(WithVector::Bool(false)),
         score_threshold: request.score_threshold,
     });
@@ -4124,7 +4143,9 @@ async fn ckks_vector_group_points_with_scoring(
         params,
         candidate_limit,
         0,
-        Some(WithPayloadInterface::Bool(true)),
+        Some(encrypted_vector_sidecar_and_group_payload_selector(
+            group_by,
+        )),
         Some(WithVector::Bool(false)),
         score_threshold,
         Some(candidate_limit),
@@ -5010,7 +5031,9 @@ async fn try_ckks_vector_recommend_groups(
         params: request.params.clone(),
         limit: usize::MAX,
         offset: Some(0),
-        with_payload: Some(WithPayloadInterface::Bool(true)),
+        with_payload: Some(encrypted_vector_sidecar_and_group_payload_selector(
+            &request.group_request.group_by,
+        )),
         with_vector: Some(WithVector::Bool(false)),
         score_threshold: request.score_threshold,
         using: request.using.clone(),
@@ -6372,7 +6395,7 @@ async fn ckks_vector_sidecar_for_point_id(
         .retrieve(
             PointRequestInternal {
                 ids: vec![point_id],
-                with_payload: Some(WithPayloadInterface::Bool(true)),
+                with_payload: Some(encrypted_vector_sidecar_payload_selector()),
                 with_vector: WithVector::Bool(false),
             },
             read_consistency,
@@ -7564,7 +7587,7 @@ async fn try_ckks_vector_query_groups(
             ckks_fill_scored_points_payload_or_vectors(
                 &collection,
                 &mut fused,
-                WithPayloadInterface::Bool(true),
+                encrypted_vector_sidecar_and_group_payload_selector(&request.group_by),
                 WithVector::Bool(false),
                 read_consistency,
                 shard_selection,
@@ -8114,7 +8137,9 @@ async fn try_ckks_vector_query_groups(
         params: request.params.clone(),
         limit: usize::MAX,
         offset: 0,
-        with_payload: Some(WithPayloadInterface::Bool(true)),
+        with_payload: Some(encrypted_vector_sidecar_and_group_payload_selector(
+            &request.group_by,
+        )),
         with_vector: Some(WithVector::Bool(false)),
         score_threshold: request.score_threshold,
     };
@@ -8673,6 +8698,38 @@ mod tests {
     use crate::settings::{
         CryptoBackendConfig, CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings,
     };
+
+    #[test]
+    fn ckks_internal_sidecar_payload_selectors_are_narrow() {
+        let protected_result_payload = "document.body".parse::<JsonPath>().unwrap();
+
+        let sidecar_selector = encrypted_vector_sidecar_payload_selector();
+        let WithPayloadInterface::Fields(sidecar_fields) = sidecar_selector else {
+            panic!("CKKS sidecar lookup must not request the full payload");
+        };
+        assert_eq!(sidecar_fields.len(), 1);
+        assert_eq!(sidecar_fields[0].first_key, ENCRYPTED_VECTOR_SIDECAR_FIELD);
+        assert!(sidecar_fields[0].rest.is_empty());
+        assert!(
+            !sidecar_fields
+                .iter()
+                .any(|field| field.compatible(&protected_result_payload))
+        );
+
+        let group_by = "document.title".parse::<JsonPath>().unwrap();
+        let group_selector = encrypted_vector_sidecar_and_group_payload_selector(&group_by);
+        let WithPayloadInterface::Fields(group_fields) = group_selector else {
+            panic!("CKKS grouped sidecar lookup must not request the full payload");
+        };
+        assert_eq!(group_fields.len(), 2);
+        assert_eq!(group_fields[0].first_key, ENCRYPTED_VECTOR_SIDECAR_FIELD);
+        assert_eq!(group_fields[1], group_by);
+        assert!(
+            !group_fields
+                .iter()
+                .any(|field| field.compatible(&protected_result_payload))
+        );
+    }
 
     fn scored_point(id: u64, score: f32) -> ScoredPoint {
         ScoredPoint {
