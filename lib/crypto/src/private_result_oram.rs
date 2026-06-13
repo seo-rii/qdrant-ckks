@@ -5098,11 +5098,48 @@ mod tests {
             Err(PrivateResultOramError::InvalidBucketHash)
         );
 
+        let mut malformed_hash = decoded.clone();
+        malformed_hash.buckets[0].ciphertext_sha256 = "AAAA".to_string();
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&malformed_hash),
+            Err(PrivateResultOramError::InvalidBucketField(
+                "ciphertext_sha256"
+            ))
+        );
+
         let mut wrong_commitment = decoded.clone();
         wrong_commitment.buckets[0].bucket_commitment = commitment(99);
         assert_eq!(
             validate_private_result_oram_upload_bundle(&wrong_commitment),
             Err(PrivateResultOramError::InvalidBucketCommitment)
+        );
+
+        let mut malformed_commitment = decoded.clone();
+        malformed_commitment.buckets[0].bucket_commitment = "AAAA".to_string();
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&malformed_commitment),
+            Err(PrivateResultOramError::InvalidBucketField(
+                "bucket_commitment"
+            ))
+        );
+
+        let mut malformed_ciphertext = decoded.clone();
+        malformed_ciphertext.buckets[0].ciphertext = "A".to_string();
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&malformed_ciphertext),
+            Err(PrivateResultOramError::InvalidBucketField("ciphertext"))
+        );
+
+        let mut oversized_ciphertext = decoded.clone();
+        let oversized_raw =
+            vec![
+                0;
+                private_result_oram_upload_max_ciphertext_bytes(&decoded.manifest).unwrap() + 1
+            ];
+        oversized_ciphertext.buckets[0].ciphertext = BASE64URL_NOPAD.encode(&oversized_raw);
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&oversized_ciphertext),
+            Err(PrivateResultOramError::BucketOversized)
         );
 
         let mut wrong_root = manifest;
