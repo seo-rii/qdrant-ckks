@@ -1038,7 +1038,9 @@ preflighted before session access. Once the active session is resolved, the
 request signing key must match the session manifest's `owner_signing_key_id`
 before the verifier public key is looked up; non-owner key ids therefore do not
 reach the registry lookup boundary and are rejected without echoing the
-submitted key id.
+submitted key id. Unsupported request signature algorithms on these two paths
+are rejected on the same generic validation path without echoing the submitted
+algorithm value.
 The `read_buckets` handler verifies the canonical signed bucket-id sequence
 before returning detailed path-shape or bucket-range errors, so unauthenticated
 malformed read batches stay on the generic signature-failure path.
