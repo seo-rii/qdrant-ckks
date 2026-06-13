@@ -5865,7 +5865,7 @@ fn validate_backend_program_path_with_sha256(
         }
 
         let actual = hash_backend_program_for_sha256(backend_name, program)?;
-        if actual[..] != expected[..] {
+        if !constant_time_eq::constant_time_eq(actual.as_ref(), expected.as_slice()) {
             return Err(invalid_program());
         }
     }
