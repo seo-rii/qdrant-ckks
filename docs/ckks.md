@@ -856,7 +856,11 @@ metadata before encrypted buckets are returned.
 Snapshot restore preflight follows the same result-privacy boundary: private
 HNSW ORAM manifests with `private_payload_oram_required` require a configured
 private result ORAM payload binding and corresponding result ORAM snapshot store.
-Restore preflight also checks every
+It also requires the paired result ORAM snapshot manifest's
+`oram.path_batch_size` to divide the private HNSW
+`fixed_budget.fixed_result_k`, matching runtime validation and preventing a
+restored index from producing partial final `read_buckets` batches. Restore
+preflight also checks every
 manifest-range bucket for the manifest-derived fixed ciphertext size and verifies
 each bucket commitment against collection/vector/key lineage, bucket epoch, and
 `ciphertext_sha256` before accepting the Merkle root.

@@ -701,7 +701,12 @@ fn validate_private_hnsw_oram_vector_snapshot(
 
     let store = PrivateHnswOramStore::new(collection_dir, vector_name)?;
     let (manifest, signature) = store.read_manifest()?;
-    let private_result_oram_configured = private_result_oram_configured(params)?;
+    let private_result_oram_path_batch_size =
+        private_result_oram_snapshot_path_batch_size_for_hnsw_restore(
+            collection_dir,
+            params,
+            manifest.result_privacy,
+        )?;
     validate_private_hnsw_oram_restore_manifest(
         &manifest,
         &signature,
@@ -709,7 +714,7 @@ fn validate_private_hnsw_oram_vector_snapshot(
         vector_name,
         expected_dim,
         expected_distance,
-        private_result_oram_configured,
+        private_result_oram_path_batch_size,
     )?;
 
     let current_epoch = store.read_current_epoch()?;
@@ -838,6 +843,29 @@ fn private_result_oram_configured(params: &CollectionParams) -> CollectionResult
     }
 
     Ok(configured)
+}
+
+fn private_result_oram_snapshot_path_batch_size_for_hnsw_restore(
+    collection_dir: &Path,
+    params: &CollectionParams,
+    result_privacy: ResultPrivacyMode,
+) -> CollectionResult<Option<u32>> {
+    if result_privacy != ResultPrivacyMode::PrivatePayloadOramRequired {
+        return Ok(None);
+    }
+    if !private_result_oram_configured(params)? {
+        return Ok(None);
+    }
+
+    let store = PrivateResultOramStore::new(collection_dir);
+    let (manifest, _) = store.read_manifest().map_err(|_| {
+        CollectionError::bad_request(
+            "private HNSW ORAM snapshot restore result_privacy=private_payload_oram_required \
+             requires a readable private result ORAM snapshot manifest",
+        )
+    })?;
+    validate_private_result_oram_manifest_shape(&manifest).map_err(private_result_restore_error)?;
+    Ok(Some(manifest.oram.path_batch_size))
 }
 
 fn private_hnsw_oram_configured_vectors(
@@ -973,19 +1001,28 @@ fn validate_private_hnsw_oram_restore_manifest(
     vector_name: &str,
     expected_dim: u32,
     expected_distance: DistanceKind,
-    private_result_oram_configured: bool,
+    private_result_oram_path_batch_size: Option<u32>,
 ) -> CollectionResult<()> {
     validate_private_hnsw_oram_manifest_shape(manifest).map_err(private_hnsw_restore_error)?;
     validate_private_hnsw_oram_manifest_signature_shape(signature)
         .map_err(private_hnsw_restore_error)?;
-    if manifest.result_privacy == ResultPrivacyMode::PrivatePayloadOramRequired
-        && !private_result_oram_configured
-    {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot restore result_privacy=private_payload_oram_required \
-             requires a {PRIVATE_RESULT_ORAM_BINDING} payload rule backed by \
-             {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}"
-        )));
+    if manifest.result_privacy == ResultPrivacyMode::PrivatePayloadOramRequired {
+        let Some(result_path_batch_size) = private_result_oram_path_batch_size else {
+            return Err(CollectionError::bad_request(format!(
+                "private HNSW ORAM snapshot restore result_privacy=private_payload_oram_required \
+                 requires a {PRIVATE_RESULT_ORAM_BINDING} payload rule backed by \
+                 {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}"
+            )));
+        };
+        if result_path_batch_size == 0
+            || manifest.fixed_budget.fixed_result_k % result_path_batch_size != 0
+        {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM snapshot restore result_privacy=private_payload_oram_required \
+                 requires result ORAM oram.path_batch_size to divide private HNSW \
+                 fixed_budget.fixed_result_k for fixed-size read_buckets batches",
+            ));
+        }
     }
     if signature.key_id != manifest.owner_signing_key_id {
         return Err(CollectionError::bad_request(
@@ -2441,6 +2478,40 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_result_oram_batch_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-result-private-batch-mismatch")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_with_result_config(uuid);
+        let mut hnsw_manifest = private_hnsw_manifest(uuid.to_string());
+        hnsw_manifest.result_privacy = ResultPrivacyMode::PrivatePayloadOramRequired;
+        hnsw_manifest.fixed_budget.fixed_result_k = 3;
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &hnsw_manifest);
+        let mut result_manifest = private_result_manifest(uuid.to_string());
+        result_manifest.key_id = "tenant-a/vector-private-rk".to_string();
+        result_manifest.rk_id = "tenant-a/vector-private-rk".to_string();
+        refresh_private_result_snapshot_manifest_root(&mut result_manifest);
+        write_private_result_snapshot_fixture(temp_dir.path(), &result_manifest);
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("fixed_budget.fixed_result_k"));
+        assert!(rendered.contains("oram.path_batch_size"));
+        assert!(rendered.contains("fixed-size read_buckets"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("private_result_oram"));
+        assert!(!rendered.contains("3"));
+        assert!(!rendered.contains("2"));
     }
 
     #[cfg(unix)]
