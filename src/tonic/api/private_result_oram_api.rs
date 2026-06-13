@@ -1191,6 +1191,10 @@ mod private_result_oram_grpc_tests {
                 "{active_snapshot_error}"
             );
             assert!(
+                !active_snapshot_error.contains(&session.session_id),
+                "{active_snapshot_error}"
+            );
+            assert!(
                 !active_snapshot_error.contains(&fixture.buckets[0].ciphertext),
                 "{active_snapshot_error}"
             );
@@ -1209,6 +1213,10 @@ mod private_result_oram_grpc_tests {
             );
             assert!(
                 !active_full_snapshot_error.contains(&fixture.manifest.root_hash),
+                "{active_full_snapshot_error}"
+            );
+            assert!(
+                !active_full_snapshot_error.contains(&session.session_id),
                 "{active_full_snapshot_error}"
             );
             assert!(

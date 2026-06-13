@@ -1393,6 +1393,10 @@ mod private_hnsw_rest_tests {
                 "{active_snapshot_error}"
             );
             assert!(
+                !active_snapshot_error.contains(&session_id),
+                "{active_snapshot_error}"
+            );
+            assert!(
                 !active_snapshot_error.contains("private_hnsw_oram"),
                 "{active_snapshot_error}"
             );
@@ -1407,6 +1411,10 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !active_full_snapshot_error.contains(&fixture.encrypted_build.root_hash),
+                "{active_full_snapshot_error}"
+            );
+            assert!(
+                !active_full_snapshot_error.contains(&session_id),
                 "{active_full_snapshot_error}"
             );
             assert!(
