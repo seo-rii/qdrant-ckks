@@ -9590,6 +9590,37 @@ esac
             );
 
             assert_private_result_session_error(
+                crate::common::query::do_search_point_groups(
+                    &toc,
+                    "private_result_docs",
+                    SearchGroupsRequestInternal {
+                        vector: vec![0.1, 0.2].into(),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        with_vector: Some(WithVector::Bool(false)),
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        group_request: BaseGroupRequest {
+                            group_by: "group".parse().unwrap(),
+                            group_size: 1,
+                            limit: 1,
+                            with_lookup: Some(api::rest::WithLookupInterface::Collection(
+                                "private_result_docs".to_string(),
+                            )),
+                        },
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM grouped search lookup must fail closed"),
+            );
+
+            assert_private_result_session_error(
                 crate::common::query::do_query_point_groups(
                     &toc,
                     "private_result_docs",
@@ -9619,6 +9650,42 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM grouped universal query must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_query_point_groups(
+                    &toc,
+                    "private_result_docs",
+                    CollectionQueryGroupsRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                        ))),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(false),
+                        lookup_from: None,
+                        group_by: "group".parse().unwrap(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: Some(collection::lookup::WithLookup {
+                            collection_name: "private_result_docs".to_string(),
+                            with_payload: Some(WithPayloadInterface::Bool(true)),
+                            with_vectors: Some(WithVector::Bool(false)),
+                        }),
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM grouped universal query lookup must fail closed"),
             );
 
             assert_private_result_session_error(
@@ -9712,6 +9779,41 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM grouped recommend must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_recommend_point_groups(
+                    &toc,
+                    "private_result_docs",
+                    RecommendGroupsRequestInternal {
+                        positive: vec![RecommendExample::Dense(vec![0.1, 0.2])],
+                        negative: Vec::new(),
+                        strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        with_vector: Some(WithVector::Bool(false)),
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                        lookup_from: None,
+                        group_request: BaseGroupRequest {
+                            group_by: "group".parse().unwrap(),
+                            group_size: 1,
+                            limit: 1,
+                            with_lookup: Some(api::rest::WithLookupInterface::Collection(
+                                "private_result_docs".to_string(),
+                            )),
+                        },
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM grouped recommend lookup must fail closed"),
             );
 
             assert_private_result_session_error(

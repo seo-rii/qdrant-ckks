@@ -3683,6 +3683,13 @@ pub async fn do_search_point_groups(
         &mut request.group_request.with_lookup,
         encrypted_payload_read_mode,
     );
+    preflight_rest_group_lookup_private_result_oram_raw_payload_read(
+        toc,
+        &request.group_request.with_lookup,
+        "search group lookup",
+        &auth,
+    )
+    .await?;
     let lookup_decrypt_collection = rest_group_lookup_payload_decrypt_collection(
         &request.group_request.with_lookup,
         encrypted_payload_read_mode,
@@ -4913,6 +4920,13 @@ pub async fn do_recommend_point_groups(
         &mut request.group_request.with_lookup,
         encrypted_payload_read_mode,
     );
+    preflight_rest_group_lookup_private_result_oram_raw_payload_read(
+        toc,
+        &request.group_request.with_lookup,
+        "recommend group lookup",
+        &auth,
+    )
+    .await?;
     let lookup_decrypt_collection = rest_group_lookup_payload_decrypt_collection(
         &request.group_request.with_lookup,
         encrypted_payload_read_mode,
@@ -5814,6 +5828,37 @@ fn normalize_collection_group_lookup_payload_for_read(
     mode: EncryptedPayloadReadMode,
 ) {
     normalize_lookup_payload_for_read(&mut lookup.with_payload, mode);
+}
+
+async fn preflight_rest_group_lookup_private_result_oram_raw_payload_read(
+    toc: &TableOfContent,
+    with_lookup: &Option<api::rest::WithLookupInterface>,
+    operation: &str,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    match with_lookup.as_ref() {
+        None => Ok(()),
+        Some(api::rest::WithLookupInterface::Collection(collection_name)) => {
+            preflight_private_result_oram_raw_payload_read(
+                toc,
+                collection_name,
+                Some(&WithPayloadInterface::Bool(true)),
+                operation,
+                auth,
+            )
+            .await
+        }
+        Some(api::rest::WithLookupInterface::WithLookup(lookup)) => {
+            preflight_private_result_oram_raw_payload_read(
+                toc,
+                &lookup.collection_name,
+                lookup.with_payload.as_ref(),
+                operation,
+                auth,
+            )
+            .await
+        }
+    }
 }
 
 fn rest_group_lookup_payload_decrypt_collection(
@@ -7516,6 +7561,14 @@ pub async fn do_query_point_groups(
     .await?;
     if let Some(lookup) = &mut request.with_lookup {
         normalize_collection_group_lookup_payload_for_read(lookup, encrypted_payload_read_mode);
+        preflight_private_result_oram_raw_payload_read(
+            toc,
+            &lookup.collection_name,
+            lookup.with_payload.as_ref(),
+            "query group lookup",
+            &auth,
+        )
+        .await?;
     }
     let lookup_decrypt_collection = request
         .with_lookup
