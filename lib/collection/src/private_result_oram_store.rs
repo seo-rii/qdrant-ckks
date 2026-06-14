@@ -2066,6 +2066,10 @@ mod tests {
             .to_string();
         assert!(rendered.contains("manifest signature verification failed"));
         assert!(!rendered.contains(&tampered.manifest_signature.sig));
+        assert!(
+            !store.root_path().exists(),
+            "invalid signed upload must not create private result ORAM layout"
+        );
         assert!(matches!(
             store.read_current_epoch(),
             Err(CollectionError::NotFound { .. })
