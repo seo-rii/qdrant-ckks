@@ -1075,15 +1075,13 @@ fn private_result_oram_instance<'a>(
         .instances
         .get(&rule.instance)
         .ok_or_else(|| {
-            StorageError::bad_request(format!(
-                "private result ORAM rule {} references missing runtime instance {}",
-                rule.id, rule.instance,
-            ))
+            StorageError::bad_request(
+                "private result ORAM collection binding references a missing runtime instance",
+            )
         })?;
     if instance.provider != PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER {
         return Err(StorageError::bad_request(format!(
-            "private result ORAM rule {} runtime instance {} must use provider {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}",
-            rule.id, rule.instance,
+            "private result ORAM collection binding must reference a {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER} runtime instance",
         )));
     }
     Ok(instance)
@@ -1826,6 +1824,48 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("session_id is invalid"));
         assert!(!rendered.contains(malformed));
+    }
+
+    #[test]
+    fn private_result_oram_instance_errors_do_not_reflect_rule_or_instance_ids() {
+        let rule_id = "private_result_rule_secret_sentinel";
+        let instance_id = "private_result_instance_secret_sentinel";
+        let rule = EncryptionRuleRef {
+            id: rule_id.to_string(),
+            selector: EncryptionSelector::PayloadPaths {
+                paths: vec!["body".to_string()],
+            },
+            instance: instance_id.to_string(),
+            binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+        };
+
+        let missing_settings = Settings::new(None).unwrap();
+        let rendered = private_result_oram_instance(&missing_settings, &rule)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("missing runtime instance"), "{rendered}");
+        assert!(!rendered.contains(rule_id), "{rendered}");
+        assert!(!rendered.contains(instance_id), "{rendered}");
+
+        let mut wrong_provider_settings = Settings::new(None).unwrap();
+        wrong_provider_settings.crypto.instances.insert(
+            instance_id.to_string(),
+            CryptoInstanceConfig {
+                provider: qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                materials: HashMap::new(),
+                backend_ref: None,
+                options: json!({}),
+            },
+        );
+        let rendered = private_result_oram_instance(&wrong_provider_settings, &rule)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            rendered.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(rule_id), "{rendered}");
+        assert!(!rendered.contains(instance_id), "{rendered}");
     }
 
     #[test]

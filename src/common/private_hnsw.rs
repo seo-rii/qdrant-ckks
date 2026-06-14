@@ -1275,15 +1275,13 @@ fn private_hnsw_instance<'a>(
         .instances
         .get(&rule.instance)
         .ok_or_else(|| {
-            StorageError::bad_request(format!(
-                "private HNSW ORAM rule {} references missing runtime instance {}",
-                rule.id, rule.instance,
-            ))
+            StorageError::bad_request(
+                "private HNSW ORAM collection binding references a missing runtime instance",
+            )
         })?;
     if instance.provider != VECTOR_PRIVATE_HNSW_ORAM_PROVIDER {
         return Err(StorageError::bad_request(format!(
-            "private HNSW ORAM rule {} runtime instance {} must use provider {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER}",
-            rule.id, rule.instance,
+            "private HNSW ORAM collection binding must reference a {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER} runtime instance",
         )));
     }
     Ok(instance)
@@ -2322,6 +2320,48 @@ mod private_hnsw_tests {
 
         assert!(rendered.contains("option result_privacy has unsupported value"));
         assert!(!rendered.contains(unsupported), "{rendered}");
+    }
+
+    #[test]
+    fn private_hnsw_instance_errors_do_not_reflect_rule_or_instance_ids() {
+        let rule_id = "private_hnsw_rule_secret_sentinel";
+        let instance_id = "private_hnsw_instance_secret_sentinel";
+        let rule = EncryptionRuleRef {
+            id: rule_id.to_string(),
+            selector: EncryptionSelector::VectorNames {
+                names: vec!["text".to_string()],
+            },
+            instance: instance_id.to_string(),
+            binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+        };
+
+        let missing_settings = Settings::new(None).unwrap();
+        let rendered = private_hnsw_instance(&missing_settings, &rule)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("missing runtime instance"), "{rendered}");
+        assert!(!rendered.contains(rule_id), "{rendered}");
+        assert!(!rendered.contains(instance_id), "{rendered}");
+
+        let mut wrong_provider_settings = Settings::new(None).unwrap();
+        wrong_provider_settings.crypto.instances.insert(
+            instance_id.to_string(),
+            CryptoInstanceConfig {
+                provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                materials: HashMap::new(),
+                backend_ref: None,
+                options: serde_json::json!({}),
+            },
+        );
+        let rendered = private_hnsw_instance(&wrong_provider_settings, &rule)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            rendered.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(rule_id), "{rendered}");
+        assert!(!rendered.contains(instance_id), "{rendered}");
     }
 
     fn fixture_bucket(bucket_id: u64, epoch: u64) -> PrivateHnswOramBucket {
