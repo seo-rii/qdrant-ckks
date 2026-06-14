@@ -503,6 +503,7 @@ pub async fn do_upload_private_hnsw_manifest(
         vector_name,
         &signature.key_id,
         "private_hnsw_manifest_upload",
+        AccessRequirements::new().write(),
     )
     .await?;
     let epoch = validate_private_hnsw_oram_manifest(
@@ -621,7 +622,7 @@ pub async fn do_upload_private_hnsw_buckets(
     validate_root_hash_string(&root_hash, "root_hash")?;
     let pass = auth.check_collection_access(
         collection_name,
-        AccessRequirements::new(),
+        AccessRequirements::new().write(),
         "private_hnsw_buckets_upload",
     )?;
     let collection: std::sync::Arc<collection::collection::Collection> =
@@ -729,7 +730,7 @@ pub async fn do_open_private_hnsw_session(
 
     let pass = auth.check_collection_access(
         collection_name,
-        AccessRequirements::new(),
+        AccessRequirements::new().write(),
         "private_hnsw_session_open",
     )?;
     let collection: std::sync::Arc<collection::collection::Collection> =
@@ -865,6 +866,7 @@ pub async fn do_read_private_hnsw_paths(
         vector_name,
         None,
         "private_hnsw_oram_read_paths",
+        AccessRequirements::new(),
     )
     .await?;
     let now_unix = current_unix_secs()?;
@@ -978,6 +980,7 @@ pub async fn do_commit_private_hnsw_paths(
         vector_name,
         None,
         "private_hnsw_oram_commit",
+        AccessRequirements::new().write(),
     )
     .await?;
     let now_unix = current_unix_secs()?;
@@ -1101,6 +1104,7 @@ pub async fn do_close_private_hnsw_session(
         vector_name,
         None,
         "private_hnsw_session_close",
+        AccessRequirements::new().write(),
     )
     .await?;
     let now_unix = current_unix_secs()?;
@@ -1188,8 +1192,9 @@ async fn resolve_private_hnsw_context(
     vector_name: &str,
     signature_key_id: &str,
     method: &str,
+    requirements: AccessRequirements,
 ) -> StorageResult<ResolvedPrivateHnswContext> {
-    let pass = auth.check_collection_access(collection_name, AccessRequirements::new(), method)?;
+    let pass = auth.check_collection_access(collection_name, requirements, method)?;
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
@@ -1578,8 +1583,9 @@ async fn collection_context_for_request(
     vector_name: &str,
     signature_key_id: Option<&str>,
     method: &str,
+    requirements: AccessRequirements,
 ) -> StorageResult<ResolvedPrivateHnswContext> {
-    let pass = auth.check_collection_access(collection_name, AccessRequirements::new(), method)?;
+    let pass = auth.check_collection_access(collection_name, requirements, method)?;
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;

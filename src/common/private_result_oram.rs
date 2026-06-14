@@ -378,6 +378,7 @@ pub async fn do_upload_private_result_oram_manifest(
         collection_name,
         &signature.key_id,
         "private_result_oram_manifest_upload",
+        AccessRequirements::new().write(),
     )
     .await?;
     let epoch = validate_private_result_oram_manifest(
@@ -477,7 +478,7 @@ pub async fn do_open_private_result_oram_session(
 
     let pass = auth.check_collection_access(
         collection_name,
-        AccessRequirements::new(),
+        AccessRequirements::new().write(),
         "private_result_oram_session_open",
     )?;
     let collection: std::sync::Arc<collection::collection::Collection> =
@@ -576,7 +577,7 @@ pub async fn do_upload_private_result_oram_buckets(
     validate_base64url_32_string(&root_hash, "root_hash")?;
     let pass = auth.check_collection_access(
         collection_name,
-        AccessRequirements::new(),
+        AccessRequirements::new().write(),
         "private_result_oram_buckets_upload",
     )?;
     let collection: std::sync::Arc<collection::collection::Collection> =
@@ -680,6 +681,7 @@ pub async fn do_read_private_result_oram_buckets(
         collection_name,
         None,
         "private_result_oram_buckets_read",
+        AccessRequirements::new(),
     )
     .await?;
     let now_unix = current_unix_secs()?;
@@ -778,6 +780,7 @@ pub async fn do_commit_private_result_oram_buckets(
         collection_name,
         None,
         "private_result_oram_commit",
+        AccessRequirements::new().write(),
     )
     .await?;
     let now_unix = current_unix_secs()?;
@@ -897,6 +900,7 @@ pub async fn do_close_private_result_oram_session(
         collection_name,
         None,
         "private_result_oram_session_close",
+        AccessRequirements::new().write(),
     )
     .await?;
     let now_unix = current_unix_secs()?;
@@ -961,8 +965,9 @@ async fn collection_context_for_request(
     collection_name: &str,
     signature_key_id: Option<&str>,
     method: &str,
+    requirements: AccessRequirements,
 ) -> StorageResult<ResolvedPrivateResultOramContext> {
-    let pass = auth.check_collection_access(collection_name, AccessRequirements::new(), method)?;
+    let pass = auth.check_collection_access(collection_name, requirements, method)?;
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
@@ -998,8 +1003,9 @@ async fn resolve_private_result_oram_context(
     collection_name: &str,
     signature_key_id: &str,
     method: &str,
+    requirements: AccessRequirements,
 ) -> StorageResult<ResolvedPrivateResultOramContext> {
-    let pass = auth.check_collection_access(collection_name, AccessRequirements::new(), method)?;
+    let pass = auth.check_collection_access(collection_name, requirements, method)?;
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;

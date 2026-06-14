@@ -340,6 +340,15 @@ mod private_hnsw_rest_tests {
         serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap()
     }
 
+    fn assert_requires_write_access(error: impl std::fmt::Display) {
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("Global manage access is required")
+                || rendered.contains("Write access to collection"),
+            "expected write-access denial, got: {rendered}",
+        );
+    }
+
     #[test]
     fn sdk_fixture_roundtrips_through_rest_wire_dtos() {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
@@ -409,6 +418,179 @@ mod private_hnsw_rest_tests {
             },
         };
         assert_eq!(json_roundtrip(&commit_request), commit_request);
+    }
+
+    #[test]
+    fn private_hnsw_common_ops_require_write_access_for_mutations() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let write_auth = Auth::new_internal(Access::full("private HNSW write setup"));
+            let read_auth = Auth::new_internal(Access::full_ro("private HNSW read-only test"));
+            let pass = new_unchecked_verification_pass();
+            let write_toc = dispatcher.toc(&write_auth, &pass);
+            let read_toc = dispatcher.toc(&read_auth, &pass);
+
+            do_upload_private_hnsw_manifest(
+                write_toc,
+                &write_auth,
+                &settings,
+                "docs",
+                "text",
+                fixture.manifest.clone(),
+                fixture.manifest_signature.clone(),
+            )
+            .await
+            .unwrap();
+            do_upload_private_hnsw_buckets(
+                write_toc,
+                &write_auth,
+                &settings,
+                "docs",
+                "text",
+                fixture.encrypted_build.index_epoch,
+                fixture.encrypted_build.root_hash.clone(),
+                fixture.encrypted_build.buckets.clone(),
+            )
+            .await
+            .unwrap();
+
+            do_get_private_hnsw_manifest(read_toc, &read_auth, &settings, "docs", "text")
+                .await
+                .unwrap();
+
+            let read_only_manifest_upload = do_upload_private_hnsw_manifest(
+                read_toc,
+                &read_auth,
+                &settings,
+                "docs",
+                "text",
+                fixture.manifest.clone(),
+                fixture.manifest_signature.clone(),
+            )
+            .await
+            .unwrap_err();
+            assert_requires_write_access(read_only_manifest_upload);
+
+            let read_only_bucket_upload = do_upload_private_hnsw_buckets(
+                read_toc,
+                &read_auth,
+                &settings,
+                "docs",
+                "text",
+                fixture.encrypted_build.index_epoch,
+                fixture.encrypted_build.root_hash.clone(),
+                fixture.encrypted_build.buckets.clone(),
+            )
+            .await
+            .unwrap_err();
+            assert_requires_write_access(read_only_bucket_upload);
+
+            let read_only_open = do_open_private_hnsw_session(
+                read_toc,
+                &read_auth,
+                &settings,
+                "docs",
+                "text",
+                "tenant-a/read-only-sdk".to_string(),
+                BASE_EPOCH,
+                true,
+                qdrant_sec::ResultPrivacyMode::IdsVisible,
+            )
+            .await
+            .unwrap_err();
+            assert_requires_write_access(read_only_open);
+
+            let session = do_open_private_hnsw_session(
+                write_toc,
+                &write_auth,
+                &settings,
+                "docs",
+                "text",
+                "tenant-a/write-sdk".to_string(),
+                BASE_EPOCH,
+                true,
+                qdrant_sec::ResultPrivacyMode::IdsVisible,
+            )
+            .await
+            .unwrap();
+            let paths = vec![fixture.entry_leaf_label()];
+            let read_signature = fixture.sign_read_paths(&paths, 1, true);
+            let read_response = do_read_private_hnsw_paths(
+                read_toc,
+                &read_auth,
+                &settings,
+                "docs",
+                "text",
+                &session.session_id,
+                BASE_EPOCH,
+                &fixture.encrypted_build.root_hash,
+                paths,
+                CommonPrivateHnswReadPadding {
+                    requested_paths: 1,
+                    dummy_paths_included: true,
+                },
+                CommonPrivateHnswClientSignature {
+                    alg: read_signature.alg,
+                    key_id: read_signature.key_id,
+                    sig: read_signature.sig,
+                },
+            )
+            .await
+            .unwrap();
+            assert!(!read_response.buckets.is_empty());
+
+            let search_run = fixture.run_single_search_collect_writeback();
+            let read_only_commit = do_commit_private_hnsw_paths(
+                read_toc,
+                &read_auth,
+                &settings,
+                "docs",
+                "text",
+                &session.session_id,
+                BASE_EPOCH,
+                NEXT_EPOCH,
+                search_run.commit_plan.old_root_hash.clone(),
+                search_run.commit_plan.new_root_hash.clone(),
+                search_run.updated_buckets.clone(),
+                CommonPrivateHnswClientSignature {
+                    alg: search_run.commit_signature.alg.clone(),
+                    key_id: search_run.commit_signature.key_id.clone(),
+                    sig: search_run.commit_signature.sig.clone(),
+                },
+            )
+            .await
+            .unwrap_err();
+            assert_requires_write_access(read_only_commit);
+
+            let read_only_close = do_close_private_hnsw_session(
+                read_toc,
+                &read_auth,
+                &settings,
+                "docs",
+                "text",
+                &session.session_id,
+            )
+            .await
+            .unwrap_err();
+            assert_requires_write_access(read_only_close);
+
+            assert!(
+                do_close_private_hnsw_session(
+                    write_toc,
+                    &write_auth,
+                    &settings,
+                    "docs",
+                    "text",
+                    &session.session_id,
+                )
+                .await
+                .unwrap()
+            );
+        });
     }
 
     #[test]

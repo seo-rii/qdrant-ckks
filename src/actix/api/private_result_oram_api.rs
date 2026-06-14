@@ -591,6 +591,15 @@ mod private_result_oram_rest_tests {
         serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap()
     }
 
+    fn assert_requires_write_access(error: impl std::fmt::Display) {
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("Global manage access is required")
+                || rendered.contains("Write access to collection"),
+            "expected write-access denial, got: {rendered}",
+        );
+    }
+
     async fn create_private_result_collection(dispatcher: &Dispatcher) {
         dispatcher
             .submit_collection_meta_op(
@@ -686,6 +695,156 @@ mod private_result_oram_rest_tests {
             commit_signature,
         };
         assert_eq!(json_roundtrip(&commit_request), commit_request);
+    }
+
+    #[test]
+    fn private_result_oram_common_ops_require_write_access_for_mutations() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateResultRouteFixture::build();
+        let settings = fixture.settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_result_collection(&dispatcher).await;
+            let write_auth = Auth::new_internal(Access::full("private result ORAM write setup"));
+            let read_auth =
+                Auth::new_internal(Access::full_ro("private result ORAM read-only test"));
+            let pass = new_unchecked_verification_pass();
+            let write_toc = dispatcher.toc(&write_auth, &pass);
+            let read_toc = dispatcher.toc(&read_auth, &pass);
+
+            do_upload_private_result_oram_manifest(
+                write_toc,
+                &write_auth,
+                &settings,
+                COLLECTION_NAME,
+                fixture.manifest.clone(),
+                fixture.signature.clone(),
+            )
+            .await
+            .unwrap();
+            do_upload_private_result_oram_buckets(
+                write_toc,
+                &write_auth,
+                &settings,
+                COLLECTION_NAME,
+                fixture.manifest.index_epoch,
+                fixture.manifest.root_hash.clone(),
+                fixture.buckets.clone(),
+            )
+            .await
+            .unwrap();
+
+            do_get_private_result_oram_manifest(read_toc, &read_auth, &settings, COLLECTION_NAME)
+                .await
+                .unwrap();
+
+            let read_only_manifest_upload = do_upload_private_result_oram_manifest(
+                read_toc,
+                &read_auth,
+                &settings,
+                COLLECTION_NAME,
+                fixture.manifest.clone(),
+                fixture.signature.clone(),
+            )
+            .await
+            .unwrap_err();
+            assert_requires_write_access(read_only_manifest_upload);
+
+            let read_only_bucket_upload = do_upload_private_result_oram_buckets(
+                read_toc,
+                &read_auth,
+                &settings,
+                COLLECTION_NAME,
+                fixture.manifest.index_epoch,
+                fixture.manifest.root_hash.clone(),
+                fixture.buckets.clone(),
+            )
+            .await
+            .unwrap_err();
+            assert_requires_write_access(read_only_bucket_upload);
+
+            let read_only_open = do_open_private_result_oram_session(
+                read_toc,
+                &read_auth,
+                &settings,
+                COLLECTION_NAME,
+                "tenant-a/read-only-sdk".to_string(),
+                BASE_EPOCH,
+                true,
+            )
+            .await
+            .unwrap_err();
+            assert_requires_write_access(read_only_open);
+
+            let session = do_open_private_result_oram_session(
+                write_toc,
+                &write_auth,
+                &settings,
+                COLLECTION_NAME,
+                "tenant-a/write-sdk".to_string(),
+                BASE_EPOCH,
+                true,
+            )
+            .await
+            .unwrap();
+
+            let bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            let read_response = do_read_private_result_oram_buckets(
+                read_toc,
+                &read_auth,
+                &settings,
+                COLLECTION_NAME,
+                &session.session_id,
+                BASE_EPOCH,
+                fixture.manifest.root_hash.clone(),
+                bucket_ids.clone(),
+                fixture.read_signature(&bucket_ids),
+            )
+            .await
+            .unwrap();
+            assert_eq!(read_response.buckets.len(), bucket_ids.len());
+
+            let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+            let read_only_commit = do_commit_private_result_oram_buckets(
+                read_toc,
+                &read_auth,
+                &settings,
+                COLLECTION_NAME,
+                &session.session_id,
+                BASE_EPOCH,
+                NEXT_EPOCH,
+                fixture.manifest.root_hash.clone(),
+                new_root_hash,
+                vec![updated_bucket],
+                commit_signature,
+            )
+            .await
+            .unwrap_err();
+            assert_requires_write_access(read_only_commit);
+
+            let read_only_close = do_close_private_result_oram_session(
+                read_toc,
+                &read_auth,
+                &settings,
+                COLLECTION_NAME,
+                &session.session_id,
+            )
+            .await
+            .unwrap_err();
+            assert_requires_write_access(read_only_close);
+
+            assert!(
+                do_close_private_result_oram_session(
+                    write_toc,
+                    &write_auth,
+                    &settings,
+                    COLLECTION_NAME,
+                    &session.session_id,
+                )
+                .await
+                .unwrap()
+            );
+        });
     }
 
     #[test]
