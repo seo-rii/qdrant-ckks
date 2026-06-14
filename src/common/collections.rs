@@ -1261,6 +1261,15 @@ mod tests {
 
     use super::*;
 
+    fn assert_no_cluster_fingerprint_leak(rendered: &str, sentinels: &[&str]) {
+        for sentinel in sentinels {
+            assert!(
+                !rendered.contains(sentinel),
+                "cluster crypto parity errors must not expose fingerprint `{sentinel}`: {rendered}",
+            );
+        }
+    }
+
     #[test]
     fn test_generate_even_placement() {
         let pool = vec![1, 2, 3];
@@ -1354,6 +1363,68 @@ mod tests {
             &metadata,
         )
         .expect("matching crypto runtime parity should allow encrypted movement");
+    }
+
+    #[test]
+    fn encrypted_cluster_data_movement_parity_errors_redact_fingerprints() {
+        let operation = ClusterOperations::MoveShard(MoveShardOperation {
+            move_shard: collection::operations::cluster_ops::MoveShard {
+                shard_id: 1,
+                to_shard_id: None,
+                from_peer_id: 1,
+                to_peer_id: 2,
+                method: None,
+            },
+        });
+        let local_sentinel = "local-fingerprint-redaction-sentinel";
+        let peer_sentinel = "peer-fingerprint-redaction-sentinel";
+        let metadata = HashMap::from([
+            (
+                1,
+                PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                    local_sentinel.to_string(),
+                )),
+            ),
+            (
+                2,
+                PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                    peer_sentinel.to_string(),
+                )),
+            ),
+        ]);
+
+        let err = validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2],
+            &metadata,
+        )
+        .expect_err("encrypted shard movement must fail closed on mismatched parity");
+        let rendered = err.to_string();
+        assert!(rendered.contains("crypto runtime parity mismatch"));
+        assert!(rendered.contains("peer 2"));
+        assert_no_cluster_fingerprint_leak(&rendered, &[local_sentinel, peer_sentinel]);
+
+        let metadata = HashMap::from([(
+            2,
+            PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                peer_sentinel.to_string(),
+            )),
+        )]);
+        let err = validate_encrypted_cluster_data_movement_parity(
+            "docs",
+            true,
+            &operation,
+            1,
+            &[1, 2],
+            &metadata,
+        )
+        .expect_err("encrypted shard movement must fail closed when local metadata is missing");
+        let rendered = err.to_string();
+        assert!(rendered.contains("local peer 1 has not published"));
+        assert_no_cluster_fingerprint_leak(&rendered, &[peer_sentinel]);
     }
 
     #[test]
