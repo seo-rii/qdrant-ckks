@@ -1140,6 +1140,12 @@ pub fn validate_recovered_private_hnsw_oram_snapshot_signatures(
     let Some(encryption) = config.params.effective_encryption() else {
         return Ok(());
     };
+    validate_collection_crypto_runtime_with_crypto_id(
+        settings,
+        collection_name,
+        &collection_crypto_id,
+        &config.params,
+    )?;
 
     let mut checked_vectors = HashSet::new();
     for rule in encryption
@@ -2852,6 +2858,35 @@ mod private_hnsw_tests {
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_BINDING));
     }
 
+    #[test]
+    fn recovered_snapshot_signature_preflight_validates_runtime_key_epoch_pinning() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-recovered-runtime")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut manifest = fixture_session("session-1", 20).manifest;
+        manifest.collection_id = uuid.to_string();
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+        let settings = recovered_snapshot_settings(&manifest, key_pair.public_key().as_ref());
+        let mut config = recovered_snapshot_config(uuid, &manifest);
+        let encryption = config.params.encryption.as_mut().unwrap();
+        encryption.key_id = Some("tenant-a/other-private-hnsw-rk".to_string());
+
+        let err = validate_recovered_private_hnsw_oram_snapshot_signatures(
+            &settings,
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("private HNSW ORAM instance"));
+        assert!(!rendered.contains("tenant-a/other-private-hnsw-rk"));
+        assert!(!rendered.contains(&manifest.key_id));
+        assert!(!rendered.contains("manifest has not been uploaded"));
+    }
+
     fn recovered_snapshot_leaf_commitments(bucket_count: u64, domain: u8) -> Vec<String> {
         (0..bucket_count)
             .map(|bucket_id| {
@@ -3171,10 +3206,19 @@ mod private_hnsw_tests {
                         EXPECTED_RK_ID_OPTION: manifest.rk_id,
                         MIN_RK_EPOCH_OPTION: manifest.rk_epoch,
                         MAX_RK_EPOCH_OPTION: manifest.rk_epoch,
+                        "search_execution": "client_led",
+                        "search_mode": "private_hnsw_oram",
                         RESULT_PRIVACY_OPTION: "ids_visible",
+                        "distance": "cosine",
+                        "dim": manifest.dim,
                         HNSW_OPTION: manifest.hnsw,
                         ORAM_OPTION: manifest.oram,
                         FIXED_BUDGET_OPTION: manifest.fixed_budget,
+                        "integrity": {
+                            "manifest_signature_required": true,
+                            "commit_signature_required": true,
+                            "merkle_root_required": true,
+                        },
                         SIGNATURE_PUBLIC_KEYS_OPTION: {
                             "tenant-a/private-hnsw-signing-v1": BASE64URL_NOPAD.encode(public_key),
                         },

@@ -933,6 +933,12 @@ pub fn validate_recovered_private_result_oram_snapshot_signatures(
     let Some(encryption) = config.params.effective_encryption() else {
         return Ok(());
     };
+    validate_collection_crypto_runtime_with_crypto_id(
+        settings,
+        collection_name,
+        &collection_crypto_id,
+        &config.params,
+    )?;
 
     for rule in encryption
         .rules
@@ -2161,7 +2167,7 @@ mod private_result_oram_tests {
             .tempdir()
             .unwrap();
         let uuid = Uuid::from_u128(7);
-        let mut manifest = read_shape_manifest();
+        let mut manifest = recovered_snapshot_manifest();
         manifest.collection_id = uuid.to_string();
         let leaf_commitments = recovered_snapshot_leaf_commitments(manifest.bucket_count, 43);
         manifest.root_hash =
@@ -2224,6 +2230,34 @@ mod private_result_oram_tests {
         assert!(!rendered.contains(PRIVATE_RESULT_ORAM_BINDING));
     }
 
+    #[test]
+    fn recovered_snapshot_signature_preflight_validates_runtime_key_epoch_pinning() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-recovered-runtime")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let manifest = recovered_snapshot_manifest();
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[11; 32]).unwrap();
+        let settings = recovered_snapshot_settings(&manifest, key_pair.public_key().as_ref());
+        let mut config = recovered_snapshot_config(uuid);
+        let encryption = config.params.encryption.as_mut().unwrap();
+        encryption.key_id = Some("tenant-a/other-private-result-rk".to_string());
+
+        let err = validate_recovered_private_result_oram_snapshot_signatures(
+            &settings,
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("private result ORAM instance"));
+        assert!(!rendered.contains("tenant-a/other-private-result-rk"));
+        assert!(!rendered.contains(&manifest.key_id));
+        assert!(!rendered.contains("manifest has not been uploaded"));
+    }
+
     fn recovered_snapshot_leaf_commitments(bucket_count: u64, domain: u8) -> Vec<String> {
         (0..bucket_count)
             .map(|bucket_id| {
@@ -2278,6 +2312,12 @@ mod private_result_oram_tests {
             owner_signing_key_id: SIGNING_KEY_ID.to_string(),
             created_at_unix: 1_700_000_000,
         }
+    }
+
+    fn recovered_snapshot_manifest() -> PrivateResultOramManifest {
+        let mut manifest = read_shape_manifest();
+        manifest.oram.block_size_bytes = 1024;
+        manifest
     }
 
     fn recovered_snapshot_config(uuid: Uuid) -> CollectionConfigInternal {
@@ -2340,6 +2380,11 @@ mod private_result_oram_tests {
                         MIN_RK_EPOCH_OPTION: manifest.rk_epoch,
                         MAX_RK_EPOCH_OPTION: manifest.rk_epoch,
                         ORAM_OPTION: manifest.oram,
+                        "integrity": {
+                            "manifest_signature_required": true,
+                            "commit_signature_required": true,
+                            "merkle_root_required": true,
+                        },
                         SIGNATURE_PUBLIC_KEYS_OPTION: {
                             SIGNING_KEY_ID: BASE64URL_NOPAD.encode(public_key),
                         },
