@@ -741,6 +741,10 @@ pub async fn do_read_private_result_oram_buckets(
                 )
                 .map_err(private_result_oram_read_store_error)?;
             ensure_private_result_oram_read_proof_matches_buckets(&proof, &buckets)?;
+            validate_private_result_oram_read_bucket_ciphertexts_fixed_size(
+                &session.manifest,
+                &buckets,
+            )?;
             let proof_value = serde_json::to_string(&proof).map_err(|_| {
                 StorageError::service_error("failed to serialize private result ORAM Merkle proof")
             })?;
@@ -1501,6 +1505,16 @@ fn validate_bucket_ciphertext_fixed_size(
     Ok(())
 }
 
+fn validate_private_result_oram_read_bucket_ciphertexts_fixed_size(
+    manifest: &PrivateResultOramManifest,
+    buckets: &[qdrant_sec::PrivateResultOramBucket],
+) -> StorageResult<()> {
+    for bucket in buckets {
+        validate_bucket_ciphertext_fixed_size(bucket, manifest)?;
+    }
+    Ok(())
+}
+
 fn validate_bucket_read_request(
     manifest: &PrivateResultOramManifest,
     bucket_ids: &[u64],
@@ -1837,12 +1851,27 @@ mod private_result_oram_tests {
         };
 
         validate_bucket_ciphertext_fixed_size(&bucket, &manifest).unwrap();
+        validate_private_result_oram_read_bucket_ciphertexts_fixed_size(
+            &manifest,
+            std::slice::from_ref(&bucket),
+        )
+        .unwrap();
 
         let sentinel = b"private-result-fixed-size-sentinel";
         bucket.ciphertext = BASE64URL_NOPAD.encode(sentinel);
         let rendered = validate_bucket_ciphertext_fixed_size(&bucket, &manifest)
             .unwrap_err()
             .to_string();
+        assert!(rendered.contains("bucket ciphertext validation failed"));
+        assert!(!rendered.contains("private-result-fixed-size-sentinel"));
+        assert!(!rendered.contains(&bucket.ciphertext));
+
+        let rendered = validate_private_result_oram_read_bucket_ciphertexts_fixed_size(
+            &manifest,
+            std::slice::from_ref(&bucket),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(rendered.contains("bucket ciphertext validation failed"));
         assert!(!rendered.contains("private-result-fixed-size-sentinel"));
         assert!(!rendered.contains(&bucket.ciphertext));

@@ -938,6 +938,7 @@ pub async fn do_read_private_hnsw_paths(
                 )
                 .map_err(private_hnsw_read_batch_store_error)?;
             ensure_private_hnsw_read_proof_matches_buckets(&proof, &buckets)?;
+            validate_private_hnsw_read_bucket_ciphertexts_fixed_size(&session.manifest, &buckets)?;
             let proof_value = serde_json::to_string(&proof).map_err(|_| {
                 StorageError::service_error("failed to serialize private HNSW ORAM Merkle proof")
             })?;
@@ -1976,6 +1977,16 @@ fn validate_bucket_ciphertext_fixed_size(
     Ok(())
 }
 
+fn validate_private_hnsw_read_bucket_ciphertexts_fixed_size(
+    manifest: &PrivateHnswOramManifest,
+    buckets: &[PrivateHnswOramBucket],
+) -> StorageResult<()> {
+    for bucket in buckets {
+        validate_bucket_ciphertext_fixed_size(bucket, manifest)?;
+    }
+    Ok(())
+}
+
 fn max_updated_bucket_count(session: &PrivateHnswSession) -> StorageResult<usize> {
     let levels = usize::try_from(session.tree_height)
         .ok()
@@ -2502,6 +2513,11 @@ mod private_hnsw_tests {
         for bucket in &encrypted_build.buckets {
             validate_bucket_ciphertext_fixed_size(bucket, &manifest).unwrap();
         }
+        validate_private_hnsw_read_bucket_ciphertexts_fixed_size(
+            &manifest,
+            &encrypted_build.buckets,
+        )
+        .unwrap();
 
         let mut short_ciphertext_bucket = encrypted_build.buckets[0].clone();
         let mut short_raw = BASE64URL_NOPAD
@@ -2514,6 +2530,18 @@ mod private_hnsw_tests {
         let err =
             validate_bucket_ciphertext_fixed_size(&short_ciphertext_bucket, &manifest).unwrap_err();
         let rendered = err.to_string();
+        assert!(rendered.contains("fixed ciphertext size"));
+        assert!(!rendered.contains("0"), "{rendered}");
+        assert!(
+            !rendered.contains(&short_ciphertext_bucket.ciphertext),
+            "{rendered}"
+        );
+        let rendered = validate_private_hnsw_read_bucket_ciphertexts_fixed_size(
+            &manifest,
+            std::slice::from_ref(&short_ciphertext_bucket),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(rendered.contains("fixed ciphertext size"));
         assert!(!rendered.contains("0"), "{rendered}");
         assert!(

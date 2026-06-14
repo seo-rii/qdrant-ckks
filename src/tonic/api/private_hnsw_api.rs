@@ -944,7 +944,15 @@ mod private_hnsw_grpc_tests {
                 .await
                 .unwrap();
             let manifest_store = PrivateHnswOramStore::new(collection.path(), VECTOR_NAME).unwrap();
-            std::fs::create_dir_all(manifest_store.root_path().parent().unwrap()).unwrap();
+            let manifest_parent = manifest_store.root_path().parent().unwrap();
+            std::fs::create_dir_all(manifest_parent).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+
+                std::fs::set_permissions(manifest_parent, std::fs::Permissions::from_mode(0o700))
+                    .unwrap();
+            }
             std::fs::write(manifest_store.root_path(), b"not-a-directory").unwrap();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
