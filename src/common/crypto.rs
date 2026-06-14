@@ -1659,19 +1659,19 @@ fn generic_vector_write_plan(
             })?;
             for vector_name in names {
                 let Some(vector_params) = params.vectors.get_params(vector_name) else {
-                    return Err(StorageError::bad_input(format!(
-                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' is not configured as a dense vector",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "private HNSW ORAM vector is not configured as a dense vector",
+                    ));
                 };
                 if vector_params.distance != private_distance {
-                    return Err(StorageError::bad_input(format!(
-                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' distance does not match runtime policy",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "private HNSW ORAM vector distance does not match runtime policy",
+                    ));
                 }
                 if vector_params.size.get() != private_dim {
-                    return Err(StorageError::bad_input(format!(
-                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' dimension does not match runtime policy",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "private HNSW ORAM vector dimension does not match runtime policy",
+                    ));
                 }
                 rules.push(VectorWriteRule::PrivateHnswOram {
                     vector_name: vector_name.clone(),
@@ -6823,19 +6823,19 @@ fn validate_generic_collection_crypto_runtime(
             })?;
             for vector_name in names {
                 let Some(vector_params) = params.vectors.get_params(vector_name) else {
-                    return Err(StorageError::bad_input(format!(
-                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' is not configured as a dense vector",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "private HNSW ORAM vector is not configured as a dense vector",
+                    ));
                 };
                 if vector_params.distance != private_distance {
-                    return Err(StorageError::bad_input(format!(
-                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' distance does not match runtime policy",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "private HNSW ORAM vector distance does not match runtime policy",
+                    ));
                 }
                 if vector_params.size.get() != private_dim {
-                    return Err(StorageError::bad_input(format!(
-                        "collection {collection_name} private HNSW ORAM vector '{vector_name}' dimension does not match runtime policy",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "private HNSW ORAM vector dimension does not match runtime policy",
+                    ));
                 }
             }
             continue;
@@ -21691,6 +21691,7 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("distance") && description.contains("does not match runtime policy")
+                    && !description.contains("embedding")
                     && !description.contains("Dot") && !description.contains("Cosine")),
             "unexpected error: {err:?}",
         );
@@ -21729,7 +21730,26 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("dimension") && description.contains("does not match runtime policy")
+                    && !description.contains("embedding")
                     && !description.contains('2') && !description.contains('3')),
+            "unexpected error: {err:?}",
+        );
+
+        let missing_vector_sentinel = "private-hnsw-missing-vector-secret";
+        let mut missing_vector_params = params;
+        let EncryptionSelector::VectorNames { names } =
+            &mut missing_vector_params.encryption.as_mut().unwrap().rules[0].selector
+        else {
+            panic!("fixture must use vector_names selector");
+        };
+        names[0] = missing_vector_sentinel.to_string();
+        let err =
+            validate_collection_crypto_runtime_inner(&settings, "docs", &missing_vector_params)
+                .expect_err("private HNSW ORAM vector must be configured as dense vector");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("not configured as a dense vector")
+                    && !description.contains(missing_vector_sentinel)),
             "unexpected error: {err:?}",
         );
     }
