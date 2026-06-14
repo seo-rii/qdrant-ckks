@@ -1147,6 +1147,43 @@ mod private_result_oram_rest_tests {
             );
             drop(snapshot_guard);
 
+            let client_id_sentinel = "result-session-client-id-sentinel";
+            let oversized_client_id_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/session",
+                OpenPrivateResultOramSessionRequest {
+                    client_id: format!("{client_id_sentinel}{}", "x".repeat(260)),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                },
+                StatusCode::BAD_REQUEST,
+                "client_id must be non-empty and at most 256 bytes"
+            );
+            assert!(
+                !oversized_client_id_error.contains(client_id_sentinel),
+                "{oversized_client_id_error}"
+            );
+
+            let malformed_client_id_sentinel = "result-session-client-id!sentinel";
+            let malformed_client_id_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/session",
+                OpenPrivateResultOramSessionRequest {
+                    client_id: malformed_client_id_sentinel.to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                },
+                StatusCode::BAD_REQUEST,
+                "client_id is invalid"
+            );
+            assert!(
+                !malformed_client_id_error.contains(malformed_client_id_sentinel),
+                "{malformed_client_id_error}"
+            );
+            assert!(
+                !malformed_client_id_error
+                    .contains("client_id must be non-empty and at most 256 bytes"),
+                "{malformed_client_id_error}"
+            );
+
             let session_result = post_json_ok!(
                 "/collections/docs/private-result-oram/session",
                 OpenPrivateResultOramSessionRequest {

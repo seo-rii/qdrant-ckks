@@ -1121,6 +1121,55 @@ mod private_result_oram_grpc_tests {
             assert!(!err.message().contains("private_result_oram"));
             drop(snapshot_guard);
 
+            let client_id_sentinel = "result-session-client-id-sentinel";
+            let err = PrivateResultOram::open_private_result_oram_session(
+                &service,
+                Request::new(grpc::OpenPrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    client_id: format!("{client_id_sentinel}{}", "x".repeat(260)),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("client_id must be non-empty and at most 256 bytes")
+            );
+            assert!(
+                !err.message().contains(client_id_sentinel),
+                "{}",
+                err.message()
+            );
+
+            let malformed_client_id_sentinel = "result-session-client-id!sentinel";
+            let err = PrivateResultOram::open_private_result_oram_session(
+                &service,
+                Request::new(grpc::OpenPrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    client_id: malformed_client_id_sentinel.to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("client_id is invalid"));
+            assert!(
+                !err.message().contains(malformed_client_id_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains("client_id must be non-empty and at most 256 bytes"),
+                "{}",
+                err.message()
+            );
+
             let session = PrivateResultOram::open_private_result_oram_session(
                 &service,
                 Request::new(grpc::OpenPrivateResultOramSessionRequest {
