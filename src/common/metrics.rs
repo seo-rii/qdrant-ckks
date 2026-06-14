@@ -1459,6 +1459,131 @@ mod tests {
     }
 
     #[test]
+    fn test_private_oram_openapi_surface_is_fixed() {
+        let openapi: serde_json::Value =
+            serde_json::from_str(include_str!("../../docs/redoc/master/openapi.json"))
+                .expect("OpenAPI fixture must parse");
+        let paths = openapi
+            .get("paths")
+            .and_then(serde_json::Value::as_object)
+            .expect("OpenAPI fixture must contain paths");
+        let expected = [
+            (
+                "/collections/{collection_name}/private-hnsw/{vector_name}/buckets",
+                "post",
+                "upload_private_hnsw_buckets",
+            ),
+            (
+                "/collections/{collection_name}/private-hnsw/{vector_name}/manifest",
+                "get",
+                "get_private_hnsw_manifest",
+            ),
+            (
+                "/collections/{collection_name}/private-hnsw/{vector_name}/manifest",
+                "post",
+                "upload_private_hnsw_manifest",
+            ),
+            (
+                "/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit",
+                "post",
+                "commit_private_hnsw_paths",
+            ),
+            (
+                "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+                "post",
+                "read_private_hnsw_paths",
+            ),
+            (
+                "/collections/{collection_name}/private-hnsw/{vector_name}/session",
+                "post",
+                "open_private_hnsw_session",
+            ),
+            (
+                "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+                "post",
+                "close_private_hnsw_session",
+            ),
+            (
+                "/collections/{collection_name}/private-result-oram/buckets",
+                "post",
+                "upload_private_result_oram_buckets",
+            ),
+            (
+                "/collections/{collection_name}/private-result-oram/manifest",
+                "get",
+                "get_private_result_oram_manifest",
+            ),
+            (
+                "/collections/{collection_name}/private-result-oram/manifest",
+                "post",
+                "upload_private_result_oram_manifest",
+            ),
+            (
+                "/collections/{collection_name}/private-result-oram/oram/commit",
+                "post",
+                "commit_private_result_oram_buckets",
+            ),
+            (
+                "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+                "post",
+                "read_private_result_oram_buckets",
+            ),
+            (
+                "/collections/{collection_name}/private-result-oram/session",
+                "post",
+                "open_private_result_oram_session",
+            ),
+            (
+                "/collections/{collection_name}/private-result-oram/session/{session_id}/close",
+                "post",
+                "close_private_result_oram_session",
+            ),
+        ];
+
+        for (path, method, operation_id) in expected {
+            let operation = paths
+                .get(path)
+                .and_then(|path_item| path_item.get(method))
+                .unwrap_or_else(|| panic!("OpenAPI must expose {method} {path}"));
+            assert_eq!(
+                operation
+                    .get("operationId")
+                    .and_then(serde_json::Value::as_str),
+                Some(operation_id),
+                "OpenAPI operationId drift for {method} {path}",
+            );
+        }
+
+        let private_oram_path_count = paths
+            .keys()
+            .filter(|path| path.contains("/private-hnsw/") || path.contains("/private-result-oram"))
+            .count();
+        assert_eq!(
+            private_oram_path_count, 12,
+            "OpenAPI private ORAM path surface changed",
+        );
+
+        let private_oram_method_count = paths
+            .iter()
+            .filter(|(path, _)| {
+                path.contains("/private-hnsw/") || path.contains("/private-result-oram")
+            })
+            .map(|(_, path_item)| {
+                path_item
+                    .as_object()
+                    .expect("OpenAPI path item must be an object")
+                    .keys()
+                    .filter(|method| matches!(method.as_str(), "get" | "post"))
+                    .count()
+            })
+            .sum::<usize>();
+        assert_eq!(
+            private_oram_method_count, 14,
+            "OpenAPI private ORAM method surface changed",
+        );
+    }
+
+    #[test]
     fn test_rest_metrics_global_mode() {
         use std::collections::HashMap;
 
