@@ -10105,6 +10105,26 @@ esac
                 };
 
             assert_private_result_predicate_error(
+                toc.facet(
+                    "private_result_predicate_docs",
+                    segment::data_types::facets::FacetParams {
+                        key: "body".parse().unwrap(),
+                        limit: 0,
+                        filter: None,
+                        exact: false,
+                    },
+                    ShardSelectorInternal::All,
+                    None,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM zero-limit facet must fail closed"),
+                "cannot facet on private result ORAM payload field",
+            );
+
+            assert_private_result_predicate_error(
                 crate::common::query::do_scroll_points(
                     &toc,
                     "private_result_predicate_docs",

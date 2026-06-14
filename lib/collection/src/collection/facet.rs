@@ -27,9 +27,6 @@ impl Collection {
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<FacetResponse> {
-        if request.limit == 0 {
-            return Ok(FacetResponse::default());
-        }
         self.ensure_crypto_migration_allows_regular_operation("reads")
             .await?;
 
@@ -44,6 +41,10 @@ impl Collection {
         }
         self.ensure_filter_does_not_touch_encrypted_payload(request.filter.as_ref())
             .await?;
+
+        if request.limit == 0 {
+            return Ok(FacetResponse::default());
+        }
 
         let limit = request.limit;
         let request = Arc::new(request);
