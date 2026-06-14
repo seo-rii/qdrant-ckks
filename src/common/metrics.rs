@@ -1596,111 +1596,69 @@ mod tests {
 
         use super::{GrpcTelemetry, MetricsData, MetricsProvider, WebApiTelemetry};
 
+        fn rest_status_map(count: usize) -> HashMap<u16, OperationDurationStatistics> {
+            let mut status_map = HashMap::new();
+            status_map.insert(
+                200u16,
+                OperationDurationStatistics {
+                    count,
+                    ..Default::default()
+                },
+            );
+            status_map
+        }
+
+        fn grpc_status_map(count: usize) -> HashMap<i32, OperationDurationStatistics> {
+            let mut status_map = HashMap::new();
+            status_map.insert(
+                0i32,
+                OperationDurationStatistics {
+                    count,
+                    ..Default::default()
+                },
+            );
+            status_map
+        }
+
         let mut rest_per_collection = HashMap::new();
         let mut rest_methods = HashMap::new();
-        let mut rest_status_map = HashMap::new();
-        rest_status_map.insert(
-            200u16,
-            OperationDurationStatistics {
-                count: 4,
-                ..Default::default()
-            },
-        );
-        rest_methods.insert(
-            "POST /collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths"
-                .to_string(),
-            rest_status_map,
-        );
-        let mut dynamic_rest_status_map = HashMap::new();
-        dynamic_rest_status_map.insert(
-            200u16,
-            OperationDurationStatistics {
-                count: 1,
-                ..Default::default()
-            },
-        );
-        rest_methods.insert(
-            "POST /collections/docs/private-hnsw/text/oram/read_paths/leaf-label-sentinel"
-                .to_string(),
-            dynamic_rest_status_map,
-        );
-        let mut close_session_status_map = HashMap::new();
-        close_session_status_map.insert(
-            200u16,
-            OperationDurationStatistics {
-                count: 1,
-                ..Default::default()
-            },
-        );
-        rest_methods.insert(
-            "POST /collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close"
-                .to_string(),
-            close_session_status_map,
-        );
-        let mut dynamic_close_session_status_map = HashMap::new();
-        dynamic_close_session_status_map.insert(
-            200u16,
-            OperationDurationStatistics {
-                count: 1,
-                ..Default::default()
-            },
-        );
-        rest_methods.insert(
-            "POST /collections/docs/private-hnsw/text/session/session-id-sentinel/close"
-                .to_string(),
-            dynamic_close_session_status_map,
-        );
-        let mut result_read_status_map = HashMap::new();
-        result_read_status_map.insert(
-            200u16,
-            OperationDurationStatistics {
-                count: 2,
-                ..Default::default()
-            },
-        );
-        rest_methods.insert(
-            "POST /collections/{collection_name}/private-result-oram/oram/read_buckets".to_string(),
-            result_read_status_map,
-        );
-        let mut dynamic_result_read_status_map = HashMap::new();
-        dynamic_result_read_status_map.insert(
-            200u16,
-            OperationDurationStatistics {
-                count: 1,
-                ..Default::default()
-            },
-        );
-        rest_methods.insert(
-            "POST /collections/docs/private-result-oram/oram/read_buckets/bucket-id-sentinel"
-                .to_string(),
-            dynamic_result_read_status_map,
-        );
-        let mut result_close_status_map = HashMap::new();
-        result_close_status_map.insert(
-            200u16,
-            OperationDurationStatistics {
-                count: 1,
-                ..Default::default()
-            },
-        );
-        rest_methods.insert(
-            "POST /collections/{collection_name}/private-result-oram/session/{session_id}/close"
-                .to_string(),
-            result_close_status_map,
-        );
-        let mut dynamic_result_close_status_map = HashMap::new();
-        dynamic_result_close_status_map.insert(
-            200u16,
-            OperationDurationStatistics {
-                count: 1,
-                ..Default::default()
-            },
-        );
-        rest_methods.insert(
-            "POST /collections/docs/private-result-oram/session/result-session-id-sentinel/close"
-                .to_string(),
-            dynamic_result_close_status_map,
-        );
+        let rest_fixed_endpoints = [
+            "POST /collections/{collection_name}/private-hnsw/{vector_name}/buckets",
+            "GET /collections/{collection_name}/private-hnsw/{vector_name}/manifest",
+            "POST /collections/{collection_name}/private-hnsw/{vector_name}/manifest",
+            "POST /collections/{collection_name}/private-hnsw/{vector_name}/oram/commit",
+            "POST /collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+            "POST /collections/{collection_name}/private-hnsw/{vector_name}/session",
+            "POST /collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+            "POST /collections/{collection_name}/private-result-oram/buckets",
+            "GET /collections/{collection_name}/private-result-oram/manifest",
+            "POST /collections/{collection_name}/private-result-oram/manifest",
+            "POST /collections/{collection_name}/private-result-oram/oram/commit",
+            "POST /collections/{collection_name}/private-result-oram/oram/read_buckets",
+            "POST /collections/{collection_name}/private-result-oram/session",
+            "POST /collections/{collection_name}/private-result-oram/session/{session_id}/close",
+        ];
+        for (idx, endpoint) in rest_fixed_endpoints.iter().enumerate() {
+            rest_methods.insert((*endpoint).to_string(), rest_status_map(idx + 1));
+        }
+
+        let rest_dynamic_endpoints = [
+            "POST /collections/docs/private-hnsw/text/buckets/bucket-id-sentinel",
+            "GET /collections/docs/private-hnsw/text/manifest/root-hash-sentinel",
+            "POST /collections/docs/private-hnsw/text/oram/commit/updated-bucket-sentinel",
+            "POST /collections/docs/private-hnsw/text/oram/read_paths/leaf-label-sentinel",
+            "POST /collections/docs/private-hnsw/text/session/client-state-sentinel",
+            "POST /collections/docs/private-hnsw/text/session/session-id-sentinel/close",
+            "POST /collections/docs/private-result-oram/buckets/result-bucket-id-sentinel",
+            "GET /collections/docs/private-result-oram/manifest/result-root-hash-sentinel",
+            "POST /collections/docs/private-result-oram/oram/commit/result-updated-bucket-sentinel",
+            "POST /collections/docs/private-result-oram/oram/read_buckets/result-bucket-id-sentinel",
+            "POST /collections/docs/private-result-oram/session/token-position-map-sentinel",
+            "POST /collections/docs/private-result-oram/session/result-session-id-sentinel/close",
+        ];
+        for endpoint in rest_dynamic_endpoints {
+            rest_methods.insert(endpoint.to_string(), rest_status_map(1));
+        }
         rest_per_collection.insert("docs".to_string(), rest_methods);
 
         let rest_telemetry = WebApiTelemetry {
@@ -1713,97 +1671,86 @@ mod tests {
 
         assert!(rest_output.contains("rest_responses_total"));
         assert!(rest_output.contains("collection=\"docs\""));
-        assert!(rest_output.contains(
-            "endpoint=\"/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths\"",
-        ));
-        assert!(rest_output.contains(
-            "endpoint=\"/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close\"",
-        ));
-        assert!(rest_output.contains(
-            "endpoint=\"/collections/{collection_name}/private-result-oram/oram/read_buckets\"",
-        ));
-        assert!(rest_output.contains(
-            "endpoint=\"/collections/{collection_name}/private-result-oram/session/{session_id}/close\"",
-        ));
-        assert!(!rest_output.contains("leaf-label-sentinel"));
-        assert!(!rest_output.contains("bucket-id-sentinel"));
-        assert!(!rest_output.contains("session-id-sentinel"));
-        assert!(!rest_output.contains("result-session-id-sentinel"));
+        let expected_rest_labels = [
+            "/collections/{collection_name}/private-hnsw/{vector_name}/buckets",
+            "/collections/{collection_name}/private-hnsw/{vector_name}/manifest",
+            "/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit",
+            "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+            "/collections/{collection_name}/private-hnsw/{vector_name}/session",
+            "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+            "/collections/{collection_name}/private-result-oram/buckets",
+            "/collections/{collection_name}/private-result-oram/manifest",
+            "/collections/{collection_name}/private-result-oram/oram/commit",
+            "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+            "/collections/{collection_name}/private-result-oram/session",
+            "/collections/{collection_name}/private-result-oram/session/{session_id}/close",
+        ];
+        for endpoint in expected_rest_labels {
+            assert!(
+                rest_output.contains(&format!("endpoint=\"{endpoint}\"")),
+                "expected fixed REST endpoint label `{endpoint}` in output:\n{rest_output}",
+            );
+        }
+
+        let redacted_sentinels = [
+            "bucket-id-sentinel",
+            "client-state-sentinel",
+            "leaf-label-sentinel",
+            "result-bucket-id-sentinel",
+            "result-root-hash-sentinel",
+            "result-session-id-sentinel",
+            "result-updated-bucket-sentinel",
+            "root-hash-sentinel",
+            "session-id-sentinel",
+            "token-position-map-sentinel",
+            "updated-bucket-sentinel",
+        ];
+        for sentinel in redacted_sentinels {
+            assert!(
+                !rest_output.contains(sentinel),
+                "REST metrics must not expose `{sentinel}`:\n{rest_output}",
+            );
+        }
 
         let mut grpc_per_collection = HashMap::new();
         let mut grpc_methods = HashMap::new();
-        let mut grpc_status_map = HashMap::new();
-        grpc_status_map.insert(
-            0i32,
-            OperationDurationStatistics {
-                count: 6,
-                ..Default::default()
-            },
-        );
-        grpc_methods.insert(
-            "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets".to_string(),
-            grpc_status_map,
-        );
-        let mut dynamic_grpc_status_map = HashMap::new();
-        dynamic_grpc_status_map.insert(
-            0i32,
-            OperationDurationStatistics {
-                count: 1,
-                ..Default::default()
-            },
-        );
-        grpc_methods.insert(
-            "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets/bucket-id-sentinel".to_string(),
-            dynamic_grpc_status_map,
-        );
-        let mut hnsw_grpc_status_map = HashMap::new();
-        hnsw_grpc_status_map.insert(
-            0i32,
-            OperationDurationStatistics {
-                count: 3,
-                ..Default::default()
-            },
-        );
-        grpc_methods.insert(
-            "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths".to_string(),
-            hnsw_grpc_status_map,
-        );
-        let mut hnsw_close_status_map = HashMap::new();
-        hnsw_close_status_map.insert(
-            0i32,
-            OperationDurationStatistics {
-                count: 1,
-                ..Default::default()
-            },
-        );
-        grpc_methods.insert(
-            "/qdrant.PrivateHnswOram/ClosePrivateHnswSession".to_string(),
-            hnsw_close_status_map,
-        );
-        let mut dynamic_hnsw_grpc_status_map = HashMap::new();
-        dynamic_hnsw_grpc_status_map.insert(
-            0i32,
-            OperationDurationStatistics {
-                count: 1,
-                ..Default::default()
-            },
-        );
-        grpc_methods.insert(
-            "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths/leaf-label-sentinel".to_string(),
-            dynamic_hnsw_grpc_status_map,
-        );
-        let mut dynamic_hnsw_close_status_map = HashMap::new();
-        dynamic_hnsw_close_status_map.insert(
-            0i32,
-            OperationDurationStatistics {
-                count: 1,
-                ..Default::default()
-            },
-        );
-        grpc_methods.insert(
-            "/qdrant.PrivateHnswOram/ClosePrivateHnswSession/session-id-sentinel".to_string(),
-            dynamic_hnsw_close_status_map,
-        );
+        let grpc_fixed_endpoints = [
+            "/qdrant.PrivateHnswOram/ClosePrivateHnswSession",
+            "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths",
+            "/qdrant.PrivateHnswOram/GetPrivateHnswManifest",
+            "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
+            "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths",
+            "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets",
+            "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest",
+            "/qdrant.PrivateResultOram/ClosePrivateResultOramSession",
+            "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets",
+            "/qdrant.PrivateResultOram/GetPrivateResultOramManifest",
+            "/qdrant.PrivateResultOram/OpenPrivateResultOramSession",
+            "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets",
+            "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets",
+            "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest",
+        ];
+        for (idx, endpoint) in grpc_fixed_endpoints.iter().enumerate() {
+            grpc_methods.insert((*endpoint).to_string(), grpc_status_map(idx + 1));
+        }
+
+        let grpc_dynamic_endpoints = [
+            "/qdrant.PrivateHnswOram/ClosePrivateHnswSession/session-id-sentinel",
+            "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths/updated-bucket-sentinel",
+            "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/client-state-sentinel",
+            "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths/leaf-label-sentinel",
+            "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets/bucket-id-sentinel",
+            "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest/root-hash-sentinel",
+            "/qdrant.PrivateResultOram/ClosePrivateResultOramSession/result-session-id-sentinel",
+            "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets/result-updated-bucket-sentinel",
+            "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/token-position-map-sentinel",
+            "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets/result-bucket-id-sentinel",
+            "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets/result-bucket-id-sentinel",
+            "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest/result-root-hash-sentinel",
+        ];
+        for endpoint in grpc_dynamic_endpoints {
+            grpc_methods.insert(endpoint.to_string(), grpc_status_map(1));
+        }
         grpc_per_collection.insert("docs".to_string(), grpc_methods);
 
         let grpc_telemetry = GrpcTelemetry {
@@ -1816,17 +1763,18 @@ mod tests {
 
         assert!(grpc_output.contains("grpc_responses_total"));
         assert!(grpc_output.contains("collection=\"docs\""));
-        assert!(
-            grpc_output
-                .contains("endpoint=\"/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets\"",)
-        );
-        assert!(grpc_output.contains("endpoint=\"/qdrant.PrivateHnswOram/ReadPrivateHnswPaths\"",));
-        assert!(
-            grpc_output.contains("endpoint=\"/qdrant.PrivateHnswOram/ClosePrivateHnswSession\"",)
-        );
-        assert!(!grpc_output.contains("leaf-label-sentinel"));
-        assert!(!grpc_output.contains("bucket-id-sentinel"));
-        assert!(!grpc_output.contains("session-id-sentinel"));
+        for endpoint in grpc_fixed_endpoints {
+            assert!(
+                grpc_output.contains(&format!("endpoint=\"{endpoint}\"")),
+                "expected fixed gRPC endpoint label `{endpoint}` in output:\n{grpc_output}",
+            );
+        }
+        for sentinel in redacted_sentinels {
+            assert!(
+                !grpc_output.contains(sentinel),
+                "gRPC metrics must not expose `{sentinel}`:\n{grpc_output}",
+            );
+        }
     }
 
     #[test]
