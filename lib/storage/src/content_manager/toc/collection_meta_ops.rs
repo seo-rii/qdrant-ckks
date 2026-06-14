@@ -1243,26 +1243,44 @@ mod tests {
             method: Some(ShardTransferMethod::StreamRecords),
             filter: None,
         };
+        let transfer_key = ShardTransferKey {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 2,
+            to: 3,
+        };
+        let progressing_operations = [
+            ShardTransferOperations::Start(transfer.clone()),
+            ShardTransferOperations::Restart(ShardTransferRestart {
+                shard_id: 1,
+                to_shard_id: None,
+                from: 2,
+                to: 3,
+                method: ShardTransferMethod::Snapshot,
+            }),
+            ShardTransferOperations::Finish(transfer.clone()),
+            ShardTransferOperations::RecoveryToPartial(transfer_key),
+            ShardTransferOperations::SnapshotRecovered(transfer_key),
+        ];
 
-        let err = reject_private_oram_shard_transfer_until_supported(
-            "docs",
-            &params,
-            &ShardTransferOperations::Start(transfer.clone()),
-        )
-        .expect_err("private result ORAM transfer progress must fail closed");
-        assert!(
-            err.to_string().contains("private ORAM shard transfer")
-                && err
-                    .to_string()
-                    .contains("consensus-backed epoch/root ownership"),
-            "unexpected error: {err}",
-        );
+        for operation in progressing_operations {
+            let err =
+                reject_private_oram_shard_transfer_until_supported("docs", &params, &operation)
+                    .expect_err("private result ORAM transfer progress must fail closed");
+            assert!(
+                err.to_string().contains("private ORAM shard transfer")
+                    && err
+                        .to_string()
+                        .contains("consensus-backed epoch/root ownership"),
+                "unexpected error for {operation:?}: {err}",
+            );
+        }
 
         reject_private_oram_shard_transfer_until_supported(
             "docs",
             &params,
             &ShardTransferOperations::Abort {
-                transfer: transfer.key(),
+                transfer: transfer_key,
                 reason: "cleanup unsupported private ORAM transfer".to_string(),
             },
         )
