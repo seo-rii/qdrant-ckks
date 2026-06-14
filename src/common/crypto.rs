@@ -7143,10 +7143,9 @@ fn validate_private_result_oram_collection_runtime(
     for rule in &encryption.rules {
         if rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING) {
             if !matches!(rule.selector, EncryptionSelector::PayloadPaths { .. }) {
-                return Err(StorageError::bad_input(format!(
-                    "collection {collection_name} private result ORAM rule {} must use payload_paths selector",
-                    rule.id,
-                )));
+                return Err(StorageError::bad_input(
+                    "private result ORAM bindings must use payload_paths selectors",
+                ));
             }
             if configured_private_result_rule
                 .replace(rule.id.as_str())
@@ -7164,10 +7163,9 @@ fn validate_private_result_oram_collection_runtime(
 
         let Some(instance) = runtime_settings.instances.get(&rule.instance) else {
             if rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING) {
-                return Err(StorageError::bad_input(format!(
-                    "collection {collection_name} references unknown private result ORAM crypto instance {}",
-                    rule.instance,
-                )));
+                return Err(StorageError::bad_input(
+                    "private result ORAM collection binding references a missing runtime instance",
+                ));
             }
             continue;
         };
@@ -7175,15 +7173,11 @@ fn validate_private_result_oram_collection_runtime(
         if rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING) {
             if instance.provider != PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER {
                 return Err(StorageError::bad_input(format!(
-                    "collection {collection_name} rule {} uses binding {PRIVATE_RESULT_ORAM_BINDING}, which requires provider {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}; found {}",
-                    rule.id, instance.provider,
+                    "private result ORAM collection binding must reference a {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER} runtime instance",
                 )));
             }
             validate_private_result_oram_instance(&rule.instance, instance).map_err(|_| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} private result ORAM instance {} is invalid",
-                    rule.instance,
-                ))
+                StorageError::bad_input("private result ORAM runtime instance is invalid")
             })?;
             validate_private_oram_collection_key_epoch(
                 collection_name,
@@ -7197,8 +7191,7 @@ fn validate_private_result_oram_collection_runtime(
 
         if instance.provider == PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER {
             return Err(StorageError::bad_input(format!(
-                "collection {collection_name} rule {} uses provider {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}, which must use binding {PRIVATE_RESULT_ORAM_BINDING}",
-                rule.id,
+                "private result ORAM runtime instance must use binding {PRIVATE_RESULT_ORAM_BINDING}",
             )));
         }
     }
@@ -10419,13 +10412,16 @@ mod tests {
 
     #[test]
     fn validate_collection_crypto_runtime_rejects_private_result_oram_binding_drift() {
+        let rule_id_sentinel = "private_result_binding_secret_rule";
+        let result_instance_sentinel = "private_result_binding_secret_instance";
+        let client_instance_sentinel = "private_result_client_secret_instance";
         let settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
                 allow_inline_key_material: false,
                 instances: HashMap::from([
                     (
-                        "payload_result_oram_v1".to_string(),
+                        result_instance_sentinel.to_string(),
                         CryptoInstanceConfig {
                             provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
                             materials: HashMap::new(),
@@ -10434,7 +10430,7 @@ mod tests {
                         },
                     ),
                     (
-                        "payload_client_v1".to_string(),
+                        client_instance_sentinel.to_string(),
                         CryptoInstanceConfig {
                             provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
                             materials: HashMap::new(),
@@ -10455,11 +10451,11 @@ mod tests {
                 encryption_epoch: 7,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
-                    id: "body_private_result".to_string(),
+                    id: rule_id_sentinel.to_string(),
                     selector: EncryptionSelector::PayloadPaths {
                         paths: vec!["body".to_string()],
                     },
-                    instance: "payload_result_oram_v1".to_string(),
+                    instance: result_instance_sentinel.to_string(),
                     binding: Some(PAYLOAD_FIELD_BINDING.to_string()),
                 }],
             }),
@@ -10471,12 +10467,15 @@ mod tests {
                 .expect_err("private result ORAM provider must require its own binding");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
-                    && description.contains(PRIVATE_RESULT_ORAM_BINDING)),
+                if description.contains("runtime instance must use binding")
+                    && description.contains(PRIVATE_RESULT_ORAM_BINDING)
+                    && !description.contains(rule_id_sentinel)
+                    && !description.contains(result_instance_sentinel)),
             "unexpected error: {err:?}",
         );
 
-        params.encryption.as_mut().unwrap().rules[0].instance = "payload_client_v1".to_string();
+        params.encryption.as_mut().unwrap().rules[0].instance =
+            client_instance_sentinel.to_string();
         params.encryption.as_mut().unwrap().rules[0].binding =
             Some(PRIVATE_RESULT_ORAM_BINDING.to_string());
         let err =
@@ -10484,8 +10483,27 @@ mod tests {
                 .expect_err("private result ORAM binding must require its provider");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains(PRIVATE_RESULT_ORAM_BINDING)
-                    && description.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)),
+                if description.contains("collection binding must reference")
+                    && description.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+                    && !description.contains(rule_id_sentinel)
+                    && !description.contains(client_instance_sentinel)
+                    && !description.contains(PAYLOAD_CLIENT_AEAD_PROVIDER)),
+            "unexpected error: {err:?}",
+        );
+
+        let missing_instance_sentinel = "private_result_missing_secret_instance";
+        params.encryption.as_mut().unwrap().rules[0].instance =
+            missing_instance_sentinel.to_string();
+        let err =
+            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+                .expect_err(
+                    "private result ORAM binding must require an existing runtime instance",
+                );
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("missing runtime instance")
+                    && !description.contains(rule_id_sentinel)
+                    && !description.contains(missing_instance_sentinel)),
             "unexpected error: {err:?}",
         );
     }
