@@ -1722,7 +1722,7 @@ fn private_hnsw_error(err: qdrant_sec::PrivateHnswOramError) -> StorageError {
         qdrant_sec::PrivateHnswOramError::SignatureKeyIdMismatch => StorageError::bad_request(
             "private HNSW ORAM signature key_id does not match manifest owner_signing_key_id",
         ),
-        err => StorageError::bad_request(err.to_string()),
+        _ => StorageError::bad_request("private HNSW ORAM request validation failed"),
     }
 }
 
@@ -2609,6 +2609,16 @@ mod private_hnsw_tests {
         assert!(rendered.contains("signature key_id does not match manifest owner_signing_key_id"));
         assert!(!rendered.contains(&signature.key_id));
         assert!(!rendered.contains("not configured"));
+    }
+
+    #[test]
+    fn private_hnsw_error_mapping_redacts_qdrant_sec_fields() {
+        let err = private_hnsw_error(qdrant_sec::PrivateHnswOramError::InvalidManifestField(
+            "secret_manifest_field",
+        ));
+        let rendered = err.to_string();
+        assert!(rendered.contains("private HNSW ORAM request validation failed"));
+        assert!(!rendered.contains("secret_manifest_field"), "{rendered}");
     }
 
     #[test]
