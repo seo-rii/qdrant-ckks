@@ -853,6 +853,7 @@ fn private_result_oram_snapshot_path_batch_size_for_hnsw_restore(
         return Ok(None);
     }
 
+    validate_private_result_oram_snapshot_store_matches_config(collection_dir, true)?;
     let store = PrivateResultOramStore::new(collection_dir);
     let (manifest, _) = store.read_manifest().map_err(|_| {
         CollectionError::bad_request(
@@ -2543,6 +2544,48 @@ mod tests {
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains("3"));
         assert!(!rendered.contains("2"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_symlinked_result_oram_store() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-result-private-symlink")
+            .tempdir()
+            .unwrap();
+        let outside_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-result-outside")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_with_result_config(uuid);
+        let mut hnsw_manifest = private_hnsw_manifest(uuid.to_string());
+        hnsw_manifest.result_privacy = ResultPrivacyMode::PrivatePayloadOramRequired;
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &hnsw_manifest);
+        let mut result_manifest = private_result_manifest(uuid.to_string());
+        result_manifest.key_id = "tenant-a/vector-private-rk".to_string();
+        result_manifest.rk_id = "tenant-a/vector-private-rk".to_string();
+        refresh_private_result_snapshot_manifest_root(&mut result_manifest);
+        write_private_result_snapshot_fixture(outside_dir.path(), &result_manifest);
+        std::os::unix::fs::symlink(
+            outside_dir.path().join(PRIVATE_RESULT_ORAM_DIR),
+            temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR),
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("private result ORAM snapshot store root"));
+        assert!(rendered.contains("non-symlink directory"));
+        assert!(!rendered.contains(outside_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!rendered.contains(&result_manifest.root_hash));
     }
 
     #[cfg(unix)]
