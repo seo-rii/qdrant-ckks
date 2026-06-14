@@ -199,15 +199,24 @@ mod tests {
              new_root_hash=new-root-hash-sentinel \
              path_label=leaf-sentinel candidate_heap=candidate-sentinel \
              pathLabels=leaf-camel-sentinel \
+             readPathLabels=read-path-labels-camel-sentinel \
              neighbors=neighbors-sentinel \
              client_signature=client-signature-sentinel \
+             request_signature=request-signature-sentinel \
              readSignature=read-signature-camel-sentinel \
              commitSignature=commit-signature-camel-sentinel \
              payload_fetch_token=fetch-token-sentinel \
              payloadFetchTokens=fetch-token-camel-sentinel \
+             resultIds=result-id-camel-sentinel \
+             point_tokens=point-token-snake-sentinel \
+             clientState=client-state-camel-sentinel \
+             tokenPositionMap=token-position-map-camel-sentinel \
+             updated_bucket=updated-bucket-singular-sentinel \
              updated_buckets=updated-bucket-sentinel \
              updatedBuckets=updated-bucket-camel-sentinel \
              bucket_commitment=bucket-commitment-sentinel \
+             bucket_commitments=bucket-commitment-snake-plural-sentinel \
+             bucket_ids=bucket-id-snake-sentinel \
              bucketIds=bucket-id-camel-sentinel",
         );
 
@@ -223,16 +232,25 @@ mod tests {
         assert!(!rendered.contains("new-root-hash-sentinel"));
         assert!(!rendered.contains("leaf-sentinel"));
         assert!(!rendered.contains("leaf-camel-sentinel"));
+        assert!(!rendered.contains("read-path-labels-camel-sentinel"));
         assert!(!rendered.contains("neighbors-sentinel"));
         assert!(!rendered.contains("candidate-sentinel"));
         assert!(!rendered.contains("client-signature-sentinel"));
+        assert!(!rendered.contains("request-signature-sentinel"));
         assert!(!rendered.contains("read-signature-camel-sentinel"));
         assert!(!rendered.contains("commit-signature-camel-sentinel"));
         assert!(!rendered.contains("fetch-token-sentinel"));
         assert!(!rendered.contains("fetch-token-camel-sentinel"));
+        assert!(!rendered.contains("result-id-camel-sentinel"));
+        assert!(!rendered.contains("point-token-snake-sentinel"));
+        assert!(!rendered.contains("client-state-camel-sentinel"));
+        assert!(!rendered.contains("token-position-map-camel-sentinel"));
+        assert!(!rendered.contains("updated-bucket-singular-sentinel"));
         assert!(!rendered.contains("updated-bucket-sentinel"));
         assert!(!rendered.contains("updated-bucket-camel-sentinel"));
         assert!(!rendered.contains("bucket-commitment-sentinel"));
+        assert!(!rendered.contains("bucket-commitment-snake-plural-sentinel"));
+        assert!(!rendered.contains("bucket-id-snake-sentinel"));
         assert!(!rendered.contains("bucket-id-camel-sentinel"));
     }
 }
