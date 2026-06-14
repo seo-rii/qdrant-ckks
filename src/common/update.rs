@@ -16,8 +16,8 @@ use collection::operations::conversions::write_ordering_from_proto;
 use collection::operations::point_ops::*;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::{
-    CollectionError, CollectionResult, CollectionUpdateProvenance, UpdateResult,
-    ckks_vector_sidecar_delete_target,
+    CollectionError, CollectionResult, CollectionUpdateProvenance, CountRequestInternal,
+    UpdateResult, ckks_vector_sidecar_delete_target,
 };
 use collection::operations::vector_ops::*;
 use collection::operations::verification::*;
@@ -9033,6 +9033,25 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM filter must fail closed"),
+                "cannot filter on private result ORAM payload field",
+            );
+
+            assert_private_result_predicate_error(
+                crate::common::query::do_count_points(
+                    &toc,
+                    "private_result_predicate_docs",
+                    CountRequestInternal {
+                        filter: Some(private_body_filter()),
+                        exact: true,
+                    },
+                    None,
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM count filter must fail closed"),
                 "cannot filter on private result ORAM payload field",
             );
 
