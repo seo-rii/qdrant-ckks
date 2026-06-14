@@ -707,6 +707,7 @@ fn validate_private_hnsw_oram_vector_snapshot(
         &manifest,
         &signature,
         stable_crypto_id,
+        params,
         vector_name,
         expected_dim,
         expected_distance,
@@ -995,6 +996,7 @@ fn validate_private_hnsw_oram_restore_manifest(
     manifest: &PrivateHnswOramManifest,
     signature: &PrivateHnswOramSignature,
     stable_crypto_id: &str,
+    params: &CollectionParams,
     vector_name: &str,
     expected_dim: u32,
     expected_distance: DistanceKind,
@@ -1030,6 +1032,25 @@ fn validate_private_hnsw_oram_restore_manifest(
         return Err(CollectionError::bad_request(
             "private HNSW ORAM snapshot manifest collection_id mismatch",
         ));
+    }
+    if let Some(encryption) = params.effective_encryption() {
+        if let Some(collection_key_id) = encryption.key_id.as_deref() {
+            if manifest.key_id != collection_key_id {
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM snapshot manifest key_id mismatch",
+                ));
+            }
+            if manifest.rk_id != collection_key_id {
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM snapshot manifest rk_id mismatch",
+                ));
+            }
+        }
+        if manifest.rk_epoch != encryption.encryption_epoch {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM snapshot manifest rk_epoch mismatch",
+            ));
+        }
     }
     if manifest.vector_name != vector_name {
         return Err(CollectionError::bad_request(
@@ -1070,10 +1091,23 @@ fn validate_private_result_oram_restore_manifest(
     }
     if let Some(encryption) = params.effective_encryption()
         && let Some(collection_key_id) = encryption.key_id.as_deref()
-        && manifest.key_id != collection_key_id
+    {
+        if manifest.key_id != collection_key_id {
+            return Err(CollectionError::bad_request(
+                "private result ORAM snapshot manifest key_id mismatch",
+            ));
+        }
+        if manifest.rk_id != collection_key_id {
+            return Err(CollectionError::bad_request(
+                "private result ORAM snapshot manifest rk_id mismatch",
+            ));
+        }
+    }
+    if let Some(encryption) = params.effective_encryption()
+        && manifest.rk_epoch != encryption.encryption_epoch
     {
         return Err(CollectionError::bad_request(
-            "private result ORAM snapshot manifest key_id mismatch",
+            "private result ORAM snapshot manifest rk_epoch mismatch",
         ));
     }
     Ok(())
@@ -2036,6 +2070,56 @@ mod tests {
     }
 
     #[test]
+    fn private_result_oram_restore_preflight_rejects_manifest_rk_id_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-bad-rk-id")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let mut manifest = private_result_manifest(uuid.to_string());
+        manifest.rk_id = "tenant-a/result-private-rk-v2".to_string();
+        refresh_private_result_snapshot_manifest_root(&mut manifest);
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("manifest rk_id mismatch"));
+        assert!(!rendered.contains(&manifest.rk_id), "{rendered}");
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_manifest_rk_epoch_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-bad-rk-epoch")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let mut manifest = private_result_manifest(uuid.to_string());
+        manifest.rk_epoch = 8;
+        refresh_private_result_snapshot_manifest_root(&mut manifest);
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("manifest rk_epoch mismatch"));
+        assert!(!rendered.contains("8"), "{rendered}");
+    }
+
+    #[test]
     fn private_result_oram_restore_preflight_rejects_current_epoch_mismatch() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-restore-bad-current-epoch")
@@ -2272,6 +2356,81 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_manifest_key_id_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-key-id")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let mut manifest = private_hnsw_manifest(uuid.to_string());
+        manifest.key_id = "tenant-a/vector-private-rk-v2".to_string();
+        refresh_private_hnsw_snapshot_manifest_root(&mut manifest);
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("manifest key_id mismatch"));
+        assert!(!rendered.contains(&manifest.key_id), "{rendered}");
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_manifest_rk_id_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-rk-id")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let mut manifest = private_hnsw_manifest(uuid.to_string());
+        manifest.rk_id = "tenant-a/vector-private-rk-v2".to_string();
+        refresh_private_hnsw_snapshot_manifest_root(&mut manifest);
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("manifest rk_id mismatch"));
+        assert!(!rendered.contains(&manifest.rk_id), "{rendered}");
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_manifest_rk_epoch_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-rk-epoch")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let mut manifest = private_hnsw_manifest(uuid.to_string());
+        manifest.rk_epoch = 8;
+        refresh_private_hnsw_snapshot_manifest_root(&mut manifest);
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("manifest rk_epoch mismatch"));
+        assert!(!rendered.contains("8"), "{rendered}");
     }
 
     #[test]
