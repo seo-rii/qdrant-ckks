@@ -1175,13 +1175,13 @@ fn decode_base64url_32(value: &str, field: &str) -> CollectionResult<[u8; 32]> {
 }
 
 fn create_private_dir(path: &Path) -> CollectionResult<()> {
-    match fs::symlink_metadata(path) {
+    let created = match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() => {
             return Err(CollectionError::service_error(
                 "private result ORAM path must be a non-symlink directory",
             ));
         }
-        Ok(_) => {}
+        Ok(_) => false,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             fs::create_dir_all(path).map_err(|_| {
                 CollectionError::service_error("failed to create private result ORAM directory")
@@ -1194,20 +1194,23 @@ fn create_private_dir(path: &Path) -> CollectionResult<()> {
                     "private result ORAM path must be a non-symlink directory",
                 ));
             }
+            true
         }
         Err(_) => {
             return Err(CollectionError::service_error(
                 "failed to inspect private result ORAM directory",
             ));
         }
-    }
+    };
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|_| {
-            CollectionError::service_error("failed to harden private result ORAM directory")
-        })?;
+        if created {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|_| {
+                CollectionError::service_error("failed to harden private result ORAM directory")
+            })?;
+        }
     }
     validate_private_dir(path)
 }
@@ -1966,7 +1969,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn temp_directory_group_world_accessible_is_rehardened_before_write() {
+    fn temp_directory_group_world_accessible_rejects_without_path_leak() {
         use std::os::unix::fs::PermissionsExt;
 
         let temp = TempDir::new().unwrap();
@@ -1978,29 +1981,21 @@ mod tests {
         )
         .unwrap();
 
-        let epoch = PrivateResultOramEpochState {
-            index_epoch: 42,
-            root_hash: root_hash(42),
-        };
-        store.write_initial_epoch(&epoch).unwrap();
-
-        assert_eq!(store.read_current_epoch().unwrap(), epoch);
-        let temp_mode = fs::metadata(store.root_path().join(TEMP_DIR))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
-        assert_eq!(temp_mode, 0o700);
-        let duplicate_err = store
+        let err = store
             .write_initial_epoch(&PrivateResultOramEpochState {
                 index_epoch: 42,
                 root_hash: root_hash(42),
             })
             .unwrap_err();
 
-        let rendered = duplicate_err.to_string();
+        let rendered = err.to_string();
+        assert!(rendered.contains("group/world accessible"));
         assert!(!rendered.contains("private_result_oram"), "{rendered}");
         assert!(!rendered.contains("private-result-oram-"), "{rendered}");
+        assert!(matches!(
+            store.read_current_epoch(),
+            Err(CollectionError::NotFound { .. })
+        ));
     }
 
     #[cfg(unix)]
