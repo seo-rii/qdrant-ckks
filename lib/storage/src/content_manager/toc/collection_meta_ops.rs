@@ -1103,6 +1103,15 @@ mod tests {
         ReshardingOperation, SetShardReplicaState, ShardTransferOperations,
     };
 
+    fn assert_crypto_fingerprints_redacted(rendered: &str) {
+        for sentinel in ["fingerprint-a", "fingerprint-b"] {
+            assert!(
+                !rendered.contains(sentinel),
+                "crypto runtime parity errors must not expose fingerprint `{sentinel}`: {rendered}",
+            );
+        }
+    }
+
     #[test]
     fn encrypted_collection_requires_transfer_parity_enforcement() {
         assert!(!collection_params_require_crypto_runtime_transfer_parity(
@@ -1546,7 +1555,9 @@ mod tests {
         );
         let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
             .expect_err("mismatched peer metadata must fail closed");
-        assert!(err.to_string().contains("crypto runtime parity mismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("crypto runtime parity mismatch"));
+        assert_crypto_fingerprints_redacted(&rendered);
     }
 
     #[test]
@@ -1567,10 +1578,12 @@ mod tests {
 
         let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
             .expect_err("missing local crypto metadata must fail closed");
+        let rendered = err.to_string();
         assert!(
-            err.to_string()
-                .contains("requires local peer 1 crypto runtime capability metadata")
+            rendered.contains("requires local peer 1 crypto runtime capability metadata"),
+            "{rendered}",
         );
+        assert_crypto_fingerprints_redacted(&rendered);
 
         metadata.insert(
             1,
@@ -1582,10 +1595,12 @@ mod tests {
 
         let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
             .expect_err("missing transfer participant crypto metadata must fail closed");
+        let rendered = err.to_string();
         assert!(
-            err.to_string()
-                .contains("requires peer 2 crypto runtime capability metadata")
+            rendered.contains("requires peer 2 crypto runtime capability metadata"),
+            "{rendered}",
         );
+        assert_crypto_fingerprints_redacted(&rendered);
 
         metadata.insert(
             2,
@@ -1593,10 +1608,12 @@ mod tests {
         );
         let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
             .expect_err("empty transfer participant crypto metadata must fail closed");
+        let rendered = err.to_string();
         assert!(
-            err.to_string()
-                .contains("requires peer 2 crypto runtime capability metadata")
+            rendered.contains("requires peer 2 crypto runtime capability metadata"),
+            "{rendered}",
         );
+        assert_crypto_fingerprints_redacted(&rendered);
 
         metadata.insert(
             2,
@@ -1604,10 +1621,12 @@ mod tests {
         );
         let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
             .expect_err("blank transfer participant crypto metadata must fail closed");
+        let rendered = err.to_string();
         assert!(
-            err.to_string()
-                .contains("requires peer 2 crypto runtime capability metadata")
+            rendered.contains("requires peer 2 crypto runtime capability metadata"),
+            "{rendered}",
         );
+        assert_crypto_fingerprints_redacted(&rendered);
 
         metadata.insert(
             1,
@@ -1621,10 +1640,12 @@ mod tests {
         );
         let err = validate_encrypted_transfer_crypto_runtime_parity("docs", 1, 2, 3, &metadata)
             .expect_err("blank local crypto metadata must fail closed");
+        let rendered = err.to_string();
         assert!(
-            err.to_string()
-                .contains("requires local peer 1 crypto runtime capability metadata")
+            rendered.contains("requires local peer 1 crypto runtime capability metadata"),
+            "{rendered}",
         );
+        assert_crypto_fingerprints_redacted(&rendered);
     }
 
     #[test]
@@ -1661,16 +1682,20 @@ mod tests {
         let err =
             validate_encrypted_resharding_crypto_runtime_parity("docs", 1, [1, 2, 3], &metadata)
                 .expect_err("mismatched peer metadata must fail closed");
-        assert!(err.to_string().contains("crypto runtime parity mismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("crypto runtime parity mismatch"));
+        assert_crypto_fingerprints_redacted(&rendered);
 
         metadata.remove(&2);
         let err =
             validate_encrypted_resharding_crypto_runtime_parity("docs", 1, [1, 2, 3], &metadata)
                 .expect_err("missing peer metadata must fail closed");
+        let rendered = err.to_string();
         assert!(
-            err.to_string()
-                .contains("requires peer 2 crypto runtime capability metadata")
+            rendered.contains("requires peer 2 crypto runtime capability metadata"),
+            "{rendered}",
         );
+        assert_crypto_fingerprints_redacted(&rendered);
 
         metadata.insert(
             2,
@@ -1679,10 +1704,12 @@ mod tests {
         let err =
             validate_encrypted_resharding_crypto_runtime_parity("docs", 1, [1, 2, 3], &metadata)
                 .expect_err("blank peer crypto metadata must fail closed");
+        let rendered = err.to_string();
         assert!(
-            err.to_string()
-                .contains("requires peer 2 crypto runtime capability metadata")
+            rendered.contains("requires peer 2 crypto runtime capability metadata"),
+            "{rendered}",
         );
+        assert_crypto_fingerprints_redacted(&rendered);
     }
 
     #[test]
@@ -1712,8 +1739,10 @@ mod tests {
             "docs", 1, &placement, &metadata,
         )
         .expect_err("mismatched create-shard-key placement must fail closed");
-        assert!(err.to_string().contains("create shard key"));
-        assert!(err.to_string().contains("crypto runtime parity mismatch"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("create shard key"));
+        assert!(rendered.contains("crypto runtime parity mismatch"));
+        assert_crypto_fingerprints_redacted(&rendered);
 
         metadata.insert(
             3,
@@ -1729,9 +1758,11 @@ mod tests {
             "docs", 1, &placement, &metadata,
         )
         .expect_err("missing create-shard-key placement metadata must fail closed");
+        let rendered = err.to_string();
         assert!(
-            err.to_string()
-                .contains("requires peer 2 crypto runtime capability metadata")
+            rendered.contains("requires peer 2 crypto runtime capability metadata"),
+            "{rendered}",
         );
+        assert_crypto_fingerprints_redacted(&rendered);
     }
 }
