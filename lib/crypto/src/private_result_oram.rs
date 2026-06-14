@@ -2405,6 +2405,12 @@ pub fn verify_private_result_oram_merkle_proof(
         {
             return Err(PrivateResultOramError::InvalidMerkleProof);
         }
+        let raw_ciphertext = BASE64URL_NOPAD
+            .decode(bucket.ciphertext.as_bytes())
+            .map_err(|_| PrivateResultOramError::InvalidBucketCiphertextEncoding)?;
+        if base64url_sha256(&raw_ciphertext) != bucket.ciphertext_sha256 {
+            return Err(PrivateResultOramError::InvalidBucketCiphertextHash);
+        }
         decode_bucket_commitment(&bucket.bucket_commitment)?;
         if let Some(existing) = buckets_by_id.insert(bucket.bucket_id, bucket) {
             if existing != bucket {
@@ -4881,6 +4887,19 @@ mod tests {
         )
         .unwrap();
 
+        let mut hash_mismatch_bucket = bucket0.clone();
+        hash_mismatch_bucket.ciphertext_sha256 = commitment(8);
+        assert_eq!(
+            verify_private_result_oram_merkle_proof(
+                &proof,
+                42,
+                &root,
+                2,
+                &[hash_mismatch_bucket, bucket1.clone()],
+            ),
+            Err(PrivateResultOramError::InvalidBucketCiphertextHash)
+        );
+
         let mut future_epoch_bucket = bucket0.clone();
         future_epoch_bucket.index_epoch = 43;
         assert_eq!(
@@ -4908,8 +4927,9 @@ mod tests {
         .unwrap();
 
         let mut conflicting_duplicate_bucket = bucket0.clone();
-        conflicting_duplicate_bucket.ciphertext =
-            BASE64URL_NOPAD.encode(b"conflicting duplicate bucket");
+        let conflicting_raw = b"conflicting duplicate bucket";
+        conflicting_duplicate_bucket.ciphertext = BASE64URL_NOPAD.encode(conflicting_raw);
+        conflicting_duplicate_bucket.ciphertext_sha256 = base64url_sha256(conflicting_raw);
         assert_eq!(
             verify_private_result_oram_merkle_proof(
                 &duplicate_proof,

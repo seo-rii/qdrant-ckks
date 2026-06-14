@@ -2791,6 +2791,12 @@ pub fn verify_private_hnsw_oram_merkle_proof(
         {
             return Err(PrivateHnswClientError::InvalidMerkleProof);
         }
+        let raw_ciphertext = BASE64URL_NOPAD
+            .decode(bucket.ciphertext.as_bytes())
+            .map_err(|_| PrivateHnswClientError::InvalidBucketCiphertextEncoding)?;
+        if base64url_sha256(&raw_ciphertext) != bucket.ciphertext_sha256 {
+            return Err(PrivateHnswClientError::InvalidBucketCiphertextHash);
+        }
         decode_bucket_commitment(&bucket.bucket_commitment)?;
         if let Some(existing) = buckets_by_id.insert(bucket.bucket_id, bucket) {
             if existing != bucket {
@@ -3887,12 +3893,13 @@ mod tests {
         commitment_byte: u8,
         hash_byte: u8,
     ) -> PrivateHnswOramBucket {
+        let ciphertext = [hash_byte; 48];
         PrivateHnswOramBucket {
             version: 1,
             bucket_id,
             index_epoch,
-            ciphertext: BASE64URL_NOPAD.encode(&[hash_byte; 48]),
-            ciphertext_sha256: BASE64URL_NOPAD.encode(&[hash_byte; 32]),
+            ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
+            ciphertext_sha256: base64url_sha256(&ciphertext),
             bucket_commitment: commitment(commitment_byte),
         }
     }
@@ -5319,6 +5326,19 @@ mod tests {
         .unwrap();
         verify_private_hnsw_oram_merkle_proof(&proof, 42, &root, 4, &[bucket.clone()]).unwrap();
 
+        let mut hash_mismatch_bucket = bucket.clone();
+        hash_mismatch_bucket.ciphertext_sha256 = commitment(8);
+        assert_eq!(
+            verify_private_hnsw_oram_merkle_proof(
+                &proof,
+                42,
+                &root,
+                4,
+                std::slice::from_ref(&hash_mismatch_bucket),
+            ),
+            Err(PrivateHnswClientError::InvalidBucketCiphertextHash)
+        );
+
         let duplicate_proof = PrivateHnswOramMerkleProof {
             leaves: vec![proof.leaves[0].clone(), proof.leaves[0].clone()],
             ..proof.clone()
@@ -5333,8 +5353,9 @@ mod tests {
         .unwrap();
 
         let mut conflicting_duplicate_bucket = bucket.clone();
-        conflicting_duplicate_bucket.ciphertext =
-            BASE64URL_NOPAD.encode(b"conflicting duplicate HNSW bucket");
+        let conflicting_raw = b"conflicting duplicate HNSW bucket";
+        conflicting_duplicate_bucket.ciphertext = BASE64URL_NOPAD.encode(conflicting_raw);
+        conflicting_duplicate_bucket.ciphertext_sha256 = base64url_sha256(conflicting_raw);
         assert_eq!(
             verify_private_hnsw_oram_merkle_proof(
                 &duplicate_proof,
