@@ -1933,6 +1933,39 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn temp_directory_symlink_rejects_without_path_or_temp_name_leak() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        store.ensure_layout().unwrap();
+        let outside_temp = temp.path().join("outside-private-result-temp");
+        fs::create_dir(&outside_temp).unwrap();
+        fs::set_permissions(&outside_temp, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::remove_dir(store.root_path().join(TEMP_DIR)).unwrap();
+        symlink(&outside_temp, store.root_path().join(TEMP_DIR)).unwrap();
+
+        let err = store
+            .write_initial_epoch(&PrivateResultOramEpochState {
+                index_epoch: 42,
+                root_hash: root_hash(42),
+            })
+            .unwrap_err();
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("non-symlink directory"));
+        assert!(
+            !rendered.contains("outside-private-result-temp"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("private_result_oram"), "{rendered}");
+        assert!(!rendered.contains("private-result-oram-"), "{rendered}");
+        let outside_mode = fs::metadata(&outside_temp).unwrap().permissions().mode() & 0o777;
+        assert_eq!(outside_mode, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn bucket_directory_group_world_accessible_rejects() {
         use std::os::unix::fs::PermissionsExt;
 
