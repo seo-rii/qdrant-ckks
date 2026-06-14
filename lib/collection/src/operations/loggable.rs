@@ -418,6 +418,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "roothashes"
                         | "oldroothash"
                         | "newroothash"
+                        | "unknownfield"
                 ) {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -879,7 +880,9 @@ mod tests {
                     "oram_position_map": "qdrant-sec-private-hnsw-oram-position-map-log-sentinel",
                     "stash": "qdrant-sec-private-hnsw-stash-log-sentinel"
                 },
-                "clientState": "qdrant-sec-private-hnsw-camel-client-state-log-sentinel"
+                "clientState": "qdrant-sec-private-hnsw-camel-client-state-log-sentinel",
+                "unknown_field": "qdrant-sec-private-oram-unknown-field-log-sentinel",
+                "unknownField": "qdrant-sec-private-oram-camel-unknown-field-log-sentinel"
             }
         });
         let mut private_hnsw_graph = json!({
@@ -1019,6 +1022,8 @@ mod tests {
             "qdrant-sec-private-hnsw-camel-point-token-log-sentinel",
             "qdrant-sec-private-hnsw-payload-token-log-sentinel",
             "qdrant-sec-private-hnsw-camel-payload-token-log-sentinel",
+            "qdrant-sec-private-oram-unknown-field-log-sentinel",
+            "qdrant-sec-private-oram-camel-unknown-field-log-sentinel",
             "qdrant-sec-private-result-session-id-log-sentinel",
             "qdrant-sec-private-result-camel-session-id-log-sentinel",
             "qdrant-sec-private-result-root-hash-log-sentinel",
@@ -1077,6 +1082,7 @@ mod tests {
                 "bucket_commitments": ["bucket-commitment-a"],
                 "read_signature": "read-signature-a",
                 "commit_signature": "commit-signature-a",
+                "unknown_field": "unknown-field-a",
                 "updated_buckets": [
                     { "bucket_id": 7, "bucket_commitment": "updated-bucket-a" },
                     { "bucket_id": 8, "bucket_commitment": "updated-bucket-b" }
@@ -1095,6 +1101,7 @@ mod tests {
                 "bucket_commitments": ["bucket-commitment-b", "bucket-commitment-c"],
                 "read_signature": "read-signature-b",
                 "commit_signature": "commit-signature-b",
+                "unknown_field": "unknown-field-b",
                 "updated_buckets": [{ "bucket_id": 12, "bucket_commitment": "updated-bucket-c" }],
                 "token_position_map": { "fetch-token-b": 17 }
             }
@@ -1117,6 +1124,7 @@ mod tests {
                 "bucketCommitments": ["private-oram-camel-bucket-commitment-a"],
                 "readSignature": "private-oram-camel-read-signature-a",
                 "commitSignature": "private-oram-camel-commit-signature-a",
+                "unknownField": "private-oram-camel-unknown-field-a",
                 "updatedBuckets": [
                     { "bucketId": 7, "bucketCommitment": "private-oram-camel-updated-bucket-a" },
                     { "bucketId": 8, "bucketCommitment": "private-oram-camel-updated-bucket-b" }
@@ -1139,6 +1147,7 @@ mod tests {
                 ],
                 "readSignature": "private-oram-camel-read-signature-b",
                 "commitSignature": "private-oram-camel-commit-signature-b",
+                "unknownField": "private-oram-camel-unknown-field-b",
                 "updatedBuckets": [
                     { "bucketId": 12, "bucketCommitment": "private-oram-camel-updated-bucket-c" }
                 ],
