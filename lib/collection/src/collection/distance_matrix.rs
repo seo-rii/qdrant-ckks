@@ -156,9 +156,6 @@ impl Collection {
             filter,
             using,
         } = request;
-        if limit_per_sample == 0 || sample_size == 0 {
-            return Ok(Default::default());
-        }
         self.ensure_crypto_migration_allows_regular_operation("reads")
             .await?;
 
@@ -182,6 +179,10 @@ impl Collection {
             }
         }
         drop(config);
+
+        if limit_per_sample == 0 || sample_size == 0 {
+            return Ok(Default::default());
+        }
 
         // make sure the vector is present in the point
         let has_vector = Filter::new_must(Condition::HasVector(HasVectorCondition::from(

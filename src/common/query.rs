@@ -9655,6 +9655,10 @@ mod tests {
             create_private_hnsw_collection(&dispatcher).await;
             let pass = new_unchecked_verification_pass();
             let toc = dispatcher.toc(&auth, &pass).clone();
+            let collection_pass = auth
+                .check_collection_access(COLLECTION_NAME, AccessRequirements::new(), "test")
+                .unwrap();
+            let private_hnsw_collection = toc.get_collection(&collection_pass).await.unwrap();
 
             let err = do_search_points_matrix(
                 &toc,
@@ -9681,6 +9685,29 @@ mod tests {
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
                         && description.contains("/private-hnsw/text/session")
             ));
+
+            let err = private_hnsw_collection
+                .search_points_matrix(
+                    CollectionSearchMatrixRequest {
+                        sample_size: 0,
+                        limit_per_sample: 0,
+                        filter: None,
+                        using: VECTOR_NAME.to_string(),
+                    },
+                    ShardSelectorInternal::All,
+                    None,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .unwrap_err();
+
+            let message = err.to_string();
+            assert!(
+                message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER),
+                "{message}"
+            );
+            assert!(message.contains("/private-hnsw/text/session"), "{message}");
         });
     }
 
