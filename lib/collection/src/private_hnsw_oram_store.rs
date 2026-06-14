@@ -116,6 +116,10 @@ impl PrivateHnswOramStore {
     }
 
     pub fn ensure_layout(&self) -> CollectionResult<()> {
+        let private_hnsw_dir = self.root.parent().ok_or_else(|| {
+            CollectionError::service_error("private HNSW ORAM store path is invalid")
+        })?;
+        create_private_dir(private_hnsw_dir)?;
         create_private_dir(&self.root)?;
         create_private_dir(&self.buckets_dir())?;
         create_private_dir(&self.epochs_dir())?;
@@ -2005,8 +2009,13 @@ mod tests {
                 .unwrap()
                 .permissions()
                 .mode();
+            let parent_mode = fs::metadata(store.root_path().parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode();
             assert_eq!(manifest_mode & 0o077, 0);
             assert_eq!(root_mode & 0o077, 0);
+            assert_eq!(parent_mode & 0o077, 0);
         }
     }
 
@@ -3120,6 +3129,7 @@ mod tests {
         fs::set_permissions(&outside_dir, fs::Permissions::from_mode(0o755)).unwrap();
         let private_hnsw_root = temp.path().join(PRIVATE_HNSW_ORAM_DIR);
         fs::create_dir(&private_hnsw_root).unwrap();
+        fs::set_permissions(&private_hnsw_root, fs::Permissions::from_mode(0o700)).unwrap();
         symlink(&outside_dir, private_hnsw_root.join("text")).unwrap();
         let store = fixture_store(&temp);
 
@@ -3131,6 +3141,28 @@ mod tests {
         assert!(!rendered.contains("private_hnsw_oram"), "{rendered}");
         let outside_mode = fs::metadata(&outside_dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(outside_mode, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_directory_group_world_accessible_rejects_without_path_leak() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let private_hnsw_root = temp.path().join(PRIVATE_HNSW_ORAM_DIR);
+        fs::create_dir(&private_hnsw_root).unwrap();
+        fs::set_permissions(&private_hnsw_root, fs::Permissions::from_mode(0o755)).unwrap();
+        let store = fixture_store(&temp);
+
+        let err = store.ensure_layout().unwrap_err();
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("group/world accessible"));
+        assert!(!rendered.contains("private_hnsw_oram"), "{rendered}");
+        assert!(
+            !store.root_path().exists(),
+            "weak parent must fail before creating vector store root"
+        );
     }
 
     #[cfg(unix)]
