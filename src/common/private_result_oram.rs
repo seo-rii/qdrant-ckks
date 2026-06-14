@@ -1423,6 +1423,11 @@ fn signature_public_keys(
 }
 
 fn decode_signature_public_key(public_key_b64: &str) -> StorageResult<Vec<u8>> {
+    if public_key_b64.len() != BASE64URL_NOPAD_32_BYTE_LEN {
+        return Err(StorageError::bad_request(
+            "private result ORAM signature public key has invalid encoded length",
+        ));
+    }
     let public_key = BASE64URL_NOPAD
         .decode(public_key_b64.as_bytes())
         .map_err(|_| {
@@ -1901,6 +1906,16 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("signature public key has invalid encoded length"));
         assert!(!rendered.contains(&wrong_len));
+
+        let oversized = format!("{valid}{}", "A".repeat(4096));
+        let err = signature_public_key(
+            &instance_with_signature_public_key(&oversized),
+            SIGNING_KEY_ID,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature public key has invalid encoded length"));
+        assert!(!rendered.contains(&oversized));
 
         let mut malformed = BASE64URL_NOPAD.encode(&[7; 32]);
         malformed.replace_range(0..1, "!");
