@@ -27,6 +27,7 @@ struct PrivateHnswPath {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct PrivateHnswClientSignature {
     pub alg: String,
     pub key_id: String,
@@ -34,12 +35,14 @@ pub struct PrivateHnswClientSignature {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct UploadPrivateHnswManifestRequest {
     pub manifest: qdrant_sec::PrivateHnswOramManifest,
     pub signature: qdrant_sec::PrivateHnswOramSignature,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct UploadPrivateHnswBucketsRequest {
     pub index_epoch: u64,
     pub root_hash: String,
@@ -47,6 +50,7 @@ pub struct UploadPrivateHnswBucketsRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct OpenPrivateHnswSessionRequest {
     pub client_id: String,
     pub desired_epoch: u64,
@@ -67,6 +71,7 @@ pub struct PrivateHnswSessionResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct OramReadPathsRequest {
     pub session_id: String,
     pub index_epoch: u64,
@@ -77,6 +82,7 @@ pub struct OramReadPathsRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct OramReadPadding {
     pub requested_paths: u32,
     pub dummy_paths_included: bool,
@@ -99,6 +105,7 @@ pub struct OramReadProof {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct OramCommitRequest {
     pub session_id: String,
     pub old_epoch: u64,
@@ -322,7 +329,7 @@ mod private_hnsw_rest_tests {
     use actix_web::{App, test as actix_test, web};
     use collection::private_hnsw_oram_store::{PrivateHnswOramEpochState, PrivateHnswOramStore};
     use serde::de::DeserializeOwned;
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use storage::rbac::{Access, AccessRequirements, Auth};
 
     use super::*;
@@ -340,6 +347,19 @@ mod private_hnsw_rest_tests {
         serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap()
     }
 
+    fn assert_unknown_field_rejected<T>(value: &T)
+    where
+        T: Serialize + DeserializeOwned + Debug,
+    {
+        let mut value = serde_json::to_value(value).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("extra".to_string(), json!("reject-me"));
+        let err = serde_json::from_value::<T>(value).unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
+    }
+
     fn assert_requires_write_access(error: impl std::fmt::Display) {
         let rendered = error.to_string();
         assert!(
@@ -347,6 +367,81 @@ mod private_hnsw_rest_tests {
                 || rendered.contains("Write access to collection"),
             "expected write-access denial, got: {rendered}",
         );
+    }
+
+    #[test]
+    fn private_hnsw_rest_request_dtos_reject_unknown_fields() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let manifest_request = UploadPrivateHnswManifestRequest {
+            manifest: fixture.manifest.clone(),
+            signature: fixture.manifest_signature.clone(),
+        };
+        assert_unknown_field_rejected(&manifest_request);
+
+        let buckets_request = UploadPrivateHnswBucketsRequest {
+            index_epoch: fixture.encrypted_build.index_epoch,
+            root_hash: fixture.encrypted_build.root_hash.clone(),
+            buckets: fixture.encrypted_build.buckets.clone(),
+        };
+        assert_unknown_field_rejected(&buckets_request);
+
+        let session_request = OpenPrivateHnswSessionRequest {
+            client_id: "tenant-a/sdk-instance-1".to_string(),
+            desired_epoch: BASE_EPOCH,
+            fixed_budget: true,
+            result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+        };
+        assert_unknown_field_rejected(&session_request);
+
+        let read_request = OramReadPathsRequest {
+            session_id: SESSION_ID.to_string(),
+            index_epoch: fixture.encrypted_build.index_epoch,
+            root_hash: fixture.encrypted_build.root_hash.clone(),
+            paths: vec![fixture.entry_leaf_label()],
+            padding: OramReadPadding {
+                requested_paths: 1,
+                dummy_paths_included: true,
+            },
+            client_signature: PrivateHnswClientSignature {
+                alg: "ed25519".to_string(),
+                key_id: SIGNING_KEY_ID.to_string(),
+                sig: fixture.client_signature().sig,
+            },
+        };
+        assert_unknown_field_rejected(&read_request);
+
+        let padding = json!({
+            "requested_paths": 1,
+            "dummy_paths_included": true,
+            "extra": "reject-me",
+        });
+        let err = serde_json::from_value::<OramReadPadding>(padding).unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
+
+        let signature = json!({
+            "alg": "ed25519",
+            "key_id": SIGNING_KEY_ID,
+            "sig": fixture.client_signature().sig,
+            "extra": "reject-me",
+        });
+        let err = serde_json::from_value::<PrivateHnswClientSignature>(signature).unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
+
+        let search_run = fixture.run_single_search_collect_writeback();
+        let commit_request = OramCommitRequest {
+            session_id: SESSION_ID.to_string(),
+            old_epoch: BASE_EPOCH,
+            new_epoch: NEXT_EPOCH,
+            old_root_hash: search_run.commit_plan.old_root_hash,
+            new_root_hash: search_run.commit_plan.new_root_hash,
+            updated_buckets: search_run.updated_buckets,
+            commit_signature: PrivateHnswClientSignature {
+                alg: search_run.commit_signature.alg,
+                key_id: search_run.commit_signature.key_id,
+                sig: search_run.commit_signature.sig,
+            },
+        };
+        assert_unknown_field_rejected(&commit_request);
     }
 
     #[test]

@@ -25,12 +25,14 @@ struct PrivateResultOramPath {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct UploadPrivateResultOramManifestRequest {
     pub manifest: qdrant_sec::PrivateResultOramManifest,
     pub signature: qdrant_sec::PrivateResultOramSignature,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct UploadPrivateResultOramBucketsRequest {
     pub index_epoch: u64,
     pub root_hash: String,
@@ -38,6 +40,7 @@ pub struct UploadPrivateResultOramBucketsRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct OpenPrivateResultOramSessionRequest {
     pub client_id: String,
     pub desired_epoch: u64,
@@ -56,6 +59,7 @@ pub struct PrivateResultOramSessionResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct ReadPrivateResultOramBucketsRequest {
     pub session_id: String,
     pub index_epoch: u64,
@@ -81,6 +85,7 @@ pub struct PrivateResultOramReadProof {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct CommitPrivateResultOramBucketsRequest {
     pub session_id: String,
     pub old_epoch: u64,
@@ -600,6 +605,19 @@ mod private_result_oram_rest_tests {
         serde_json::from_value(serde_json::to_value(value).unwrap()).unwrap()
     }
 
+    fn assert_unknown_field_rejected<T>(value: &T)
+    where
+        T: Serialize + DeserializeOwned + Debug,
+    {
+        let mut value = serde_json::to_value(value).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("extra".to_string(), json!("reject-me"));
+        let err = serde_json::from_value::<T>(value).unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
+    }
+
     fn assert_requires_write_access(error: impl std::fmt::Display) {
         let rendered = error.to_string();
         assert!(
@@ -704,6 +722,52 @@ mod private_result_oram_rest_tests {
             commit_signature,
         };
         assert_eq!(json_roundtrip(&commit_request), commit_request);
+    }
+
+    #[test]
+    fn private_result_oram_rest_request_dtos_reject_unknown_fields() {
+        let fixture = PrivateResultRouteFixture::build();
+        let manifest_request = UploadPrivateResultOramManifestRequest {
+            manifest: fixture.manifest.clone(),
+            signature: fixture.signature.clone(),
+        };
+        assert_unknown_field_rejected(&manifest_request);
+
+        let buckets_request = UploadPrivateResultOramBucketsRequest {
+            index_epoch: fixture.manifest.index_epoch,
+            root_hash: fixture.manifest.root_hash.clone(),
+            buckets: fixture.buckets.clone(),
+        };
+        assert_unknown_field_rejected(&buckets_request);
+
+        let session_request = OpenPrivateResultOramSessionRequest {
+            client_id: "tenant-a/sdk-instance-1".to_string(),
+            desired_epoch: BASE_EPOCH,
+            fixed_budget: true,
+        };
+        assert_unknown_field_rejected(&session_request);
+
+        let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
+        let read_request = ReadPrivateResultOramBucketsRequest {
+            session_id: SESSION_ID.to_string(),
+            index_epoch: fixture.manifest.index_epoch,
+            root_hash: fixture.manifest.root_hash.clone(),
+            bucket_ids: read_bucket_ids.clone(),
+            read_signature: fixture.read_signature(&read_bucket_ids),
+        };
+        assert_unknown_field_rejected(&read_request);
+
+        let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+        let commit_request = CommitPrivateResultOramBucketsRequest {
+            session_id: SESSION_ID.to_string(),
+            old_epoch: BASE_EPOCH,
+            new_epoch: NEXT_EPOCH,
+            old_root_hash: fixture.manifest.root_hash.clone(),
+            new_root_hash,
+            updated_buckets: vec![updated_bucket],
+            commit_signature,
+        };
+        assert_unknown_field_rejected(&commit_request);
     }
 
     #[test]
