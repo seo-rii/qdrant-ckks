@@ -826,10 +826,9 @@ fn private_result_oram_configured(params: &CollectionParams) -> CollectionResult
         .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING))
     {
         if !matches!(rule.selector, EncryptionSelector::PayloadPaths { .. }) {
-            return Err(CollectionError::bad_request(format!(
-                "private result ORAM snapshot rule {} must use payload_paths selector",
-                rule.id,
-            )));
+            return Err(CollectionError::bad_request(
+                "private result ORAM snapshot rules must use payload_paths selector",
+            ));
         }
         if configured {
             return Err(CollectionError::bad_request(
@@ -880,10 +879,9 @@ fn private_hnsw_oram_configured_vectors(
         .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
     {
         let EncryptionSelector::VectorNames { names } = &rule.selector else {
-            return Err(CollectionError::bad_request(format!(
-                "private HNSW ORAM snapshot rule {} must use vector_names selector",
-                rule.id,
-            )));
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM snapshot rules must use vector_names selector",
+            ));
         };
         if names.len() != 1 {
             return Err(CollectionError::bad_request(
@@ -1885,6 +1883,38 @@ mod tests {
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_wrong_selector_without_rule_id() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-wrong-selector")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut config = private_result_config(uuid);
+        let rule = &mut config.params.encryption.as_mut().unwrap().rules[0];
+        rule.id = "private-result-secret-rule-id".to_string();
+        rule.selector = EncryptionSelector::VectorNames {
+            names: vec!["secret-result-vector".to_string()],
+        };
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("must use payload_paths selector"));
+        assert!(
+            !rendered.contains("private-result-secret-rule-id"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("secret-result-vector"), "{rendered}");
+        assert!(!rendered.contains("missing for configured binding"));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+    }
+
     #[cfg(unix)]
     #[test]
     fn private_result_oram_restore_preflight_rejects_root_symlink() {
@@ -2465,6 +2495,38 @@ mod tests {
                 .contains("missing for configured vector rules")
         );
         assert!(!err.to_string().contains(PRIVATE_HNSW_ORAM_DIR));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_wrong_selector_without_rule_id() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-wrong-selector")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut config = private_hnsw_config(uuid);
+        let rule = &mut config.params.encryption.as_mut().unwrap().rules[0];
+        rule.id = "private-hnsw-secret-rule-id".to_string();
+        rule.selector = EncryptionSelector::PayloadPaths {
+            paths: vec!["secret.payload".to_string()],
+        };
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("must use vector_names selector"));
+        assert!(
+            !rendered.contains("private-hnsw-secret-rule-id"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("secret.payload"), "{rendered}");
+        assert!(!rendered.contains("missing for configured vector rules"));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
     }
 
     #[test]
