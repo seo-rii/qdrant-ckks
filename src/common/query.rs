@@ -9252,6 +9252,10 @@ mod tests {
             create_private_hnsw_collection(&dispatcher).await;
             let pass = new_unchecked_verification_pass();
             let toc = dispatcher.toc(&auth, &pass).clone();
+            let collection_pass = auth
+                .check_collection_access(COLLECTION_NAME, AccessRequirements::new(), "test")
+                .unwrap();
+            let private_hnsw_collection = toc.get_collection(&collection_pass).await.unwrap();
 
             let err = do_query_points(
                 &toc,
@@ -9290,6 +9294,39 @@ mod tests {
                         && !description.contains("runtime OpenFHE")
             ));
 
+            let err = private_hnsw_collection
+                .query(
+                    ShardQueryRequest {
+                        prefetches: Vec::new(),
+                        query: Some(ScoringQuery::Vector(QueryEnum::Nearest(NamedQuery::new(
+                            VectorInternal::Dense(vec![1.0, 0.0]),
+                            VECTOR_NAME.to_string(),
+                        )))),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 0,
+                        offset: 0,
+                        params: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(false),
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .unwrap_err();
+
+            let message = err.to_string();
+            assert!(
+                message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER),
+                "{message}"
+            );
+            assert!(message.contains("/private-hnsw/text/session"), "{message}");
+            assert!(!message.contains("runtime CKKS"), "{message}");
+            assert!(!message.contains("runtime OpenFHE"), "{message}");
+
             let err = do_search_points(
                 &toc,
                 COLLECTION_NAME,
@@ -9326,6 +9363,40 @@ mod tests {
                         && !description.contains("runtime CKKS")
                         && !description.contains("runtime OpenFHE")
             ));
+
+            let err = private_hnsw_collection
+                .core_search_batch(
+                    CoreSearchRequestBatch {
+                        searches: vec![CoreSearchRequest {
+                            query: QueryEnum::Nearest(NamedQuery::new(
+                                VectorInternal::Dense(vec![1.0, 0.0]),
+                                VECTOR_NAME.to_string(),
+                            )),
+                            filter: None,
+                            params: None,
+                            limit: 0,
+                            offset: 0,
+                            with_payload: Some(WithPayloadInterface::Bool(false)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            score_threshold: None,
+                        }],
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .unwrap_err();
+
+            let message = err.to_string();
+            assert!(
+                message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER),
+                "{message}"
+            );
+            assert!(message.contains("/private-hnsw/text/session"), "{message}");
+            assert!(!message.contains("runtime CKKS"), "{message}");
+            assert!(!message.contains("runtime OpenFHE"), "{message}");
 
             let err = do_recommend_points(
                 &toc,
@@ -9623,6 +9694,10 @@ mod tests {
             create_private_hnsw_collection(&dispatcher).await;
             let pass = new_unchecked_verification_pass();
             let toc = dispatcher.toc(&auth, &pass).clone();
+            let collection_pass = auth
+                .check_collection_access(COLLECTION_NAME, AccessRequirements::new(), "test")
+                .unwrap();
+            let private_hnsw_collection = toc.get_collection(&collection_pass).await.unwrap();
 
             let err = do_recommend_points(
                 &toc,
@@ -9658,6 +9733,39 @@ mod tests {
                         && description.contains("/private-hnsw/text/session")
             ));
 
+            let err = collection::recommendations::recommend_by(
+                RecommendRequestInternal {
+                    positive: vec![RecommendExample::Dense(vec![1.0, 0.0])],
+                    negative: Vec::new(),
+                    strategy: Some(RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    limit: 0,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    using: Some(UsingVector::Name(VECTOR_NAME.to_string())),
+                    lookup_from: None,
+                },
+                private_hnsw_collection.as_ref(),
+                |_| async { None },
+                None,
+                ShardSelectorInternal::All,
+                None,
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .map_err(StorageError::from)
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+
             let err = do_discover_points(
                 &toc,
                 COLLECTION_NAME,
@@ -9675,12 +9783,43 @@ mod tests {
                 },
                 None,
                 ShardSelectorInternal::All,
-                auth,
+                auth.clone(),
                 None,
                 HwMeasurementAcc::disposable(),
                 Some(&settings),
             )
             .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/text/session")
+            ));
+
+            let err = collection::discovery::discover(
+                DiscoverRequestInternal {
+                    target: Some(RecommendExample::Dense(vec![1.0, 0.0])),
+                    context: None,
+                    filter: None,
+                    params: None,
+                    limit: 0,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    using: Some(UsingVector::Name(VECTOR_NAME.to_string())),
+                    lookup_from: None,
+                },
+                private_hnsw_collection.as_ref(),
+                |_| async { None },
+                None,
+                ShardSelectorInternal::All,
+                None,
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .map_err(StorageError::from)
             .unwrap_err();
 
             assert!(matches!(

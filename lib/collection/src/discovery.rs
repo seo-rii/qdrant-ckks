@@ -4,7 +4,7 @@ use std::time::Duration;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use futures::Future;
 use itertools::Itertools;
-use segment::data_types::vectors::NamedQuery;
+use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, NamedQuery};
 use segment::types::{Condition, Filter, HasIdCondition, ScoredPoint};
 use segment::vector_storage::query::{ContextPair, ContextQuery, DiscoverQuery};
 use shard::query::query_enum::QueryEnum;
@@ -137,6 +137,14 @@ where
     F: Fn(String) -> Fut,
     Fut: Future<Output = Option<Arc<Collection>>>,
 {
+    let vector_name = request
+        .using
+        .as_ref()
+        .map(|using| using.as_name())
+        .unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string());
+    collection
+        .ensure_vector_search_does_not_touch_encrypted_vector(&vector_name, "discover")
+        .await?;
     collection
         .ensure_private_result_oram_payload_read_is_not_raw(
             request.with_payload.as_ref(),
@@ -175,6 +183,14 @@ where
 {
     let start = std::time::Instant::now();
     for (request, _) in &request_batch {
+        let vector_name = request
+            .using
+            .as_ref()
+            .map(|using| using.as_name())
+            .unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string());
+        collection
+            .ensure_vector_search_does_not_touch_encrypted_vector(&vector_name, "discover")
+            .await?;
         collection
             .ensure_private_result_oram_payload_read_is_not_raw(
                 request.with_payload.as_ref(),

@@ -192,6 +192,32 @@ fn encrypted_vector_return_error(
     )))
 }
 
+fn encrypted_vector_search_error(
+    encryption: &CollectionEncryptionConfig,
+    vector_name: &str,
+    operation: &str,
+) -> Option<CollectionError> {
+    for rule in &encryption.rules {
+        let EncryptionSelector::VectorNames { names } = &rule.selector else {
+            continue;
+        };
+        if !names.iter().any(|name| name == vector_name) {
+            continue;
+        }
+
+        let message = if encryption_rule_uses_private_hnsw_oram(rule) {
+            private_hnsw_oram_api_required_message(vector_name)
+        } else {
+            format!(
+                "cannot {operation} encrypted vector '{vector_name}' through direct collection {operation}; use the runtime CKKS sidecar {operation} entrypoint",
+            )
+        };
+        return Some(CollectionError::bad_input(message));
+    }
+
+    None
+}
+
 fn reject_private_result_oram_payload_point_operation(
     operation: &CollectionUpdateOperations,
     encryption: &CollectionEncryptionConfig,
@@ -3732,6 +3758,28 @@ impl Collection {
             "cannot {operation} private result ORAM payload field '{payload_path}' through ordinary collection payload reads; {}",
             private_result_oram_api_required_message(payload_path),
         )))
+    }
+
+    pub(crate) async fn ensure_vector_search_does_not_touch_encrypted_vector(
+        &self,
+        vector_name: &str,
+        operation: &str,
+    ) -> CollectionResult<()> {
+        let Some(encryption) = self
+            .collection_config
+            .read()
+            .await
+            .params
+            .effective_encryption()
+        else {
+            return Ok(());
+        };
+
+        if let Some(err) = encrypted_vector_search_error(&encryption, vector_name, operation) {
+            return Err(err);
+        }
+
+        Ok(())
     }
 
     pub(super) async fn encrypted_payload_redaction_plan_for_mode(

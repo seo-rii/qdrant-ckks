@@ -7,7 +7,8 @@ use api::rest::RecommendStrategy;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use itertools::Itertools;
 use segment::data_types::vectors::{
-    DenseVector, NamedQuery, TypedMultiDenseVector, VectorElementType, VectorInternal, VectorRef,
+    DEFAULT_VECTOR_NAME, DenseVector, NamedQuery, TypedMultiDenseVector, VectorElementType,
+    VectorInternal, VectorRef,
 };
 use segment::types::{
     Condition, ExtendedPointId, Filter, HasIdCondition, PointIdType, ScoredPoint,
@@ -157,6 +158,14 @@ where
     F: Fn(String) -> Fut,
     Fut: Future<Output = Option<Arc<Collection>>>,
 {
+    let vector_name = request
+        .using
+        .as_ref()
+        .map(UsingVector::as_name)
+        .unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string());
+    collection
+        .ensure_vector_search_does_not_touch_encrypted_vector(&vector_name, "recommend")
+        .await?;
     collection
         .ensure_private_result_oram_payload_read_is_not_raw(
             request.with_payload.as_ref(),
@@ -263,6 +272,14 @@ where
     let start = std::time::Instant::now();
 
     for (request, _) in &request_batch {
+        let vector_name = request
+            .using
+            .as_ref()
+            .map(UsingVector::as_name)
+            .unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string());
+        collection
+            .ensure_vector_search_does_not_touch_encrypted_vector(&vector_name, "recommend")
+            .await?;
         collection
             .ensure_private_result_oram_payload_read_is_not_raw(
                 request.with_payload.as_ref(),
