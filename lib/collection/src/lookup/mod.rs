@@ -47,6 +47,12 @@ where
         .ok_or_else(|| CollectionError::NotFound {
             what: format!("Collection {}", request.collection_name),
         })?;
+    collection
+        .ensure_private_result_oram_payload_read_is_not_raw(
+            request.with_payload.as_ref(),
+            "group lookup",
+        )
+        .await?;
 
     let ids = values
         .into_iter()

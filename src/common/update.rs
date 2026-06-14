@@ -9766,6 +9766,26 @@ esac
                 .expect_err("private result ORAM grouped search lookup must fail closed"),
             );
 
+            let lookup_collection = private_result_collection.clone();
+            assert_private_result_session_error(
+                collection::lookup::lookup_ids(
+                    collection::lookup::WithLookup {
+                        collection_name: "private_result_docs".to_string(),
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vectors: Some(WithVector::Bool(false)),
+                    },
+                    Vec::<collection::lookup::types::PseudoId>::new(),
+                    |_| async move { Some(lookup_collection) },
+                    None,
+                    &ShardSelectorInternal::All,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .map_err(StorageError::from)
+                .expect_err("private result ORAM empty group lookup must fail closed"),
+            );
+
             assert_private_result_session_error(
                 crate::common::query::do_query_point_groups(
                     &toc,
