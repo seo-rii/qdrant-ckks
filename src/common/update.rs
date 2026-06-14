@@ -4239,6 +4239,40 @@ esac
                 .expect_err("private result ORAM delete_points by filter must fail closed"),
                 "cannot delete points by filter for private result ORAM payload field",
             );
+
+            assert_private_result_write_error(
+                do_batch_update_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    vec![UpdateOperation::SetPayload(SetPayloadOperation {
+                        set_payload: SetPayload {
+                            payload: segment::types::Payload(
+                                json!({ "body": "ordinary batch set secret" })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            ),
+                            points: Some(vec![1.into()]),
+                            filter: None,
+                            shard_key: None,
+                            key: None,
+                        },
+                    })],
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM batch update must fail closed"),
+                "cannot set payload for private result ORAM payload field",
+            );
         });
     }
 
