@@ -2296,6 +2296,10 @@ fn sanitize_collection_crypto_validation_error(err: impl std::fmt::Display) -> S
     let rendered = err.to_string();
     if rendered.contains("duplicate_private_result_oram_binding") {
         "private result ORAM supports one configured binding in v1".to_string()
+    } else if rendered.contains("private-result-oram/v1")
+        && rendered.contains("overlapping_encryption_selector")
+    {
+        "private result ORAM payload selector overlaps another encryption selector".to_string()
     } else {
         rendered
     }
@@ -10213,6 +10217,78 @@ mod tests {
                     && description.contains("supports one configured binding in v1")
                     && !description.contains("body")
                     && !description.contains("summary")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_redacts_private_result_oram_overlap_errors() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([
+                    (
+                        "payload_result_oram_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: private_result_oram_options(),
+                        },
+                    ),
+                    (
+                        "payload_client_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: PAYLOAD_CLIENT_AEAD_PROVIDER.to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: json!({}),
+                        },
+                    ),
+                ]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:result-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "body_private_result".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body.secret".to_string()],
+                        },
+                        instance: "payload_result_oram_v1".to_string(),
+                        binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "body_client_payload".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body.secret".to_string()],
+                        },
+                        instance: "payload_client_v1".to_string(),
+                        binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err =
+            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+                .expect_err("private result ORAM overlapping selectors must fail closed");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private result ORAM payload selector overlaps")
+                    && !description.contains("body.secret")
+                    && !description.contains("body_private_result")
+                    && !description.contains("body_client_payload")),
             "unexpected error: {err:?}",
         );
     }
