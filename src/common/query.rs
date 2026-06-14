@@ -786,7 +786,6 @@ pub async fn do_core_search_batch_points(
         &auth,
     )
     .await?;
-
     if runtime_settings.is_none() {
         let private_hnsw_vectors =
             private_hnsw_oram_vector_names_for_collection(toc, collection_name, &auth).await?;
@@ -4353,6 +4352,16 @@ pub async fn do_recommend_batch_points(
         &auth,
     )
     .await?;
+    for (request, _) in &requests {
+        preflight_private_result_oram_raw_payload_read(
+            toc,
+            collection_name,
+            request.with_payload.as_ref(),
+            "recommend results",
+            &auth,
+        )
+        .await?;
+    }
 
     if runtime_settings.is_none() {
         let private_hnsw_vectors =
@@ -4892,6 +4901,14 @@ pub async fn do_recommend_point_groups(
         &auth,
     )
     .await?;
+    preflight_private_result_oram_raw_payload_read(
+        toc,
+        collection_name,
+        request.with_payload.as_ref(),
+        "recommend grouped results",
+        &auth,
+    )
+    .await?;
     normalize_rest_group_lookup_payload_for_read(
         &mut request.group_request.with_lookup,
         encrypted_payload_read_mode,
@@ -5249,6 +5266,16 @@ pub async fn do_discover_batch_points(
         &auth,
     )
     .await?;
+    for (request, _) in &requests {
+        preflight_private_result_oram_raw_payload_read(
+            toc,
+            collection_name,
+            request.with_payload.as_ref(),
+            "discover results",
+            &auth,
+        )
+        .await?;
+    }
 
     if runtime_settings.is_none() {
         let private_hnsw_vectors =

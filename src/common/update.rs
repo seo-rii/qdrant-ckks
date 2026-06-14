@@ -9622,6 +9622,155 @@ esac
             );
 
             assert_private_result_session_error(
+                crate::common::query::do_recommend_points(
+                    &toc,
+                    "private_result_docs",
+                    RecommendRequestInternal {
+                        positive: vec![RecommendExample::Dense(vec![0.1, 0.2])],
+                        negative: Vec::new(),
+                        strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                        filter: None,
+                        params: None,
+                        limit: 1,
+                        offset: None,
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        score_threshold: None,
+                        using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM recommend must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_recommend_batch_points(
+                    &toc,
+                    "private_result_docs",
+                    vec![(
+                        RecommendRequestInternal {
+                            positive: vec![RecommendExample::Dense(vec![0.1, 0.2])],
+                            negative: Vec::new(),
+                            strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                            filter: None,
+                            params: None,
+                            limit: 1,
+                            offset: None,
+                            with_payload: Some(WithPayloadInterface::Bool(true)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            score_threshold: None,
+                            using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                            lookup_from: None,
+                        },
+                        ShardSelectorInternal::All,
+                    )],
+                    None,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM batch recommend must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_recommend_point_groups(
+                    &toc,
+                    "private_result_docs",
+                    RecommendGroupsRequestInternal {
+                        positive: vec![RecommendExample::Dense(vec![0.1, 0.2])],
+                        negative: Vec::new(),
+                        strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        with_vector: Some(WithVector::Bool(false)),
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                        lookup_from: None,
+                        group_request: BaseGroupRequest {
+                            group_by: "group".parse().unwrap(),
+                            group_size: 1,
+                            limit: 1,
+                            with_lookup: None,
+                        },
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM grouped recommend must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_discover_points(
+                    &toc,
+                    "private_result_docs",
+                    DiscoverRequestInternal {
+                        target: Some(RecommendExample::Dense(vec![0.1, 0.2])),
+                        context: None,
+                        filter: None,
+                        params: None,
+                        limit: 1,
+                        offset: None,
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM discover must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_discover_batch_points(
+                    &toc,
+                    "private_result_docs",
+                    vec![(
+                        DiscoverRequestInternal {
+                            target: Some(RecommendExample::Dense(vec![0.1, 0.2])),
+                            context: None,
+                            filter: None,
+                            params: None,
+                            limit: 1,
+                            offset: None,
+                            with_payload: Some(WithPayloadInterface::Bool(true)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                            lookup_from: None,
+                        },
+                        ShardSelectorInternal::All,
+                    )],
+                    None,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM batch discover must fail closed"),
+            );
+
+            assert_private_result_session_error(
                 crate::common::query::do_query_points(
                     &toc,
                     "private_result_docs",
