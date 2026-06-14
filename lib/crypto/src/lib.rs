@@ -96,7 +96,8 @@ pub use private_hnsw_client::{
     sign_private_hnsw_oram_manifest, sign_private_hnsw_oram_manifest_refresh,
     sign_private_hnsw_oram_read_paths, validate_private_hnsw_oram_upload_bundle,
     validate_private_hnsw_oram_upload_bundle_with_signature,
-    validate_private_hnsw_search_result_privacy, verify_private_hnsw_oram_merkle_proof,
+    validate_private_hnsw_search_fixed_budget, validate_private_hnsw_search_result_privacy,
+    validate_private_hnsw_strict_search_result, verify_private_hnsw_oram_merkle_proof,
     verify_private_hnsw_oram_merkle_proof_json,
 };
 pub use private_hnsw_oram::{
