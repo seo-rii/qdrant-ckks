@@ -1200,6 +1200,9 @@ fn private_hnsw_client_error(err: qdrant_sec::PrivateHnswClientError) -> Collect
             "private HNSW search query and node vector dimensions differ"
         }
         PrivateHnswClientError::NonFiniteDistance => "private HNSW search distance is not finite",
+        PrivateHnswClientError::FixedBudgetNotExhausted { .. } => {
+            "private HNSW search did not exhaust the fixed access budget"
+        }
         PrivateHnswClientError::MissingPayloadFetchToken => {
             "private HNSW private result mode requires payload fetch tokens"
         }
@@ -1647,6 +1650,13 @@ mod tests {
                     actual_epoch: 999_999,
                 }),
                 vec!["777777", "888888", "999999"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::FixedBudgetNotExhausted {
+                    completed_steps: 777_777,
+                    fixed_steps: 888_888,
+                }),
+                vec!["777777", "888888"],
             ),
         ];
 
