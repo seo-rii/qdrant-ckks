@@ -10,7 +10,8 @@ use collection::collection::payload_index_schema::{
 };
 use collection::config::{
     CollectionParams, CryptoMigrationCheckpoint, CryptoMigrationState,
-    private_hnsw_oram_api_required_message,
+    encryption_rule_uses_private_result_oram, private_hnsw_oram_api_required_message,
+    private_result_oram_api_required_message,
 };
 use collection::operations::conversions::write_ordering_from_proto;
 use collection::operations::point_ops::*;
@@ -1780,6 +1781,15 @@ async fn maybe_encrypt_upsert_payloads(
         auth.check_collection_access(collection_name, AccessRequirements::new(), "upsert_points")?;
     let collection = toc.get_collection(&collection_pass).await?;
     let collection_config = collection.config_snapshot().await;
+    if let Some(encryption) = collection_config.params.effective_encryption()
+        && let Some((payload_path, operation_kind)) =
+            private_result_oram_payload_upsert_violation(&encryption, &operation)?
+    {
+        return Err(private_result_oram_payload_write_error(
+            payload_path,
+            operation_kind,
+        ));
+    }
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
         .map_err(|err| StorageError::bad_input(err.to_string()))?;
@@ -2812,6 +2822,15 @@ async fn maybe_encrypt_point_payload_update(
         auth.check_collection_access(collection_name, AccessRequirements::new(), operation_name)?;
     let collection = toc.get_collection(&collection_pass).await?;
     let collection_config = collection.config_snapshot().await;
+    if let Some(encryption) = collection_config.params.effective_encryption()
+        && let Some(payload_path) =
+            private_result_oram_payload_update_violation(&encryption, &operation)?
+    {
+        return Err(private_result_oram_payload_write_error(
+            payload_path,
+            payload_update_operation_kind(operation_name),
+        ));
+    }
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
         .map_err(|err| StorageError::bad_input(err.to_string()))?;
@@ -3040,6 +3059,15 @@ async fn ensure_payload_runtime_available_for_upsert(
         return Ok(());
     };
 
+    if let Some((payload_path, operation_kind)) =
+        private_result_oram_payload_upsert_violation(&encryption, operation)?
+    {
+        return Err(private_result_oram_payload_write_error(
+            payload_path,
+            operation_kind,
+        ));
+    }
+
     let mut touches_encrypted_payload = false;
     match operation {
         PointInsertOperations::PointsList(list) => {
@@ -3088,6 +3116,15 @@ async fn ensure_payload_runtime_available_for_payload_update(
         return Ok(());
     };
 
+    if let Some(payload_path) =
+        private_result_oram_payload_update_violation(&encryption, operation)?
+    {
+        return Err(private_result_oram_payload_write_error(
+            payload_path,
+            payload_update_operation_kind(operation_name),
+        ));
+    }
+
     if payload_touches_encrypted_config(&encryption, &operation.payload, operation.key.as_ref())? {
         return Err(StorageError::bad_input(format!(
             "payload encryption runtime for collection {collection_name} is required before writing encrypted payload fields",
@@ -3095,6 +3132,112 @@ async fn ensure_payload_runtime_available_for_payload_update(
     }
 
     Ok(())
+}
+
+fn private_result_oram_payload_upsert_violation<'a>(
+    encryption: &'a collection::config::CollectionEncryptionConfig,
+    operation: &PointInsertOperations,
+) -> Result<Option<(&'a str, &'static str)>, StorageError> {
+    for rule in encryption
+        .rules
+        .iter()
+        .filter(|rule| encryption_rule_uses_private_result_oram(rule))
+    {
+        let collection::config::EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+            continue;
+        };
+        for payload_path in paths {
+            let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
+                StorageError::bad_input(format!(
+                    "private result ORAM payload field path '{payload_path}' is invalid: {err:?}",
+                ))
+            })?;
+            if upsert_touches_payload_path(operation, &protected_path) {
+                return Ok(Some((payload_path.as_str(), "upsert points")));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn private_result_oram_payload_update_violation<'a>(
+    encryption: &'a collection::config::CollectionEncryptionConfig,
+    operation: &SetPayload,
+) -> Result<Option<&'a str>, StorageError> {
+    for rule in encryption
+        .rules
+        .iter()
+        .filter(|rule| encryption_rule_uses_private_result_oram(rule))
+    {
+        let collection::config::EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+            continue;
+        };
+        for payload_path in paths {
+            let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
+                StorageError::bad_input(format!(
+                    "private result ORAM payload field path '{payload_path}' is invalid: {err:?}",
+                ))
+            })?;
+            if payload_touches_path(&operation.payload, operation.key.as_ref(), &protected_path) {
+                return Ok(Some(payload_path.as_str()));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn upsert_touches_payload_path(
+    operation: &PointInsertOperations,
+    protected_path: &JsonPath,
+) -> bool {
+    match operation {
+        PointInsertOperations::PointsList(list) => list.points.iter().any(|point| {
+            point
+                .payload
+                .as_ref()
+                .is_some_and(|payload| payload_touches_path(payload, None, protected_path))
+        }),
+        PointInsertOperations::PointsBatch(batch) => {
+            batch.batch.payloads.as_ref().is_some_and(|payloads| {
+                payloads
+                    .iter()
+                    .flatten()
+                    .any(|payload| payload_touches_path(payload, None, protected_path))
+            })
+        }
+    }
+}
+
+fn payload_touches_path(
+    payload: &segment::types::Payload,
+    key: Option<&JsonPath>,
+    protected_path: &JsonPath,
+) -> bool {
+    if let Some(key) = key {
+        key.compatible(protected_path)
+    } else {
+        !protected_path.value_get(&payload.0).is_empty()
+    }
+}
+
+fn payload_update_operation_kind(operation_name: &str) -> &'static str {
+    match operation_name {
+        "set_payload" => "set payload",
+        "overwrite_payload" => "overwrite payload",
+        _ => "payload update",
+    }
+}
+
+fn private_result_oram_payload_write_error(
+    payload_path: &str,
+    operation_kind: &str,
+) -> StorageError {
+    StorageError::bad_input(format!(
+        "cannot {operation_kind} for private result ORAM payload field '{payload_path}'; {}",
+        private_result_oram_api_required_message(payload_path),
+    ))
 }
 
 fn payload_touches_encrypted_config(
@@ -3155,6 +3298,7 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::fs;
     use std::num::NonZeroUsize;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, OnceLock};
 
     use api::rest::{BaseGroupRequest, SearchGroupsRequestInternal};
@@ -3289,6 +3433,14 @@ mod tests {
             })
             .clone();
         Ed25519KeyPair::from_pkcs8(&pkcs8).unwrap()
+    }
+
+    fn fake_ckks_query_nonce() -> String {
+        static NONCE_COUNTER: AtomicU64 = AtomicU64::new(1);
+        let counter = NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mut nonce = [7_u8; 12];
+        nonce[4..].copy_from_slice(&counter.to_be_bytes());
+        BASE64URL_NOPAD.encode(&nonce)
     }
 
     fn payload_runtime_settings() -> Settings {
@@ -3654,7 +3806,7 @@ esac
         let signing_key = fake_ckks_query_signing_key_pair();
         let signature_alg = "ed25519".to_string();
         let signature_key_id = "tenant-a:query-signing-v1".to_string();
-        let query_nonce = BASE64URL_NOPAD.encode(&[7_u8; 12]);
+        let query_nonce = fake_ckks_query_nonce();
         let signature_message = crate::common::crypto::ckks_client_query_signature_message(
             TEST_VECTOR_COLLECTION_CRYPTO_ID,
             DEFAULT_VECTOR_NAME,
@@ -3800,6 +3952,136 @@ esac
             }),
             ..CollectionParams::empty()
         }
+    }
+
+    #[test]
+    fn private_result_oram_payload_writes_require_session_api_through_common_update() {
+        let runtime = Runtime::new().unwrap();
+        let storage_dir = Builder::new()
+            .prefix("private-result-oram-write-guard")
+            .tempdir()
+            .unwrap();
+        let storage_config = update_test_storage_config(storage_dir.path());
+        let toc = update_test_toc(&storage_config);
+        let dispatcher = Dispatcher::new(toc.clone());
+        let auth = Auth::new_internal(Access::full("For test"));
+        let params = private_result_oram_payload_params();
+
+        runtime.block_on(async {
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "private_result_write_docs".to_string(),
+                            CreateCollection {
+                                vectors: params.vectors,
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: params.encryption,
+                                strict_mode_config: None,
+                                uuid: Some(
+                                    Uuid::parse_str(TEST_VECTOR_COLLECTION_CRYPTO_ID).unwrap(),
+                                ),
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let assert_private_result_write_error =
+                |err: StorageError, expected_operation: &str| {
+                    let message = err.to_string();
+                    assert!(message.contains(expected_operation), "{message}");
+                    assert!(
+                        message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                        "{message}"
+                    );
+                    assert!(
+                        message.contains("/private-result-oram/session"),
+                        "{message}"
+                    );
+                    assert!(!message.contains("payload encryption runtime"), "{message}");
+                };
+
+            assert_private_result_write_error(
+                do_upsert_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                        points: vec![api::rest::PointStruct {
+                            id: 1.into(),
+                            vector: api::rest::VectorStruct::Single(vec![0.1, 0.2]),
+                            payload: Some(segment::types::Payload(
+                                json!({ "body": "ordinary write secret" })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            )),
+                        }],
+                        shard_key: None,
+                        update_filter: None,
+                        update_mode: None,
+                    }),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM upsert must fail closed"),
+                "cannot upsert points for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_set_payload(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    SetPayload {
+                        payload: segment::types::Payload(
+                            json!({ "body": "ordinary set secret" })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        ),
+                        points: Some(vec![1.into()]),
+                        filter: None,
+                        shard_key: None,
+                        key: None,
+                    },
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM set_payload must fail closed"),
+                "cannot set payload for private result ORAM payload field",
+            );
+        });
     }
 
     fn default_private_hnsw_vector_params() -> CollectionParams {
