@@ -2912,6 +2912,12 @@ pub fn plan_private_hnsw_oram_commit(
             });
         }
         decode_bucket_ciphertext_hash(&bucket.ciphertext_sha256)?;
+        let raw_ciphertext = BASE64URL_NOPAD
+            .decode(bucket.ciphertext.as_bytes())
+            .map_err(|_| PrivateHnswClientError::InvalidBucketCiphertextEncoding)?;
+        if base64url_sha256(&raw_ciphertext) != bucket.ciphertext_sha256 {
+            return Err(PrivateHnswClientError::InvalidBucketCiphertextHash);
+        }
         decode_bucket_commitment(&bucket.bucket_commitment)?;
 
         let bucket_index = usize::try_from(bucket.bucket_id)
@@ -4793,7 +4799,9 @@ mod tests {
         );
 
         let mut mismatched_duplicate = bucket.clone();
-        mismatched_duplicate.ciphertext = BASE64URL_NOPAD.encode(b"different ciphertext");
+        let mismatched_ciphertext = b"different ciphertext";
+        mismatched_duplicate.ciphertext = BASE64URL_NOPAD.encode(mismatched_ciphertext);
+        mismatched_duplicate.ciphertext_sha256 = base64url_sha256(mismatched_ciphertext);
         assert_eq!(
             open_private_hnsw_oram_verified_path_batch(
                 &keys,
@@ -5275,6 +5283,19 @@ mod tests {
                 bucket_id: 4,
                 bucket_count: 4,
             })
+        );
+
+        let mut hash_mismatch = updated_bucket.clone();
+        hash_mismatch.ciphertext_sha256 = commitment(8);
+        assert_eq!(
+            plan_private_hnsw_oram_commit(
+                42,
+                43,
+                &old_root,
+                &leaf_commitments,
+                std::slice::from_ref(&hash_mismatch),
+            ),
+            Err(PrivateHnswClientError::InvalidBucketCiphertextHash)
         );
     }
 

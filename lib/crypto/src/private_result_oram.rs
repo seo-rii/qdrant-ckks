@@ -2526,6 +2526,12 @@ pub fn plan_private_result_oram_commit(
         }
         decode_base64url_32(&bucket.ciphertext_sha256, "ciphertext_sha256")
             .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext_sha256"))?;
+        let raw_ciphertext = BASE64URL_NOPAD
+            .decode(bucket.ciphertext.as_bytes())
+            .map_err(|_| PrivateResultOramError::InvalidBucketCiphertextEncoding)?;
+        if base64url_sha256(&raw_ciphertext) != bucket.ciphertext_sha256 {
+            return Err(PrivateResultOramError::InvalidBucketCiphertextHash);
+        }
         decode_bucket_commitment(&bucket.bucket_commitment)?;
 
         let bucket_index = usize::try_from(bucket.bucket_id)
@@ -5135,6 +5141,19 @@ mod tests {
                 bucket_id: 4,
                 bucket_count: 4,
             })
+        );
+
+        let mut hash_mismatch = updated_bucket.clone();
+        hash_mismatch.ciphertext_sha256 = commitment(8);
+        assert_eq!(
+            plan_private_result_oram_commit(
+                42,
+                43,
+                &old_root,
+                &leaf_commitments,
+                std::slice::from_ref(&hash_mismatch),
+            ),
+            Err(PrivateResultOramError::InvalidBucketCiphertextHash)
         );
     }
 
