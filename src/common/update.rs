@@ -19,6 +19,7 @@ use collection::operations::types::{
     CollectionError, CollectionResult, CollectionUpdateProvenance, CountRequestInternal,
     UpdateResult, ckks_vector_sidecar_delete_target,
 };
+use collection::operations::universal_query::formula::{ExpressionInternal, FormulaInternal};
 use collection::operations::vector_ops::*;
 use collection::operations::verification::*;
 use collection::shards::shard::ShardId;
@@ -9053,6 +9054,38 @@ esac
                 .await
                 .expect_err("private result ORAM count filter must fail closed"),
                 "cannot filter on private result ORAM payload field",
+            );
+
+            assert_private_result_predicate_error(
+                crate::common::query::do_query_points(
+                    &toc,
+                    "private_result_predicate_docs",
+                    CollectionQueryRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Formula(FormulaInternal {
+                            formula: ExpressionInternal::Variable("body".to_string()),
+                            defaults: HashMap::new(),
+                        })),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        offset: 0,
+                        params: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(false),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM formula must fail closed"),
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_predicate_error(
