@@ -294,7 +294,7 @@
 
 대상 리스크: `ARCH-002`, `CONF-003`
 
-목표: `lib/ckks`를 공통 crypto layer와 provider-specific layer로 나눈다.
+목표: CKKS 중심 crypto layer를 `lib/crypto`의 공통 crypto layer와 provider-specific layer로 나눈다.
 
 작업 순서:
 
@@ -314,7 +314,7 @@
 완료 조건:
 
 - CKKS 고유 코드와 공통 crypto 코드의 책임 경계가 명확하다.
-- 새 provider 추가가 `lib/ckks`에 계속 결합되지 않는다.
+- 새 provider 추가가 CKKS 전용 모듈 경계에 계속 결합되지 않는다.
 
 ## Phase 10: User-Facing Examples and Release Gate
 
