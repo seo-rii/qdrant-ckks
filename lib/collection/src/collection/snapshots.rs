@@ -1177,12 +1177,12 @@ fn validate_private_result_restore_bucket_contract(
     Ok(())
 }
 
-fn private_hnsw_restore_error(err: qdrant_sec::PrivateHnswOramError) -> CollectionError {
-    CollectionError::bad_request(err.to_string())
+fn private_hnsw_restore_error(_err: qdrant_sec::PrivateHnswOramError) -> CollectionError {
+    CollectionError::bad_request("private HNSW ORAM snapshot manifest or signature is invalid")
 }
 
-fn private_result_restore_error(err: qdrant_sec::PrivateResultOramError) -> CollectionError {
-    CollectionError::bad_request(err.to_string())
+fn private_result_restore_error(_err: qdrant_sec::PrivateResultOramError) -> CollectionError {
+    CollectionError::bad_request("private result ORAM snapshot manifest or signature is invalid")
 }
 
 fn private_hnsw_distance_kind(distance: segment::types::Distance) -> DistanceKind {
@@ -1572,6 +1572,23 @@ mod tests {
             .join(PRIVATE_RESULT_ORAM_DIR)
             .join("buckets")
             .join(format!("{bucket_id:08}.bucket"))
+    }
+
+    #[test]
+    fn private_oram_snapshot_restore_error_mapping_redacts_qdrant_sec_fields() {
+        let hnsw = private_hnsw_restore_error(
+            qdrant_sec::PrivateHnswOramError::InvalidManifestField("secret_hnsw_field"),
+        )
+        .to_string();
+        assert!(hnsw.contains("private HNSW ORAM snapshot manifest or signature is invalid"));
+        assert!(!hnsw.contains("secret_hnsw_field"), "{hnsw}");
+
+        let result = private_result_restore_error(
+            qdrant_sec::PrivateResultOramError::InvalidManifestField("secret_result_field"),
+        )
+        .to_string();
+        assert!(result.contains("private result ORAM snapshot manifest or signature is invalid"));
+        assert!(!result.contains("secret_result_field"), "{result}");
     }
 
     #[test]
