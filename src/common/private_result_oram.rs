@@ -699,7 +699,7 @@ pub async fn do_read_private_result_oram_buckets(
                     "private result ORAM session epoch/root mismatch",
                 ));
             }
-            validate_bucket_read_request(&session.manifest, &bucket_ids)?;
+            validate_bucket_read_request_budget(&session.manifest, &bucket_ids)?;
             validate_session_signature_owner_key(session, &read_signature.key_id)?;
             let public_key = request_context.signature_public_key(&read_signature.key_id)?;
             validate_private_result_oram_read_buckets_signature(
@@ -722,6 +722,7 @@ pub async fn do_read_private_result_oram_buckets(
                 },
             )
             .map_err(private_result_oram_error)?;
+            validate_bucket_read_request_details(&session.manifest, &bucket_ids)?;
             let store = PrivateResultOramStore::new(&session.collection_path);
             ensure_private_result_oram_active_session_current_epoch(
                 &store,
@@ -1444,6 +1445,14 @@ fn validate_bucket_read_request(
     manifest: &PrivateResultOramManifest,
     bucket_ids: &[u64],
 ) -> StorageResult<()> {
+    validate_bucket_read_request_budget(manifest, bucket_ids)?;
+    validate_bucket_read_request_details(manifest, bucket_ids)
+}
+
+fn validate_bucket_read_request_budget(
+    manifest: &PrivateResultOramManifest,
+    bucket_ids: &[u64],
+) -> StorageResult<()> {
     if bucket_ids.is_empty() {
         return Err(StorageError::bad_request(
             "private result ORAM read_buckets request is empty",
@@ -1465,6 +1474,24 @@ fn validate_bucket_read_request(
             "private result ORAM read_buckets must contain whole ORAM paths",
         ));
     }
+    if u64::try_from(bucket_ids.len()).unwrap_or(u64::MAX) != expected_bucket_ids {
+        return Err(StorageError::bad_request(
+            "private result ORAM read_buckets request must match fixed path budget",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bucket_read_request_details(
+    manifest: &PrivateResultOramManifest,
+    bucket_ids: &[u64],
+) -> StorageResult<()> {
+    let path_len = usize::try_from(manifest.oram.tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or_else(|| {
+            StorageError::bad_request("private result ORAM read_buckets budget is invalid")
+        })?;
     for &bucket_id in bucket_ids {
         if bucket_id >= manifest.bucket_count {
             return Err(StorageError::bad_request(
@@ -1474,11 +1501,6 @@ fn validate_bucket_read_request(
     }
     for path in bucket_ids.chunks(path_len) {
         validate_bucket_read_path_shape(path)?;
-    }
-    if u64::try_from(bucket_ids.len()).unwrap_or(u64::MAX) != expected_bucket_ids {
-        return Err(StorageError::bad_request(
-            "private result ORAM read_buckets request must match fixed path budget",
-        ));
     }
     Ok(())
 }
@@ -1855,6 +1877,8 @@ mod private_result_oram_tests {
     fn bucket_read_request_preserves_path_shape_and_allows_shared_buckets() {
         let manifest = read_shape_manifest();
         validate_bucket_read_request(&manifest, &[0, 1, 3, 0, 1, 4]).unwrap();
+        validate_bucket_read_request_budget(&manifest, &[0, 2, 3, 0, 1, 4]).unwrap();
+        validate_bucket_read_request_budget(&manifest, &[0, 1, 7, 0, 1, 4]).unwrap();
 
         let empty = validate_bucket_read_request(&manifest, &[]).unwrap_err();
         assert!(empty.to_string().contains("read_buckets request is empty"));
@@ -1867,7 +1891,8 @@ mod private_result_oram_tests {
         assert!(rendered.contains("fixed path budget"));
         assert!(!rendered.contains("3"), "{rendered}");
 
-        let malformed_path = validate_bucket_read_request(&manifest, &[0, 2, 3]).unwrap_err();
+        let malformed_path =
+            validate_bucket_read_request(&manifest, &[0, 2, 3, 0, 1, 4]).unwrap_err();
         let rendered = malformed_path.to_string();
         assert!(rendered.contains("valid ORAM paths"));
         assert!(!rendered.contains("2"), "{rendered}");
@@ -1879,7 +1904,8 @@ mod private_result_oram_tests {
         assert!(rendered.contains("fixed path budget"));
         assert!(!rendered.contains("5"), "{rendered}");
 
-        let out_of_range = validate_bucket_read_request(&manifest, &[0, 1, 7]).unwrap_err();
+        let out_of_range =
+            validate_bucket_read_request(&manifest, &[0, 1, 7, 0, 1, 4]).unwrap_err();
         let rendered = out_of_range.to_string();
         assert!(rendered.contains("out of range"));
         assert!(!rendered.contains("7"), "{rendered}");

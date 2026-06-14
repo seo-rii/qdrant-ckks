@@ -1318,13 +1318,14 @@ mod private_result_oram_rest_tests {
                     session_id: session_id.clone(),
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1, 3, 4],
+                    bucket_ids: vec![0, 2, 3, 0, 1, 4],
                     read_signature: wrong_read_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
-                "whole ORAM paths"
+                "read_buckets signature verification failed"
             );
             assert!(!invalid_signature_bad_path_error.contains(&wrong_read_signature.sig));
+            assert!(!invalid_signature_bad_path_error.contains("valid ORAM paths"));
             assert!(!invalid_signature_bad_path_error.contains(&fixture.buckets[0].ciphertext));
 
             let invalid_signature_out_of_range_error = post_json_error_contains!(
@@ -1333,13 +1334,14 @@ mod private_result_oram_rest_tests {
                     session_id: session_id.clone(),
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1, fixture.manifest.bucket_count],
+                    bucket_ids: vec![0, 1, fixture.manifest.bucket_count, 0, 1, 4],
                     read_signature: wrong_read_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
-                "bucket id is out of range"
+                "read_buckets signature verification failed"
             );
             assert!(!invalid_signature_out_of_range_error.contains(&wrong_read_signature.sig));
+            assert!(!invalid_signature_out_of_range_error.contains("bucket id is out of range"));
             assert!(!invalid_signature_out_of_range_error.contains(&fixture.buckets[0].ciphertext));
 
             let unconfigured_read_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
