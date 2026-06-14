@@ -8946,6 +8946,188 @@ esac
     }
 
     #[test]
+    fn private_result_oram_predicate_paths_require_session_api() {
+        let runtime = Runtime::new().unwrap();
+        let storage_dir = Builder::new()
+            .prefix("private-result-oram-predicate-guard")
+            .tempdir()
+            .unwrap();
+        let storage_config = update_test_storage_config(storage_dir.path());
+        let toc = update_test_toc(&storage_config);
+        let dispatcher = Dispatcher::new(toc.clone());
+        let auth = Auth::new_internal(Access::full("For test"));
+        let params = private_result_oram_payload_params();
+
+        runtime.block_on(async {
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "private_result_predicate_docs".to_string(),
+                            CreateCollection {
+                                vectors: params.vectors,
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: params.encryption,
+                                strict_mode_config: None,
+                                uuid: Some(
+                                    Uuid::parse_str(TEST_VECTOR_COLLECTION_CRYPTO_ID).unwrap(),
+                                ),
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let private_body_filter = || {
+                Filter::new_must(Condition::Field(FieldCondition::new_match(
+                    "body".parse().unwrap(),
+                    "secret".to_string().into(),
+                )))
+            };
+            let assert_private_result_predicate_error =
+                |err: StorageError, expected_operation: &str| {
+                    let message = err.to_string();
+                    assert!(message.contains(expected_operation), "{message}");
+                    assert!(
+                        message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                        "{message}"
+                    );
+                    assert!(
+                        message.contains("/private-result-oram/session"),
+                        "{message}"
+                    );
+                };
+
+            assert_private_result_predicate_error(
+                crate::common::query::do_scroll_points(
+                    &toc,
+                    "private_result_predicate_docs",
+                    shard::scroll::ScrollRequestInternal {
+                        offset: None,
+                        limit: Some(1),
+                        filter: Some(private_body_filter()),
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: WithVector::Bool(false),
+                        order_by: None,
+                    },
+                    None,
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM filter must fail closed"),
+                "cannot filter on private result ORAM payload field",
+            );
+
+            assert_private_result_predicate_error(
+                crate::common::query::do_scroll_points(
+                    &toc,
+                    "private_result_predicate_docs",
+                    shard::scroll::ScrollRequestInternal {
+                        offset: None,
+                        limit: Some(1),
+                        filter: None,
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: WithVector::Bool(false),
+                        order_by: Some(segment::data_types::order_by::OrderByInterface::Key(
+                            "body".parse().unwrap(),
+                        )),
+                    },
+                    None,
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM order_by must fail closed"),
+                "cannot order by private result ORAM payload field",
+            );
+
+            assert_private_result_predicate_error(
+                crate::common::query::do_search_point_groups(
+                    &toc,
+                    "private_result_predicate_docs",
+                    SearchGroupsRequestInternal {
+                        vector: vec![0.1, 0.2].into(),
+                        filter: None,
+                        params: None,
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        score_threshold: None,
+                        group_request: BaseGroupRequest {
+                            group_by: "body".parse().unwrap(),
+                            group_size: 1,
+                            limit: 1,
+                            with_lookup: None,
+                        },
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM search group_by must fail closed"),
+                "cannot group by private result ORAM payload field",
+            );
+
+            assert_private_result_predicate_error(
+                crate::common::query::do_query_point_groups(
+                    &toc,
+                    "private_result_predicate_docs",
+                    CollectionQueryGroupsRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                        ))),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(false),
+                        lookup_from: None,
+                        group_by: "body".parse().unwrap(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM query group_by must fail closed"),
+                "cannot group by private result ORAM payload field",
+            );
+        });
+    }
+
+    #[test]
     fn metadata_value_encrypted_read_mode_decrypts_with_payload_decrypt_access() {
         let runtime = Runtime::new().unwrap();
         let storage_dir = Builder::new()
