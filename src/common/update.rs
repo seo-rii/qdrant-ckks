@@ -9534,6 +9534,94 @@ esac
             );
 
             assert_private_result_session_error(
+                crate::common::query::do_search_batch_points_from_rest(
+                    &toc,
+                    "private_result_docs",
+                    vec![(
+                        SearchRequestInternal {
+                            vector: vec![0.1, 0.2].into(),
+                            with_payload: Some(WithPayloadInterface::Bool(true)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            filter: None,
+                            params: None,
+                            limit: 1,
+                            offset: None,
+                            score_threshold: None,
+                        },
+                        ShardSelectorInternal::All,
+                    )],
+                    None,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM REST batch search must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_search_point_groups(
+                    &toc,
+                    "private_result_docs",
+                    SearchGroupsRequestInternal {
+                        vector: vec![0.1, 0.2].into(),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        with_vector: Some(WithVector::Bool(false)),
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        group_request: BaseGroupRequest {
+                            group_by: "group".parse().unwrap(),
+                            group_size: 1,
+                            limit: 1,
+                            with_lookup: None,
+                        },
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM grouped search must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_query_point_groups(
+                    &toc,
+                    "private_result_docs",
+                    CollectionQueryGroupsRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                        ))),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(true),
+                        lookup_from: None,
+                        group_by: "group".parse().unwrap(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM grouped universal query must fail closed"),
+            );
+
+            assert_private_result_session_error(
                 crate::common::query::do_query_points(
                     &toc,
                     "private_result_docs",

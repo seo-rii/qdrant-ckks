@@ -22,7 +22,8 @@ use collection::common::batching::batch_requests;
 use collection::config::{
     CollectionEncryptionConfig, EncryptedVectorReturnRequest, EncryptionSelector,
     encrypted_vector_return_request, encryption_rule_uses_private_result_oram,
-    private_hnsw_oram_api_required_message, private_result_oram_payload_selector_overlap_message,
+    private_hnsw_oram_api_required_message, private_result_oram_api_required_message,
+    private_result_oram_payload_selector_overlap_message,
 };
 use collection::grouping::group_by::GroupRequest;
 use collection::lookup::lookup_ids;
@@ -55,7 +56,7 @@ use segment::index::hnsw_index::ckks_ciphertext_graph::{
 use segment::json_path::JsonPath;
 use segment::types::{
     Distance, EncryptedPayloadReadMode, Filter, Order, Payload, PayloadContainer,
-    PayloadEncryptedReadPolicy, PointIdType, ScoredPoint, SearchParams, ShardKey,
+    PayloadEncryptedReadPolicy, PayloadSelector, PointIdType, ScoredPoint, SearchParams, ShardKey,
     WithPayloadInterface, WithVector,
 };
 use segment::utils::scored_point_ties::ScoredPointTies;
@@ -3671,6 +3672,14 @@ pub async fn do_search_point_groups(
         &auth,
     )
     .await?;
+    preflight_private_result_oram_raw_payload_read(
+        toc,
+        collection_name,
+        request.with_payload.as_ref(),
+        "search grouped results",
+        &auth,
+    )
+    .await?;
     normalize_rest_group_lookup_payload_for_read(
         &mut request.group_request.with_lookup,
         encrypted_payload_read_mode,
@@ -5904,6 +5913,89 @@ async fn preflight_payload_decrypt_for_read(
     Ok(())
 }
 
+async fn preflight_private_result_oram_raw_payload_read(
+    toc: &TableOfContent,
+    collection_name: &str,
+    with_payload: Option<&WithPayloadInterface>,
+    operation: &str,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    let Some(with_payload) = with_payload else {
+        return Ok(());
+    };
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), operation)?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+    let Some(encryption) = collection_config.params.effective_encryption() else {
+        return Ok(());
+    };
+    let Some(payload_path) =
+        private_result_oram_raw_payload_read_violation(with_payload, &encryption)?
+    else {
+        return Ok(());
+    };
+
+    Err(StorageError::bad_input(format!(
+        "cannot {operation} private result ORAM payload field '{payload_path}' through ordinary collection payload reads; {}",
+        private_result_oram_api_required_message(payload_path),
+    )))
+}
+
+fn private_result_oram_raw_payload_read_violation<'a>(
+    with_payload: &WithPayloadInterface,
+    encryption: &'a CollectionEncryptionConfig,
+) -> Result<Option<&'a str>, StorageError> {
+    if !with_payload.is_required()
+        || with_payload.encrypted_payload_read_mode() != EncryptedPayloadReadMode::Raw
+    {
+        return Ok(None);
+    }
+
+    for rule in encryption
+        .rules
+        .iter()
+        .filter(|rule| encryption_rule_uses_private_result_oram(rule))
+    {
+        let EncryptionSelector::PayloadPaths { paths } = &rule.selector else {
+            continue;
+        };
+        for payload_path in paths {
+            let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
+                StorageError::bad_input(format!(
+                    "private result ORAM payload field path '{payload_path}' is invalid: {err:?}",
+                ))
+            })?;
+            if private_result_oram_with_payload_touches_path(with_payload, &protected_path) {
+                return Ok(Some(payload_path.as_str()));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn private_result_oram_with_payload_touches_path(
+    with_payload: &WithPayloadInterface,
+    protected_path: &JsonPath,
+) -> bool {
+    match with_payload {
+        WithPayloadInterface::Bool(enabled) => *enabled,
+        WithPayloadInterface::Encrypted(_) => true,
+        WithPayloadInterface::Fields(fields) => {
+            fields.iter().any(|field| field.compatible(protected_path))
+        }
+        WithPayloadInterface::Selector(PayloadSelector::Include(selector)) => selector
+            .include
+            .iter()
+            .any(|field| field.compatible(protected_path)),
+        WithPayloadInterface::Selector(PayloadSelector::Exclude(selector)) => !selector
+            .exclude
+            .iter()
+            .any(|field| field.check_exclude_pattern(protected_path)),
+    }
+}
+
 async fn preflight_payload_decrypt_modes_for_read(
     toc: &TableOfContent,
     collection_name: &str,
@@ -7384,6 +7476,14 @@ pub async fn do_query_point_groups(
         collection_name,
         encrypted_payload_read_mode,
         runtime_settings,
+        &auth,
+    )
+    .await?;
+    preflight_private_result_oram_raw_payload_read(
+        toc,
+        collection_name,
+        Some(&request.with_payload),
+        "query grouped results",
         &auth,
     )
     .await?;
