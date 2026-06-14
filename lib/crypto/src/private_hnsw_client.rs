@@ -150,6 +150,11 @@ pub enum PrivateHnswClientError {
     VectorDimensionMismatch,
     #[error("private HNSW search distance is not finite")]
     NonFiniteDistance,
+    #[error("private HNSW search did not exhaust the fixed access budget")]
+    FixedBudgetNotExhausted {
+        completed_steps: usize,
+        fixed_steps: usize,
+    },
     #[error("private HNSW private result mode requires every hit to carry a payload fetch token")]
     MissingPayloadFetchToken,
     #[error("private HNSW ORAM Merkle tree must contain at least one leaf")]
@@ -617,6 +622,34 @@ pub fn validate_private_hnsw_search_result_privacy(
             }
         }
     }
+}
+
+pub fn validate_private_hnsw_search_fixed_budget(
+    params: &PrivateHnswSearchParams,
+    result: &PrivateHnswSearchResult,
+) -> Result<(), PrivateHnswClientError> {
+    if params.fixed_steps == 0 {
+        return Err(PrivateHnswClientError::InvalidSearchConfig("fixed_steps"));
+    }
+    if result.completed_steps == params.fixed_steps
+        && result.accessed_leaf_labels.len() == params.fixed_steps
+    {
+        return Ok(());
+    }
+
+    Err(PrivateHnswClientError::FixedBudgetNotExhausted {
+        completed_steps: result.completed_steps,
+        fixed_steps: params.fixed_steps,
+    })
+}
+
+pub fn validate_private_hnsw_strict_search_result(
+    result_privacy: ResultPrivacyMode,
+    params: &PrivateHnswSearchParams,
+    result: &PrivateHnswSearchResult,
+) -> Result<(), PrivateHnswClientError> {
+    validate_private_hnsw_search_fixed_budget(params, result)?;
+    validate_private_hnsw_search_result_privacy(result_privacy, result)
 }
 
 pub fn plan_private_hnsw_private_result_fetch_tokens(
@@ -5560,6 +5593,65 @@ mod tests {
             ),
             Err(PrivateHnswClientError::MissingPayloadFetchToken)
         );
+    }
+
+    #[test]
+    fn strict_search_result_requires_fixed_budget_exhaustion() {
+        let params = PrivateHnswSearchParams {
+            entry_node_id: [9; 32],
+            k: 1,
+            ef: 1,
+            fixed_steps: 3,
+            distance: DistanceKind::Euclid,
+            padding_node_id: Some([10; 32]),
+        };
+        let short_result = PrivateHnswSearchResult {
+            hits: vec![PrivateHnswSearchHit {
+                node_id: [1; 32],
+                point_token: [2; 32],
+                payload_fetch_token: Some([3; 32]),
+                distance: 0.0,
+            }],
+            accessed_leaf_labels: vec!["AAAAAAAAAAA".to_string()],
+            completed_steps: 1,
+        };
+
+        assert_eq!(
+            validate_private_hnsw_search_fixed_budget(&params, &short_result),
+            Err(PrivateHnswClientError::FixedBudgetNotExhausted {
+                completed_steps: 1,
+                fixed_steps: 3,
+            })
+        );
+        assert_eq!(
+            validate_private_hnsw_strict_search_result(
+                ResultPrivacyMode::PrivatePayloadOramRequired,
+                &params,
+                &short_result,
+            ),
+            Err(PrivateHnswClientError::FixedBudgetNotExhausted {
+                completed_steps: 1,
+                fixed_steps: 3,
+            })
+        );
+
+        let padded_result = PrivateHnswSearchResult {
+            accessed_leaf_labels: vec![
+                "AAAAAAAAAAA".to_string(),
+                "AAAAAAAAAAE".to_string(),
+                "AAAAAAAAAAI".to_string(),
+            ],
+            completed_steps: 3,
+            ..short_result
+        };
+
+        validate_private_hnsw_search_fixed_budget(&params, &padded_result).unwrap();
+        validate_private_hnsw_strict_search_result(
+            ResultPrivacyMode::PrivatePayloadOramRequired,
+            &params,
+            &padded_result,
+        )
+        .unwrap();
     }
 
     #[test]

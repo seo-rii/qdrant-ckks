@@ -1249,7 +1249,10 @@ the same Merkle proof check before bucket decryption, state remap, or writeback.
 `PrivateHnswSearchAccessMetrics` with path-access count, unique leaf count,
 fixed-step budget, and budget-exhaustion status for latency/ORAM-volume
 benchmarks without exposing plaintext vectors, distances beyond client-local
-hits, or decrypted neighbor lists.
+hits, or decrypted neighbor lists. Strict SDK flows should call
+`validate_private_hnsw_strict_search_result` before result fetch or commit so a
+search that stopped before consuming `fixed_steps` is treated as a failed
+fixed-budget search, not a shortened private query.
 `cargo bench -p qdrant-sec --bench private_hnsw_oram_bench` provides the
 initial SDK-side benchmark harness for plaintext reference index build and
 fixed-budget plaintext ORAM-HNSW traversal, including an upper-layer client
