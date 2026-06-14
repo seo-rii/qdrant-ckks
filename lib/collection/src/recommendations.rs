@@ -157,6 +157,12 @@ where
     F: Fn(String) -> Fut,
     Fut: Future<Output = Option<Arc<Collection>>>,
 {
+    collection
+        .ensure_private_result_oram_payload_read_is_not_raw(
+            request.with_payload.as_ref(),
+            "recommend",
+        )
+        .await?;
     if request.limit == 0 {
         return Ok(vec![]);
     }
@@ -255,6 +261,15 @@ where
     Fut: Future<Output = Option<Arc<Collection>>>,
 {
     let start = std::time::Instant::now();
+
+    for (request, _) in &request_batch {
+        collection
+            .ensure_private_result_oram_payload_read_is_not_raw(
+                request.with_payload.as_ref(),
+                "recommend",
+            )
+            .await?;
+    }
 
     // shortcuts batch if all requests with limit=0
     if request_batch.iter().all(|(s, _)| s.limit == 0) {

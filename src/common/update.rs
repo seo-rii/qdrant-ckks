@@ -9864,6 +9864,34 @@ esac
             );
 
             assert_private_result_session_error(
+                collection::recommendations::recommend_by(
+                    RecommendRequestInternal {
+                        positive: vec![RecommendExample::Dense(vec![0.1, 0.2])],
+                        negative: Vec::new(),
+                        strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                        filter: None,
+                        params: None,
+                        limit: 0,
+                        offset: None,
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        score_threshold: None,
+                        using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                        lookup_from: None,
+                    },
+                    private_result_collection.as_ref(),
+                    |_| async { None },
+                    None,
+                    ShardSelectorInternal::All,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .map_err(StorageError::from)
+                .expect_err("private result ORAM zero-limit collection recommend must fail closed"),
+            );
+
+            assert_private_result_session_error(
                 crate::common::query::do_recommend_batch_points(
                     &toc,
                     "private_result_docs",
@@ -9987,6 +10015,32 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM discover must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                collection::discovery::discover(
+                    DiscoverRequestInternal {
+                        target: Some(RecommendExample::Dense(vec![0.1, 0.2])),
+                        context: None,
+                        filter: None,
+                        params: None,
+                        limit: 0,
+                        offset: None,
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        using: Some(DEFAULT_VECTOR_NAME.to_string().into()),
+                        lookup_from: None,
+                    },
+                    private_result_collection.as_ref(),
+                    |_| async { None },
+                    None,
+                    ShardSelectorInternal::All,
+                    None,
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .map_err(StorageError::from)
+                .expect_err("private result ORAM zero-limit collection discover must fail closed"),
             );
 
             assert_private_result_session_error(

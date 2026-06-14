@@ -3705,7 +3705,7 @@ impl PayloadRedactionPlan {
 }
 
 impl Collection {
-    pub(super) async fn ensure_private_result_oram_payload_read_is_not_raw(
+    pub(crate) async fn ensure_private_result_oram_payload_read_is_not_raw(
         &self,
         with_payload: Option<&WithPayloadInterface>,
         operation: &str,
