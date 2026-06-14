@@ -6288,6 +6288,14 @@ pub async fn do_get_points(
         &auth,
     )
     .await?;
+    preflight_private_result_oram_raw_payload_read(
+        toc,
+        collection_name,
+        request.with_payload.as_ref(),
+        "retrieve",
+        &auth,
+    )
+    .await?;
     request_raw_encrypted_payload_for_collection_read(
         &mut request.with_payload,
         encrypted_payload_read_mode,
@@ -6346,6 +6354,14 @@ pub async fn do_scroll_points(
         collection_name,
         encrypted_payload_read_mode,
         runtime_settings,
+        &auth,
+    )
+    .await?;
+    preflight_private_result_oram_raw_payload_read(
+        toc,
+        collection_name,
+        request.with_payload.as_ref(),
+        "scroll",
         &auth,
     )
     .await?;

@@ -9456,6 +9456,26 @@ esac
             );
 
             assert_private_result_session_error(
+                crate::common::query::do_get_points(
+                    &toc,
+                    "private_result_docs",
+                    PointRequestInternal {
+                        ids: Vec::new(),
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: WithVector::Bool(false),
+                    },
+                    None,
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM empty retrieve must fail closed"),
+            );
+
+            assert_private_result_session_error(
                 crate::common::query::do_scroll_points(
                     &toc,
                     "private_result_docs",
@@ -9476,6 +9496,29 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM scroll must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_scroll_points(
+                    &toc,
+                    "private_result_docs",
+                    shard::scroll::ScrollRequestInternal {
+                        offset: None,
+                        limit: Some(0),
+                        filter: None,
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: WithVector::Bool(false),
+                        order_by: None,
+                    },
+                    None,
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM zero-limit scroll must fail closed"),
             );
 
             assert_private_result_session_error(
