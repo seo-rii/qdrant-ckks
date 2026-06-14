@@ -2560,7 +2560,21 @@ pub fn plan_private_result_oram_commit_for_manifest(
         current_leaf_commitments,
         updated_buckets,
     )?;
+    let max_ciphertext_bytes = private_result_oram_upload_max_ciphertext_bytes(manifest)?;
+    let expected_ciphertext_bytes = private_result_oram_bucket_ciphertext_bytes(&manifest.oram)?;
     for bucket in updated_buckets {
+        validate_private_result_oram_bucket_shape(
+            bucket,
+            PrivateResultOramBucketValidationContext {
+                expected_index_epoch: new_epoch,
+                bucket_count: manifest.bucket_count,
+                max_ciphertext_bytes,
+            },
+        )?;
+        validate_private_result_oram_bucket_ciphertext_fixed_size(
+            bucket,
+            expected_ciphertext_bytes,
+        )?;
         let expected_commitment = private_result_oram_bucket_commitment(
             PrivateResultOramBucketCommitmentContext {
                 collection_id: &manifest.collection_id,
@@ -4982,7 +4996,7 @@ mod tests {
             bucket_count: leaf_commitments.len() as u64,
             ..fixture_manifest()
         };
-        let updated_bucket = fixture_commit_bucket(2, 43, 9);
+        let updated_bucket = fixture_upload_bucket(2, 43, 9, &manifest);
 
         let plan = plan_private_result_oram_commit_for_manifest(
             &manifest,
@@ -4995,7 +5009,7 @@ mod tests {
         assert_eq!(plan.old_root_hash, old_root);
         assert_eq!(plan.leaf_commitments[2], updated_bucket.bucket_commitment);
 
-        let mut wrong_commitment = updated_bucket;
+        let mut wrong_commitment = updated_bucket.clone();
         wrong_commitment.bucket_commitment = commitment(99);
         assert_eq!(
             plan_private_result_oram_commit_for_manifest(
@@ -5005,6 +5019,23 @@ mod tests {
                 std::slice::from_ref(&wrong_commitment),
             ),
             Err(PrivateResultOramError::InvalidBucketCommitment)
+        );
+
+        let mut short_ciphertext = updated_bucket.clone();
+        let short_raw = b"short-result-commit-bucket";
+        let short_hash = BASE64URL_NOPAD.encode(Sha256::digest(short_raw).as_ref());
+        short_ciphertext.ciphertext = BASE64URL_NOPAD.encode(short_raw);
+        short_ciphertext.ciphertext_sha256 = short_hash.clone();
+        short_ciphertext.bucket_commitment =
+            fixture_bucket_commitment(2, short_ciphertext.index_epoch, &short_hash);
+        assert_eq!(
+            plan_private_result_oram_commit_for_manifest(
+                &manifest,
+                43,
+                &leaf_commitments,
+                std::slice::from_ref(&short_ciphertext),
+            ),
+            Err(PrivateResultOramError::InvalidBucketField("ciphertext"))
         );
 
         let wrong_bucket_count = PrivateResultOramManifest {
