@@ -138,6 +138,7 @@ pub(crate) fn redact_crypto_material_for_report(value: &str) -> String {
         "topk",
         "updatedbucket",
         "updatedbuckets",
+        "unknownfield",
         "visitednode",
         "visitednodes",
     ]
@@ -279,6 +280,8 @@ mod tests {
             "updated_bucket=private-updated-bucket-singular-sentinel",
             "updated_buckets=[private-updated-bucket-snake-sentinel]",
             "updatedBuckets=[private-updated-bucket-sentinel]",
+            "unknown_field=private-unknown-field-sentinel",
+            "unknownField=private-unknown-field-camel-sentinel",
         ] {
             let payload = ErrorReporter::build_report_payload(secret, "node-6", Some(secret));
 

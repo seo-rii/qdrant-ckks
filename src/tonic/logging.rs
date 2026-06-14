@@ -218,7 +218,9 @@ mod tests {
              bucket_commitments=bucket-commitment-snake-plural-sentinel \
              bucketCommitments=bucket-commitment-camel-plural-sentinel \
              bucket_ids=bucket-id-snake-sentinel \
-             bucketIds=bucket-id-camel-sentinel",
+             bucketIds=bucket-id-camel-sentinel \
+             unknown_field=unknown-field-snake-sentinel \
+             unknownField=unknown-field-camel-sentinel",
         );
 
         let rendered = redacted_grpc_status_message(&status);
@@ -254,5 +256,7 @@ mod tests {
         assert!(!rendered.contains("bucket-commitment-camel-plural-sentinel"));
         assert!(!rendered.contains("bucket-id-snake-sentinel"));
         assert!(!rendered.contains("bucket-id-camel-sentinel"));
+        assert!(!rendered.contains("unknown-field-snake-sentinel"));
+        assert!(!rendered.contains("unknown-field-camel-sentinel"));
     }
 }
