@@ -1153,13 +1153,12 @@ pub fn validate_recovered_private_hnsw_oram_snapshot_signatures(
         .iter()
         .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_HNSW_ORAM_BINDING))
     {
-        let instance = private_hnsw_instance(settings, rule)?;
         let EncryptionSelector::VectorNames { names } = &rule.selector else {
-            return Err(StorageError::bad_request(format!(
-                "private HNSW ORAM snapshot rule {} must use vector_names selector",
-                rule.id,
-            )));
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM snapshot rule must use vector_names selector",
+            ));
         };
+        let instance = private_hnsw_instance(settings, rule)?;
         for vector_name in names {
             if !checked_vectors.insert(vector_name.clone()) {
                 continue;
@@ -2884,6 +2883,38 @@ mod private_hnsw_tests {
         assert!(rendered.contains("private HNSW ORAM instance"));
         assert!(!rendered.contains("tenant-a/other-private-hnsw-rk"));
         assert!(!rendered.contains(&manifest.key_id));
+        assert!(!rendered.contains("manifest has not been uploaded"));
+    }
+
+    #[test]
+    fn recovered_snapshot_signature_preflight_rejects_wrong_selector_without_rule_details() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-recovered-wrong-selector")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut manifest = fixture_session("session-1", 20).manifest;
+        manifest.collection_id = uuid.to_string();
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+        let settings = recovered_snapshot_settings(&manifest, key_pair.public_key().as_ref());
+        let mut config = recovered_snapshot_config(uuid, &manifest);
+        let encryption = config.params.encryption.as_mut().unwrap();
+        encryption.rules[0].id = "private_hnsw_restore_secret_rule".to_string();
+        encryption.rules[0].selector = EncryptionSelector::PayloadPaths {
+            paths: vec!["private.hnsw.secret.payload".to_string()],
+        };
+
+        let err = validate_recovered_private_hnsw_oram_snapshot_signatures(
+            &settings,
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("vector_names selector"), "{rendered}");
+        assert!(!rendered.contains("private_hnsw_restore_secret_rule"));
+        assert!(!rendered.contains("private.hnsw.secret.payload"));
         assert!(!rendered.contains("manifest has not been uploaded"));
     }
 

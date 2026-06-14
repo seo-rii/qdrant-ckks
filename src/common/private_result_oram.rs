@@ -946,10 +946,9 @@ pub fn validate_recovered_private_result_oram_snapshot_signatures(
         .filter(|rule| rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING))
     {
         if !matches!(rule.selector, EncryptionSelector::PayloadPaths { .. }) {
-            return Err(StorageError::bad_request(format!(
-                "private result ORAM snapshot rule {} must use payload_paths selector",
-                rule.id,
-            )));
+            return Err(StorageError::bad_request(
+                "private result ORAM snapshot rule must use payload_paths selector",
+            ));
         }
         let instance = private_result_oram_instance(settings, rule)?;
         let store = PrivateResultOramStore::new(collection_path);
@@ -2255,6 +2254,37 @@ mod private_result_oram_tests {
         assert!(rendered.contains("private result ORAM instance"));
         assert!(!rendered.contains("tenant-a/other-private-result-rk"));
         assert!(!rendered.contains(&manifest.key_id));
+        assert!(!rendered.contains("manifest has not been uploaded"));
+    }
+
+    #[test]
+    fn recovered_snapshot_signature_preflight_rejects_wrong_selector_without_rule_details() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-recovered-wrong-selector")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let manifest = recovered_snapshot_manifest();
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[11; 32]).unwrap();
+        let settings = recovered_snapshot_settings(&manifest, key_pair.public_key().as_ref());
+        let mut config = recovered_snapshot_config(uuid);
+        let encryption = config.params.encryption.as_mut().unwrap();
+        encryption.rules[0].id = "private_result_restore_secret_rule".to_string();
+        encryption.rules[0].selector = EncryptionSelector::VectorNames {
+            names: vec!["private-result-secret-vector".to_string()],
+        };
+
+        let err = validate_recovered_private_result_oram_snapshot_signatures(
+            &settings,
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("payload_paths selector"), "{rendered}");
+        assert!(!rendered.contains("private_result_restore_secret_rule"));
+        assert!(!rendered.contains("private-result-secret-vector"));
         assert!(!rendered.contains("manifest has not been uploaded"));
     }
 
