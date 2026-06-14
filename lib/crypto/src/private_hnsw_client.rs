@@ -599,7 +599,8 @@ impl PrivateHnswSearchResult {
                 .collect::<BTreeSet<_>>()
                 .len(),
             fixed_steps: params.fixed_steps,
-            exhausted_fixed_budget: self.completed_steps == params.fixed_steps,
+            exhausted_fixed_budget: self.completed_steps == params.fixed_steps
+                && self.accessed_leaf_labels.len() == params.fixed_steps,
         }
     }
 }
@@ -5652,6 +5653,33 @@ mod tests {
             &padded_result,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn search_access_metrics_requires_matching_path_count_for_budget_exhaustion() {
+        let params = PrivateHnswSearchParams {
+            entry_node_id: [9; 32],
+            k: 1,
+            ef: 1,
+            fixed_steps: 3,
+            distance: DistanceKind::Euclid,
+            padding_node_id: Some([10; 32]),
+        };
+        let inconsistent_result = PrivateHnswSearchResult {
+            hits: Vec::new(),
+            accessed_leaf_labels: vec!["AAAAAAAAAAA".to_string()],
+            completed_steps: 3,
+        };
+
+        assert_eq!(
+            inconsistent_result.access_metrics(&params),
+            PrivateHnswSearchAccessMetrics {
+                path_accesses: 1,
+                unique_leaf_labels: 1,
+                fixed_steps: 3,
+                exhausted_fixed_budget: false,
+            }
+        );
     }
 
     #[test]
