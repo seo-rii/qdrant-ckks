@@ -824,6 +824,56 @@ mod tests {
     }
 
     #[test]
+    fn cli_snapshot_crypto_preflight_rejects_unconfigured_private_hnsw_oram_directory() {
+        let settings = Settings::new(None).unwrap();
+        let collection_dir = TempDir::new().unwrap();
+        let mut config = recovered_private_hnsw_config();
+        config.params.encryption = None;
+        fs::write(
+            collection_dir.path().join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+        fs::create_dir(collection_dir.path().join(PRIVATE_HNSW_ORAM_DIR)).unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("unconfigured private HNSW ORAM directory must fail CLI preflight");
+
+        assert!(err.contains("private HNSW ORAM snapshot layout validation failed"));
+        assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_unconfigured_private_hnsw_oram_symlink() {
+        let settings = Settings::new(None).unwrap();
+        let collection_dir = TempDir::new().unwrap();
+        let mut config = recovered_private_hnsw_config();
+        config.params.encryption = None;
+        fs::write(
+            collection_dir.path().join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            collection_dir.path().join("missing-hnsw-oram-target"),
+            collection_dir.path().join(PRIVATE_HNSW_ORAM_DIR),
+        )
+        .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("unconfigured private HNSW ORAM symlink must fail CLI preflight");
+
+        assert!(err.contains("private HNSW ORAM snapshot layout validation failed"));
+        assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains("missing-hnsw-oram-target"));
+    }
+
+    #[test]
     fn cli_snapshot_crypto_preflight_accepts_private_result_oram_snapshot() {
         let fixture = PrivateResultSnapshotFixture::build();
         let settings = fixture.settings();
