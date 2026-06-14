@@ -4175,6 +4175,30 @@ esac
             );
 
             assert_private_result_write_error(
+                do_delete_payload(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    DeletePayload {
+                        keys: vec!["body".parse().unwrap()],
+                        points: None,
+                        filter: Some(Filter::new()),
+                        shard_key: None,
+                    },
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM delete_payload by filter must fail closed"),
+                "cannot delete payload for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
                 do_clear_payload(
                     UncheckedTocProvider::new_unchecked(&toc),
                     "private_result_write_docs".to_string(),
@@ -4194,6 +4218,28 @@ esac
                 .await
                 .expect_err("private result ORAM clear_payload must fail closed"),
                 "cannot clear payload for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_clear_payload(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    PointsSelector::FilterSelector(FilterSelector {
+                        filter: Filter::new(),
+                        shard_key: None,
+                    }),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM clear_payload by filter must fail closed"),
+                "cannot clear payload by filter for private result ORAM payload field",
             );
 
             assert_private_result_write_error(
