@@ -1520,9 +1520,7 @@ fn manifest_context_from_runtime(
     private_result_oram_binding_configured: bool,
 ) -> StorageResult<ResolvedPrivateHnswContext> {
     let vector_params = params.vectors.get_params(vector_name).ok_or_else(|| {
-        CollectionError::bad_input(format!(
-            "private HNSW ORAM vector '{vector_name}' is not configured as a dense vector",
-        ))
+        CollectionError::bad_input("private HNSW ORAM vector is not configured as a dense vector")
     })?;
     let key_id = required_option_string(instance, KEY_ID_OPTION)?;
     let expected_rk_id = required_option_string(instance, EXPECTED_RK_ID_OPTION)?;
@@ -1535,9 +1533,9 @@ fn manifest_context_from_runtime(
     let verifier_public_keys = signature_public_keys(instance)?;
     let expected_distance = distance_kind(vector_params.distance);
     let expected_dim = u32::try_from(vector_params.size.get()).map_err(|_| {
-        StorageError::bad_request(format!(
-            "private HNSW ORAM vector '{vector_name}' size exceeds supported manifest dim range",
-        ))
+        StorageError::bad_request(
+            "private HNSW ORAM vector size exceeds supported manifest dim range",
+        )
     })?;
     Ok(ResolvedPrivateHnswContext {
         collection_path: std::path::PathBuf::new(),
@@ -2362,6 +2360,40 @@ mod private_hnsw_tests {
         );
         assert!(!rendered.contains(rule_id), "{rendered}");
         assert!(!rendered.contains(instance_id), "{rendered}");
+    }
+
+    #[test]
+    fn manifest_context_missing_vector_error_does_not_reflect_vector_name() {
+        let uuid = Uuid::from_u128(7);
+        let mut manifest = fixture_session("session-1", 20).manifest;
+        manifest.collection_id = uuid.to_string();
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+        let settings = recovered_snapshot_settings(&manifest, key_pair.public_key().as_ref());
+        let config = recovered_snapshot_config(uuid, &manifest);
+        let instance = settings
+            .crypto
+            .instances
+            .get("docs_text_private_hnsw")
+            .unwrap();
+        let missing_vector = "private-hnsw-runtime-vector-secret";
+
+        let err = match manifest_context_from_runtime(
+            &config.params,
+            &uuid.to_string(),
+            missing_vector,
+            instance,
+            false,
+        ) {
+            Ok(_) => panic!("missing private HNSW vector must fail runtime context validation"),
+            Err(err) => err,
+        };
+        let rendered = err.to_string();
+
+        assert!(
+            rendered.contains("not configured as a dense vector"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(missing_vector), "{rendered}");
     }
 
     fn fixture_bucket(bucket_id: u64, epoch: u64) -> PrivateHnswOramBucket {
