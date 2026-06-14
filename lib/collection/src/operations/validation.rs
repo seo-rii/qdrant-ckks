@@ -58,6 +58,20 @@ fn describe_error(
         "private_hnsw_oram_single_vector_selector" => {
             "private HNSW ORAM supports exactly one vector per rule in v1".to_string()
         }
+        "unsupported_vector_encryption_binding"
+            if params
+                .get("value")
+                .is_some_and(|value| value.to_string().contains("private-result-oram/v1")) =>
+        {
+            "private result ORAM bindings must use payload_paths selectors".to_string()
+        }
+        "unsupported_payload_encryption_binding"
+            if params
+                .get("value")
+                .is_some_and(|value| value.to_string().contains("private-hnsw-oram/v1")) =>
+        {
+            "private HNSW ORAM bindings must use vector_names selectors".to_string()
+        }
         "overlapping_encryption_selector"
             if params
                 .get("value")
@@ -314,6 +328,22 @@ mod tests {
         assert!(!overlap_message.contains("body.secret"));
         assert!(!overlap_message.contains("body_private_result"));
         assert!(!overlap_message.contains("body_client_payload"));
+
+        let mut wrong_selector = ValidationError::new("unsupported_vector_encryption_binding");
+        wrong_selector.add_param(
+            std::borrow::Cow::from("value"),
+            &serde_json::json!([
+                {
+                    "id": "result_wrong_selector_rule",
+                    "selector": { "names": ["result-secret-vector"] },
+                    "binding": "private-result-oram/v1",
+                },
+            ]),
+        );
+        let wrong_selector_message = describe_error(&wrong_selector);
+        assert!(wrong_selector_message.contains("must use payload_paths selectors"));
+        assert!(!wrong_selector_message.contains("result_wrong_selector_rule"));
+        assert!(!wrong_selector_message.contains("result-secret-vector"));
     }
 
     #[test]
@@ -355,5 +385,21 @@ mod tests {
         assert!(!overlap_message.contains("embedding_private_hnsw"));
         assert!(!overlap_message.contains("embedding_client_ckks"));
         assert!(!overlap_message.contains("embedding"));
+
+        let mut wrong_selector = ValidationError::new("unsupported_payload_encryption_binding");
+        wrong_selector.add_param(
+            std::borrow::Cow::from("value"),
+            &serde_json::json!([
+                {
+                    "id": "hnsw_wrong_selector_rule",
+                    "selector": { "paths": ["secret.payload"] },
+                    "binding": "private-hnsw-oram/v1",
+                },
+            ]),
+        );
+        let wrong_selector_message = describe_error(&wrong_selector);
+        assert!(wrong_selector_message.contains("must use vector_names selectors"));
+        assert!(!wrong_selector_message.contains("hnsw_wrong_selector_rule"));
+        assert!(!wrong_selector_message.contains("secret.payload"));
     }
 }

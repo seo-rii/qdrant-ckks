@@ -2299,6 +2299,14 @@ fn sanitize_collection_crypto_validation_error(err: impl std::fmt::Display) -> S
     } else if rendered.contains("private_hnsw_oram_single_vector_selector") {
         "private HNSW ORAM supports exactly one vector per rule in v1".to_string()
     } else if rendered.contains("private-result-oram/v1")
+        && rendered.contains("unsupported_vector_encryption_binding")
+    {
+        "private result ORAM bindings must use payload_paths selectors".to_string()
+    } else if rendered.contains("private-hnsw-oram/v1")
+        && rendered.contains("unsupported_payload_encryption_binding")
+    {
+        "private HNSW ORAM bindings must use vector_names selectors".to_string()
+    } else if rendered.contains("private-result-oram/v1")
         && rendered.contains("overlapping_encryption_selector")
     {
         "private result ORAM payload selector overlaps another encryption selector".to_string()
@@ -10295,6 +10303,56 @@ mod tests {
                     && !description.contains("body.secret")
                     && !description.contains("body_private_result")
                     && !description.contains("body_client_payload")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_redacts_private_result_oram_wrong_selector_errors() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "payload_result_oram_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_result_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:result-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "result_wrong_selector_rule".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["result-secret-vector".to_string()],
+                    },
+                    instance: "payload_result_oram_v1".to_string(),
+                    binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err =
+            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+                .expect_err("private result ORAM bindings must reject vector selectors");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private result ORAM bindings must use payload_paths selectors")
+                    && !description.contains("result_wrong_selector_rule")
+                    && !description.contains("result-secret-vector")),
             "unexpected error: {err:?}",
         );
     }
@@ -21516,6 +21574,40 @@ mod tests {
                     && !description.contains("embedding_private_hnsw")
                     && !description.contains("embedding_client_ckks")
                     && !description.contains("embedding")),
+            "unexpected error: {err:?}",
+        );
+
+        let wrong_selector_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "hnsw_wrong_selector_rule".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["secret.payload".to_string()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime_with_crypto_id(
+            &settings,
+            "docs",
+            "docs",
+            &wrong_selector_params,
+        )
+        .expect_err("private HNSW ORAM bindings must reject payload selectors");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private HNSW ORAM bindings must use vector_names selectors")
+                    && !description.contains("hnsw_wrong_selector_rule")
+                    && !description.contains("secret.payload")),
             "unexpected error: {err:?}",
         );
     }
