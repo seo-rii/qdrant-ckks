@@ -317,31 +317,35 @@ pub fn init(
 fn validation_error_handler(
     name: &str,
     err: actix_web_validator::Error,
-    _req: &HttpRequest,
+    req: &HttpRequest,
 ) -> error::Error {
     use actix_web_validator::error::DeserializeErrors;
 
     // Nicely describe deserialization and validation errors
-    let msg = match &err {
-        actix_web_validator::Error::Validate(errs) => {
-            validation::label_errors(format!("Validation error in {name}"), errs)
+    let msg = if should_sanitize_private_oram_json_validation_error(name, req.path(), &err) {
+        "Invalid JSON body for private ORAM request".to_string()
+    } else {
+        match &err {
+            actix_web_validator::Error::Validate(errs) => {
+                validation::label_errors(format!("Validation error in {name}"), errs)
+            }
+            actix_web_validator::Error::Deserialize(err) => {
+                format!(
+                    "Deserialize error in {name}: {}",
+                    match err {
+                        DeserializeErrors::DeserializeQuery(err) => err.to_string(),
+                        DeserializeErrors::DeserializeJson(err) => err.to_string(),
+                        DeserializeErrors::DeserializePath(err) => err.to_string(),
+                    }
+                )
+            }
+            actix_web_validator::Error::JsonPayloadError(
+                actix_web::error::JsonPayloadError::Deserialize(err),
+            ) => {
+                format!("Format error in {name}: {err}",)
+            }
+            err => err.to_string(),
         }
-        actix_web_validator::Error::Deserialize(err) => {
-            format!(
-                "Deserialize error in {name}: {}",
-                match err {
-                    DeserializeErrors::DeserializeQuery(err) => err.to_string(),
-                    DeserializeErrors::DeserializeJson(err) => err.to_string(),
-                    DeserializeErrors::DeserializePath(err) => err.to_string(),
-                }
-            )
-        }
-        actix_web_validator::Error::JsonPayloadError(
-            actix_web::error::JsonPayloadError::Deserialize(err),
-        ) => {
-            format!("Format error in {name}: {err}",)
-        }
-        err => err.to_string(),
     };
 
     // Build fitting response
@@ -358,11 +362,57 @@ fn validation_error_handler(
     error::InternalError::from_response(err, response).into()
 }
 
+fn should_sanitize_private_oram_json_validation_error(
+    name: &str,
+    path: &str,
+    err: &actix_web_validator::Error,
+) -> bool {
+    if name != "JSON body" || !is_private_oram_request_path(path) {
+        return false;
+    }
+
+    matches!(
+        err,
+        actix_web_validator::Error::Validate(_)
+            | actix_web_validator::Error::Deserialize(_)
+            | actix_web_validator::Error::JsonPayloadError(
+                actix_web::error::JsonPayloadError::Deserialize(_)
+            )
+    )
+}
+
+fn is_private_oram_request_path(path: &str) -> bool {
+    path.contains("/private-hnsw/") || path.contains("/private-result-oram")
+}
+
 #[cfg(test)]
 mod tests {
     use ::api::grpc::api_crate_version;
+    use actix_web::{App, test as actix_test, web};
+    use actix_web_validator::Json;
+    use serde::Deserialize;
+    use validator::Validate;
 
     use super::*;
+
+    #[derive(Deserialize, Validate)]
+    #[serde(deny_unknown_fields)]
+    struct PrivateOramValidationTestBody {
+        _known: String,
+    }
+
+    async fn private_oram_validation_test_endpoint(
+        _: Json<PrivateOramValidationTestBody>,
+    ) -> HttpResponse {
+        HttpResponse::Ok().finish()
+    }
+
+    fn body_with_unknown_field(field_name: &str, value: &str) -> serde_json::Value {
+        let mut body = serde_json::Map::new();
+        body.insert("_known".to_string(), serde_json::json!("ok"));
+        body.insert(field_name.to_string(), serde_json::json!(value));
+        serde_json::Value::Object(body)
+    }
 
     #[test]
     fn test_version() {
@@ -387,6 +437,87 @@ mod tests {
             7 * 1024 * 1024
         );
         assert_ne!(multipart_snapshot_upload_limit_bytes(&settings), usize::MAX);
+    }
+
+    #[actix_web::test]
+    async fn private_oram_json_validation_errors_do_not_reflect_unknown_field_names() {
+        let validate_json_config = actix_web_validator::JsonConfig::default()
+            .error_handler(|err, req| validation_error_handler("JSON body", err, req));
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(validate_json_config)
+                .route(
+                    "/collections/{collection_name}/private-hnsw/{vector_name}/session",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/private-result-oram/session",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/ordinary/session",
+                    web::post().to(private_oram_validation_test_endpoint),
+                ),
+        )
+        .await;
+
+        let sentinel = "qdrant-sec-private-oram-unknown-field-sentinel";
+        let private_hnsw_request = actix_test::TestRequest::post()
+            .uri("/collections/docs/private-hnsw/text/session")
+            .set_json(body_with_unknown_field(sentinel, "must-not-reflect"))
+            .to_request();
+        let private_hnsw_response = actix_test::call_service(&app, private_hnsw_request).await;
+        assert_eq!(
+            private_hnsw_response.status(),
+            actix_web::http::StatusCode::BAD_REQUEST
+        );
+        let private_hnsw_body = actix_test::read_body(private_hnsw_response).await;
+        let private_hnsw_body = String::from_utf8_lossy(&private_hnsw_body);
+        assert!(
+            private_hnsw_body.contains("Invalid JSON body for private ORAM request"),
+            "{private_hnsw_body}"
+        );
+        assert!(!private_hnsw_body.contains(sentinel), "{private_hnsw_body}");
+        assert!(
+            !private_hnsw_body.contains("unknown field"),
+            "{private_hnsw_body}"
+        );
+
+        let private_result_request = actix_test::TestRequest::post()
+            .uri("/collections/docs/private-result-oram/session")
+            .set_json(body_with_unknown_field(sentinel, "must-not-reflect"))
+            .to_request();
+        let private_result_response = actix_test::call_service(&app, private_result_request).await;
+        assert_eq!(
+            private_result_response.status(),
+            actix_web::http::StatusCode::BAD_REQUEST
+        );
+        let private_result_body = actix_test::read_body(private_result_response).await;
+        let private_result_body = String::from_utf8_lossy(&private_result_body);
+        assert!(
+            private_result_body.contains("Invalid JSON body for private ORAM request"),
+            "{private_result_body}"
+        );
+        assert!(
+            !private_result_body.contains(sentinel),
+            "{private_result_body}"
+        );
+
+        let ordinary_request = actix_test::TestRequest::post()
+            .uri("/collections/docs/ordinary/session")
+            .set_json(body_with_unknown_field(
+                sentinel,
+                "ordinary-errors-still-render-field",
+            ))
+            .to_request();
+        let ordinary_response = actix_test::call_service(&app, ordinary_request).await;
+        assert_eq!(
+            ordinary_response.status(),
+            actix_web::http::StatusCode::BAD_REQUEST
+        );
+        let ordinary_body = actix_test::read_body(ordinary_response).await;
+        let ordinary_body = String::from_utf8_lossy(&ordinary_body);
+        assert!(ordinary_body.contains(sentinel), "{ordinary_body}");
     }
 
     #[test]
