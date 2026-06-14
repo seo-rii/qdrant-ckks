@@ -734,7 +734,42 @@ mod tests {
                 .expect_err("tampered private HNSW manifest signature must fail CLI preflight");
 
         assert!(
-            err.contains("manifest signature verification failed"),
+            err.contains("private HNSW ORAM request validation failed"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR), "{err}");
+        assert!(!err.contains(&fixture.encrypted_build.root_hash), "{err}");
+        assert!(
+            !err.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+            "{err}"
+        );
+        assert!(!err.contains(SIGNING_KEY_ID), "{err}");
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_hnsw_runtime_public_key_mismatch() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let mut settings = fixture.route_settings();
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["signature_public_keys"][SIGNING_KEY_ID] =
+            json!(BASE64URL_NOPAD.encode(&[11; 32]));
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_hnsw_snapshot_fixture(collection_dir.path(), &fixture, false);
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("private HNSW runtime public key mismatch must fail CLI preflight");
+
+        assert!(
+            err.contains("private HNSW ORAM request validation failed"),
             "{err}"
         );
         assert!(
@@ -881,6 +916,38 @@ mod tests {
         let err =
             validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
                 .expect_err("tampered private result manifest signature must fail CLI preflight");
+
+        assert!(
+            err.contains("manifest signature verification failed"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR), "{err}");
+        assert!(!err.contains(&fixture.manifest.root_hash), "{err}");
+        assert!(!err.contains(&fixture.buckets[0].ciphertext), "{err}");
+        assert!(!err.contains(RESULT_SIGNING_KEY_ID), "{err}");
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_result_runtime_public_key_mismatch() {
+        let fixture = PrivateResultSnapshotFixture::build();
+        let mut settings = fixture.settings();
+        settings
+            .crypto
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options["signature_public_keys"][RESULT_SIGNING_KEY_ID] =
+            json!(BASE64URL_NOPAD.encode(&[12; 32]));
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_result_snapshot_fixture(collection_dir.path(), &fixture, false);
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("private result runtime public key mismatch must fail CLI preflight");
 
         assert!(
             err.contains("manifest signature verification failed"),
