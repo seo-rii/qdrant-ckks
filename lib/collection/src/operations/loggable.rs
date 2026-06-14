@@ -263,6 +263,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "secret_key"
                         | "secret_key_b64"
                         | "read_path"
+                        | "read_path_label"
+                        | "read_path_labels"
                         | "read_paths"
                         | "paths"
                         | "bucket_commitment"
@@ -376,6 +378,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "wrappingkeyb64"
                         | "pathlabel"
                         | "pathlabels"
+                        | "readpathlabel"
+                        | "readpathlabels"
                         | "readpath"
                         | "readpaths"
                         | "bucketcommitment"
@@ -847,12 +851,17 @@ mod tests {
                 "bucketIds": ["qdrant-sec-private-oram-camel-bucket-id-log-sentinel"],
                 "bucketId": "qdrant-sec-private-oram-camel-single-bucket-id-log-sentinel",
                 "bucket_commitment": "qdrant-sec-private-oram-bucket-commitment-log-sentinel",
+                "bucket_commitments": ["qdrant-sec-private-oram-bucket-commitments-log-sentinel"],
                 "bucketCommitments": ["qdrant-sec-private-oram-camel-bucket-commitment-log-sentinel"],
                 "bucketCommitment": "qdrant-sec-private-oram-camel-single-bucket-commitment-log-sentinel",
                 "updated_buckets": [{
                     "bucket_id": "qdrant-sec-private-oram-nested-bucket-id-log-sentinel",
                     "bucket_commitment": "qdrant-sec-private-oram-nested-bucket-commitment-log-sentinel"
                 }],
+                "updated_bucket": {
+                    "bucket_id": "qdrant-sec-private-oram-updated-single-bucket-id-log-sentinel",
+                    "bucket_commitment": "qdrant-sec-private-oram-updated-single-bucket-commitment-log-sentinel"
+                },
                 "updatedBuckets": ["qdrant-sec-private-oram-camel-updated-bucket-log-sentinel"],
                 "updatedBucket": {
                     "bucketId": "qdrant-sec-private-oram-camel-updated-single-bucket-id-log-sentinel",
@@ -861,6 +870,7 @@ mod tests {
                 "path_label": "qdrant-sec-private-hnsw-path-label-log-sentinel",
                 "pathLabel": "qdrant-sec-private-hnsw-camel-single-path-label-log-sentinel",
                 "pathLabels": ["qdrant-sec-private-hnsw-camel-path-label-log-sentinel"],
+                "readPathLabels": ["qdrant-sec-private-hnsw-camel-read-path-label-log-sentinel"],
                 "leaf_label": "qdrant-sec-private-hnsw-leaf-label-log-sentinel",
                 "leafLabel": "qdrant-sec-private-hnsw-camel-single-leaf-label-log-sentinel",
                 "leafLabels": ["qdrant-sec-private-hnsw-camel-leaf-label-log-sentinel"],
@@ -868,7 +878,8 @@ mod tests {
                     "position_map": "qdrant-sec-private-hnsw-position-map-log-sentinel",
                     "oram_position_map": "qdrant-sec-private-hnsw-oram-position-map-log-sentinel",
                     "stash": "qdrant-sec-private-hnsw-stash-log-sentinel"
-                }
+                },
+                "clientState": "qdrant-sec-private-hnsw-camel-client-state-log-sentinel"
             }
         });
         let mut private_hnsw_graph = json!({
@@ -889,8 +900,10 @@ mod tests {
                 "top_k": ["qdrant-sec-private-hnsw-top-k-log-sentinel"],
                 "topK": ["qdrant-sec-private-hnsw-camel-top-k-log-sentinel"],
                 "result_ids": ["qdrant-sec-private-hnsw-result-id-log-sentinel"],
+                "resultIds": ["qdrant-sec-private-hnsw-camel-result-id-log-sentinel"],
                 "resultId": "qdrant-sec-private-hnsw-camel-single-result-id-log-sentinel",
                 "point_token": "qdrant-sec-private-hnsw-point-token-log-sentinel",
+                "pointTokens": ["qdrant-sec-private-hnsw-camel-point-tokens-log-sentinel"],
                 "pointToken": "qdrant-sec-private-hnsw-camel-point-token-log-sentinel",
                 "payload_fetch_token": "qdrant-sec-private-hnsw-payload-token-log-sentinel",
                 "payloadFetchToken": "qdrant-sec-private-hnsw-camel-payload-token-log-sentinel"
@@ -917,6 +930,10 @@ mod tests {
                     "bucket_id": "qdrant-sec-private-result-updated-bucket-id-log-sentinel",
                     "bucket_commitment": "qdrant-sec-private-result-updated-bucket-commitment-log-sentinel"
                 }],
+                "updated_bucket": {
+                    "bucket_id": "qdrant-sec-private-result-updated-single-bucket-id-log-sentinel",
+                    "bucket_commitment": "qdrant-sec-private-result-updated-single-bucket-commitment-log-sentinel"
+                },
                 "updatedBuckets": [{
                     "bucketId": "qdrant-sec-private-result-camel-updated-bucket-id-log-sentinel",
                     "bucketCommitment": "qdrant-sec-private-result-camel-updated-bucket-commitment-log-sentinel"
@@ -926,6 +943,7 @@ mod tests {
                 "fetch_tokens": ["qdrant-sec-private-result-fetch-token-log-sentinel"],
                 "fetchToken": "qdrant-sec-private-result-camel-fetch-token-log-sentinel",
                 "token_position_map": "qdrant-sec-private-result-token-position-map-log-sentinel",
+                "tokenPositionMap": "qdrant-sec-private-result-camel-token-position-map-log-sentinel",
                 "payload_oram_leaf": "qdrant-sec-private-result-payload-oram-leaf-log-sentinel",
                 "payloadOramLeaves": ["qdrant-sec-private-result-camel-payload-oram-leaf-log-sentinel"],
                 "result_ids": ["qdrant-sec-private-result-id-log-sentinel"],
@@ -957,22 +975,27 @@ mod tests {
             "qdrant-sec-private-oram-camel-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-single-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-oram-bucket-commitments-log-sentinel",
             "qdrant-sec-private-oram-camel-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-camel-single-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-nested-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-nested-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-oram-updated-single-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-updated-single-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-camel-updated-bucket-log-sentinel",
             "qdrant-sec-private-oram-camel-updated-single-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-updated-single-bucket-commitment-log-sentinel",
             "qdrant-sec-private-hnsw-path-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-single-path-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-path-label-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-read-path-label-log-sentinel",
             "qdrant-sec-private-hnsw-leaf-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-single-leaf-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-leaf-label-log-sentinel",
             "qdrant-sec-private-hnsw-position-map-log-sentinel",
             "qdrant-sec-private-hnsw-oram-position-map-log-sentinel",
             "qdrant-sec-private-hnsw-stash-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-client-state-log-sentinel",
             "qdrant-sec-private-hnsw-node-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-single-node-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-node-id-log-sentinel",
@@ -989,8 +1012,10 @@ mod tests {
             "qdrant-sec-private-hnsw-top-k-log-sentinel",
             "qdrant-sec-private-hnsw-camel-top-k-log-sentinel",
             "qdrant-sec-private-hnsw-result-id-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-result-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-single-result-id-log-sentinel",
             "qdrant-sec-private-hnsw-point-token-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-point-tokens-log-sentinel",
             "qdrant-sec-private-hnsw-camel-point-token-log-sentinel",
             "qdrant-sec-private-hnsw-payload-token-log-sentinel",
             "qdrant-sec-private-hnsw-camel-payload-token-log-sentinel",
@@ -1011,6 +1036,8 @@ mod tests {
             "qdrant-sec-private-result-camel-request-signature-log-sentinel",
             "qdrant-sec-private-result-updated-bucket-id-log-sentinel",
             "qdrant-sec-private-result-updated-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-result-updated-single-bucket-id-log-sentinel",
+            "qdrant-sec-private-result-updated-single-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-camel-updated-bucket-id-log-sentinel",
             "qdrant-sec-private-result-camel-updated-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-payload-token-log-sentinel",
@@ -1018,6 +1045,7 @@ mod tests {
             "qdrant-sec-private-result-fetch-token-log-sentinel",
             "qdrant-sec-private-result-camel-fetch-token-log-sentinel",
             "qdrant-sec-private-result-token-position-map-log-sentinel",
+            "qdrant-sec-private-result-camel-token-position-map-log-sentinel",
             "qdrant-sec-private-result-payload-oram-leaf-log-sentinel",
             "qdrant-sec-private-result-camel-payload-oram-leaf-log-sentinel",
             "qdrant-sec-private-result-id-log-sentinel",
