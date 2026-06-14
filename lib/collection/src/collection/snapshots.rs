@@ -688,14 +688,10 @@ fn validate_private_hnsw_oram_vector_snapshot(
     vector_name: &str,
 ) -> CollectionResult<()> {
     let vector_params = params.vectors.get_params(vector_name).ok_or_else(|| {
-        CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot vector '{vector_name}' is not configured",
-        ))
+        CollectionError::bad_request("private HNSW ORAM snapshot vector is not configured")
     })?;
     let expected_dim = u32::try_from(vector_params.size.get()).map_err(|_| {
-        CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot vector '{vector_name}' dimension exceeds u32",
-        ))
+        CollectionError::bad_request("private HNSW ORAM snapshot vector dimension exceeds u32")
     })?;
     let expected_distance = private_hnsw_distance_kind(vector_params.distance);
 
@@ -721,9 +717,9 @@ fn validate_private_hnsw_oram_vector_snapshot(
     if current_epoch.index_epoch != manifest.index_epoch
         || current_epoch.root_hash != manifest.root_hash
     {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot vector '{vector_name}' current epoch/root does not match manifest",
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot current epoch/root does not match manifest",
+        ));
     }
 
     let expected_bucket_ciphertext_bytes =
@@ -745,9 +741,9 @@ fn validate_private_hnsw_oram_vector_snapshot(
     }
     let bucket_root = PrivateHnswOramStore::merkle_root_for_commitments(&bucket_commitments)?;
     if bucket_root != manifest.root_hash {
-        return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM snapshot vector '{vector_name}' bucket commitments do not match manifest root_hash",
-        )));
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot bucket commitments do not match manifest root_hash",
+        ));
     }
     let last_bucket_id = manifest.bucket_count.saturating_sub(1);
     let bucket_ids = if last_bucket_id == 0 {
@@ -2697,7 +2693,10 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("current epoch/root"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("current epoch/root"));
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert!(!rendered.contains("text"), "{rendered}");
     }
 
     #[test]
@@ -2752,7 +2751,11 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap_err();
-        assert!(err.to_string().contains("bucket commitments"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("bucket commitments"));
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains("text"), "{rendered}");
     }
 
     #[test]
