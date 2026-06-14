@@ -1602,6 +1602,11 @@ fn generic_vector_write_plan(
             .instances
             .get(&rule.instance)
             .ok_or_else(|| {
+                if binding == Some(PRIVATE_HNSW_ORAM_BINDING) {
+                    return StorageError::bad_input(
+                        "private HNSW ORAM collection binding references a missing runtime instance",
+                    );
+                }
                 StorageError::bad_input(format!(
                     "collection {collection_name} references unknown crypto instance {}",
                     rule.instance
@@ -1610,15 +1615,13 @@ fn generic_vector_write_plan(
         if binding == Some(PRIVATE_HNSW_ORAM_BINDING) {
             if instance.provider != VECTOR_PRIVATE_HNSW_ORAM_PROVIDER {
                 return Err(StorageError::bad_input(format!(
-                    "collection {collection_name} rule {} uses binding {PRIVATE_HNSW_ORAM_BINDING}, which requires provider {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER}; found {}",
-                    rule.id, instance.provider
+                    "private HNSW ORAM collection binding must reference a {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER} runtime instance",
                 )));
             }
             if names.len() != 1 {
-                return Err(StorageError::bad_input(format!(
-                    "collection {collection_name} rule {} uses {PRIVATE_HNSW_ORAM_BINDING}, which must select exactly one vector in v1",
-                    rule.id
-                )));
+                return Err(StorageError::bad_input(
+                    "private HNSW ORAM supports exactly one vector per rule in v1",
+                ));
             }
             validate_private_hnsw_oram_instance(
                 &rule.instance,
@@ -1626,10 +1629,7 @@ fn generic_vector_write_plan(
                 runtime_settings.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT),
             )
             .map_err(|_| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} is invalid",
-                    rule.instance
-                ))
+                StorageError::bad_input("private HNSW ORAM runtime instance is invalid")
             })?;
             validate_private_oram_collection_key_epoch(
                 collection_name,
@@ -1643,12 +1643,10 @@ fn generic_vector_write_plan(
                 encryption,
                 instance,
             )?;
-            let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|_| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} distance option is invalid",
-                    rule.instance
-                ))
-            })?;
+            let private_distance =
+                private_hnsw_distance(&rule.instance, instance).map_err(|_| {
+                    StorageError::bad_input("private HNSW ORAM runtime distance option is invalid")
+                })?;
             let private_dim = private_hnsw_required_u64(
                 &rule.instance,
                 instance,
@@ -1657,10 +1655,7 @@ fn generic_vector_write_plan(
                 65_536,
             )
             .map_err(|_| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} dim option is invalid",
-                    rule.instance
-                ))
+                StorageError::bad_input("private HNSW ORAM runtime dim option is invalid")
             })?;
             for vector_name in names {
                 let Some(vector_params) = params.vectors.get_params(vector_name) else {
@@ -1687,8 +1682,7 @@ fn generic_vector_write_plan(
         }
         if instance.provider == VECTOR_PRIVATE_HNSW_ORAM_PROVIDER {
             return Err(StorageError::bad_input(format!(
-                "collection {collection_name} rule {} uses provider {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER}, which must use binding {PRIVATE_HNSW_ORAM_BINDING}",
-                rule.id
+                "private HNSW ORAM runtime instance must use binding {PRIVATE_HNSW_ORAM_BINDING}",
             )));
         }
         if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER {
@@ -6772,6 +6766,11 @@ fn validate_generic_collection_crypto_runtime(
         }
 
         let Some(instance) = runtime_settings.instances.get(&rule.instance) else {
+            if binding == Some(PRIVATE_HNSW_ORAM_BINDING) {
+                return Err(StorageError::bad_input(
+                    "private HNSW ORAM collection binding references a missing runtime instance",
+                ));
+            }
             return Err(StorageError::bad_input(format!(
                 "collection {collection_name} references unknown crypto instance {}",
                 rule.instance
@@ -6780,15 +6779,13 @@ fn validate_generic_collection_crypto_runtime(
         if binding == Some(PRIVATE_HNSW_ORAM_BINDING) {
             if instance.provider != VECTOR_PRIVATE_HNSW_ORAM_PROVIDER {
                 return Err(StorageError::bad_input(format!(
-                    "collection {collection_name} rule {} uses binding {PRIVATE_HNSW_ORAM_BINDING}, which requires provider {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER}; found {}",
-                    rule.id, instance.provider
+                    "private HNSW ORAM collection binding must reference a {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER} runtime instance",
                 )));
             }
             if names.len() != 1 {
-                return Err(StorageError::bad_input(format!(
-                    "collection {collection_name} rule {} uses {PRIVATE_HNSW_ORAM_BINDING}, which must select exactly one vector in v1",
-                    rule.id
-                )));
+                return Err(StorageError::bad_input(
+                    "private HNSW ORAM supports exactly one vector per rule in v1",
+                ));
             }
             validate_private_hnsw_oram_instance(
                 &rule.instance,
@@ -6796,10 +6793,7 @@ fn validate_generic_collection_crypto_runtime(
                 runtime_settings.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT),
             )
             .map_err(|_| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} is invalid",
-                    rule.instance
-                ))
+                StorageError::bad_input("private HNSW ORAM runtime instance is invalid")
             })?;
             validate_private_oram_collection_key_epoch(
                 collection_name,
@@ -6813,12 +6807,10 @@ fn validate_generic_collection_crypto_runtime(
                 encryption,
                 instance,
             )?;
-            let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|_| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} distance option is invalid",
-                    rule.instance
-                ))
-            })?;
+            let private_distance =
+                private_hnsw_distance(&rule.instance, instance).map_err(|_| {
+                    StorageError::bad_input("private HNSW ORAM runtime distance option is invalid")
+                })?;
             let private_dim = private_hnsw_required_u64(
                 &rule.instance,
                 instance,
@@ -6827,10 +6819,7 @@ fn validate_generic_collection_crypto_runtime(
                 65_536,
             )
             .map_err(|_| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} private HNSW ORAM instance {} dim option is invalid",
-                    rule.instance
-                ))
+                StorageError::bad_input("private HNSW ORAM runtime dim option is invalid")
             })?;
             for vector_name in names {
                 let Some(vector_params) = params.vectors.get_params(vector_name) else {
@@ -6853,8 +6842,7 @@ fn validate_generic_collection_crypto_runtime(
         }
         if instance.provider == VECTOR_PRIVATE_HNSW_ORAM_PROVIDER {
             return Err(StorageError::bad_input(format!(
-                "collection {collection_name} rule {} uses provider {VECTOR_PRIVATE_HNSW_ORAM_PROVIDER}, which must use binding {PRIVATE_HNSW_ORAM_BINDING}",
-                rule.id
+                "private HNSW ORAM runtime instance must use binding {PRIVATE_HNSW_ORAM_BINDING}",
             )));
         }
         if instance.provider == VECTOR_CLIENT_CKKS_PROVIDER {
@@ -21336,12 +21324,14 @@ mod tests {
 
     #[test]
     fn validate_collection_crypto_runtime_rejects_private_hnsw_oram_binding_provider_mismatch() {
+        let rule_id_sentinel = "private_hnsw_binding_provider_secret_rule";
+        let instance_sentinel = "private_hnsw_binding_provider_secret_instance";
         let settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
                 allow_inline_key_material: false,
                 instances: HashMap::from([(
-                    "docs_client_vector_v1".to_string(),
+                    instance_sentinel.to_string(),
                     CryptoInstanceConfig {
                         provider: VECTOR_CLIENT_CKKS_PROVIDER.to_string(),
                         materials: HashMap::new(),
@@ -21362,11 +21352,11 @@ mod tests {
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
                     rules: vec![EncryptionRuleRef {
-                        id: "embedding_private_hnsw".to_string(),
+                        id: rule_id_sentinel.to_string(),
                         selector: EncryptionSelector::VectorNames {
                             names: vec!["embedding".to_string()],
                         },
-                        instance: "docs_client_vector_v1".to_string(),
+                        instance: instance_sentinel.to_string(),
                         binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
                     }],
                 }),
@@ -21379,9 +21369,26 @@ mod tests {
             .expect_err("private HNSW ORAM binding must require private HNSW provider");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains(PRIVATE_HNSW_ORAM_BINDING)
+                if description.contains("collection binding must reference")
                     && description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                    && description.contains(VECTOR_CLIENT_CKKS_PROVIDER)),
+                    && !description.contains(rule_id_sentinel)
+                    && !description.contains(instance_sentinel)
+                    && !description.contains(VECTOR_CLIENT_CKKS_PROVIDER)),
+            "unexpected error: {err:?}",
+        );
+
+        let mut missing_instance_params = params;
+        let missing_instance_sentinel = "private_hnsw_missing_secret_instance";
+        missing_instance_params.encryption.as_mut().unwrap().rules[0].instance =
+            missing_instance_sentinel.to_string();
+        let err =
+            validate_collection_crypto_runtime_inner(&settings, "docs", &missing_instance_params)
+                .expect_err("private HNSW ORAM binding must require an existing runtime instance");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("missing runtime instance")
+                    && !description.contains(rule_id_sentinel)
+                    && !description.contains(missing_instance_sentinel)),
             "unexpected error: {err:?}",
         );
     }
@@ -21389,12 +21396,14 @@ mod tests {
     #[test]
     fn validate_collection_crypto_runtime_rejects_private_hnsw_oram_provider_without_private_binding()
      {
+        let rule_id_sentinel = "private_hnsw_provider_binding_secret_rule";
+        let instance_sentinel = "private_hnsw_provider_binding_secret_instance";
         let settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
                 allow_inline_key_material: false,
                 instances: HashMap::from([(
-                    "docs_private_hnsw_v1".to_string(),
+                    instance_sentinel.to_string(),
                     CryptoInstanceConfig {
                         provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
                         materials: HashMap::new(),
@@ -21415,11 +21424,11 @@ mod tests {
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
                     rules: vec![EncryptionRuleRef {
-                        id: "embedding_private_hnsw".to_string(),
+                        id: rule_id_sentinel.to_string(),
                         selector: EncryptionSelector::VectorNames {
                             names: vec!["embedding".to_string()],
                         },
-                        instance: "docs_private_hnsw_v1".to_string(),
+                        instance: instance_sentinel.to_string(),
                         binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
                     }],
                 }),
@@ -21432,8 +21441,10 @@ mod tests {
             .expect_err("private HNSW ORAM provider must use private HNSW binding");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                    && description.contains(PRIVATE_HNSW_ORAM_BINDING)),
+                if description.contains("runtime instance must use binding")
+                    && description.contains(PRIVATE_HNSW_ORAM_BINDING)
+                    && !description.contains(rule_id_sentinel)
+                    && !description.contains(instance_sentinel)),
             "unexpected error: {err:?}",
         );
     }
@@ -21483,8 +21494,7 @@ mod tests {
             .expect_err("private HNSW ORAM runtime rule must select one vector in v1");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains(PRIVATE_HNSW_ORAM_BINDING)
-                    && description.contains("exactly one vector")),
+                if description.contains("private HNSW ORAM supports exactly one vector")),
             "unexpected error: {err:?}",
         );
     }
@@ -21774,7 +21784,8 @@ mod tests {
             .expect_err("collection runtime must reject invalid private HNSW instance");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains("private HNSW ORAM instance docs_private_hnsw_v1 is invalid")
+                if description.contains("private HNSW ORAM runtime instance is invalid")
+                    && !description.contains("docs_private_hnsw_v1")
                     && !description.contains(secret_option)
                     && !description.contains(secret_value)
                     && !description.contains("unsupported option")),
