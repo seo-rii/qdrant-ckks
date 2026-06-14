@@ -1075,8 +1075,22 @@ fn private_hnsw_client_error(err: qdrant_sec::PrivateHnswClientError) -> Collect
     use qdrant_sec::PrivateHnswClientError;
 
     let message = match err {
+        PrivateHnswClientError::Encryption(_) => "private HNSW client encryption failed",
+        PrivateHnswClientError::InvalidNeighborShape => {
+            "private HNSW node block has invalid neighbor shape"
+        }
         PrivateHnswClientError::TooManyNeighbors { .. } => {
             "private HNSW node block has too many neighbors"
+        }
+        PrivateHnswClientError::VectorTooLarge => "private HNSW node block vector is too large",
+        PrivateHnswClientError::FixedNeighborSlotsTooLarge => {
+            "private HNSW node block fixed neighbor slot count is too large"
+        }
+        PrivateHnswClientError::EncodedBlockOversized => {
+            "private HNSW node block does not fit in configured block size"
+        }
+        PrivateHnswClientError::InvalidBlockEncoding => {
+            "private HNSW node block encoding is malformed"
         }
         PrivateHnswClientError::UnsupportedBlockVersion(_) => {
             "private HNSW node block uses unsupported version"
@@ -1084,11 +1098,68 @@ fn private_hnsw_client_error(err: qdrant_sec::PrivateHnswClientError) -> Collect
         PrivateHnswClientError::UnsupportedVectorEncoding(_) => {
             "private HNSW node block uses unsupported vector encoding"
         }
+        PrivateHnswClientError::InvalidBlockPadding => "private HNSW node block padding is invalid",
+        PrivateHnswClientError::InvalidBucketContext(_) => "private HNSW bucket context is invalid",
+        PrivateHnswClientError::InvalidBucketCiphertextEncoding => {
+            "private HNSW bucket ciphertext is not base64url"
+        }
         PrivateHnswClientError::BucketCiphertextSizeMismatch { .. } => {
             "private HNSW bucket ciphertext length does not match expected fixed length"
         }
+        PrivateHnswClientError::InvalidBucketCiphertextHash => {
+            "private HNSW bucket ciphertext hash is invalid"
+        }
+        PrivateHnswClientError::InvalidBucketCommitment => {
+            "private HNSW bucket commitment is invalid"
+        }
+        PrivateHnswClientError::BucketMetadataMismatch => {
+            "private HNSW bucket metadata does not match the decrypt context"
+        }
         PrivateHnswClientError::UnsupportedBucketCiphertextVersion(_) => {
             "private HNSW bucket uses unsupported ciphertext version"
+        }
+        PrivateHnswClientError::BucketOpenFailed => {
+            "private HNSW bucket ciphertext authentication failed"
+        }
+        PrivateHnswClientError::InvalidTreeHeight => "private HNSW ORAM tree_height is invalid",
+        PrivateHnswClientError::LeafOutOfRange => {
+            "private HNSW ORAM leaf label is outside tree range"
+        }
+        PrivateHnswClientError::InvalidLeafLabelEncoding => {
+            "private HNSW ORAM leaf label is not base64url"
+        }
+        PrivateHnswClientError::InvalidLeafLabelLength => {
+            "private HNSW ORAM leaf label has invalid length"
+        }
+        PrivateHnswClientError::BucketCountMismatch => {
+            "private HNSW ORAM bucket_count does not match tree_height"
+        }
+        PrivateHnswClientError::InvalidOramClientConfig(_) => {
+            "private HNSW ORAM client config is invalid"
+        }
+        PrivateHnswClientError::InvalidBucketPlaintext => {
+            "private HNSW ORAM bucket plaintext is malformed"
+        }
+        PrivateHnswClientError::BucketPlaintextMetadataMismatch => {
+            "private HNSW ORAM bucket plaintext metadata does not match config"
+        }
+        PrivateHnswClientError::BucketPlaintextSlotCountMismatch => {
+            "private HNSW ORAM bucket plaintext slot count does not match config"
+        }
+        PrivateHnswClientError::PathBucketMismatch => {
+            "private HNSW ORAM path buckets do not match requested leaf"
+        }
+        PrivateHnswClientError::MissingPosition => {
+            "private HNSW ORAM client position map is missing a node"
+        }
+        PrivateHnswClientError::MissingBlock => {
+            "private HNSW ORAM path did not contain requested node"
+        }
+        PrivateHnswClientError::DuplicateBlock => {
+            "private HNSW ORAM path contains duplicate node blocks"
+        }
+        PrivateHnswClientError::InvalidBuildConfig(_) => {
+            "private HNSW ORAM build config is invalid"
         }
         PrivateHnswClientError::OramInitialPlacementOverflow { .. } => {
             "private HNSW ORAM initial placement overflowed path"
@@ -1096,8 +1167,48 @@ fn private_hnsw_client_error(err: qdrant_sec::PrivateHnswClientError) -> Collect
         PrivateHnswClientError::UnsupportedClientStateSnapshotVersion(_) => {
             "private HNSW ORAM client state snapshot uses unsupported version"
         }
+        PrivateHnswClientError::InvalidClientStateSnapshot => {
+            "private HNSW ORAM client state snapshot is malformed"
+        }
+        PrivateHnswClientError::InvalidClientStateContext(_) => {
+            "private HNSW ORAM client state context is invalid"
+        }
+        PrivateHnswClientError::InvalidClientStateCiphertextEncoding => {
+            "private HNSW ORAM client state ciphertext is not base64url"
+        }
+        PrivateHnswClientError::InvalidClientStateCiphertextHash => {
+            "private HNSW ORAM client state ciphertext hash is invalid"
+        }
         PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(_) => {
             "private HNSW ORAM client state uses unsupported ciphertext version"
+        }
+        PrivateHnswClientError::ClientStateOpenFailed => {
+            "private HNSW ORAM client state decryption authentication failed"
+        }
+        PrivateHnswClientError::InvalidSearchConfig(_) => "private HNSW search config is invalid",
+        PrivateHnswClientError::UnsupportedSearchVectorEncoding => {
+            "private HNSW search currently requires f32_le node vectors"
+        }
+        PrivateHnswClientError::InvalidF32VectorLength => {
+            "private HNSW search f32 vector bytes are malformed"
+        }
+        PrivateHnswClientError::VectorDimensionMismatch => {
+            "private HNSW search query and node vector dimensions differ"
+        }
+        PrivateHnswClientError::NonFiniteDistance => "private HNSW search distance is not finite",
+        PrivateHnswClientError::MissingPayloadFetchToken => {
+            "private HNSW private result mode requires payload fetch tokens"
+        }
+        PrivateHnswClientError::EmptyMerkleTree => {
+            "private HNSW ORAM Merkle tree must contain at least one leaf"
+        }
+        PrivateHnswClientError::InvalidMerkleRoot => "private HNSW ORAM Merkle root is invalid",
+        PrivateHnswClientError::MerkleRootMismatch => "private HNSW ORAM Merkle root mismatch",
+        PrivateHnswClientError::InvalidCommitEpoch => {
+            "private HNSW ORAM commit new_epoch must be greater than old_epoch"
+        }
+        PrivateHnswClientError::EmptyCommit => {
+            "private HNSW ORAM commit must update at least one bucket"
         }
         PrivateHnswClientError::BucketOutOfRange { .. } => {
             "private HNSW ORAM bucket is out of range"
@@ -1117,7 +1228,22 @@ fn private_hnsw_client_error(err: qdrant_sec::PrivateHnswClientError) -> Collect
         PrivateHnswClientError::UnsupportedBucketVersion(_) => {
             "private HNSW ORAM bucket uses unsupported version"
         }
-        other => return CollectionError::bad_request(other.to_string()),
+        PrivateHnswClientError::InvalidCommitSignatureContext(_) => {
+            "private HNSW ORAM commit signature context is invalid"
+        }
+        PrivateHnswClientError::InvalidManifestSignatureContext(_) => {
+            "private HNSW ORAM manifest signature context is invalid"
+        }
+        PrivateHnswClientError::ManifestCommitMismatch => {
+            "private HNSW ORAM manifest epoch/root does not match commit old epoch/root"
+        }
+        PrivateHnswClientError::InvalidMerkleProof => "private HNSW ORAM Merkle proof is malformed",
+        PrivateHnswClientError::InvalidMerkleProofJson => {
+            "private HNSW ORAM Merkle proof JSON is malformed"
+        }
+        PrivateHnswClientError::MerkleProofMismatch => {
+            "private HNSW ORAM Merkle proof does not match buckets/root"
+        }
     };
     CollectionError::bad_request(message)
 }
@@ -1136,7 +1262,32 @@ fn private_hnsw_oram_error(err: qdrant_sec::PrivateHnswOramError) -> CollectionE
             "private HNSW ORAM commit signature verification failed"
         }
         PrivateHnswOramError::MalformedSignature => "private HNSW ORAM signature is malformed",
-        other => return CollectionError::bad_request(other.to_string()),
+        PrivateHnswOramError::InvalidProvider => "private HNSW ORAM manifest provider is invalid",
+        PrivateHnswOramError::InvalidBinding => "private HNSW ORAM manifest binding is invalid",
+        PrivateHnswOramError::InvalidManifestField(_) => {
+            "private HNSW ORAM manifest field is invalid"
+        }
+        PrivateHnswOramError::ManifestContextMismatch(_) => {
+            "private HNSW ORAM manifest field does not match runtime context"
+        }
+        PrivateHnswOramError::MissingManifestSignature => {
+            "private HNSW ORAM manifest signature is missing"
+        }
+        PrivateHnswOramError::SignatureKeyIdMismatch => {
+            "private HNSW ORAM manifest signature key id does not match runtime context"
+        }
+        PrivateHnswOramError::InvalidManifestSignature => {
+            "private HNSW ORAM manifest signature verification failed"
+        }
+        PrivateHnswOramError::EmptyCommit => {
+            "private HNSW ORAM commit must update at least one bucket"
+        }
+        PrivateHnswOramError::InvalidReadPathsSignature => {
+            "private HNSW ORAM read_paths signature verification failed"
+        }
+        PrivateHnswOramError::InvalidResourceKeyId => {
+            "private HNSW ORAM resource key id is invalid"
+        }
     };
     CollectionError::bad_request(message)
 }

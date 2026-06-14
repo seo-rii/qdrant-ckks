@@ -996,11 +996,41 @@ fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> Collect
     use qdrant_sec::PrivateResultOramError;
 
     let message = match err {
+        PrivateResultOramError::Encryption(_) => "private result ORAM client encryption failed",
         PrivateResultOramError::UnsupportedManifestVersion(_) => {
             "private result ORAM manifest version is unsupported"
         }
+        PrivateResultOramError::InvalidProvider => {
+            "private result ORAM manifest provider is invalid"
+        }
+        PrivateResultOramError::InvalidBinding => "private result ORAM manifest binding is invalid",
+        PrivateResultOramError::InvalidManifestField(_) => {
+            "private result ORAM manifest field is invalid"
+        }
+        PrivateResultOramError::ManifestContextMismatch(_) => {
+            "private result ORAM manifest field does not match runtime context"
+        }
+        PrivateResultOramError::MissingManifestSignature => {
+            "private result ORAM manifest signature is missing"
+        }
         PrivateResultOramError::UnsupportedSignatureAlgorithm(_) => {
             "private result ORAM signature algorithm must be ed25519"
+        }
+        PrivateResultOramError::SignatureKeyIdMismatch => {
+            "private result ORAM signature key id does not match runtime context"
+        }
+        PrivateResultOramError::MalformedSignature => "private result ORAM signature is malformed",
+        PrivateResultOramError::InvalidManifestSignature => {
+            "private result ORAM manifest signature verification failed"
+        }
+        PrivateResultOramError::InvalidCommitSignature => {
+            "private result ORAM commit signature verification failed"
+        }
+        PrivateResultOramError::InvalidReadBucketsSignature => {
+            "private result ORAM read_buckets signature verification failed"
+        }
+        PrivateResultOramError::InvalidResourceKeyId => {
+            "private result ORAM resource key id is invalid"
         }
         PrivateResultOramError::UnsupportedBucketVersion(_) => {
             "private result ORAM bucket version is unsupported"
@@ -1020,13 +1050,112 @@ fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> Collect
         PrivateResultOramError::BucketOutOfRange { .. } => {
             "private result ORAM bucket is out of range"
         }
+        PrivateResultOramError::InvalidBucketField(_) => {
+            "private result ORAM bucket field is invalid"
+        }
+        PrivateResultOramError::BucketOversized => {
+            "private result ORAM bucket ciphertext exceeds maximum size"
+        }
+        PrivateResultOramError::InvalidBucketHash => {
+            "private result ORAM bucket ciphertext_sha256 mismatch"
+        }
+        PrivateResultOramError::InvalidBucketCiphertextEncoding => {
+            "private result ORAM bucket ciphertext is malformed"
+        }
+        PrivateResultOramError::InvalidBucketCiphertextHash => {
+            "private result ORAM bucket ciphertext hash mismatch"
+        }
+        PrivateResultOramError::BucketOpenFailed => {
+            "private result ORAM bucket decryption authentication failed"
+        }
+        PrivateResultOramError::BucketMetadataMismatch => {
+            "private result ORAM bucket metadata does not match context"
+        }
+        PrivateResultOramError::InvalidBucketContext(_) => {
+            "private result ORAM bucket context is invalid"
+        }
+        PrivateResultOramError::InvalidBucketCommitment => {
+            "private result ORAM bucket commitment context mismatch"
+        }
+        PrivateResultOramError::EmptyMerkleTree => "private result ORAM Merkle tree is empty",
+        PrivateResultOramError::MerkleRootMismatch => {
+            "private result ORAM Merkle root does not match current commitments"
+        }
+        PrivateResultOramError::ManifestCommitMismatch => {
+            "private result ORAM manifest epoch/root does not match commit old epoch/root"
+        }
         PrivateResultOramError::StaleBucketEpoch { .. } => {
             "private result ORAM bucket epoch does not match expected epoch"
         }
         PrivateResultOramError::DuplicateUpdatedBucket { .. } => {
             "private result ORAM commit repeats a bucket"
         }
-        other => return CollectionError::bad_request(other.to_string()),
+        PrivateResultOramError::EmptyCommit => {
+            "private result ORAM commit must update at least one bucket"
+        }
+        PrivateResultOramError::InvalidMerkleProof => {
+            "private result ORAM Merkle proof is malformed"
+        }
+        PrivateResultOramError::InvalidMerkleProofJson => {
+            "private result ORAM Merkle proof JSON is malformed"
+        }
+        PrivateResultOramError::MerkleProofMismatch => {
+            "private result ORAM Merkle proof does not match bucket commitments"
+        }
+        PrivateResultOramError::InvalidFetchPlanField(_) => {
+            "private result ORAM fetch plan field is invalid"
+        }
+        PrivateResultOramError::MissingPayloadFetchTokenPosition => {
+            "private result ORAM fetch token position is missing"
+        }
+        PrivateResultOramError::DuplicatePayloadFetchToken => {
+            "private result ORAM fetch token appears more than once"
+        }
+        PrivateResultOramError::DuplicatePayloadFetchTokenPosition => {
+            "private result ORAM fetch token position appears more than once"
+        }
+        PrivateResultOramError::InvalidClientConfig(_) => {
+            "private result ORAM client config is invalid"
+        }
+        PrivateResultOramError::InvalidPayloadBlock => {
+            "private result ORAM payload block is malformed"
+        }
+        PrivateResultOramError::InvalidPayloadBlockPadding => {
+            "private result ORAM payload block padding is invalid"
+        }
+        PrivateResultOramError::PayloadBlockOversized => {
+            "private result ORAM payload block exceeds configured size"
+        }
+        PrivateResultOramError::InvalidBucketPlaintext => {
+            "private result ORAM bucket plaintext is malformed"
+        }
+        PrivateResultOramError::BucketPlaintextSlotCountMismatch => {
+            "private result ORAM bucket plaintext slot count does not match config"
+        }
+        PrivateResultOramError::MissingPosition => {
+            "private result ORAM client position map is missing a token"
+        }
+        PrivateResultOramError::MissingBlock => {
+            "private result ORAM path did not contain requested block"
+        }
+        PrivateResultOramError::PathBucketMismatch => {
+            "private result ORAM path buckets do not match requested leaf"
+        }
+        PrivateResultOramError::InvalidClientStateSnapshot => {
+            "private result ORAM client state snapshot is malformed"
+        }
+        PrivateResultOramError::InvalidClientStateContext(_) => {
+            "private result ORAM client state context is invalid"
+        }
+        PrivateResultOramError::InvalidClientStateCiphertextEncoding => {
+            "private result ORAM client state ciphertext is not base64url"
+        }
+        PrivateResultOramError::InvalidClientStateCiphertextHash => {
+            "private result ORAM client state ciphertext hash is invalid"
+        }
+        PrivateResultOramError::ClientStateOpenFailed => {
+            "private result ORAM client state decryption authentication failed"
+        }
     };
     CollectionError::bad_request(message)
 }
