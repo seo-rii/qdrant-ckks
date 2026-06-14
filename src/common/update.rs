@@ -3779,6 +3779,19 @@ esac
         params
     }
 
+    fn default_private_hnsw_vector_params() -> CollectionParams {
+        let mut params = private_hnsw_vector_params();
+        params.vectors = collection::operations::types::VectorsConfig::Single(
+            VectorParamsBuilder::new(2, Distance::Dot).build(),
+        );
+        if let Some(encryption) = params.encryption.as_mut() {
+            encryption.rules[0].selector = EncryptionSelector::VectorNames {
+                names: vec![DEFAULT_VECTOR_NAME.to_string()],
+            };
+        }
+        params
+    }
+
     fn test_document(text: &str) -> api::rest::Document {
         api::rest::Document {
             text: text.to_string(),
@@ -3933,6 +3946,47 @@ esac
     }
 
     #[test]
+    fn private_hnsw_oram_vector_shape_guards_cover_batch_and_default_vectors() {
+        let params = private_hnsw_vector_params();
+        let named_batch = PointInsertOperationsInternal::PointsBatch(
+            collection::operations::point_ops::BatchPersisted {
+                ids: vec![1.into()],
+                vectors: BatchVectorStructPersisted::Named(HashMap::from([(
+                    "embedding".to_string(),
+                    vec![VectorPersisted::Dense(vec![0.1, 0.2])],
+                )])),
+                payloads: None,
+            },
+        );
+        assert_eq!(
+            upsert_vectors_touch_private_hnsw_oram_config(&named_batch, &params),
+            Some("embedding".to_string()),
+        );
+
+        let default_params = default_private_hnsw_vector_params();
+        let default_batch = PointInsertOperationsInternal::PointsBatch(
+            collection::operations::point_ops::BatchPersisted {
+                ids: vec![1.into()],
+                vectors: BatchVectorStructPersisted::Single(vec![vec![0.1, 0.2]]),
+                payloads: None,
+            },
+        );
+        assert_eq!(
+            upsert_vectors_touch_private_hnsw_oram_config(&default_batch, &default_params),
+            Some(DEFAULT_VECTOR_NAME.to_string()),
+        );
+
+        let default_point = vec![collection::operations::vector_ops::PointVectorsPersisted {
+            id: 1.into(),
+            vector: VectorStructPersisted::Single(vec![0.1, 0.2]),
+        }];
+        assert_eq!(
+            point_vectors_touch_private_hnsw_oram_config(&default_point, &default_params),
+            Some(DEFAULT_VECTOR_NAME.to_string()),
+        );
+    }
+
+    #[test]
     fn private_hnsw_oram_update_paths_reject_plaintext_dense_vectors() {
         let runtime = Runtime::new().unwrap();
         let storage_dir = Builder::new()
@@ -4008,6 +4062,43 @@ esac
                         )])),
                         payload: None,
                     }],
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/embedding/session")
+                        && !description.contains("CKKS vector encryption runtime")
+            ));
+
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                PointInsertOperations::PointsBatch(api::rest::schema::PointsBatch {
+                    batch: api::rest::schema::Batch {
+                        ids: vec![2.into()],
+                        vectors: api::rest::schema::BatchVectorStruct::Named(HashMap::from([(
+                            "embedding".to_string(),
+                            vec![api::rest::Vector::Dense(vec![0.3, 0.4])],
+                        )])),
+                        payloads: None,
+                    },
                     shard_key: None,
                     update_filter: None,
                     update_mode: None,
