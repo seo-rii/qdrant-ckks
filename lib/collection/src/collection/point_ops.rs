@@ -2971,11 +2971,6 @@ impl Collection {
             .limit
             .unwrap_or_else(|| default_request.limit.unwrap());
 
-        if limit == 0 {
-            return Err(CollectionError::BadRequest {
-                description: "Limit cannot be 0".to_string(),
-            });
-        }
         self.ensure_crypto_migration_allows_regular_operation("reads")
             .await?;
         self.ensure_filter_does_not_touch_encrypted_payload(request.filter.as_ref())
@@ -2997,6 +2992,11 @@ impl Collection {
             "scroll",
         )
         .await?;
+        if limit == 0 {
+            return Err(CollectionError::BadRequest {
+                description: "Limit cannot be 0".to_string(),
+            });
+        }
 
         let local_only = shard_selection.is_shard_id();
 
@@ -3159,9 +3159,6 @@ impl Collection {
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<Vec<RecordInternal>> {
-        if request.ids.is_empty() {
-            return Ok(Vec::new());
-        }
         self.ensure_crypto_migration_allows_regular_operation("reads")
             .await?;
         self.ensure_with_vector_does_not_touch_encrypted_vector(&request.with_vector)
@@ -3177,6 +3174,9 @@ impl Collection {
             "retrieve",
         )
         .await?;
+        if request.ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let with_payload = WithPayload::from(with_payload_interface);
         let ids_len = request.ids.len();
         let request = Arc::new(request);

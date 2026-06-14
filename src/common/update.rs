@@ -9480,6 +9480,24 @@ esac
             );
 
             assert_private_result_session_error(
+                private_result_collection
+                    .retrieve(
+                        PointRequestInternal {
+                            ids: Vec::new(),
+                            with_payload: Some(WithPayloadInterface::Bool(true)),
+                            with_vector: WithVector::Bool(false),
+                        },
+                        None,
+                        &ShardSelectorInternal::All,
+                        None,
+                        HwMeasurementAcc::disposable(),
+                    )
+                    .await
+                    .map_err(StorageError::from)
+                    .expect_err("private result ORAM collection empty retrieve must fail closed"),
+            );
+
+            assert_private_result_session_error(
                 crate::common::query::do_scroll_points(
                     &toc,
                     "private_result_docs",
@@ -9523,6 +9541,29 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM zero-limit scroll must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                private_result_collection
+                    .scroll_by(
+                        shard::scroll::ScrollRequestInternal {
+                            offset: None,
+                            limit: Some(0),
+                            filter: None,
+                            with_payload: Some(WithPayloadInterface::Bool(true)),
+                            with_vector: WithVector::Bool(false),
+                            order_by: None,
+                        },
+                        None,
+                        &ShardSelectorInternal::All,
+                        None,
+                        HwMeasurementAcc::disposable(),
+                    )
+                    .await
+                    .map_err(StorageError::from)
+                    .expect_err(
+                        "private result ORAM collection zero-limit scroll must fail closed",
+                    ),
             );
 
             assert_private_result_session_error(
