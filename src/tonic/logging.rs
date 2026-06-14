@@ -194,6 +194,9 @@ mod tests {
              sessionId=session-camel-sentinel \
              paths=raw-path-sentinel \
              read_paths=read-path-sentinel \
+             root_hash=root-hash-sentinel \
+             oldRootHash=old-root-hash-camel-sentinel \
+             new_root_hash=new-root-hash-sentinel \
              path_label=leaf-sentinel candidate_heap=candidate-sentinel \
              pathLabels=leaf-camel-sentinel \
              neighbors=neighbors-sentinel \
@@ -215,6 +218,9 @@ mod tests {
         assert!(!rendered.contains("session-camel-sentinel"));
         assert!(!rendered.contains("raw-path-sentinel"));
         assert!(!rendered.contains("read-path-sentinel"));
+        assert!(!rendered.contains("root-hash-sentinel"));
+        assert!(!rendered.contains("old-root-hash-camel-sentinel"));
+        assert!(!rendered.contains("new-root-hash-sentinel"));
         assert!(!rendered.contains("leaf-sentinel"));
         assert!(!rendered.contains("leaf-camel-sentinel"));
         assert!(!rendered.contains("neighbors-sentinel"));

@@ -303,6 +303,10 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "payload_fetch_tokens"
                         | "payload_oram_leaf"
                         | "payload_oram_leaves"
+                        | "root_hash"
+                        | "root_hashes"
+                        | "old_root_hash"
+                        | "new_root_hash"
                 ) || matches!(
                     key_without_separators,
                     "xapikey"
@@ -406,6 +410,10 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "payloadfetchtokens"
                         | "payloadoramleaf"
                         | "payloadoramleaves"
+                        | "roothash"
+                        | "roothashes"
+                        | "oldroothash"
+                        | "newroothash"
                 ) {
                     *value = Value::String("[redacted]".to_string());
                 } else {
@@ -826,11 +834,15 @@ mod tests {
 
     #[test]
     fn log_value_redacts_private_oram_access_pattern_fields() {
-        let mut value = json!({
+        let mut private_hnsw_oram_access = json!({
             "private_hnsw": {
                 "client_id": "qdrant-sec-private-hnsw-client-id-log-sentinel",
                 "session_id": "qdrant-sec-private-hnsw-session-id-log-sentinel",
                 "paths": ["qdrant-sec-private-hnsw-path-log-sentinel"],
+                "root_hash": "qdrant-sec-private-hnsw-root-hash-log-sentinel",
+                "rootHash": "qdrant-sec-private-hnsw-camel-root-hash-log-sentinel",
+                "old_root_hash": "qdrant-sec-private-hnsw-old-root-hash-log-sentinel",
+                "newRootHash": "qdrant-sec-private-hnsw-camel-new-root-hash-log-sentinel",
                 "bucket_ids": ["qdrant-sec-private-oram-bucket-id-log-sentinel"],
                 "bucketIds": ["qdrant-sec-private-oram-camel-bucket-id-log-sentinel"],
                 "bucketId": "qdrant-sec-private-oram-camel-single-bucket-id-log-sentinel",
@@ -856,7 +868,11 @@ mod tests {
                     "position_map": "qdrant-sec-private-hnsw-position-map-log-sentinel",
                     "oram_position_map": "qdrant-sec-private-hnsw-oram-position-map-log-sentinel",
                     "stash": "qdrant-sec-private-hnsw-stash-log-sentinel"
-                },
+                }
+            }
+        });
+        let mut private_hnsw_graph = json!({
+            "private_hnsw": {
                 "node_id": "qdrant-sec-private-hnsw-node-id-log-sentinel",
                 "nodeId": "qdrant-sec-private-hnsw-camel-single-node-id-log-sentinel",
                 "nodeIds": ["qdrant-sec-private-hnsw-camel-node-id-log-sentinel"],
@@ -878,10 +894,16 @@ mod tests {
                 "pointToken": "qdrant-sec-private-hnsw-camel-point-token-log-sentinel",
                 "payload_fetch_token": "qdrant-sec-private-hnsw-payload-token-log-sentinel",
                 "payloadFetchToken": "qdrant-sec-private-hnsw-camel-payload-token-log-sentinel"
-            },
+            }
+        });
+        let mut private_result_oram = json!({
             "private_result_oram": {
                 "session_id": "qdrant-sec-private-result-session-id-log-sentinel",
                 "sessionId": "qdrant-sec-private-result-camel-session-id-log-sentinel",
+                "root_hash": "qdrant-sec-private-result-root-hash-log-sentinel",
+                "rootHashes": ["qdrant-sec-private-result-camel-root-hash-log-sentinel"],
+                "oldRootHash": "qdrant-sec-private-result-camel-old-root-hash-log-sentinel",
+                "new_root_hash": "qdrant-sec-private-result-new-root-hash-log-sentinel",
                 "bucket_ids": ["qdrant-sec-private-result-bucket-id-log-sentinel"],
                 "bucketIds": ["qdrant-sec-private-result-camel-bucket-id-log-sentinel"],
                 "bucket_commitments": ["qdrant-sec-private-result-bucket-commitment-log-sentinel"],
@@ -913,13 +935,24 @@ mod tests {
             }
         });
 
-        redact_sensitive_log_fields(&mut value);
-        let serialized = serde_json::to_string(&value).unwrap();
+        redact_sensitive_log_fields(&mut private_hnsw_oram_access);
+        redact_sensitive_log_fields(&mut private_hnsw_graph);
+        redact_sensitive_log_fields(&mut private_result_oram);
+        let serialized = format!(
+            "{}{}{}",
+            serde_json::to_string(&private_hnsw_oram_access).unwrap(),
+            serde_json::to_string(&private_hnsw_graph).unwrap(),
+            serde_json::to_string(&private_result_oram).unwrap()
+        );
 
         for sentinel in [
             "qdrant-sec-private-hnsw-client-id-log-sentinel",
             "qdrant-sec-private-hnsw-session-id-log-sentinel",
             "qdrant-sec-private-hnsw-path-log-sentinel",
+            "qdrant-sec-private-hnsw-root-hash-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-root-hash-log-sentinel",
+            "qdrant-sec-private-hnsw-old-root-hash-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-new-root-hash-log-sentinel",
             "qdrant-sec-private-oram-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-single-bucket-id-log-sentinel",
@@ -963,6 +996,10 @@ mod tests {
             "qdrant-sec-private-hnsw-camel-payload-token-log-sentinel",
             "qdrant-sec-private-result-session-id-log-sentinel",
             "qdrant-sec-private-result-camel-session-id-log-sentinel",
+            "qdrant-sec-private-result-root-hash-log-sentinel",
+            "qdrant-sec-private-result-camel-root-hash-log-sentinel",
+            "qdrant-sec-private-result-camel-old-root-hash-log-sentinel",
+            "qdrant-sec-private-result-new-root-hash-log-sentinel",
             "qdrant-sec-private-result-bucket-id-log-sentinel",
             "qdrant-sec-private-result-camel-bucket-id-log-sentinel",
             "qdrant-sec-private-result-bucket-commitment-log-sentinel",
@@ -1004,6 +1041,9 @@ mod tests {
         let mut first = json!({
             "read_buckets": {
                 "session_id": "private-oram-session-a",
+                "root_hash": "private-oram-root-a",
+                "old_root_hash": "private-oram-old-root-a",
+                "new_root_hash": "private-oram-new-root-a",
                 "read_paths": ["read-path-a"],
                 "bucket_ids": [1, 2, 3],
                 "bucket_commitments": ["bucket-commitment-a"],
@@ -1019,6 +1059,9 @@ mod tests {
         let mut second = json!({
             "read_buckets": {
                 "session_id": "private-oram-session-b",
+                "root_hash": "private-oram-root-b",
+                "old_root_hash": "private-oram-old-root-b",
+                "new_root_hash": "private-oram-new-root-b",
                 "read_paths": ["read-path-b"],
                 "bucket_ids": [9, 10, 11],
                 "bucket_commitments": ["bucket-commitment-b", "bucket-commitment-c"],
