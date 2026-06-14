@@ -1338,7 +1338,7 @@ fn private_hnsw_manifest_read_store_error(err: CollectionError) -> StorageError 
         CollectionError::ServiceError { .. } => {
             StorageError::service_error("private HNSW ORAM manifest store validation failed")
         }
-        other => StorageError::from(other),
+        _ => StorageError::service_error("private HNSW ORAM manifest store validation failed"),
     }
 }
 
@@ -1353,7 +1353,9 @@ fn private_hnsw_read_store_error(err: CollectionError) -> StorageError {
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private HNSW ORAM encrypted bucket store validation failed",
         ),
-        other => StorageError::from(other),
+        _ => StorageError::service_error(
+            "private HNSW ORAM encrypted bucket store validation failed",
+        ),
     }
 }
 
@@ -1383,7 +1385,7 @@ fn private_hnsw_manifest_store_error(err: CollectionError) -> StorageError {
         CollectionError::ServiceError { .. } => {
             StorageError::service_error("private HNSW ORAM manifest store validation failed")
         }
-        other => StorageError::from(other),
+        _ => StorageError::service_error("private HNSW ORAM manifest store validation failed"),
     }
 }
 
@@ -1398,7 +1400,7 @@ fn private_hnsw_epoch_store_error(err: CollectionError) -> StorageError {
         CollectionError::ServiceError { .. } => {
             StorageError::service_error("private HNSW ORAM current epoch validation failed")
         }
-        other => StorageError::from(other),
+        _ => StorageError::service_error("private HNSW ORAM current epoch validation failed"),
     }
 }
 
@@ -1413,7 +1415,9 @@ fn private_hnsw_upload_store_error(err: CollectionError) -> StorageError {
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private HNSW ORAM encrypted bucket store validation failed",
         ),
-        other => StorageError::from(other),
+        _ => StorageError::service_error(
+            "private HNSW ORAM encrypted bucket store validation failed",
+        ),
     }
 }
 
@@ -1450,7 +1454,9 @@ fn private_hnsw_commit_writeback_store_error(err: CollectionError) -> StorageErr
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private HNSW ORAM encrypted bucket store metadata validation failed",
         ),
-        other => StorageError::from(other),
+        _ => StorageError::service_error(
+            "private HNSW ORAM encrypted bucket store metadata validation failed",
+        ),
     }
 }
 
@@ -2660,6 +2666,23 @@ mod private_hnsw_tests {
             private_hnsw_upload_store_error(CollectionError::bad_request(sentinel)).to_string();
         assert!(rendered.contains("encrypted bucket store validation failed"));
         assert!(!rendered.contains(sentinel), "{rendered}");
+
+        let unexpected = || CollectionError::BadInput {
+            description: sentinel.to_string(),
+        };
+        let rendered_errors = [
+            private_hnsw_manifest_read_store_error(unexpected()).to_string(),
+            private_hnsw_read_store_error(unexpected()).to_string(),
+            private_hnsw_read_batch_store_error(unexpected()).to_string(),
+            private_hnsw_manifest_store_error(unexpected()).to_string(),
+            private_hnsw_epoch_store_error(unexpected()).to_string(),
+            private_hnsw_upload_store_error(unexpected()).to_string(),
+            private_hnsw_commit_writeback_store_error(unexpected()).to_string(),
+        ];
+        for rendered in rendered_errors {
+            assert!(rendered.contains("private HNSW ORAM"));
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
     }
 
     #[test]

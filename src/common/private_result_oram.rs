@@ -1535,7 +1535,7 @@ fn private_result_oram_manifest_read_store_error(err: CollectionError) -> Storag
         CollectionError::ServiceError { .. } => {
             StorageError::service_error("private result ORAM manifest store validation failed")
         }
-        other => StorageError::from(other),
+        _ => StorageError::service_error("private result ORAM manifest store validation failed"),
     }
 }
 
@@ -1550,7 +1550,7 @@ fn private_result_oram_manifest_store_error(err: CollectionError) -> StorageErro
         CollectionError::ServiceError { .. } => {
             StorageError::service_error("private result ORAM manifest store validation failed")
         }
-        other => StorageError::from(other),
+        _ => StorageError::service_error("private result ORAM manifest store validation failed"),
     }
 }
 
@@ -1565,7 +1565,7 @@ fn private_result_oram_epoch_store_error(err: CollectionError) -> StorageError {
         CollectionError::ServiceError { .. } => {
             StorageError::service_error("private result ORAM current epoch validation failed")
         }
-        other => StorageError::from(other),
+        _ => StorageError::service_error("private result ORAM current epoch validation failed"),
     }
 }
 
@@ -1580,7 +1580,9 @@ fn private_result_oram_upload_store_error(err: CollectionError) -> StorageError 
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private result ORAM encrypted bucket store validation failed",
         ),
-        other => StorageError::from(other),
+        _ => StorageError::service_error(
+            "private result ORAM encrypted bucket store validation failed",
+        ),
     }
 }
 
@@ -1595,7 +1597,9 @@ fn private_result_oram_read_store_error(err: CollectionError) -> StorageError {
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private result ORAM encrypted bucket store validation failed",
         ),
-        other => StorageError::from(other),
+        _ => StorageError::service_error(
+            "private result ORAM encrypted bucket store validation failed",
+        ),
     }
 }
 
@@ -1627,7 +1631,9 @@ fn private_result_oram_commit_writeback_store_error(err: CollectionError) -> Sto
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private result ORAM encrypted bucket store metadata validation failed",
         ),
-        other => StorageError::from(other),
+        _ => StorageError::service_error(
+            "private result ORAM encrypted bucket store metadata validation failed",
+        ),
     }
 }
 
@@ -1795,6 +1801,22 @@ mod private_result_oram_tests {
                 .to_string();
         assert!(rendered.contains("encrypted bucket store validation failed"));
         assert!(!rendered.contains(sentinel), "{rendered}");
+
+        let unexpected = || CollectionError::BadInput {
+            description: sentinel.to_string(),
+        };
+        let rendered_errors = [
+            private_result_oram_manifest_read_store_error(unexpected()).to_string(),
+            private_result_oram_manifest_store_error(unexpected()).to_string(),
+            private_result_oram_epoch_store_error(unexpected()).to_string(),
+            private_result_oram_upload_store_error(unexpected()).to_string(),
+            private_result_oram_read_store_error(unexpected()).to_string(),
+            private_result_oram_commit_writeback_store_error(unexpected()).to_string(),
+        ];
+        for rendered in rendered_errors {
+            assert!(rendered.contains("private result ORAM"));
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
     }
 
     #[test]
