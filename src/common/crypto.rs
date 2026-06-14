@@ -2234,8 +2234,9 @@ pub fn validate_create_collection_crypto_runtime(
     params.sparse_vectors = create_collection.sparse_vectors.clone();
     params.encryption = create_collection.encryption.clone();
     params.validate().map_err(|err| {
+        let detail = sanitize_collection_crypto_validation_error(err);
         StorageError::bad_input(format!(
-            "collection {collection_name} crypto config is invalid: {err}"
+            "collection {collection_name} crypto config is invalid: {detail}"
         ))
     })?;
     if create_collection.quantization_config.is_some()
@@ -2278,8 +2279,9 @@ pub fn validate_collection_crypto_runtime_with_crypto_id(
     params: &CollectionParams,
 ) -> Result<(), StorageError> {
     params.validate().map_err(|err| {
+        let detail = sanitize_collection_crypto_validation_error(err);
         StorageError::bad_input(format!(
-            "collection {collection_name} crypto config is invalid: {err}"
+            "collection {collection_name} crypto config is invalid: {detail}"
         ))
     })?;
     validate_collection_crypto_runtime_inner_with_crypto_id(
@@ -2288,6 +2290,15 @@ pub fn validate_collection_crypto_runtime_with_crypto_id(
         collection_crypto_id,
         params,
     )
+}
+
+fn sanitize_collection_crypto_validation_error(err: impl std::fmt::Display) -> String {
+    let rendered = err.to_string();
+    if rendered.contains("duplicate_private_result_oram_binding") {
+        "private result ORAM supports one configured binding in v1".to_string()
+    } else {
+        rendered
+    }
 }
 
 #[cfg(test)]
@@ -2374,8 +2385,9 @@ pub fn validate_recovered_collection_crypto_runtime(
             )));
         }
         encryption.validate().map_err(|err| {
+            let detail = sanitize_collection_crypto_validation_error(err);
             StorageError::bad_input(format!(
-                "recovered collection {collection_name} encryption config is invalid: {err}",
+                "recovered collection {collection_name} encryption config is invalid: {detail}",
             ))
         })?;
     }
@@ -2402,8 +2414,9 @@ pub fn validate_recovered_collection_crypto_config(
             )));
         }
         encryption.validate().map_err(|err| {
+            let detail = sanitize_collection_crypto_validation_error(err);
             StorageError::bad_input(format!(
-                "recovered collection {collection_name} encryption config is invalid: {err}",
+                "recovered collection {collection_name} encryption config is invalid: {detail}",
             ))
         })?;
     }
@@ -7112,7 +7125,25 @@ fn validate_private_result_oram_collection_runtime(
     collection_name: &str,
     encryption: &CollectionEncryptionConfig,
 ) -> Result<(), StorageError> {
+    let mut configured_private_result_rule = None;
     for rule in &encryption.rules {
+        if rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING) {
+            if !matches!(rule.selector, EncryptionSelector::PayloadPaths { .. }) {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} private result ORAM rule {} must use payload_paths selector",
+                    rule.id,
+                )));
+            }
+            if configured_private_result_rule
+                .replace(rule.id.as_str())
+                .is_some()
+            {
+                return Err(StorageError::bad_input(format!(
+                    "collection {collection_name} private result ORAM supports one configured binding in v1",
+                )));
+            }
+        }
+
         let EncryptionSelector::PayloadPaths { .. } = &rule.selector else {
             continue;
         };
@@ -10122,6 +10153,67 @@ mod tests {
                 .expect("private result ORAM binding should not break ordinary payload planning")
                 .is_none(),
             "private result ORAM rules must not enter the ordinary payload write plan",
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_duplicate_private_result_oram_binding() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "payload_result_oram_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_result_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:result-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "body_private_result".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "payload_result_oram_v1".to_string(),
+                        binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "summary_private_result".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["summary".to_string()],
+                        },
+                        instance: "payload_result_oram_v1".to_string(),
+                        binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err =
+            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+                .expect_err("private result ORAM v1 must reject multiple bindings");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private result ORAM")
+                    && description.contains("supports one configured binding in v1")
+                    && !description.contains("body")
+                    && !description.contains("summary")),
+            "unexpected error: {err:?}",
         );
     }
 
