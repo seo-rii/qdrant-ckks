@@ -2953,14 +2953,16 @@ pub fn plan_private_hnsw_oram_commit_for_manifest(
         rk_id: &manifest.rk_id,
         rk_epoch: manifest.rk_epoch,
     };
+    let expected_ciphertext_bytes = private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram)
+        .map_err(|_| PrivateHnswClientError::InvalidOramClientConfig("oram"))?;
     for bucket in updated_buckets {
-        let expected_commitment = private_hnsw_bucket_commitment(
-            base_context.for_bucket(bucket.bucket_id, new_epoch),
-            &bucket.ciphertext_sha256,
+        validate_private_hnsw_upload_bucket(
+            base_context,
+            bucket,
+            new_epoch,
+            manifest.bucket_count,
+            expected_ciphertext_bytes,
         )?;
-        if expected_commitment != bucket.bucket_commitment {
-            return Err(PrivateHnswClientError::InvalidBucketCommitment);
-        }
     }
     Ok(plan)
 }
@@ -3899,13 +3901,17 @@ mod tests {
         bucket_id: u64,
         index_epoch: u64,
         hash_byte: u8,
+        manifest: &PrivateHnswOramManifest,
     ) -> PrivateHnswOramBucket {
-        let ciphertext_sha256 = commitment(hash_byte);
+        let mut raw_ciphertext =
+            vec![hash_byte; private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap()];
+        raw_ciphertext[0] = BUCKET_AEAD_VERSION;
+        let ciphertext_sha256 = base64url_sha256(&raw_ciphertext);
         PrivateHnswOramBucket {
             version: 1,
             bucket_id,
             index_epoch,
-            ciphertext: BASE64URL_NOPAD.encode(&[hash_byte; 48]),
+            ciphertext: BASE64URL_NOPAD.encode(&raw_ciphertext),
             bucket_commitment: private_hnsw_bucket_commitment(
                 bucket_base_context().for_bucket(bucket_id, index_epoch),
                 &ciphertext_sha256,
@@ -4862,7 +4868,7 @@ mod tests {
             bucket_count: leaf_commitments.len() as u64,
             ..fixture_manifest()
         };
-        let updated_bucket = fixture_context_commit_bucket(2, 43, 9);
+        let updated_bucket = fixture_context_commit_bucket(2, 43, 9, &manifest);
 
         let plan = plan_private_hnsw_oram_commit_for_manifest(
             &manifest,
@@ -4875,7 +4881,7 @@ mod tests {
         assert_eq!(plan.old_root_hash, old_root);
         assert_eq!(plan.leaf_commitments[2], updated_bucket.bucket_commitment);
 
-        let mut wrong_commitment = updated_bucket;
+        let mut wrong_commitment = updated_bucket.clone();
         wrong_commitment.bucket_commitment = commitment(99);
         assert_eq!(
             plan_private_hnsw_oram_commit_for_manifest(
@@ -4885,6 +4891,30 @@ mod tests {
                 std::slice::from_ref(&wrong_commitment),
             ),
             Err(PrivateHnswClientError::InvalidBucketCommitment)
+        );
+
+        let mut short_ciphertext = updated_bucket.clone();
+        let short_raw = [BUCKET_AEAD_VERSION, 1, 2, 3];
+        short_ciphertext.ciphertext = BASE64URL_NOPAD.encode(&short_raw);
+        short_ciphertext.ciphertext_sha256 = base64url_sha256(&short_raw);
+        short_ciphertext.bucket_commitment = private_hnsw_bucket_commitment(
+            bucket_base_context()
+                .for_bucket(short_ciphertext.bucket_id, short_ciphertext.index_epoch),
+            &short_ciphertext.ciphertext_sha256,
+        )
+        .unwrap();
+        assert_eq!(
+            plan_private_hnsw_oram_commit_for_manifest(
+                &manifest,
+                43,
+                &leaf_commitments,
+                std::slice::from_ref(&short_ciphertext),
+            ),
+            Err(PrivateHnswClientError::BucketCiphertextSizeMismatch {
+                bucket_id: short_ciphertext.bucket_id,
+                expected_bytes: private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap(),
+                actual_bytes: short_raw.len(),
+            })
         );
 
         let wrong_bucket_count = PrivateHnswOramManifest {
