@@ -52,6 +52,16 @@ fn describe_error(
 
     // Generate messages based on codes
     match code.as_ref() {
+        "duplicate_private_result_oram_binding" => {
+            "private result ORAM supports one configured binding in v1".to_string()
+        }
+        "overlapping_encryption_selector"
+            if params
+                .get("value")
+                .is_some_and(|value| value.to_string().contains("private-result-oram/v1")) =>
+        {
+            "private result ORAM payload selector overlaps another encryption selector".to_string()
+        }
         "range" => {
             let msg = match (params.get("min"), params.get("max")) {
                 (Some(min), None) => format!("must be {min} or larger"),
@@ -247,5 +257,52 @@ mod tests {
 
             assert_eq!(describe_errors(&errors), expected_errors);
         }
+    }
+
+    #[test]
+    fn describe_error_redacts_private_result_oram_selector_values() {
+        let mut duplicate = ValidationError::new("duplicate_private_result_oram_binding");
+        duplicate.add_param(
+            std::borrow::Cow::from("value"),
+            &serde_json::json!([
+                {
+                    "id": "body_private_result",
+                    "selector": { "paths": ["body.secret"] },
+                    "binding": "private-result-oram/v1",
+                },
+                {
+                    "id": "summary_private_result",
+                    "selector": { "paths": ["summary.secret"] },
+                    "binding": "private-result-oram/v1",
+                },
+            ]),
+        );
+        let duplicate_message = describe_error(&duplicate);
+        assert!(duplicate_message.contains("private result ORAM supports one configured binding"));
+        assert!(!duplicate_message.contains("body.secret"));
+        assert!(!duplicate_message.contains("summary.secret"));
+        assert!(!duplicate_message.contains("body_private_result"));
+
+        let mut overlap = ValidationError::new("overlapping_encryption_selector");
+        overlap.add_param(
+            std::borrow::Cow::from("value"),
+            &serde_json::json!([
+                {
+                    "id": "body_private_result",
+                    "selector": { "paths": ["body.secret"] },
+                    "binding": "private-result-oram/v1",
+                },
+                {
+                    "id": "body_client_payload",
+                    "selector": { "paths": ["body.secret"] },
+                    "binding": "client-payload/v1",
+                },
+            ]),
+        );
+        let overlap_message = describe_error(&overlap);
+        assert!(overlap_message.contains("private result ORAM payload selector overlaps"));
+        assert!(!overlap_message.contains("body.secret"));
+        assert!(!overlap_message.contains("body_private_result"));
+        assert!(!overlap_message.contains("body_client_payload"));
     }
 }
