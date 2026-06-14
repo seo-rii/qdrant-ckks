@@ -1377,6 +1377,9 @@ fn private_hnsw_manifest_store_error(err: CollectionError) -> StorageError {
         CollectionError::NotFound { .. } => {
             StorageError::not_found("private HNSW ORAM manifest store is unavailable")
         }
+        CollectionError::BadRequest { .. } => {
+            StorageError::bad_request("private HNSW ORAM manifest store validation failed")
+        }
         CollectionError::ServiceError { .. } => {
             StorageError::service_error("private HNSW ORAM manifest store validation failed")
         }
@@ -1403,6 +1406,9 @@ fn private_hnsw_upload_store_error(err: CollectionError) -> StorageError {
     match err {
         CollectionError::NotFound { .. } => {
             StorageError::not_found("private HNSW ORAM encrypted bucket store is unavailable")
+        }
+        CollectionError::BadRequest { .. } => {
+            StorageError::bad_request("private HNSW ORAM encrypted bucket store validation failed")
         }
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private HNSW ORAM encrypted bucket store validation failed",
@@ -2640,6 +2646,20 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("private HNSW ORAM request validation failed"));
         assert!(!rendered.contains("secret_manifest_field"), "{rendered}");
+    }
+
+    #[test]
+    fn private_hnsw_store_error_mapping_redacts_store_details() {
+        let sentinel = "qdrant-sec-private-hnsw-store-detail-sentinel";
+        let rendered =
+            private_hnsw_manifest_store_error(CollectionError::bad_request(sentinel)).to_string();
+        assert!(rendered.contains("manifest store validation failed"));
+        assert!(!rendered.contains(sentinel), "{rendered}");
+
+        let rendered =
+            private_hnsw_upload_store_error(CollectionError::bad_request(sentinel)).to_string();
+        assert!(rendered.contains("encrypted bucket store validation failed"));
+        assert!(!rendered.contains(sentinel), "{rendered}");
     }
 
     #[test]

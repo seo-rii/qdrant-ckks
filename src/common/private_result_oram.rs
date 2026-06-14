@@ -1544,6 +1544,9 @@ fn private_result_oram_manifest_store_error(err: CollectionError) -> StorageErro
         CollectionError::NotFound { .. } => {
             StorageError::not_found("private result ORAM manifest store is unavailable")
         }
+        CollectionError::BadRequest { .. } => {
+            StorageError::bad_request("private result ORAM manifest store validation failed")
+        }
         CollectionError::ServiceError { .. } => {
             StorageError::service_error("private result ORAM manifest store validation failed")
         }
@@ -1571,6 +1574,9 @@ fn private_result_oram_upload_store_error(err: CollectionError) -> StorageError 
         CollectionError::NotFound { .. } => {
             StorageError::not_found("private result ORAM encrypted bucket store is unavailable")
         }
+        CollectionError::BadRequest { .. } => StorageError::bad_request(
+            "private result ORAM encrypted bucket store validation failed",
+        ),
         CollectionError::ServiceError { .. } => StorageError::service_error(
             "private result ORAM encrypted bucket store validation failed",
         ),
@@ -1773,6 +1779,22 @@ mod private_result_oram_tests {
         assert!(rendered.contains("signature key_id does not match manifest owner_signing_key_id"));
         assert!(!rendered.contains(&signature.key_id));
         assert!(!rendered.contains("not configured"));
+    }
+
+    #[test]
+    fn private_result_oram_store_error_mapping_redacts_store_details() {
+        let sentinel = "qdrant-sec-private-result-store-detail-sentinel";
+        let rendered =
+            private_result_oram_manifest_store_error(CollectionError::bad_request(sentinel))
+                .to_string();
+        assert!(rendered.contains("manifest store validation failed"));
+        assert!(!rendered.contains(sentinel), "{rendered}");
+
+        let rendered =
+            private_result_oram_upload_store_error(CollectionError::bad_request(sentinel))
+                .to_string();
+        assert!(rendered.contains("encrypted bucket store validation failed"));
+        assert!(!rendered.contains(sentinel), "{rendered}");
     }
 
     #[test]
