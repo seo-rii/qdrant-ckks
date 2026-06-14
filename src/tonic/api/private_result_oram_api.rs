@@ -1379,12 +1379,17 @@ mod private_result_oram_grpc_tests {
             assert!(
                 invalid_signature_bad_path
                     .message()
-                    .contains("read_buckets signature verification failed")
+                    .contains("whole ORAM paths")
             );
             assert!(
                 !invalid_signature_bad_path
                     .message()
-                    .contains("whole ORAM paths")
+                    .contains(&wrong_read_signature.sig)
+            );
+            assert!(
+                !invalid_signature_bad_path
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
             );
 
             let invalid_signature_out_of_range =
@@ -1405,12 +1410,17 @@ mod private_result_oram_grpc_tests {
             assert!(
                 invalid_signature_out_of_range
                     .message()
-                    .contains("read_buckets signature verification failed")
+                    .contains("bucket id is out of range")
             );
             assert!(
                 !invalid_signature_out_of_range
                     .message()
-                    .contains("out of range")
+                    .contains(&wrong_read_signature.sig)
+            );
+            assert!(
+                !invalid_signature_out_of_range
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
             );
 
             let unconfigured_read_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
