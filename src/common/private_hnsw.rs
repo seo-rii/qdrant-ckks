@@ -1178,6 +1178,16 @@ pub fn validate_recovered_private_hnsw_oram_snapshot_signatures(
             )
             .map_err(private_hnsw_error)?;
             resolved.validate_manifest_runtime_policy(&manifest)?;
+            let expected_epoch = PrivateHnswOramEpochState {
+                index_epoch: manifest.index_epoch,
+                root_hash: manifest.root_hash.clone(),
+            };
+            ensure_private_hnsw_restored_snapshot_storage_matches(
+                &store,
+                &expected_epoch,
+                &manifest,
+                &signature,
+            )?;
         }
     }
 
@@ -1319,6 +1329,35 @@ fn ensure_private_hnsw_session_open_storage_matches(
     {
         return Err(StorageError::bad_request(
             "private HNSW ORAM session open observed concurrent manifest or epoch update",
+        ));
+    }
+    store
+        .read_merkle_path_batch(
+            &[0],
+            expected_epoch.index_epoch,
+            &expected_epoch.root_hash,
+            expected_manifest.bucket_count,
+        )
+        .map_err(private_hnsw_read_store_error)?;
+    Ok(())
+}
+
+fn ensure_private_hnsw_restored_snapshot_storage_matches(
+    store: &PrivateHnswOramStore,
+    expected_epoch: &PrivateHnswOramEpochState,
+    expected_manifest: &PrivateHnswOramManifest,
+    expected_signature: &PrivateHnswOramSignature,
+) -> StorageResult<()> {
+    let current_epoch = store
+        .read_current_epoch()
+        .map_err(private_hnsw_epoch_store_error)?;
+    let (stored_manifest, stored_signature) = read_uploaded_manifest(store)?;
+    if current_epoch != *expected_epoch
+        || stored_manifest != *expected_manifest
+        || stored_signature != *expected_signature
+    {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM restored snapshot manifest or epoch does not match current storage",
         ));
     }
     store
@@ -2700,6 +2739,9 @@ mod private_hnsw_tests {
         let uuid = Uuid::from_u128(7);
         let mut manifest = fixture_session("session-1", 20).manifest;
         manifest.collection_id = uuid.to_string();
+        let leaf_commitments = recovered_snapshot_leaf_commitments(manifest.bucket_count, 31);
+        manifest.root_hash =
+            PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
         let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
         let signature = sign_private_hnsw_oram_manifest(&key_pair, &manifest)
             .expect("fixture manifest should sign");
@@ -2707,6 +2749,7 @@ mod private_hnsw_tests {
         let config = recovered_snapshot_config(uuid, &manifest);
         let store = PrivateHnswOramStore::new(temp_dir.path(), "text").unwrap();
         store.write_manifest(&manifest, &signature).unwrap();
+        install_recovered_private_hnsw_snapshot_storage(&store, &manifest, leaf_commitments);
 
         validate_recovered_private_hnsw_oram_snapshot_signatures(
             &settings,
@@ -2729,10 +2772,61 @@ mod private_hnsw_tests {
         )
         .unwrap_err();
         let rendered = err.to_string();
-        assert!(rendered.contains("manifest signature verification failed"));
+        assert!(rendered.contains("private HNSW ORAM request validation failed"));
         assert!(!rendered.contains(&tampered_signature.sig));
         assert!(!rendered.contains(&manifest.root_hash));
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_BINDING));
+
+        let mut mismatched_manifest = manifest.clone();
+        mismatched_manifest.root_hash = BASE64URL_NOPAD.encode(&[88; 32]);
+        let mismatched_signature = sign_private_hnsw_oram_manifest(&key_pair, &mismatched_manifest)
+            .expect("fixture manifest should sign");
+        store
+            .write_manifest(&mismatched_manifest, &mismatched_signature)
+            .unwrap();
+        let err = validate_recovered_private_hnsw_oram_snapshot_signatures(
+            &settings,
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("restored snapshot manifest or epoch does not match current storage")
+        );
+        assert!(!rendered.contains(&mismatched_manifest.root_hash));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_BINDING));
+    }
+
+    fn recovered_snapshot_leaf_commitments(bucket_count: u64, domain: u8) -> Vec<String> {
+        (0..bucket_count)
+            .map(|bucket_id| {
+                let mut bytes = [domain; 32];
+                bytes[..8].copy_from_slice(&bucket_id.to_be_bytes());
+                BASE64URL_NOPAD.encode(&bytes)
+            })
+            .collect()
+    }
+
+    fn install_recovered_private_hnsw_snapshot_storage(
+        store: &PrivateHnswOramStore,
+        manifest: &PrivateHnswOramManifest,
+        leaf_commitments: Vec<String>,
+    ) {
+        store
+            .write_initial_epoch(&PrivateHnswOramEpochState {
+                index_epoch: manifest.index_epoch,
+                root_hash: manifest.root_hash.clone(),
+            })
+            .unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                manifest.index_epoch,
+                manifest.root_hash.clone(),
+                leaf_commitments,
+            )
+            .unwrap();
     }
 
     #[test]

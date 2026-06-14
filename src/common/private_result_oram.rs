@@ -956,6 +956,16 @@ pub fn validate_recovered_private_result_oram_snapshot_signatures(
         )
         .map_err(private_result_oram_error)?;
         resolved.validate_manifest_runtime_policy(&manifest)?;
+        let expected_epoch = PrivateResultOramEpochState {
+            index_epoch: manifest.index_epoch,
+            root_hash: manifest.root_hash.clone(),
+        };
+        ensure_private_result_oram_restored_snapshot_storage_matches(
+            &store,
+            &expected_epoch,
+            &manifest,
+            &signature,
+        )?;
     }
 
     Ok(())
@@ -1130,6 +1140,35 @@ fn ensure_private_result_oram_session_open_storage_matches(
     {
         return Err(StorageError::bad_request(
             "private result ORAM session open observed concurrent manifest or epoch update",
+        ));
+    }
+    store
+        .read_merkle_path_batch(
+            &[0],
+            expected_epoch.index_epoch,
+            &expected_epoch.root_hash,
+            expected_manifest.bucket_count,
+        )
+        .map_err(private_result_oram_read_store_error)?;
+    Ok(())
+}
+
+fn ensure_private_result_oram_restored_snapshot_storage_matches(
+    store: &PrivateResultOramStore,
+    expected_epoch: &PrivateResultOramEpochState,
+    expected_manifest: &PrivateResultOramManifest,
+    expected_signature: &PrivateResultOramSignature,
+) -> StorageResult<()> {
+    let current_epoch = store
+        .read_current_epoch()
+        .map_err(private_result_oram_epoch_store_error)?;
+    let (stored_manifest, stored_signature) = read_uploaded_manifest(store)?;
+    if current_epoch != *expected_epoch
+        || stored_manifest != *expected_manifest
+        || stored_signature != *expected_signature
+    {
+        return Err(StorageError::bad_request(
+            "private result ORAM restored snapshot manifest or epoch does not match current storage",
         ));
     }
     store
@@ -2080,6 +2119,9 @@ mod private_result_oram_tests {
         let uuid = Uuid::from_u128(7);
         let mut manifest = read_shape_manifest();
         manifest.collection_id = uuid.to_string();
+        let leaf_commitments = recovered_snapshot_leaf_commitments(manifest.bucket_count, 43);
+        manifest.root_hash =
+            PrivateResultOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
         let key_pair = Ed25519KeyPair::from_seed_unchecked(&[11; 32]).unwrap();
         let signature = qdrant_sec::sign_private_result_oram_manifest(&key_pair, &manifest)
             .expect("fixture manifest should sign");
@@ -2087,6 +2129,7 @@ mod private_result_oram_tests {
         let config = recovered_snapshot_config(uuid);
         let store = PrivateResultOramStore::new(temp_dir.path());
         store.write_manifest(&manifest, &signature).unwrap();
+        install_recovered_private_result_oram_snapshot_storage(&store, &manifest, leaf_commitments);
 
         validate_recovered_private_result_oram_snapshot_signatures(
             &settings,
@@ -2113,6 +2156,58 @@ mod private_result_oram_tests {
         assert!(!rendered.contains(&tampered_signature.sig));
         assert!(!rendered.contains(&manifest.root_hash));
         assert!(!rendered.contains(PRIVATE_RESULT_ORAM_BINDING));
+
+        let mut mismatched_manifest = manifest.clone();
+        mismatched_manifest.root_hash = BASE64URL_NOPAD.encode(&[88; 32]);
+        let mismatched_signature =
+            qdrant_sec::sign_private_result_oram_manifest(&key_pair, &mismatched_manifest)
+                .expect("fixture manifest should sign");
+        store
+            .write_manifest(&mismatched_manifest, &mismatched_signature)
+            .unwrap();
+        let err = validate_recovered_private_result_oram_snapshot_signatures(
+            &settings,
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("restored snapshot manifest or epoch does not match current storage")
+        );
+        assert!(!rendered.contains(&mismatched_manifest.root_hash));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_BINDING));
+    }
+
+    fn recovered_snapshot_leaf_commitments(bucket_count: u64, domain: u8) -> Vec<String> {
+        (0..bucket_count)
+            .map(|bucket_id| {
+                let mut bytes = [domain; 32];
+                bytes[..8].copy_from_slice(&bucket_id.to_be_bytes());
+                BASE64URL_NOPAD.encode(&bytes)
+            })
+            .collect()
+    }
+
+    fn install_recovered_private_result_oram_snapshot_storage(
+        store: &PrivateResultOramStore,
+        manifest: &PrivateResultOramManifest,
+        leaf_commitments: Vec<String>,
+    ) {
+        store
+            .write_initial_epoch(&PrivateResultOramEpochState {
+                index_epoch: manifest.index_epoch,
+                root_hash: manifest.root_hash.clone(),
+            })
+            .unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                manifest.index_epoch,
+                manifest.root_hash.clone(),
+                leaf_commitments,
+            )
+            .unwrap();
     }
 
     fn read_shape_manifest() -> PrivateResultOramManifest {
