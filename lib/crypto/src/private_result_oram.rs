@@ -583,12 +583,7 @@ pub fn open_private_result_oram_client_state_snapshot(
     if encrypted.ciphertext_sha256.len() != BASE64URL_NOPAD_32_BYTE_LEN {
         return Err(PrivateResultOramError::InvalidClientStateCiphertextHash);
     }
-    let Some(decoded_len) = base64url_nopad_decoded_len(encrypted.ciphertext.len()) else {
-        return Err(PrivateResultOramError::InvalidClientStateCiphertextEncoding);
-    };
-    if decoded_len > PRIVATE_RESULT_ORAM_CLIENT_STATE_CIPHERTEXT_MAX_BYTES {
-        return Err(PrivateResultOramError::InvalidClientStateCiphertextEncoding);
-    }
+    validate_private_result_oram_client_state_ciphertext_encoded_len(encrypted.ciphertext.len())?;
 
     let raw_ciphertext = BASE64URL_NOPAD
         .decode(encrypted.ciphertext.as_bytes())
@@ -2723,6 +2718,18 @@ fn base64url_nopad_decoded_len(encoded_len: usize) -> Option<usize> {
         3 => base_len.checked_add(2),
         _ => None,
     }
+}
+
+fn validate_private_result_oram_client_state_ciphertext_encoded_len(
+    encoded_len: usize,
+) -> Result<usize, PrivateResultOramError> {
+    let Some(decoded_len) = base64url_nopad_decoded_len(encoded_len) else {
+        return Err(PrivateResultOramError::InvalidClientStateCiphertextEncoding);
+    };
+    if decoded_len > PRIVATE_RESULT_ORAM_CLIENT_STATE_CIPHERTEXT_MAX_BYTES {
+        return Err(PrivateResultOramError::InvalidClientStateCiphertextEncoding);
+    }
+    Ok(decoded_len)
 }
 
 fn push_domain(message: &mut Vec<u8>, domain: &[u8]) {
@@ -5620,6 +5627,44 @@ mod tests {
                 verification,
             ),
             Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+    }
+
+    #[test]
+    fn client_state_ciphertext_length_guard_rejects_impossible_and_oversized_shapes() {
+        fn base64url_nopad_encoded_len(decoded_len: usize) -> usize {
+            let full_triples = decoded_len / 3;
+            let base_len = full_triples * 4;
+            match decoded_len % 3 {
+                0 => base_len,
+                1 => base_len + 2,
+                2 => base_len + 3,
+                _ => unreachable!(),
+            }
+        }
+
+        assert_eq!(base64url_nopad_decoded_len(0), Some(0));
+        assert_eq!(base64url_nopad_decoded_len(2), Some(1));
+        assert_eq!(base64url_nopad_decoded_len(3), Some(2));
+        assert_eq!(base64url_nopad_decoded_len(4), Some(3));
+        assert_eq!(base64url_nopad_decoded_len(1), None);
+        assert_eq!(base64url_nopad_decoded_len(5), None);
+
+        let max_encoded =
+            base64url_nopad_encoded_len(PRIVATE_RESULT_ORAM_CLIENT_STATE_CIPHERTEXT_MAX_BYTES);
+        assert_eq!(
+            validate_private_result_oram_client_state_ciphertext_encoded_len(max_encoded).unwrap(),
+            PRIVATE_RESULT_ORAM_CLIENT_STATE_CIPHERTEXT_MAX_BYTES
+        );
+        let oversized_encoded =
+            base64url_nopad_encoded_len(PRIVATE_RESULT_ORAM_CLIENT_STATE_CIPHERTEXT_MAX_BYTES + 1);
+        assert_eq!(
+            validate_private_result_oram_client_state_ciphertext_encoded_len(oversized_encoded),
+            Err(PrivateResultOramError::InvalidClientStateCiphertextEncoding)
+        );
+        assert_eq!(
+            validate_private_result_oram_client_state_ciphertext_encoded_len(5),
+            Err(PrivateResultOramError::InvalidClientStateCiphertextEncoding)
         );
     }
 
