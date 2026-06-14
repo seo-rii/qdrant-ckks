@@ -3180,11 +3180,11 @@ mod tests {
     use qdrant_sec::{
         CLIENT_CKKS_VECTOR_MARKER, CLIENT_ENCRYPTED_PAYLOAD_MARKER, ENCRYPTED_CKKS_VECTOR_MARKER,
         ENCRYPTED_VECTOR_SIDECAR_FIELD, METADATA_AES_GCM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
-        VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
-        ckks_vector_sidecar_envelope_key, client_ckks_vector_signature_message,
-        client_payload_signature_message, is_client_encrypted_payload_value,
-        is_encrypted_ckks_vector_payload_value, is_encrypted_payload_value,
-        server_payload_envelope_key,
+        PRIVATE_RESULT_ORAM_BINDING, VECTOR_CLIENT_CKKS_PROVIDER, VECTOR_ENVELOPE_BINDING,
+        VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, ckks_vector_sidecar_envelope_key,
+        client_ckks_vector_signature_message, client_payload_signature_message,
+        is_client_encrypted_payload_value, is_encrypted_ckks_vector_payload_value,
+        is_encrypted_payload_value, server_payload_envelope_key,
     };
     use ring::rand::SystemRandom;
     use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -3777,6 +3777,28 @@ esac
             encryption.rules[0].binding = Some(PRIVATE_HNSW_ORAM_BINDING.to_string());
         }
         params
+    }
+
+    fn private_result_oram_payload_params() -> CollectionParams {
+        CollectionParams {
+            vectors: VectorParamsBuilder::new(2, Distance::Dot).build().into(),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/result-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_private_result_oram".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_private_result_oram_v1".to_string(),
+                    binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
     }
 
     fn default_private_hnsw_vector_params() -> CollectionParams {
@@ -8756,6 +8778,169 @@ esac
                     .and_then(|payload| payload.0.get("body"))
                     .and_then(Value::as_str),
                 Some("server secret"),
+            );
+        });
+    }
+
+    #[test]
+    fn private_result_oram_ordinary_payload_reads_require_session_api() {
+        let runtime = Runtime::new().unwrap();
+        let storage_dir = Builder::new()
+            .prefix("private-result-oram-read-guard")
+            .tempdir()
+            .unwrap();
+        let storage_config = update_test_storage_config(storage_dir.path());
+        let toc = update_test_toc(&storage_config);
+        let dispatcher = Dispatcher::new(toc.clone());
+        let auth = Auth::new_internal(Access::full("For test"));
+        let params = private_result_oram_payload_params();
+
+        runtime.block_on(async {
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            "private_result_docs".to_string(),
+                            CreateCollection {
+                                vectors: params.vectors,
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: params.encryption,
+                                strict_mode_config: None,
+                                uuid: Some(
+                                    Uuid::parse_str(TEST_VECTOR_COLLECTION_CRYPTO_ID).unwrap(),
+                                ),
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let assert_private_result_session_error = |err: StorageError| {
+                let message = err.to_string();
+                assert!(
+                    message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("/private-result-oram/session"),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("ordinary collection payload reads"),
+                    "{message}"
+                );
+            };
+
+            assert_private_result_session_error(
+                crate::common::query::do_get_points(
+                    &toc,
+                    "private_result_docs",
+                    PointRequestInternal {
+                        ids: vec![1.into()],
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: WithVector::Bool(false),
+                    },
+                    None,
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM retrieve must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_scroll_points(
+                    &toc,
+                    "private_result_docs",
+                    shard::scroll::ScrollRequestInternal {
+                        offset: None,
+                        limit: Some(1),
+                        filter: None,
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: WithVector::Bool(false),
+                        order_by: None,
+                    },
+                    None,
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM scroll must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_search_points(
+                    &toc,
+                    "private_result_docs",
+                    SearchRequestInternal {
+                        vector: vec![0.1, 0.2].into(),
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        filter: None,
+                        params: None,
+                        limit: 1,
+                        offset: None,
+                        score_threshold: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM search must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_query_points(
+                    &toc,
+                    "private_result_docs",
+                    CollectionQueryRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                        ))),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        offset: 0,
+                        params: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(true),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM universal query must fail closed"),
             );
         });
     }
