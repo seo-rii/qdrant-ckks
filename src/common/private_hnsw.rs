@@ -666,6 +666,8 @@ pub async fn do_upload_private_hnsw_buckets(
     )
     .map_err(private_hnsw_error)?;
     resolved.validate_manifest_runtime_policy(&manifest)?;
+    let _upload_guard =
+        begin_private_hnsw_upload_write_window(&resolved.collection_crypto_id, vector_name)?;
     let current_epoch = store
         .read_current_epoch()
         .map_err(private_hnsw_epoch_store_error)?;
@@ -674,8 +676,6 @@ pub async fn do_upload_private_hnsw_buckets(
             "private HNSW ORAM bucket upload epoch/root does not match current manifest epoch",
         ));
     }
-    let _upload_guard =
-        begin_private_hnsw_upload_write_window(&resolved.collection_crypto_id, vector_name)?;
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest)?;
     for bucket in &buckets {
         store
