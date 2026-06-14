@@ -59,6 +59,8 @@ use crate::tonic::api::telemetry_wrapper::{
     PointsTelemetryWrapper, ShardSnapshotsTelemetryWrapper, SnapshotsTelemetryWrapper,
 };
 
+const BYTES_PER_MIB: usize = 1024 * 1024;
+
 #[derive(Default)]
 pub struct QdrantService {}
 
@@ -127,6 +129,8 @@ pub fn init(
         let private_result_service =
             PrivateResultOramService::new(dispatcher.clone(), settings.clone());
         let snapshot_service = SnapshotsService::new(dispatcher.clone());
+        let private_oram_max_decoding_message_size =
+            private_oram_grpc_max_decoding_message_size(settings.service.max_request_size_mb);
 
         // Only advertise the public services. By default, all services in QDRANT_DESCRIPTOR_SET
         // will be advertised, so explicitly list the services to be included.
@@ -202,13 +206,13 @@ pub fn init(
                 PrivateHnswOramServer::new(private_hnsw_service)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(usize::MAX),
+                    .max_decoding_message_size(private_oram_max_decoding_message_size),
             )
             .add_service(
                 PrivateResultOramServer::new(private_result_service)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(usize::MAX),
+                    .max_decoding_message_size(private_oram_max_decoding_message_size),
             )
             .add_service(
                 SnapshotsServer::new(SnapshotsTelemetryWrapper::new(snapshot_service))
@@ -230,6 +234,28 @@ pub fn init(
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BYTES_PER_MIB, private_oram_grpc_max_decoding_message_size};
+
+    #[test]
+    fn private_oram_grpc_decoding_limit_uses_service_request_limit() {
+        assert_eq!(
+            private_oram_grpc_max_decoding_message_size(32),
+            32 * BYTES_PER_MIB,
+        );
+        assert_eq!(private_oram_grpc_max_decoding_message_size(0), 0);
+        assert_eq!(
+            private_oram_grpc_max_decoding_message_size(usize::MAX),
+            usize::MAX,
+        );
+    }
+}
+
+fn private_oram_grpc_max_decoding_message_size(max_request_size_mb: usize) -> usize {
+    max_request_size_mb.saturating_mul(BYTES_PER_MIB)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -783,7 +783,7 @@ mod private_hnsw_rest_tests {
                     signature: mismatched_collection_signature,
                 },
                 StatusCode::BAD_REQUEST,
-                "collection_id"
+                "request validation failed"
             );
 
             let mut mismatched_vector_manifest = fixture.manifest.clone();
@@ -796,7 +796,7 @@ mod private_hnsw_rest_tests {
                     signature: mismatched_vector_signature,
                 },
                 StatusCode::BAD_REQUEST,
-                "vector_name"
+                "request validation failed"
             );
 
             let mut mismatched_key_manifest = fixture.manifest.clone();
@@ -809,7 +809,7 @@ mod private_hnsw_rest_tests {
                     signature: mismatched_key_signature,
                 },
                 StatusCode::BAD_REQUEST,
-                "key_id"
+                "request validation failed"
             );
 
             let mut mismatched_epoch_manifest = fixture.manifest.clone();
@@ -822,7 +822,7 @@ mod private_hnsw_rest_tests {
                     signature: mismatched_epoch_signature,
                 },
                 StatusCode::BAD_REQUEST,
-                "rk_epoch"
+                "request validation failed"
             );
 
             let mut mismatched_dim_manifest = fixture.manifest.clone();
@@ -835,7 +835,7 @@ mod private_hnsw_rest_tests {
                     signature: mismatched_dim_signature,
                 },
                 StatusCode::BAD_REQUEST,
-                "dim"
+                "request validation failed"
             );
 
             let mut mismatched_distance_manifest = fixture.manifest.clone();
@@ -849,7 +849,7 @@ mod private_hnsw_rest_tests {
                     signature: mismatched_distance_signature,
                 },
                 StatusCode::BAD_REQUEST,
-                "distance"
+                "request validation failed"
             );
 
             let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
@@ -861,7 +861,7 @@ mod private_hnsw_rest_tests {
                     signature: fixture.manifest_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
-                "bucket_count"
+                "request validation failed"
             );
 
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
@@ -1009,7 +1009,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "manifest signature is malformed"
+                "request validation failed"
             );
             assert!(!unknown_key_malformed_signature_error.contains("not configured"));
             assert!(
@@ -1032,7 +1032,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "manifest signature is malformed"
+                "request validation failed"
             );
             assert!(
                 !malformed_manifest_signature_error.contains(manifest_signature_sentinel),
@@ -1053,7 +1053,7 @@ mod private_hnsw_rest_tests {
                     signature: bad_manifest_signature,
                 },
                 StatusCode::BAD_REQUEST,
-                "manifest signature verification failed"
+                "request validation failed"
             );
 
             let manifest_result = post_json_ok!(
@@ -1191,15 +1191,19 @@ mod private_hnsw_rest_tests {
             hash_mismatch_buckets[0]
                 .ciphertext_sha256
                 .replace_range(0..1, replacement);
-            post_json_error_contains!(
+            let hash_mismatch_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/buckets",
                 UploadPrivateHnswBucketsRequest {
                     index_epoch: fixture.encrypted_build.index_epoch,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    buckets: hash_mismatch_buckets,
+                    buckets: hash_mismatch_buckets.clone(),
                 },
                 StatusCode::BAD_REQUEST,
-                "ciphertext_sha256 mismatch"
+                "encrypted bucket store validation failed"
+            );
+            assert!(
+                !hash_mismatch_error.contains(&hash_mismatch_buckets[0].ciphertext_sha256),
+                "{hash_mismatch_error}"
             );
 
             let mut merkle_mismatch_buckets = fixture.encrypted_build.buckets.clone();
@@ -1221,7 +1225,7 @@ mod private_hnsw_rest_tests {
                     buckets: merkle_mismatch_buckets,
                 },
                 StatusCode::BAD_REQUEST,
-                "bucket commitment context mismatch"
+                "initial upload bucket commitment context mismatch"
             );
             assert!(
                 !commitment_context_mismatch_error.contains(&computed_mismatch_root),
@@ -1239,7 +1243,7 @@ mod private_hnsw_rest_tests {
                     buckets: malformed_upload_buckets,
                 },
                 StatusCode::BAD_REQUEST,
-                "ciphertext"
+                "encrypted bucket store validation failed"
             );
             assert!(
                 !malformed_upload_error.contains(upload_ciphertext_sentinel),
@@ -1266,7 +1270,7 @@ mod private_hnsw_rest_tests {
                     buckets: late_malformed_upload_buckets,
                 },
                 StatusCode::BAD_REQUEST,
-                "ciphertext"
+                "encrypted bucket store validation failed"
             );
             assert!(
                 !late_malformed_upload_error.contains(late_upload_ciphertext_sentinel),
@@ -1757,7 +1761,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "read_paths signature verification failed"
+                "request validation failed"
             );
             assert!(!read_error.contains("invalid path label"), "{read_error}");
             assert!(!read_error.contains(path_label_sentinel), "{read_error}");
@@ -1830,7 +1834,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "read_paths signature verification failed"
+                "request validation failed"
             );
 
             let unknown_read_key_error = post_json_error_contains!(
@@ -2598,7 +2602,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "commit signature verification failed"
+                "request validation failed"
             );
             assert!(!commit_new_root_error.contains("new_root_hash"));
             assert!(
@@ -2665,7 +2669,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "ciphertext_sha256 is invalid"
+                "request validation failed"
             );
             assert!(
                 !commit_hash_error.contains(commit_hash_sentinel),
@@ -2729,7 +2733,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "commit signature verification failed"
+                "request validation failed"
             );
             assert!(!invalid_signature_duplicate_bucket_error.contains("duplicate bucket id"));
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
@@ -2770,7 +2774,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "commit signature verification failed"
+                "request validation failed"
             );
 
             let commit_ciphertext_sentinel = "commit-error-ciphertext-sentinel";
@@ -2792,7 +2796,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "ciphertext"
+                "bucket ciphertext validation failed"
             );
             assert!(
                 !malformed_commit_error.contains(commit_ciphertext_sentinel),

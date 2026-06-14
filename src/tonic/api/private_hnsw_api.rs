@@ -979,7 +979,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("collection_id"));
+            assert!(err.message().contains("request validation failed"));
 
             let mut mismatched_vector_manifest = fixture.manifest.clone();
             mismatched_vector_manifest.vector_name = "title".to_string();
@@ -996,7 +996,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("vector_name"));
+            assert!(err.message().contains("request validation failed"));
 
             let mut mismatched_key_manifest = fixture.manifest.clone();
             mismatched_key_manifest.key_id = "tenant-b/vector-private-rk".to_string();
@@ -1013,7 +1013,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("key_id"));
+            assert!(err.message().contains("request validation failed"));
 
             let mut mismatched_epoch_manifest = fixture.manifest.clone();
             mismatched_epoch_manifest.rk_epoch += 1;
@@ -1030,7 +1030,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("rk_epoch"));
+            assert!(err.message().contains("request validation failed"));
 
             let mut mismatched_dim_manifest = fixture.manifest.clone();
             mismatched_dim_manifest.dim += 1;
@@ -1047,7 +1047,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("dim"));
+            assert!(err.message().contains("request validation failed"));
 
             let mut mismatched_distance_manifest = fixture.manifest.clone();
             mismatched_distance_manifest.distance = DistanceKind::Cosine;
@@ -1065,7 +1065,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("distance"));
+            assert!(err.message().contains("request validation failed"));
 
             let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
             mismatched_bucket_count_manifest.bucket_count -= 1;
@@ -1081,7 +1081,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("bucket_count"));
+            assert!(err.message().contains("request validation failed"));
 
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
             mismatched_privacy_manifest.result_privacy =
@@ -1294,7 +1294,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("manifest signature is malformed"));
+            assert!(err.message().contains("request validation failed"));
             assert!(!err.message().contains("not configured"));
             assert!(
                 !err.message().contains(signature_key_id_sentinel),
@@ -1323,7 +1323,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("manifest signature is malformed"));
+            assert!(err.message().contains("request validation failed"));
             assert!(
                 !err.message().contains(manifest_signature_sentinel),
                 "{}",
@@ -1349,10 +1349,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("manifest signature verification failed")
-            );
+            assert!(err.message().contains("request validation failed"));
 
             let manifest_epoch = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
@@ -1542,6 +1539,7 @@ mod private_hnsw_grpc_tests {
                     index_epoch: fixture.encrypted_build.index_epoch,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
                     buckets: hash_mismatch_buckets
+                        .clone()
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
@@ -1550,7 +1548,14 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("ciphertext_sha256 mismatch"));
+            assert!(
+                err.message()
+                    .contains("encrypted bucket store validation failed")
+            );
+            assert!(
+                !err.message()
+                    .contains(&hash_mismatch_buckets[0].ciphertext_sha256)
+            );
 
             let mut merkle_mismatch_buckets = fixture.encrypted_build.buckets.clone();
             merkle_mismatch_buckets[0].bucket_commitment =
@@ -1579,7 +1584,10 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("bucket commitment context mismatch"));
+            assert!(
+                err.message()
+                    .contains("initial upload bucket commitment context mismatch")
+            );
             assert!(
                 !err.message().contains(&computed_mismatch_root),
                 "{}",
@@ -1605,7 +1613,10 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("ciphertext"));
+            assert!(
+                err.message()
+                    .contains("encrypted bucket store validation failed")
+            );
             assert!(
                 !err.message().contains(upload_ciphertext_sentinel),
                 "{}",
@@ -1640,7 +1651,10 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("ciphertext"));
+            assert!(
+                err.message()
+                    .contains("encrypted bucket store validation failed")
+            );
             assert!(
                 !err.message().contains(late_upload_ciphertext_sentinel),
                 "{}",
@@ -2215,10 +2229,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("read_paths signature verification failed")
-            );
+            assert!(err.message().contains("request validation failed"));
             assert!(!err.message().contains("invalid path label"));
             assert!(!err.message().contains(path_label_sentinel));
             assert!(
@@ -2245,10 +2256,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("read_paths signature verification failed")
-            );
+            assert!(err.message().contains("request validation failed"));
             assert!(!err.message().contains("leaf label"));
             assert!(
                 !err.message().contains(&unauthenticated_path_label_sentinel),
@@ -2320,10 +2328,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("read_paths signature verification failed")
-            );
+            assert!(err.message().contains("request validation failed"));
 
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
@@ -3167,10 +3172,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("commit signature verification failed")
-            );
+            assert!(err.message().contains("request validation failed"));
             assert!(!err.message().contains("new_root_hash"));
             assert!(
                 !err.message().contains(&commit_wrong_new_root),
@@ -3249,7 +3251,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("ciphertext_sha256 is invalid"));
+            assert!(err.message().contains("request validation failed"));
             assert!(
                 !err.message().contains(commit_hash_sentinel),
                 "{}",
@@ -3325,10 +3327,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("commit signature verification failed")
-            );
+            assert!(err.message().contains("request validation failed"));
             assert!(!err.message().contains("duplicate bucket id"));
 
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
@@ -3379,10 +3378,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("commit signature verification failed")
-            );
+            assert!(err.message().contains("request validation failed"));
 
             let commit_ciphertext_sentinel = "commit-error-ciphertext-sentinel";
             let mut malformed_commit_buckets = search_run.updated_buckets.clone();
@@ -3407,7 +3403,10 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("ciphertext"));
+            assert!(
+                err.message()
+                    .contains("bucket ciphertext validation failed")
+            );
             assert!(
                 !err.message().contains(commit_ciphertext_sentinel),
                 "{}",

@@ -370,7 +370,7 @@ impl PrivateHnswRouteWireFixture {
                         "bucket_size": 4,
                         "block_size_bytes": 8192,
                         "tree_height": 24,
-                        "path_batch_size": 8
+                        "path_batch_size": self.manifest.fixed_budget.fixed_result_k
                     },
                     "integrity": {
                         "manifest_signature_required": true,
