@@ -1631,6 +1631,13 @@ fn generic_vector_write_plan(
                     rule.instance
                 ))
             })?;
+            validate_private_oram_collection_key_epoch(
+                collection_name,
+                &rule.instance,
+                instance,
+                encryption,
+                "private HNSW ORAM",
+            )?;
             ensure_private_hnsw_private_result_oram_binding(
                 runtime_settings,
                 collection_name,
@@ -6765,6 +6772,13 @@ fn validate_generic_collection_crypto_runtime(
                     rule.instance
                 ))
             })?;
+            validate_private_oram_collection_key_epoch(
+                collection_name,
+                &rule.instance,
+                instance,
+                encryption,
+                "private HNSW ORAM",
+            )?;
             ensure_private_hnsw_private_result_oram_binding(
                 runtime_settings,
                 collection_name,
@@ -7126,6 +7140,13 @@ fn validate_private_result_oram_collection_runtime(
                     rule.instance,
                 ))
             })?;
+            validate_private_oram_collection_key_epoch(
+                collection_name,
+                &rule.instance,
+                instance,
+                encryption,
+                "private result ORAM",
+            )?;
             continue;
         }
 
@@ -7135,6 +7156,50 @@ fn validate_private_result_oram_collection_runtime(
                 rule.id,
             )));
         }
+    }
+
+    Ok(())
+}
+
+fn validate_private_oram_collection_key_epoch(
+    collection_name: &str,
+    instance_name: &str,
+    instance: &CryptoInstanceConfig,
+    encryption: &CollectionEncryptionConfig,
+    provider_label: &str,
+) -> Result<(), StorageError> {
+    if let Some(collection_key_id) = encryption.key_id.as_deref() {
+        let instance_key_id = instance.options.get("key_id").and_then(Value::as_str);
+        if instance_key_id != Some(collection_key_id) {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} {provider_label} instance {instance_name} key_id must match collection key_id",
+            )));
+        }
+        let expected_rk_id = instance
+            .options
+            .get(EXPECTED_RK_ID_OPTION)
+            .and_then(Value::as_str);
+        if expected_rk_id != Some(collection_key_id) {
+            return Err(StorageError::bad_input(format!(
+                "collection {collection_name} {provider_label} instance {instance_name} expected_rk_id must match collection key_id",
+            )));
+        }
+    }
+
+    let min_rk_epoch = instance
+        .options
+        .get(MIN_RK_EPOCH_OPTION)
+        .and_then(Value::as_u64);
+    let max_rk_epoch = instance
+        .options
+        .get(MAX_RK_EPOCH_OPTION)
+        .and_then(Value::as_u64);
+    if min_rk_epoch != Some(encryption.encryption_epoch)
+        || max_rk_epoch != Some(encryption.encryption_epoch)
+    {
+        return Err(StorageError::bad_input(format!(
+            "collection {collection_name} {provider_label} instance {instance_name} rk_epoch must match collection encryption_epoch",
+        )));
     }
 
     Ok(())
@@ -10034,7 +10099,7 @@ mod tests {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
-                key_id: Some("tenant-a:docs".to_string()),
+                key_id: Some("tenant-a:result-private-rk".to_string()),
                 crypto_schema_version: 1,
                 encryption_epoch: 7,
                 migration_state: CryptoMigrationState::Active,
@@ -10057,6 +10122,72 @@ mod tests {
                 .expect("private result ORAM binding should not break ordinary payload planning")
                 .is_none(),
             "private result ORAM rules must not enter the ordinary payload write plan",
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_private_result_oram_key_epoch_mismatch() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "payload_result_oram_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_result_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let mut params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_private_result".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "payload_result_oram_v1".to_string(),
+                    binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err =
+            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+                .expect_err("private result ORAM collection key must match runtime instance");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private result ORAM")
+                    && description.contains("key_id must match collection key_id")
+                    && !description.contains("tenant-a:docs")
+                    && !description.contains("tenant-a:result-private-rk")),
+            "unexpected error: {err:?}",
+        );
+
+        let encryption = params.encryption.as_mut().unwrap();
+        encryption.key_id = Some("tenant-a:result-private-rk".to_string());
+        encryption.encryption_epoch = 8;
+        let err =
+            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+                .expect_err("private result ORAM collection epoch must match runtime instance");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private result ORAM")
+                    && description.contains("rk_epoch must match collection encryption_epoch")
+                    && !description.contains('7')
+                    && !description.contains('8')),
+            "unexpected error: {err:?}",
         );
     }
 
@@ -20658,7 +20789,7 @@ mod tests {
             CollectionParams {
                 encryption: Some(CollectionEncryptionConfig {
                     version: 1,
-                    key_id: Some("tenant-a:docs".to_string()),
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
                     crypto_schema_version: 1,
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
@@ -20678,6 +20809,73 @@ mod tests {
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params)
             .expect("private HNSW ORAM vector provider should pass collection runtime validation");
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_private_hnsw_oram_key_epoch_mismatch() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "docs_private_hnsw_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_hnsw_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let mut params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Cosine,
+        );
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect_err("private HNSW ORAM collection key must match runtime instance");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private HNSW ORAM")
+                    && description.contains("key_id must match collection key_id")
+                    && !description.contains("tenant-a:docs")
+                    && !description.contains("tenant-a:docs-private-rk")),
+            "unexpected error: {err:?}",
+        );
+
+        let encryption = params.encryption.as_mut().unwrap();
+        encryption.key_id = Some("tenant-a:docs-private-rk".to_string());
+        encryption.encryption_epoch = 8;
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect_err("private HNSW ORAM collection epoch must match runtime instance");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private HNSW ORAM")
+                    && description.contains("rk_epoch must match collection encryption_epoch")
+                    && !description.contains('7')
+                    && !description.contains('8')),
+            "unexpected error: {err:?}",
+        );
     }
 
     #[test]
@@ -20706,7 +20904,7 @@ mod tests {
             CollectionParams {
                 encryption: Some(CollectionEncryptionConfig {
                     version: 1,
-                    key_id: Some("tenant-a:docs".to_string()),
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
                     crypto_schema_version: 1,
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
@@ -20741,6 +20939,9 @@ mod tests {
         let mut hnsw_options = private_hnsw_oram_options();
         hnsw_options["result_privacy"] = json!("private_payload_oram_required");
         hnsw_options["fixed_budget"]["fixed_result_k"] = json!(8);
+        let mut result_options = private_result_oram_options();
+        result_options["key_id"] = json!("tenant-a:docs-private-rk");
+        result_options["expected_rk_id"] = json!("tenant-a:docs-private-rk");
         let settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
@@ -20761,7 +20962,7 @@ mod tests {
                             provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
                             materials: HashMap::new(),
                             backend_ref: None,
-                            options: private_result_oram_options(),
+                            options: result_options,
                         },
                     ),
                 ]),
@@ -20773,7 +20974,7 @@ mod tests {
             CollectionParams {
                 encryption: Some(CollectionEncryptionConfig {
                     version: 1,
-                    key_id: Some("tenant-a:docs".to_string()),
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
                     crypto_schema_version: 1,
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
@@ -20809,6 +21010,9 @@ mod tests {
     fn validate_collection_crypto_runtime_rejects_private_hnsw_result_oram_batch_mismatch() {
         let mut hnsw_options = private_hnsw_oram_options();
         hnsw_options["result_privacy"] = json!("private_payload_oram_required");
+        let mut result_options = private_result_oram_options();
+        result_options["key_id"] = json!("tenant-a:docs-private-rk");
+        result_options["expected_rk_id"] = json!("tenant-a:docs-private-rk");
         let settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
@@ -20829,7 +21033,7 @@ mod tests {
                             provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
                             materials: HashMap::new(),
                             backend_ref: None,
-                            options: private_result_oram_options(),
+                            options: result_options,
                         },
                     ),
                 ]),
@@ -20841,7 +21045,7 @@ mod tests {
             CollectionParams {
                 encryption: Some(CollectionEncryptionConfig {
                     version: 1,
-                    key_id: Some("tenant-a:docs".to_string()),
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
                     crypto_schema_version: 1,
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
@@ -20905,7 +21109,7 @@ mod tests {
             CollectionParams {
                 encryption: Some(CollectionEncryptionConfig {
                     version: 1,
-                    key_id: Some("tenant-a:docs".to_string()),
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
                     crypto_schema_version: 1,
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
@@ -20958,7 +21162,7 @@ mod tests {
             CollectionParams {
                 encryption: Some(CollectionEncryptionConfig {
                     version: 1,
-                    key_id: Some("tenant-a:docs".to_string()),
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
                     crypto_schema_version: 1,
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
@@ -21009,7 +21213,7 @@ mod tests {
             CollectionParams {
                 encryption: Some(CollectionEncryptionConfig {
                     version: 1,
-                    key_id: Some("tenant-a:docs".to_string()),
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
                     crypto_schema_version: 1,
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
@@ -21060,7 +21264,7 @@ mod tests {
             CollectionParams {
                 encryption: Some(CollectionEncryptionConfig {
                     version: 1,
-                    key_id: Some("tenant-a:docs".to_string()),
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
                     crypto_schema_version: 1,
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
@@ -21099,7 +21303,7 @@ mod tests {
             CollectionParams {
                 encryption: Some(CollectionEncryptionConfig {
                     version: 1,
-                    key_id: Some("tenant-a:docs".to_string()),
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
                     crypto_schema_version: 1,
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
@@ -21161,7 +21365,7 @@ mod tests {
             CollectionParams {
                 encryption: Some(CollectionEncryptionConfig {
                     version: 1,
-                    key_id: Some("tenant-a:docs".to_string()),
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
                     crypto_schema_version: 1,
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
@@ -21214,7 +21418,7 @@ mod tests {
             CollectionParams {
                 encryption: Some(CollectionEncryptionConfig {
                     version: 1,
-                    key_id: Some("tenant-a:docs".to_string()),
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
                     crypto_schema_version: 1,
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
