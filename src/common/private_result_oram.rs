@@ -15,8 +15,8 @@ use qdrant_sec::{
     PrivateResultOramManifestValidationContext, PrivateResultOramMerkleProof,
     PrivateResultOramReadBucketsSignatureInput, PrivateResultOramSignature,
     PrivateResultOramSignatureVerification, PrivateResultOramUploadBundle,
-    validate_private_result_oram_commit_signature, validate_private_result_oram_manifest,
-    validate_private_result_oram_manifest_signature_shape,
+    private_result_oram_bucket_ciphertext_bytes, validate_private_result_oram_commit_signature,
+    validate_private_result_oram_manifest, validate_private_result_oram_manifest_signature_shape,
     validate_private_result_oram_read_buckets_signature,
     validate_private_result_oram_upload_bundle,
 };
@@ -639,6 +639,7 @@ pub async fn do_upload_private_result_oram_buckets(
                 max_ciphertext_bytes,
             )
             .map_err(private_result_oram_upload_store_error)?;
+        validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
     }
     for bucket in &bundle.buckets {
         store
@@ -848,6 +849,7 @@ pub async fn do_commit_private_result_oram_buckets(
                     ));
                 }
                 validate_base64url_32_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
+                validate_bucket_ciphertext_fixed_size(bucket, &session.manifest)?;
             }
             let store = PrivateResultOramStore::new(&session.collection_path);
             ensure_private_result_oram_active_session_current_epoch(
@@ -1441,6 +1443,25 @@ fn max_bucket_ciphertext_bytes(oram: &OramParams) -> StorageResult<usize> {
         .ok_or_else(|| StorageError::bad_request("private result ORAM bucket size is invalid"))
 }
 
+fn validate_bucket_ciphertext_fixed_size(
+    bucket: &qdrant_sec::PrivateResultOramBucket,
+    manifest: &PrivateResultOramManifest,
+) -> StorageResult<()> {
+    let expected = private_result_oram_bucket_ciphertext_bytes(&manifest.oram)
+        .map_err(|_| StorageError::bad_request("private result ORAM bucket size is invalid"))?;
+    let ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| {
+            StorageError::bad_request("private result ORAM bucket ciphertext validation failed")
+        })?;
+    if ciphertext.len() != expected {
+        return Err(StorageError::bad_request(
+            "private result ORAM bucket ciphertext validation failed",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_bucket_read_request(
     manifest: &PrivateResultOramManifest,
     bucket_ids: &[u64],
@@ -1698,6 +1719,7 @@ mod private_result_oram_tests {
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use segment::types::HnswConfig;
     use serde_json::json;
+    use sha2::Digest;
     use uuid::Uuid;
 
     use super::*;
@@ -1759,6 +1781,32 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("root_hash must be base64url without padding"));
         assert!(!rendered.contains(&malformed));
+    }
+
+    #[test]
+    fn bucket_ciphertext_fixed_size_rejects_volume_drift_without_reflecting_value() {
+        let manifest = read_shape_manifest();
+        let expected_len = private_result_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap();
+        let ciphertext = vec![7; expected_len];
+        let mut bucket = qdrant_sec::PrivateResultOramBucket {
+            version: 1,
+            bucket_id: 0,
+            index_epoch: manifest.index_epoch,
+            ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
+            ciphertext_sha256: BASE64URL_NOPAD.encode(&sha2::Sha256::digest(&ciphertext)),
+            bucket_commitment: BASE64URL_NOPAD.encode(&[8; 32]),
+        };
+
+        validate_bucket_ciphertext_fixed_size(&bucket, &manifest).unwrap();
+
+        let sentinel = b"private-result-fixed-size-sentinel";
+        bucket.ciphertext = BASE64URL_NOPAD.encode(sentinel);
+        let rendered = validate_bucket_ciphertext_fixed_size(&bucket, &manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("bucket ciphertext validation failed"));
+        assert!(!rendered.contains("private-result-fixed-size-sentinel"));
+        assert!(!rendered.contains(&bucket.ciphertext));
     }
 
     #[test]

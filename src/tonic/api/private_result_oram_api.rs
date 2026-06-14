@@ -402,9 +402,10 @@ mod private_result_oram_grpc_tests {
         PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND, PrivateResultOramBucket,
         PrivateResultOramBucketCommitmentContext, PrivateResultOramClientCommitBucketRef,
         PrivateResultOramCommitPlan, PrivateResultOramCommitSignatureContext,
-        PrivateResultOramReadBucketsSignatureContext, private_result_oram_bucket_commitment,
-        private_result_oram_merkle_root_for_commitments, sign_private_result_oram_commit,
-        sign_private_result_oram_manifest, sign_private_result_oram_read_buckets,
+        PrivateResultOramReadBucketsSignatureContext, private_result_oram_bucket_ciphertext_bytes,
+        private_result_oram_bucket_commitment, private_result_oram_merkle_root_for_commitments,
+        sign_private_result_oram_commit, sign_private_result_oram_manifest,
+        sign_private_result_oram_read_buckets,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use serde_json::json;
@@ -668,8 +669,17 @@ mod private_result_oram_grpc_tests {
         index_epoch: u64,
         ciphertext_bytes: &[u8],
     ) -> PrivateResultOramBucket {
-        let ciphertext = BASE64URL_NOPAD.encode(ciphertext_bytes);
-        let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(ciphertext_bytes));
+        let expected_len = private_result_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap();
+        let mut fixed_ciphertext = vec![0; expected_len];
+        for (offset, byte) in fixed_ciphertext.iter_mut().enumerate() {
+            let seed = ciphertext_bytes
+                .get(offset % ciphertext_bytes.len().max(1))
+                .copied()
+                .unwrap_or(0);
+            *byte = seed ^ (bucket_id as u8).wrapping_add(index_epoch as u8);
+        }
+        let ciphertext = BASE64URL_NOPAD.encode(&fixed_ciphertext);
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(&fixed_ciphertext));
         let bucket_commitment = private_result_oram_bucket_commitment(
             PrivateResultOramBucketCommitmentContext {
                 collection_id: &manifest.collection_id,

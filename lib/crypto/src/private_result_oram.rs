@@ -37,6 +37,9 @@ const PRIVATE_RESULT_ORAM_BUCKET_AEAD_VERSION: u8 = 1;
 const PRIVATE_RESULT_ORAM_CLIENT_STATE_AEAD_VERSION: u16 = 1;
 const PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN: usize = 12;
 const PRIVATE_RESULT_ORAM_BUCKET_AEAD_TAG_LEN: usize = 16;
+const PRIVATE_RESULT_ORAM_BUCKET_PLAINTEXT_HEADER_BYTES: usize = 4 + 2 + 8 + 4 + 4;
+const PRIVATE_RESULT_ORAM_BUCKET_AEAD_OVERHEAD_BYTES: usize =
+    1 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN + PRIVATE_RESULT_ORAM_BUCKET_AEAD_TAG_LEN;
 const PRIVATE_RESULT_ORAM_BUCKET_CIPHERTEXT_OPEN_MAX_BYTES: usize = 64 * 1024 * 1024;
 const PRIVATE_RESULT_ORAM_CLIENT_STATE_CIPHERTEXT_MAX_BYTES: usize = 256 * 1024 * 1024;
 const PRIVATE_RESULT_ORAM_CLIENT_STATE_SNAPSHOT_VERSION: u16 = 1;
@@ -232,6 +235,30 @@ pub struct PrivateResultOramClientConfig {
 pub struct PrivateResultOramPlaintextBucket {
     pub bucket_id: u64,
     pub blocks: Vec<Option<PrivateResultOramPayloadBlockPlaintext>>,
+}
+
+pub fn private_result_oram_bucket_ciphertext_bytes(
+    oram: &OramParams,
+) -> Result<usize, PrivateResultOramError> {
+    let bucket_size = usize::try_from(oram.bucket_size)
+        .map_err(|_| PrivateResultOramError::InvalidManifestField("oram.bucket_size"))?;
+    let block_size_bytes = usize::try_from(oram.block_size_bytes)
+        .map_err(|_| PrivateResultOramError::InvalidManifestField("oram.block_size_bytes"))?;
+    let slot_bytes = 1usize.checked_add(block_size_bytes).ok_or(
+        PrivateResultOramError::InvalidManifestField("oram.block_size_bytes"),
+    )?;
+    let bucket_payload_bytes =
+        bucket_size
+            .checked_mul(slot_bytes)
+            .ok_or(PrivateResultOramError::InvalidManifestField(
+                "oram.bucket_size",
+            ))?;
+    let plaintext_bytes = PRIVATE_RESULT_ORAM_BUCKET_PLAINTEXT_HEADER_BYTES
+        .checked_add(bucket_payload_bytes)
+        .ok_or(PrivateResultOramError::InvalidManifestField("oram"))?;
+    PRIVATE_RESULT_ORAM_BUCKET_AEAD_OVERHEAD_BYTES
+        .checked_add(plaintext_bytes)
+        .ok_or(PrivateResultOramError::InvalidManifestField("oram"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3253,6 +3280,20 @@ mod tests {
         assert_eq!(
             decode_private_result_oram_bucket_plaintext(3, &tampered, config),
             Err(PrivateResultOramError::InvalidBucketPlaintext)
+        );
+    }
+
+    #[test]
+    fn bucket_ciphertext_size_matches_path_oram_encoding_contract() {
+        let manifest = fixture_manifest();
+        let config = private_result_oram_client_config_from_manifest(&manifest).unwrap();
+        let plaintext_bucket = empty_private_result_oram_plaintext_bucket(0, config).unwrap();
+        let plaintext =
+            encode_private_result_oram_bucket_plaintext(&plaintext_bucket, config).unwrap();
+
+        assert_eq!(
+            private_result_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap(),
+            PRIVATE_RESULT_ORAM_BUCKET_AEAD_OVERHEAD_BYTES + plaintext.len()
         );
     }
 
