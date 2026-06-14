@@ -2296,10 +2296,16 @@ fn sanitize_collection_crypto_validation_error(err: impl std::fmt::Display) -> S
     let rendered = err.to_string();
     if rendered.contains("duplicate_private_result_oram_binding") {
         "private result ORAM supports one configured binding in v1".to_string()
+    } else if rendered.contains("private_hnsw_oram_single_vector_selector") {
+        "private HNSW ORAM supports exactly one vector per rule in v1".to_string()
     } else if rendered.contains("private-result-oram/v1")
         && rendered.contains("overlapping_encryption_selector")
     {
         "private result ORAM payload selector overlaps another encryption selector".to_string()
+    } else if rendered.contains("private-hnsw-oram/v1")
+        && rendered.contains("overlapping_encryption_selector")
+    {
+        "private HNSW ORAM vector selector overlaps another encryption selector".to_string()
     } else {
         rendered
     }
@@ -21405,6 +21411,111 @@ mod tests {
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains(PRIVATE_HNSW_ORAM_BINDING)
                     && description.contains("exactly one vector")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_redacts_private_hnsw_schema_errors() {
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "docs_private_hnsw_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_hnsw_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let multi_vector_params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string(), "body-secret".to_string()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Cosine,
+        );
+
+        let err = validate_collection_crypto_runtime_with_crypto_id(
+            &settings,
+            "docs",
+            "docs",
+            &multi_vector_params,
+        )
+        .expect_err("private HNSW ORAM schema errors must fail closed");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private HNSW ORAM supports exactly one vector")
+                    && !description.contains("embedding_private_hnsw")
+                    && !description.contains("body-secret")),
+            "unexpected error: {err:?}",
+        );
+
+        let overlap_params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![
+                        EncryptionRuleRef {
+                            id: "embedding_private_hnsw".to_string(),
+                            selector: EncryptionSelector::VectorNames {
+                                names: vec!["embedding".to_string()],
+                            },
+                            instance: "docs_private_hnsw_v1".to_string(),
+                            binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                        },
+                        EncryptionRuleRef {
+                            id: "embedding_client_ckks".to_string(),
+                            selector: EncryptionSelector::VectorNames {
+                                names: vec!["embedding".to_string()],
+                            },
+                            instance: "docs_client_ckks_v1".to_string(),
+                            binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
+                        },
+                    ],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Cosine,
+        );
+
+        let err = validate_collection_crypto_runtime_with_crypto_id(
+            &settings,
+            "docs",
+            "docs",
+            &overlap_params,
+        )
+        .expect_err("private HNSW ORAM overlapping selectors must fail closed");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private HNSW ORAM vector selector overlaps")
+                    && !description.contains("embedding_private_hnsw")
+                    && !description.contains("embedding_client_ckks")
+                    && !description.contains("embedding")),
             "unexpected error: {err:?}",
         );
     }

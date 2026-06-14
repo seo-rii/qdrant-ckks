@@ -55,12 +55,22 @@ fn describe_error(
         "duplicate_private_result_oram_binding" => {
             "private result ORAM supports one configured binding in v1".to_string()
         }
+        "private_hnsw_oram_single_vector_selector" => {
+            "private HNSW ORAM supports exactly one vector per rule in v1".to_string()
+        }
         "overlapping_encryption_selector"
             if params
                 .get("value")
                 .is_some_and(|value| value.to_string().contains("private-result-oram/v1")) =>
         {
             "private result ORAM payload selector overlaps another encryption selector".to_string()
+        }
+        "overlapping_encryption_selector"
+            if params
+                .get("value")
+                .is_some_and(|value| value.to_string().contains("private-hnsw-oram/v1")) =>
+        {
+            "private HNSW ORAM vector selector overlaps another encryption selector".to_string()
         }
         "range" => {
             let msg = match (params.get("min"), params.get("max")) {
@@ -304,5 +314,46 @@ mod tests {
         assert!(!overlap_message.contains("body.secret"));
         assert!(!overlap_message.contains("body_private_result"));
         assert!(!overlap_message.contains("body_client_payload"));
+    }
+
+    #[test]
+    fn describe_error_redacts_private_hnsw_oram_selector_values() {
+        let mut multi_vector = ValidationError::new("private_hnsw_oram_single_vector_selector");
+        multi_vector.add_param(
+            std::borrow::Cow::from("value"),
+            &serde_json::json!([
+                {
+                    "id": "embedding_private_hnsw",
+                    "selector": { "names": ["embedding", "body-secret"] },
+                    "binding": "private-hnsw-oram/v1",
+                },
+            ]),
+        );
+        let multi_vector_message = describe_error(&multi_vector);
+        assert!(multi_vector_message.contains("private HNSW ORAM supports exactly one vector"));
+        assert!(!multi_vector_message.contains("embedding_private_hnsw"));
+        assert!(!multi_vector_message.contains("body-secret"));
+
+        let mut overlap = ValidationError::new("overlapping_encryption_selector");
+        overlap.add_param(
+            std::borrow::Cow::from("value"),
+            &serde_json::json!([
+                {
+                    "id": "embedding_private_hnsw",
+                    "selector": { "names": ["embedding"] },
+                    "binding": "private-hnsw-oram/v1",
+                },
+                {
+                    "id": "embedding_client_ckks",
+                    "selector": { "names": ["embedding"] },
+                    "binding": "vector-envelope/v1",
+                },
+            ]),
+        );
+        let overlap_message = describe_error(&overlap);
+        assert!(overlap_message.contains("private HNSW ORAM vector selector overlaps"));
+        assert!(!overlap_message.contains("embedding_private_hnsw"));
+        assert!(!overlap_message.contains("embedding_client_ckks"));
+        assert!(!overlap_message.contains("embedding"));
     }
 }
