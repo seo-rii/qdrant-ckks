@@ -885,7 +885,18 @@ fn private_hnsw_oram_configured_vectors(
                 rule.id,
             )));
         };
-        configured_vectors.extend(names.iter().cloned());
+        if names.len() != 1 {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM snapshot rules must select exactly one vector in v1",
+            ));
+        }
+        for name in names {
+            if !configured_vectors.insert(name.clone()) {
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM snapshot supports one configured binding per vector in v1",
+                ));
+            }
+        }
     }
 
     Ok(configured_vectors)
@@ -2454,6 +2465,62 @@ mod tests {
                 .contains("missing for configured vector rules")
         );
         assert!(!err.to_string().contains(PRIVATE_HNSW_ORAM_DIR));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_multi_vector_rule_before_store_read() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-multi-vector-rule")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut config = private_hnsw_config(uuid);
+        let encryption = config.params.encryption.as_mut().unwrap();
+        let EncryptionSelector::VectorNames { names } = &mut encryption.rules[0].selector else {
+            panic!("fixture must use vector_names selector");
+        };
+        names.push("body-secret".to_string());
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("exactly one vector"));
+        assert!(!rendered.contains("body-secret"), "{rendered}");
+        assert!(!rendered.contains("missing for configured vector rules"));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_duplicate_vector_rule_before_store_read() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-duplicate-vector-rule")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut config = private_hnsw_config(uuid);
+        let encryption = config.params.encryption.as_mut().unwrap();
+        let mut duplicate_rule = encryption.rules[0].clone();
+        duplicate_rule.id = "docs_text_private_hnsw_duplicate".to_string();
+        encryption.rules.push(duplicate_rule);
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("one configured binding per vector"));
+        assert!(!rendered.contains("text"), "{rendered}");
+        assert!(!rendered.contains("duplicate"), "{rendered}");
+        assert!(!rendered.contains("missing for configured vector rules"));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
     }
 
     #[test]
