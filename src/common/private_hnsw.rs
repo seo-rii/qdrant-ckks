@@ -1045,6 +1045,10 @@ pub async fn do_commit_private_hnsw_paths(
                 ));
             }
             validate_root_hash_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
+            validate_private_hnsw_commit_bucket_ciphertexts_fixed_size(
+                &session.manifest,
+                std::slice::from_ref(bucket),
+            )?;
         }
 
         let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
@@ -1987,6 +1991,15 @@ fn validate_private_hnsw_read_bucket_ciphertexts_fixed_size(
     Ok(())
 }
 
+fn validate_private_hnsw_commit_bucket_ciphertexts_fixed_size(
+    manifest: &PrivateHnswOramManifest,
+    buckets: &[PrivateHnswOramBucket],
+) -> StorageResult<()> {
+    validate_private_hnsw_read_bucket_ciphertexts_fixed_size(manifest, buckets).map_err(|_| {
+        StorageError::bad_request("private HNSW ORAM bucket ciphertext validation failed")
+    })
+}
+
 fn max_updated_bucket_count(session: &PrivateHnswSession) -> StorageResult<usize> {
     let levels = usize::try_from(session.tree_height)
         .ok()
@@ -2544,6 +2557,18 @@ mod private_hnsw_tests {
         .to_string();
         assert!(rendered.contains("fixed ciphertext size"));
         assert!(!rendered.contains("0"), "{rendered}");
+        assert!(
+            !rendered.contains(&short_ciphertext_bucket.ciphertext),
+            "{rendered}"
+        );
+        let rendered = validate_private_hnsw_commit_bucket_ciphertexts_fixed_size(
+            &manifest,
+            std::slice::from_ref(&short_ciphertext_bucket),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(rendered.contains("bucket ciphertext validation failed"));
+        assert!(!rendered.contains("fixed ciphertext size"), "{rendered}");
         assert!(
             !rendered.contains(&short_ciphertext_bucket.ciphertext),
             "{rendered}"
