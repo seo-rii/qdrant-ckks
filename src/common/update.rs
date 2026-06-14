@@ -4052,6 +4052,43 @@ esac
             );
 
             assert_private_result_write_error(
+                do_upsert_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    PointInsertOperations::PointsBatch(api::rest::schema::PointsBatch {
+                        batch: api::rest::schema::Batch {
+                            ids: vec![2.into()],
+                            vectors: api::rest::schema::BatchVectorStruct::Single(vec![vec![
+                                0.3, 0.4,
+                            ]]),
+                            payloads: Some(vec![Some(segment::types::Payload(
+                                json!({ "body": "ordinary batch secret" })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            ))]),
+                        },
+                        shard_key: None,
+                        update_filter: None,
+                        update_mode: None,
+                    }),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM batch upsert must fail closed"),
+                "cannot upsert points for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
                 do_set_payload(
                     UncheckedTocProvider::new_unchecked(&toc),
                     "private_result_write_docs".to_string(),
@@ -4080,6 +4117,37 @@ esac
                 .await
                 .expect_err("private result ORAM set_payload must fail closed"),
                 "cannot set payload for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_overwrite_payload(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    SetPayload {
+                        payload: segment::types::Payload(
+                            json!({ "body": "ordinary overwrite secret" })
+                                .as_object()
+                                .unwrap()
+                                .clone(),
+                        ),
+                        points: Some(vec![1.into()]),
+                        filter: None,
+                        shard_key: None,
+                        key: None,
+                    },
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM overwrite_payload must fail closed"),
+                "cannot overwrite payload for private result ORAM payload field",
             );
         });
     }
