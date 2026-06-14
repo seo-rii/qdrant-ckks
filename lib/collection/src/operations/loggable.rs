@@ -1106,6 +1106,54 @@ mod tests {
             redacted_request_hash("private-oram", &first),
             redacted_request_hash("private-oram", &second)
         );
+
+        let mut camel_first = json!({
+            "readBuckets": {
+                "sessionId": "private-oram-camel-session-a",
+                "rootHash": "private-oram-camel-root-a",
+                "oldRootHash": "private-oram-camel-old-root-a",
+                "newRootHash": "private-oram-camel-new-root-a",
+                "bucketIds": [1, 2, 3],
+                "bucketCommitments": ["private-oram-camel-bucket-commitment-a"],
+                "readSignature": "private-oram-camel-read-signature-a",
+                "commitSignature": "private-oram-camel-commit-signature-a",
+                "updatedBuckets": [
+                    { "bucketId": 7, "bucketCommitment": "private-oram-camel-updated-bucket-a" },
+                    { "bucketId": 8, "bucketCommitment": "private-oram-camel-updated-bucket-b" }
+                ],
+                "payloadFetchToken": "private-oram-camel-payload-fetch-token-a",
+                "tokenPositionMap": { "private-oram-camel-fetch-token-a": 99 },
+                "payloadOramLeaf": "private-oram-camel-payload-leaf-a"
+            }
+        });
+        let mut camel_second = json!({
+            "readBuckets": {
+                "sessionId": "private-oram-camel-session-b",
+                "rootHash": "private-oram-camel-root-b",
+                "oldRootHash": "private-oram-camel-old-root-b",
+                "newRootHash": "private-oram-camel-new-root-b",
+                "bucketIds": [9, 10, 11],
+                "bucketCommitments": [
+                    "private-oram-camel-bucket-commitment-b",
+                    "private-oram-camel-bucket-commitment-c"
+                ],
+                "readSignature": "private-oram-camel-read-signature-b",
+                "commitSignature": "private-oram-camel-commit-signature-b",
+                "updatedBuckets": [
+                    { "bucketId": 12, "bucketCommitment": "private-oram-camel-updated-bucket-c" }
+                ],
+                "payloadFetchToken": "private-oram-camel-payload-fetch-token-b",
+                "tokenPositionMap": { "private-oram-camel-fetch-token-b": 17 },
+                "payloadOramLeaf": "private-oram-camel-payload-leaf-b"
+            }
+        });
+        redact_sensitive_log_fields(&mut camel_first);
+        redact_sensitive_log_fields(&mut camel_second);
+        assert_eq!(camel_first, camel_second);
+        assert_eq!(
+            redacted_request_hash("private-oram", &camel_first),
+            redacted_request_hash("private-oram", &camel_second)
+        );
     }
 
     #[test]

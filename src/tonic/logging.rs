@@ -216,6 +216,7 @@ mod tests {
              updatedBuckets=updated-bucket-camel-sentinel \
              bucket_commitment=bucket-commitment-sentinel \
              bucket_commitments=bucket-commitment-snake-plural-sentinel \
+             bucketCommitments=bucket-commitment-camel-plural-sentinel \
              bucket_ids=bucket-id-snake-sentinel \
              bucketIds=bucket-id-camel-sentinel",
         );
@@ -250,6 +251,7 @@ mod tests {
         assert!(!rendered.contains("updated-bucket-camel-sentinel"));
         assert!(!rendered.contains("bucket-commitment-sentinel"));
         assert!(!rendered.contains("bucket-commitment-snake-plural-sentinel"));
+        assert!(!rendered.contains("bucket-commitment-camel-plural-sentinel"));
         assert!(!rendered.contains("bucket-id-snake-sentinel"));
         assert!(!rendered.contains("bucket-id-camel-sentinel"));
     }

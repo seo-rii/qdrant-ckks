@@ -1066,6 +1066,8 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("request validation failed"));
+            assert!(!err.message().contains("Cosine"));
+            assert!(!err.message().contains("cosine"));
 
             let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
             mismatched_bucket_count_manifest.bucket_count -= 1;

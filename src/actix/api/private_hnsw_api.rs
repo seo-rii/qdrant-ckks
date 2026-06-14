@@ -842,7 +842,7 @@ mod private_hnsw_rest_tests {
             mismatched_distance_manifest.distance = qdrant_sec::DistanceKind::Cosine;
             let mismatched_distance_signature =
                 fixture.sign_manifest(&mismatched_distance_manifest);
-            post_json_error_contains!(
+            let mismatched_distance_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_distance_manifest,
@@ -850,6 +850,11 @@ mod private_hnsw_rest_tests {
                 },
                 StatusCode::BAD_REQUEST,
                 "request validation failed"
+            );
+            assert!(
+                !mismatched_distance_error.contains("Cosine")
+                    && !mismatched_distance_error.contains("cosine"),
+                "{mismatched_distance_error}"
             );
 
             let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
