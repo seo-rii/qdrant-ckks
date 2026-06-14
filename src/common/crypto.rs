@@ -1640,9 +1640,7 @@ fn generic_vector_write_plan(
             )?;
             ensure_private_hnsw_private_result_oram_binding(
                 runtime_settings,
-                collection_name,
                 encryption,
-                &rule.id,
                 instance,
             )?;
             let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|_| {
@@ -6812,9 +6810,7 @@ fn validate_generic_collection_crypto_runtime(
             )?;
             ensure_private_hnsw_private_result_oram_binding(
                 runtime_settings,
-                collection_name,
                 encryption,
-                &rule.id,
                 instance,
             )?;
             let private_distance = private_hnsw_distance(&rule.instance, instance).map_err(|_| {
@@ -7256,9 +7252,7 @@ fn validate_private_oram_collection_key_epoch(
 
 fn ensure_private_hnsw_private_result_oram_binding(
     runtime_settings: &CryptoSettings,
-    collection_name: &str,
     encryption: &CollectionEncryptionConfig,
-    rule_id: &str,
     instance: &CryptoInstanceConfig,
 ) -> Result<(), StorageError> {
     let result_privacy = instance
@@ -7303,13 +7297,13 @@ fn ensure_private_hnsw_private_result_oram_binding(
     }
     if !has_private_result_oram_binding {
         return Err(StorageError::bad_input(format!(
-            "collection {collection_name} private HNSW ORAM rule {rule_id} uses result_privacy=private_payload_oram_required, which requires a {PRIVATE_RESULT_ORAM_BINDING} payload rule backed by {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}",
+            "private HNSW ORAM result_privacy=private_payload_oram_required requires a {PRIVATE_RESULT_ORAM_BINDING} payload rule backed by {PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER}",
         )));
     }
     if !has_compatible_private_result_oram_binding {
-        return Err(StorageError::bad_input(format!(
-            "collection {collection_name} private HNSW ORAM rule {rule_id} uses result_privacy=private_payload_oram_required, which requires result ORAM oram.path_batch_size to divide private HNSW fixed_budget.fixed_result_k for fixed-size read_buckets batches",
-        )));
+        return Err(StorageError::bad_input(
+            "private HNSW ORAM result_privacy=private_payload_oram_required requires result ORAM oram.path_batch_size to divide private HNSW fixed_budget.fixed_result_k for fixed-size read_buckets batches",
+        ));
     }
     Ok(())
 }
@@ -21115,6 +21109,7 @@ mod tests {
      {
         let mut hnsw_options = private_hnsw_oram_options();
         hnsw_options["result_privacy"] = json!("private_payload_oram_required");
+        let rule_id_sentinel = "private_hnsw_result_privacy_secret_rule";
         let settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
@@ -21141,7 +21136,7 @@ mod tests {
                     encryption_epoch: 7,
                     migration_state: CryptoMigrationState::Active,
                     rules: vec![EncryptionRuleRef {
-                        id: "embedding_private_hnsw".to_string(),
+                        id: rule_id_sentinel.to_string(),
                         selector: EncryptionSelector::VectorNames {
                             names: vec!["embedding".to_string()],
                         },
@@ -21160,7 +21155,8 @@ mod tests {
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("private_payload_oram_required")
                     && description.contains(PRIVATE_RESULT_ORAM_BINDING)
-                    && description.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)),
+                    && description.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+                    && !description.contains(rule_id_sentinel)),
             "unexpected error: {err:?}",
         );
     }
@@ -21242,6 +21238,7 @@ mod tests {
     fn validate_collection_crypto_runtime_rejects_private_hnsw_result_oram_batch_mismatch() {
         let mut hnsw_options = private_hnsw_oram_options();
         hnsw_options["result_privacy"] = json!("private_payload_oram_required");
+        let rule_id_sentinel = "private_hnsw_result_batch_secret_rule";
         let mut result_options = private_result_oram_options();
         result_options["key_id"] = json!("tenant-a:docs-private-rk");
         result_options["expected_rk_id"] = json!("tenant-a:docs-private-rk");
@@ -21283,7 +21280,7 @@ mod tests {
                     migration_state: CryptoMigrationState::Active,
                     rules: vec![
                         EncryptionRuleRef {
-                            id: "embedding_private_hnsw".to_string(),
+                            id: rule_id_sentinel.to_string(),
                             selector: EncryptionSelector::VectorNames {
                                 names: vec!["embedding".to_string()],
                             },
@@ -21311,7 +21308,8 @@ mod tests {
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("fixed_budget.fixed_result_k")
                     && description.contains("oram.path_batch_size")
-                    && description.contains("fixed-size read_buckets")),
+                    && description.contains("fixed-size read_buckets")
+                    && !description.contains(rule_id_sentinel)),
             "unexpected error: {err:?}",
         );
         assert!(!format!("{err:?}").contains("10"));
