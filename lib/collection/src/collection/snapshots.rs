@@ -1082,7 +1082,13 @@ fn private_hnsw_restore_expected_bucket_ciphertext_bytes(
     manifest: &PrivateHnswOramManifest,
 ) -> CollectionResult<usize> {
     private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram)
-        .map_err(|err| CollectionError::bad_request(err.to_string()))
+        .map_err(private_hnsw_restore_bucket_ciphertext_size_error)
+}
+
+fn private_hnsw_restore_bucket_ciphertext_size_error(
+    _err: qdrant_sec::PrivateHnswOramError,
+) -> CollectionError {
+    CollectionError::bad_request("private HNSW ORAM snapshot bucket ciphertext size is invalid")
 }
 
 fn validate_private_hnsw_restore_bucket_contract(
@@ -1589,6 +1595,17 @@ mod tests {
         .to_string();
         assert!(result.contains("private result ORAM snapshot manifest or signature is invalid"));
         assert!(!result.contains("secret_result_field"), "{result}");
+    }
+
+    #[test]
+    fn private_hnsw_restore_bucket_shape_errors_are_sanitized() {
+        let rendered = private_hnsw_restore_bucket_ciphertext_size_error(
+            qdrant_sec::PrivateHnswOramError::InvalidManifestField("oram.bucket_size"),
+        )
+        .to_string();
+
+        assert!(rendered.contains("snapshot bucket ciphertext size is invalid"));
+        assert!(!rendered.contains("oram.bucket_size"), "{rendered}");
     }
 
     #[test]

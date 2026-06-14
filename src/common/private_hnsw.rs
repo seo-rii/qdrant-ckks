@@ -17,7 +17,7 @@ use qdrant_sec::{
     DistanceKind, FixedBudgetParams, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
     PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, PrivateHnswBucketAeadContext,
     PrivateHnswManifestValidationContext, PrivateHnswOramBucket, PrivateHnswOramCommitBucketRef,
-    PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
+    PrivateHnswOramCommitSignatureInput, PrivateHnswOramError, PrivateHnswOramManifest,
     PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswParams,
     PrivateHnswSignatureVerification, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
     decode_private_hnsw_oram_leaf_label, private_hnsw_bucket_commitment,
@@ -1894,7 +1894,11 @@ fn max_bucket_ciphertext_bytes(manifest: &PrivateHnswOramManifest) -> StorageRes
 
 fn expected_bucket_ciphertext_bytes(manifest: &PrivateHnswOramManifest) -> StorageResult<usize> {
     private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram)
-        .map_err(|err| StorageError::bad_request(err.to_string()))
+        .map_err(private_hnsw_bucket_ciphertext_size_error)
+}
+
+fn private_hnsw_bucket_ciphertext_size_error(_err: PrivateHnswOramError) -> StorageError {
+    StorageError::bad_request("private HNSW ORAM bucket ciphertext size is invalid")
 }
 
 fn validate_bucket_ciphertext_fixed_size(
@@ -2065,7 +2069,7 @@ fn bucket_ids_for_path_batch(
     bucket_count: u64,
 ) -> StorageResult<Vec<u64>> {
     let expected_bucket_count = private_hnsw_oram_bucket_count(tree_height)
-        .map_err(|err| StorageError::bad_request(err.to_string()))?;
+        .map_err(|_| StorageError::bad_request("private HNSW ORAM tree_height is invalid"))?;
     if bucket_count != expected_bucket_count {
         return Err(StorageError::bad_request(
             "private HNSW ORAM bucket_count does not match tree_height",
@@ -2147,6 +2151,23 @@ mod private_hnsw_tests {
         let right = BASE64URL_NOPAD.encode(&5u64.to_be_bytes());
         let bucket_ids = bucket_ids_for_path_batch(&[left, right], 3, 15).unwrap();
         assert_eq!(bucket_ids, vec![0, 2, 5, 11, 0, 2, 5, 12]);
+    }
+
+    #[test]
+    fn private_hnsw_bucket_shape_errors_are_sanitized() {
+        let rendered = private_hnsw_bucket_ciphertext_size_error(
+            qdrant_sec::PrivateHnswOramError::InvalidManifestField("oram.bucket_size"),
+        )
+        .to_string();
+        assert!(rendered.contains("bucket ciphertext size is invalid"));
+        assert!(!rendered.contains("oram.bucket_size"), "{rendered}");
+
+        let leaf = BASE64URL_NOPAD.encode(&0u64.to_be_bytes());
+        let rendered = bucket_ids_for_path_batch(&[leaf], 63, 1)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("tree_height is invalid"));
+        assert!(!rendered.contains("63"), "{rendered}");
     }
 
     #[test]
