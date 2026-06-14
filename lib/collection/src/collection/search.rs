@@ -39,6 +39,16 @@ impl Collection {
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<Vec<ScoredPoint>> {
         if request.limit == 0 {
+            self.core_search_batch(
+                CoreSearchRequestBatch {
+                    searches: vec![request],
+                },
+                read_consistency,
+                shard_selection.clone(),
+                timeout,
+                hw_measurement_acc,
+            )
+            .await?;
             return Ok(vec![]);
         }
         // search is a special case of search_batch with a single batch
@@ -66,10 +76,6 @@ impl Collection {
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<Vec<Vec<ScoredPoint>>> {
         let start = Instant::now();
-        // shortcuts batch if all requests with limit=0
-        if request.searches.iter().all(|s| s.limit == 0) {
-            return Ok(vec![]);
-        }
         self.ensure_crypto_migration_allows_regular_operation("reads")
             .await?;
         for search in &request.searches {
@@ -126,6 +132,10 @@ impl Collection {
                 "search",
             )
             .await?;
+        }
+        // shortcuts batch if all requests with limit=0
+        if request.searches.iter().all(|s| s.limit == 0) {
+            return Ok(vec![]);
         }
 
         let is_payload_required = request

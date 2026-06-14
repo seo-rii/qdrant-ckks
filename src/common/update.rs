@@ -9434,6 +9434,10 @@ esac
                     "{message}"
                 );
             };
+            let collection_pass = auth
+                .check_collection_access("private_result_docs", AccessRequirements::new(), "test")
+                .unwrap();
+            let private_result_collection = toc.get_collection(&collection_pass).await.unwrap();
 
             assert_private_result_session_error(
                 crate::common::query::do_get_points(
@@ -9602,6 +9606,36 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM zero-limit core search must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                private_result_collection
+                    .core_search_batch(
+                        shard::search::CoreSearchRequestBatch {
+                            searches: vec![CoreSearchRequest {
+                                query: QueryEnum::Nearest(NamedQuery::new(
+                                    VectorInternal::Dense(vec![0.1, 0.2]),
+                                    DEFAULT_VECTOR_NAME,
+                                )),
+                                filter: None,
+                                params: None,
+                                limit: 0,
+                                offset: 0,
+                                with_payload: Some(WithPayloadInterface::Bool(true)),
+                                with_vector: Some(WithVector::Bool(false)),
+                                score_threshold: None,
+                            }],
+                        },
+                        None,
+                        ShardSelectorInternal::All,
+                        None,
+                        HwMeasurementAcc::disposable(),
+                    )
+                    .await
+                    .map_err(StorageError::from)
+                    .expect_err(
+                        "private result ORAM collection zero-limit search must fail closed",
+                    ),
             );
 
             assert_private_result_session_error(
@@ -10001,6 +10035,30 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM zero-limit universal query must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                private_result_collection
+                    .query(
+                        collection::operations::universal_query::shard_query::ShardQueryRequest {
+                            prefetches: Vec::new(),
+                            query: None,
+                            filter: None,
+                            score_threshold: None,
+                            limit: 0,
+                            offset: 0,
+                            params: None,
+                            with_vector: WithVector::Bool(false),
+                            with_payload: WithPayloadInterface::Bool(true),
+                        },
+                        None,
+                        ShardSelectorInternal::All,
+                        None,
+                        HwMeasurementAcc::disposable(),
+                    )
+                    .await
+                    .map_err(StorageError::from)
+                    .expect_err("private result ORAM collection zero-limit query must fail closed"),
             );
 
             assert_private_result_session_error(

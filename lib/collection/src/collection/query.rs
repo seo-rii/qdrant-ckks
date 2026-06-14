@@ -60,6 +60,8 @@ impl Collection {
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<Vec<ScoredPoint>> {
         if request.limit == 0 {
+            self.ensure_query_batch_crypto_policy(std::slice::from_ref(&request))
+                .await?;
             return Ok(vec![]);
         }
         let results = self
@@ -218,12 +220,12 @@ impl Collection {
     ) -> CollectionResult<Vec<Vec<ScoredPoint>>> {
         let start = Instant::now();
 
+        self.ensure_query_batch_crypto_policy(&requests_batch)
+            .await?;
         // shortcuts batch if all requests with limit=0
         if requests_batch.iter().all(|s| s.limit == 0) {
             return Ok(vec![]);
         }
-        self.ensure_query_batch_crypto_policy(&requests_batch)
-            .await?;
         let is_payload_required = requests_batch.iter().all(|s| s.with_payload.is_required());
         let encrypted_payload_read_modes = requests_batch
             .iter()
@@ -676,10 +678,10 @@ impl Collection {
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
     ) -> CollectionResult<Vec<ShardQueryResponse>> {
+        self.ensure_query_batch_crypto_policy(&requests).await?;
         if requests.iter().all(|s| s.limit == 0) {
             return Ok(vec![]);
         }
-        self.ensure_query_batch_crypto_policy(&requests).await?;
         let requests_arc = Arc::new(requests);
 
         // Results from all shards
