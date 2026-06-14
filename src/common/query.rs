@@ -786,6 +786,16 @@ pub async fn do_core_search_batch_points(
         &auth,
     )
     .await?;
+    for search in &request.searches {
+        preflight_private_result_oram_raw_payload_read(
+            toc,
+            collection_name,
+            search.with_payload.as_ref(),
+            "search",
+            &auth,
+        )
+        .await?;
+    }
     if runtime_settings.is_none() {
         let private_hnsw_vectors =
             private_hnsw_oram_vector_names_for_collection(toc, collection_name, &auth).await?;
@@ -6924,6 +6934,16 @@ pub async fn do_query_batch_points(
         &auth,
     )
     .await?;
+    for (request, _) in &requests {
+        preflight_private_result_oram_raw_payload_read(
+            toc,
+            collection_name,
+            Some(&request.with_payload),
+            "query",
+            &auth,
+        )
+        .await?;
+    }
 
     if runtime_settings.is_none() {
         let private_hnsw_vectors =

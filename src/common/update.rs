@@ -9534,6 +9534,34 @@ esac
             );
 
             assert_private_result_session_error(
+                crate::common::query::do_core_search_points(
+                    &toc,
+                    "private_result_docs",
+                    CoreSearchRequest {
+                        query: QueryEnum::Nearest(NamedQuery::new(
+                            VectorInternal::Dense(vec![0.1, 0.2]),
+                            DEFAULT_VECTOR_NAME,
+                        )),
+                        filter: None,
+                        params: None,
+                        limit: 0,
+                        offset: 0,
+                        with_payload: Some(WithPayloadInterface::Bool(true)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        score_threshold: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM zero-limit core search must fail closed"),
+            );
+
+            assert_private_result_session_error(
                 crate::common::query::do_search_batch_points_from_rest(
                     &toc,
                     "private_result_docs",
@@ -9900,6 +9928,36 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM universal query must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_query_points(
+                    &toc,
+                    "private_result_docs",
+                    CollectionQueryRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                        ))),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 0,
+                        offset: 0,
+                        params: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(true),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM zero-limit universal query must fail closed"),
             );
 
             assert_private_result_session_error(
