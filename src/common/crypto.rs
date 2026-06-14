@@ -7188,8 +7188,8 @@ fn validate_private_result_oram_collection_runtime(
 }
 
 fn validate_private_oram_collection_key_epoch(
-    collection_name: &str,
-    instance_name: &str,
+    _collection_name: &str,
+    _instance_name: &str,
     instance: &CryptoInstanceConfig,
     encryption: &CollectionEncryptionConfig,
     provider_label: &str,
@@ -7198,7 +7198,7 @@ fn validate_private_oram_collection_key_epoch(
         let instance_key_id = instance.options.get("key_id").and_then(Value::as_str);
         if instance_key_id != Some(collection_key_id) {
             return Err(StorageError::bad_input(format!(
-                "collection {collection_name} {provider_label} instance {instance_name} key_id must match collection key_id",
+                "{provider_label} key_id must match collection key_id",
             )));
         }
         let expected_rk_id = instance
@@ -7207,7 +7207,7 @@ fn validate_private_oram_collection_key_epoch(
             .and_then(Value::as_str);
         if expected_rk_id != Some(collection_key_id) {
             return Err(StorageError::bad_input(format!(
-                "collection {collection_name} {provider_label} instance {instance_name} expected_rk_id must match collection key_id",
+                "{provider_label} expected_rk_id must match collection key_id",
             )));
         }
     }
@@ -7224,7 +7224,7 @@ fn validate_private_oram_collection_key_epoch(
         || max_rk_epoch != Some(encryption.encryption_epoch)
     {
         return Err(StorageError::bad_input(format!(
-            "collection {collection_name} {provider_label} instance {instance_name} rk_epoch must match collection encryption_epoch",
+            "{provider_label} rk_epoch must match collection encryption_epoch",
         )));
     }
 
@@ -10334,12 +10334,13 @@ mod tests {
 
     #[test]
     fn validate_collection_crypto_runtime_rejects_private_result_oram_key_epoch_mismatch() {
+        let instance_sentinel = "private_result_key_epoch_secret_instance";
         let settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
                 allow_inline_key_material: false,
                 instances: HashMap::from([(
-                    "payload_result_oram_v1".to_string(),
+                    instance_sentinel.to_string(),
                     CryptoInstanceConfig {
                         provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
                         materials: HashMap::new(),
@@ -10363,7 +10364,7 @@ mod tests {
                     selector: EncryptionSelector::PayloadPaths {
                         paths: vec!["body".to_string()],
                     },
-                    instance: "payload_result_oram_v1".to_string(),
+                    instance: instance_sentinel.to_string(),
                     binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
                 }],
             }),
@@ -10378,7 +10379,8 @@ mod tests {
                 if description.contains("private result ORAM")
                     && description.contains("key_id must match collection key_id")
                     && !description.contains("tenant-a:docs")
-                    && !description.contains("tenant-a:result-private-rk")),
+                    && !description.contains("tenant-a:result-private-rk")
+                    && !description.contains(instance_sentinel)),
             "unexpected error: {err:?}",
         );
 
@@ -10393,7 +10395,8 @@ mod tests {
                 if description.contains("private result ORAM")
                     && description.contains("rk_epoch must match collection encryption_epoch")
                     && !description.contains('7')
-                    && !description.contains('8')),
+                    && !description.contains('8')
+                    && !description.contains(instance_sentinel)),
             "unexpected error: {err:?}",
         );
     }
@@ -21045,12 +21048,13 @@ mod tests {
 
     #[test]
     fn validate_collection_crypto_runtime_rejects_private_hnsw_oram_key_epoch_mismatch() {
+        let instance_sentinel = "private_hnsw_key_epoch_secret_instance";
         let settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
                 allow_inline_key_material: false,
                 instances: HashMap::from([(
-                    "docs_private_hnsw_v1".to_string(),
+                    instance_sentinel.to_string(),
                     CryptoInstanceConfig {
                         provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
                         materials: HashMap::new(),
@@ -21075,7 +21079,7 @@ mod tests {
                         selector: EncryptionSelector::VectorNames {
                             names: vec!["embedding".to_string()],
                         },
-                        instance: "docs_private_hnsw_v1".to_string(),
+                        instance: instance_sentinel.to_string(),
                         binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
                     }],
                 }),
@@ -21091,7 +21095,8 @@ mod tests {
                 if description.contains("private HNSW ORAM")
                     && description.contains("key_id must match collection key_id")
                     && !description.contains("tenant-a:docs")
-                    && !description.contains("tenant-a:docs-private-rk")),
+                    && !description.contains("tenant-a:docs-private-rk")
+                    && !description.contains(instance_sentinel)),
             "unexpected error: {err:?}",
         );
 
@@ -21105,7 +21110,8 @@ mod tests {
                 if description.contains("private HNSW ORAM")
                     && description.contains("rk_epoch must match collection encryption_epoch")
                     && !description.contains('7')
-                    && !description.contains('8')),
+                    && !description.contains('8')
+                    && !description.contains(instance_sentinel)),
             "unexpected error: {err:?}",
         );
     }
