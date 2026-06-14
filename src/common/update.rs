@@ -4195,6 +4195,50 @@ esac
                 .expect_err("private result ORAM clear_payload must fail closed"),
                 "cannot clear payload for private result ORAM payload field",
             );
+
+            assert_private_result_write_error(
+                do_delete_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    PointsSelector::PointIdsSelector(PointIdsList {
+                        points: vec![1.into()],
+                        shard_key: None,
+                    }),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM delete_points must fail closed"),
+                "cannot delete points for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_delete_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    PointsSelector::FilterSelector(FilterSelector {
+                        filter: Filter::new(),
+                        shard_key: None,
+                    }),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM delete_points by filter must fail closed"),
+                "cannot delete points by filter for private result ORAM payload field",
+            );
         });
     }
 
