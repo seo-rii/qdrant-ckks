@@ -2073,6 +2073,7 @@ pub fn validate_private_result_oram_upload_bundle(
     }
 
     let max_ciphertext_bytes = private_result_oram_upload_max_ciphertext_bytes(manifest)?;
+    let expected_ciphertext_bytes = private_result_oram_bucket_ciphertext_bytes(&manifest.oram)?;
     let validation_context =
         PrivateResultOramBucketValidationContext::from_manifest(manifest, max_ciphertext_bytes);
     let mut commitments = Vec::with_capacity(bundle.buckets.len());
@@ -2081,6 +2082,10 @@ pub fn validate_private_result_oram_upload_bundle(
             return Err(PrivateResultOramError::InvalidBucketField("bucket_id"));
         }
         validate_private_result_oram_bucket_shape(bucket, validation_context)?;
+        validate_private_result_oram_bucket_ciphertext_fixed_size(
+            bucket,
+            expected_ciphertext_bytes,
+        )?;
         let expected_commitment = private_result_oram_bucket_commitment(
             PrivateResultOramBucketCommitmentContext {
                 collection_id: &manifest.collection_id,
@@ -2101,6 +2106,19 @@ pub fn validate_private_result_oram_upload_bundle(
         return Err(PrivateResultOramError::MerkleRootMismatch);
     }
     Ok(commitments)
+}
+
+fn validate_private_result_oram_bucket_ciphertext_fixed_size(
+    bucket: &PrivateResultOramBucket,
+    expected_ciphertext_bytes: usize,
+) -> Result<(), PrivateResultOramError> {
+    let ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext"))?;
+    if ciphertext.len() != expected_ciphertext_bytes {
+        return Err(PrivateResultOramError::InvalidBucketField("ciphertext"));
+    }
+    Ok(())
 }
 
 pub fn validate_private_result_oram_upload_bundle_with_signature(
@@ -3011,10 +3029,38 @@ mod tests {
         .unwrap()
     }
 
-    fn fixture_bucket_set() -> Vec<PrivateResultOramBucket> {
+    fn fixture_upload_bucket_set(
+        manifest: &PrivateResultOramManifest,
+    ) -> Vec<PrivateResultOramBucket> {
         (0..3)
-            .map(|bucket_id| fixture_commit_bucket(bucket_id, 42, bucket_id as u8 + 1))
+            .map(|bucket_id| {
+                fixture_upload_bucket(
+                    bucket_id,
+                    manifest.index_epoch,
+                    bucket_id as u8 + 1,
+                    manifest,
+                )
+            })
             .collect()
+    }
+
+    fn fixture_upload_bucket(
+        bucket_id: u64,
+        epoch: u64,
+        byte: u8,
+        manifest: &PrivateResultOramManifest,
+    ) -> PrivateResultOramBucket {
+        let ciphertext =
+            vec![byte; private_result_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap()];
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext).as_ref());
+        PrivateResultOramBucket {
+            version: 1,
+            bucket_id,
+            index_epoch: epoch,
+            ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
+            ciphertext_sha256: ciphertext_sha256.clone(),
+            bucket_commitment: fixture_bucket_commitment(bucket_id, epoch, &ciphertext_sha256),
+        }
     }
 
     fn small_fetch_manifest() -> PrivateResultOramManifest {
@@ -5247,7 +5293,17 @@ mod tests {
     #[test]
     fn upload_bundle_packages_signed_manifest_and_buckets() {
         let key_pair = deterministic_key_pair();
-        let buckets = fixture_bucket_set();
+        let manifest_without_root = PrivateResultOramManifest {
+            bucket_count: 3,
+            logical_result_count: 3,
+            dummy_result_count: 0,
+            oram: OramParams {
+                tree_height: 1,
+                ..fixture_manifest().oram
+            },
+            ..fixture_manifest()
+        };
+        let buckets = fixture_upload_bucket_set(&manifest_without_root);
         let root_hash = private_result_oram_merkle_root_for_commitments(
             &buckets
                 .iter()
@@ -5257,14 +5313,7 @@ mod tests {
         .unwrap();
         let manifest = PrivateResultOramManifest {
             root_hash: root_hash.clone(),
-            bucket_count: buckets.len() as u64,
-            logical_result_count: 3,
-            dummy_result_count: 0,
-            oram: OramParams {
-                tree_height: 1,
-                ..fixture_manifest().oram
-            },
-            ..fixture_manifest()
+            ..manifest_without_root
         };
 
         let bundle =
@@ -5419,6 +5468,18 @@ mod tests {
         malformed_ciphertext.buckets[0].ciphertext = "A".to_string();
         assert_eq!(
             validate_private_result_oram_upload_bundle(&malformed_ciphertext),
+            Err(PrivateResultOramError::InvalidBucketField("ciphertext"))
+        );
+
+        let mut short_ciphertext = decoded.clone();
+        let short_raw = b"short-private-result-bucket";
+        let short_hash = BASE64URL_NOPAD.encode(Sha256::digest(short_raw).as_ref());
+        short_ciphertext.buckets[0].ciphertext = BASE64URL_NOPAD.encode(short_raw);
+        short_ciphertext.buckets[0].ciphertext_sha256 = short_hash.clone();
+        short_ciphertext.buckets[0].bucket_commitment =
+            fixture_bucket_commitment(0, short_ciphertext.manifest.index_epoch, &short_hash);
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&short_ciphertext),
             Err(PrivateResultOramError::InvalidBucketField("ciphertext"))
         );
 
