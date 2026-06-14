@@ -12,8 +12,9 @@ use qdrant_sec::{
     PrivateResultOramMerkleProof, PrivateResultOramMerkleProofLeaf, PrivateResultOramMerkleSibling,
     PrivateResultOramMerkleSiblingPosition, PrivateResultOramSignature,
     PrivateResultOramSignatureVerification, PrivateResultOramUploadBundle,
-    private_result_oram_bucket_commitment, validate_private_result_oram_bucket_shape,
-    validate_private_result_oram_commit_signature, validate_private_result_oram_upload_bundle,
+    private_result_oram_bucket_ciphertext_bytes, private_result_oram_bucket_commitment,
+    validate_private_result_oram_bucket_shape, validate_private_result_oram_commit_signature,
+    validate_private_result_oram_upload_bundle,
     validate_private_result_oram_upload_bundle_with_signature,
 };
 use serde::{Deserialize, Serialize};
@@ -400,6 +401,7 @@ impl PrivateResultOramStore {
         validate_commit_manifest_context(&manifest, old, bucket_count)?;
         for bucket in updated_buckets {
             validate_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
+            validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
         }
         validate_bucket_commitment_context(&manifest, new.index_epoch, updated_buckets)?;
         let prepared_merkle_commit = self.prepare_merkle_commit(
@@ -920,6 +922,25 @@ fn validate_bucket_commitment_context(
     Ok(())
 }
 
+fn validate_bucket_ciphertext_fixed_size(
+    bucket: &PrivateResultOramBucket,
+    manifest: &PrivateResultOramManifest,
+) -> CollectionResult<()> {
+    let expected = private_result_oram_bucket_ciphertext_bytes(&manifest.oram)
+        .map_err(private_result_oram_error)?;
+    let ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| {
+            CollectionError::bad_request("private result ORAM bucket ciphertext is not base64url")
+        })?;
+    if ciphertext.len() != expected {
+        return Err(CollectionError::bad_request(
+            "private result ORAM bucket ciphertext must match fixed ciphertext size",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_bucket_for_read(
     bucket: &PrivateResultOramBucket,
     expected_epoch: u64,
@@ -1401,9 +1422,15 @@ mod tests {
     }
 
     fn bucket_ciphertext(bytes: &[u8]) -> (String, String) {
+        let expected =
+            qdrant_sec::private_result_oram_bucket_ciphertext_bytes(&fixture_manifest().oram)
+                .unwrap();
+        assert!(bytes.len() <= expected);
+        let mut ciphertext = vec![0; expected];
+        ciphertext[..bytes.len()].copy_from_slice(bytes);
         (
-            BASE64URL_NOPAD.encode(bytes),
-            BASE64URL_NOPAD.encode(Sha256::digest(bytes).as_ref()),
+            BASE64URL_NOPAD.encode(&ciphertext),
+            BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext).as_ref()),
         )
     }
 
@@ -1509,7 +1536,7 @@ mod tests {
             oram: OramParams {
                 kind: OramKind::PathOram,
                 bucket_size: 4,
-                block_size_bytes: 8192,
+                block_size_bytes: 8,
                 tree_height: 1,
                 path_batch_size: 8,
             },
@@ -1815,18 +1842,18 @@ mod tests {
         let bucket = fixture_bucket(3, 42, b"encrypted result bucket");
 
         store
-            .validate_bucket_for_write(&bucket, 42, 16, 64)
+            .validate_bucket_for_write(&bucket, 42, 16, 128)
             .unwrap();
-        store.write_bucket(&bucket, 42, 16, 64).unwrap();
-        assert_eq!(store.read_bucket(3, 42, 16, 64).unwrap(), bucket);
+        store.write_bucket(&bucket, 42, 16, 128).unwrap();
+        assert_eq!(store.read_bucket(3, 42, 16, 128).unwrap(), bucket);
 
         let mut bad_hash = bucket.clone();
         bad_hash.ciphertext_sha256 = root_hash(1);
         let err = store
-            .validate_bucket_for_write(&bad_hash, 42, 16, 64)
+            .validate_bucket_for_write(&bad_hash, 42, 16, 128)
             .unwrap_err();
         assert!(err.to_string().contains("ciphertext_sha256 mismatch"));
-        let err = store.write_bucket(&bad_hash, 42, 16, 64).unwrap_err();
+        let err = store.write_bucket(&bad_hash, 42, 16, 128).unwrap_err();
         assert!(err.to_string().contains("ciphertext_sha256 mismatch"));
 
         let oversized = fixture_bucket(4, 42, &[8; 65]);
@@ -2751,6 +2778,38 @@ mod tests {
         assert!(err.contains("ciphertext_sha256 mismatch"));
         assert!(!err.contains("private-result-writeback-ciphertext-sentinel"));
         assert!(!err.contains(&hash_mismatch_bucket.ciphertext));
+        assert_writeback_target_unchanged();
+
+        let mut short_ciphertext_bucket =
+            fixture_bucket(1, 43, b"valid hash with short result bucket");
+        let short_raw = b"short-result-commit";
+        let short_hash = BASE64URL_NOPAD.encode(Sha256::digest(short_raw).as_ref());
+        short_ciphertext_bucket.ciphertext = BASE64URL_NOPAD.encode(short_raw);
+        short_ciphertext_bucket.ciphertext_sha256 = short_hash.clone();
+        short_ciphertext_bucket.bucket_commitment = fixture_bucket_commitment(1, 43, &short_hash);
+        let mut short_ciphertext_commitments = bundle.bucket_commitments();
+        short_ciphertext_commitments[1] = short_ciphertext_bucket.bucket_commitment.clone();
+        let short_ciphertext_new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateResultOramStore::merkle_root_for_commitments(
+                &short_ciphertext_commitments,
+            )
+            .unwrap(),
+        };
+
+        let err = store
+            .commit_writeback(
+                &old,
+                &short_ciphertext_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&short_ciphertext_bucket),
+                128,
+            )
+            .unwrap_err();
+        let err = err.to_string();
+        assert!(err.contains("fixed ciphertext size"));
+        assert!(!err.contains("short-result-commit"));
+        assert!(!err.contains(&short_ciphertext_bucket.ciphertext));
         assert_writeback_target_unchanged();
 
         let valid_bucket = fixture_bucket(1, 43, b"valid result bucket with wrong root");
