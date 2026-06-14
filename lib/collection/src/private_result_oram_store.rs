@@ -1966,6 +1966,45 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn temp_directory_group_world_accessible_is_rehardened_before_write() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        store.ensure_layout().unwrap();
+        fs::set_permissions(
+            store.root_path().join(TEMP_DIR),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+
+        let epoch = PrivateResultOramEpochState {
+            index_epoch: 42,
+            root_hash: root_hash(42),
+        };
+        store.write_initial_epoch(&epoch).unwrap();
+
+        assert_eq!(store.read_current_epoch().unwrap(), epoch);
+        let temp_mode = fs::metadata(store.root_path().join(TEMP_DIR))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(temp_mode, 0o700);
+        let duplicate_err = store
+            .write_initial_epoch(&PrivateResultOramEpochState {
+                index_epoch: 42,
+                root_hash: root_hash(42),
+            })
+            .unwrap_err();
+
+        let rendered = duplicate_err.to_string();
+        assert!(!rendered.contains("private_result_oram"), "{rendered}");
+        assert!(!rendered.contains("private-result-oram-"), "{rendered}");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn bucket_directory_group_world_accessible_rejects() {
         use std::os::unix::fs::PermissionsExt;
 
