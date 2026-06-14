@@ -4149,6 +4149,52 @@ esac
                 .expect_err("private result ORAM overwrite_payload must fail closed"),
                 "cannot overwrite payload for private result ORAM payload field",
             );
+
+            assert_private_result_write_error(
+                do_delete_payload(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    DeletePayload {
+                        keys: vec!["body".parse().unwrap()],
+                        points: Some(vec![1.into()]),
+                        filter: None,
+                        shard_key: None,
+                    },
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM delete_payload must fail closed"),
+                "cannot delete payload for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_clear_payload(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    PointsSelector::PointIdsSelector(PointIdsList {
+                        points: vec![1.into()],
+                        shard_key: None,
+                    }),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM clear_payload must fail closed"),
+                "cannot clear payload for private result ORAM payload field",
+            );
         });
     }
 
