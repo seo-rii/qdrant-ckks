@@ -3313,7 +3313,11 @@ mod tests {
                 .unwrap()
                 .as_bytes()
         );
-        assert!(format!("{keys:?}").contains("[redacted; 32 bytes]"));
+        let debug = format!("{keys:?}");
+        assert!(debug.contains("[redacted; 32 bytes]"));
+        for secret in [keys.bucket_aead_key(), keys.client_state_key()] {
+            assert!(!debug.contains(&BASE64URL_NOPAD.encode(secret.as_bytes())));
+        }
     }
 
     #[test]
