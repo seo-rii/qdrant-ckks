@@ -269,6 +269,16 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "paths"
                         | "bucket_commitment"
                         | "bucket_commitments"
+                        | "merkle_proof"
+                        | "merkle_proofs"
+                        | "proof"
+                        | "proofs"
+                        | "leaf_hash"
+                        | "leaf_hashes"
+                        | "sibling"
+                        | "siblings"
+                        | "sibling_hash"
+                        | "sibling_hashes"
                         | "bucket_id"
                         | "bucket_ids"
                         | "updated_bucket"
@@ -384,6 +394,16 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "readpaths"
                         | "bucketcommitment"
                         | "bucketcommitments"
+                        | "merkleproof"
+                        | "merkleproofs"
+                        | "proof"
+                        | "proofs"
+                        | "leafhash"
+                        | "leafhashes"
+                        | "sibling"
+                        | "siblings"
+                        | "siblinghash"
+                        | "siblinghashes"
                         | "bucketid"
                         | "bucketids"
                         | "updatedbucket"
@@ -868,6 +888,19 @@ mod tests {
                     "bucketId": "qdrant-sec-private-oram-camel-updated-single-bucket-id-log-sentinel",
                     "bucketCommitment": "qdrant-sec-private-oram-camel-updated-single-bucket-commitment-log-sentinel"
                 },
+                "proof": {
+                    "leaves": [{
+                        "bucket_id": "qdrant-sec-private-oram-proof-bucket-id-log-sentinel",
+                        "leaf_hash": "qdrant-sec-private-oram-proof-leaf-hash-log-sentinel",
+                        "siblings": [{
+                            "hash": "qdrant-sec-private-oram-proof-sibling-hash-log-sentinel"
+                        }]
+                    }]
+                },
+                "merkleProof": {
+                    "leafHash": "qdrant-sec-private-oram-camel-proof-leaf-hash-log-sentinel",
+                    "siblings": ["qdrant-sec-private-oram-camel-proof-sibling-log-sentinel"]
+                },
                 "path_label": "qdrant-sec-private-hnsw-path-label-log-sentinel",
                 "pathLabel": "qdrant-sec-private-hnsw-camel-single-path-label-log-sentinel",
                 "pathLabels": ["qdrant-sec-private-hnsw-camel-path-label-log-sentinel"],
@@ -941,6 +974,16 @@ mod tests {
                     "bucketId": "qdrant-sec-private-result-camel-updated-bucket-id-log-sentinel",
                     "bucketCommitment": "qdrant-sec-private-result-camel-updated-bucket-commitment-log-sentinel"
                 }],
+                "proofs": [{
+                    "leaf_hash": "qdrant-sec-private-result-proof-leaf-hash-log-sentinel",
+                    "siblings": [{
+                        "hash": "qdrant-sec-private-result-proof-sibling-hash-log-sentinel"
+                    }]
+                }],
+                "merkleProof": {
+                    "leafHash": "qdrant-sec-private-result-camel-proof-leaf-hash-log-sentinel",
+                    "siblingHash": "qdrant-sec-private-result-camel-proof-sibling-hash-log-sentinel"
+                },
                 "payload_fetch_tokens": ["qdrant-sec-private-result-payload-token-log-sentinel"],
                 "payloadFetchToken": "qdrant-sec-private-result-camel-payload-token-log-sentinel",
                 "fetch_tokens": ["qdrant-sec-private-result-fetch-token-log-sentinel"],
@@ -988,6 +1031,11 @@ mod tests {
             "qdrant-sec-private-oram-camel-updated-bucket-log-sentinel",
             "qdrant-sec-private-oram-camel-updated-single-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-updated-single-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-oram-proof-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-proof-leaf-hash-log-sentinel",
+            "qdrant-sec-private-oram-proof-sibling-hash-log-sentinel",
+            "qdrant-sec-private-oram-camel-proof-leaf-hash-log-sentinel",
+            "qdrant-sec-private-oram-camel-proof-sibling-log-sentinel",
             "qdrant-sec-private-hnsw-path-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-single-path-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-path-label-log-sentinel",
@@ -1045,6 +1093,10 @@ mod tests {
             "qdrant-sec-private-result-updated-single-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-camel-updated-bucket-id-log-sentinel",
             "qdrant-sec-private-result-camel-updated-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-result-proof-leaf-hash-log-sentinel",
+            "qdrant-sec-private-result-proof-sibling-hash-log-sentinel",
+            "qdrant-sec-private-result-camel-proof-leaf-hash-log-sentinel",
+            "qdrant-sec-private-result-camel-proof-sibling-hash-log-sentinel",
             "qdrant-sec-private-result-payload-token-log-sentinel",
             "qdrant-sec-private-result-camel-payload-token-log-sentinel",
             "qdrant-sec-private-result-fetch-token-log-sentinel",
@@ -1087,6 +1139,10 @@ mod tests {
                     { "bucket_id": 7, "bucket_commitment": "updated-bucket-a" },
                     { "bucket_id": 8, "bucket_commitment": "updated-bucket-b" }
                 ],
+                "proof": {
+                    "leaf_hash": "leaf-hash-a",
+                    "siblings": [{ "hash": "sibling-hash-a" }]
+                },
                 "token_position_map": { "fetch-token-a": 99 }
             }
         });
@@ -1103,6 +1159,10 @@ mod tests {
                 "commit_signature": "commit-signature-b",
                 "unknown_field": "unknown-field-b",
                 "updated_buckets": [{ "bucket_id": 12, "bucket_commitment": "updated-bucket-c" }],
+                "proof": {
+                    "leaf_hash": "leaf-hash-b",
+                    "siblings": [{ "hash": "sibling-hash-b" }]
+                },
                 "token_position_map": { "fetch-token-b": 17 }
             }
         });
@@ -1129,6 +1189,10 @@ mod tests {
                     { "bucketId": 7, "bucketCommitment": "private-oram-camel-updated-bucket-a" },
                     { "bucketId": 8, "bucketCommitment": "private-oram-camel-updated-bucket-b" }
                 ],
+                "merkleProof": {
+                    "leafHash": "private-oram-camel-leaf-hash-a",
+                    "siblings": [{ "hash": "private-oram-camel-sibling-hash-a" }]
+                },
                 "payloadFetchToken": "private-oram-camel-payload-fetch-token-a",
                 "tokenPositionMap": { "private-oram-camel-fetch-token-a": 99 },
                 "payloadOramLeaf": "private-oram-camel-payload-leaf-a"
@@ -1151,6 +1215,10 @@ mod tests {
                 "updatedBuckets": [
                     { "bucketId": 12, "bucketCommitment": "private-oram-camel-updated-bucket-c" }
                 ],
+                "merkleProof": {
+                    "leafHash": "private-oram-camel-leaf-hash-b",
+                    "siblings": [{ "hash": "private-oram-camel-sibling-hash-b" }]
+                },
                 "payloadFetchToken": "private-oram-camel-payload-fetch-token-b",
                 "tokenPositionMap": { "private-oram-camel-fetch-token-b": 17 },
                 "payloadOramLeaf": "private-oram-camel-payload-leaf-b"
