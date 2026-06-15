@@ -4527,6 +4527,18 @@ mod tests {
             first.payload_token_key().as_bytes(),
             first.blind_result_key().as_bytes()
         );
+
+        let debug = format!("{first:?}");
+        assert!(debug.contains("[redacted; 32 bytes]"));
+        for secret in [
+            first.node_aead_key(),
+            first.bucket_aead_key(),
+            first.position_map_key(),
+            first.payload_token_key(),
+            first.blind_result_key(),
+        ] {
+            assert!(!debug.contains(&BASE64URL_NOPAD.encode(secret.as_bytes())));
+        }
     }
 
     #[test]
