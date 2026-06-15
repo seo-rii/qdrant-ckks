@@ -1456,6 +1456,16 @@ pub fn private_hnsw_node_reaches_level(block: &PrivateHnswNodeBlockPlaintext, le
     block.level_mask & (1u64 << level) != 0
 }
 
+fn private_hnsw_level_mask(point_level: u8) -> Result<u64, PrivateHnswClientError> {
+    if point_level >= 64 {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("levels"));
+    }
+    if point_level == 63 {
+        return Ok(u64::MAX);
+    }
+    Ok((1u64 << (u32::from(point_level) + 1)) - 1)
+}
+
 pub fn plan_private_hnsw_oram_neighbor_clustered_leaves(
     config: PrivateHnswOramClientConfig,
     blocks: &[PrivateHnswNodeBlockPlaintext],
@@ -1733,7 +1743,7 @@ pub fn build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
             version: NODE_BLOCK_VERSION,
             node_id: point.node_id,
             point_token: point.point_token,
-            level_mask: (1u64 << (u32::from(point_level) + 1)) - 1,
+            level_mask: private_hnsw_level_mask(point_level)?,
             vector_encoding: PrivateHnswVectorEncoding::F32Le,
             vector,
             neighbor_levels,
@@ -6379,6 +6389,54 @@ mod tests {
         let base = blocks.get(&base_id).unwrap();
         assert_eq!(base.level_mask, 1);
         assert!(base.neighbor_levels.iter().all(|level| *level == 0));
+    }
+
+    #[test]
+    fn layered_f32_bulk_build_handles_max_u64_level_mask_without_overflow() {
+        let config = PrivateHnswOramClientConfig {
+            bucket_size: 2,
+            fixed_neighbor_slots: 1,
+            ..oram_config()
+        };
+        let point = PrivateHnswBuildPoint {
+            node_id: [1; 32],
+            point_token: [2; 32],
+            vector: vec![0.0, 1.0],
+            payload_fetch_token: None,
+        };
+
+        let build = build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
+            config,
+            DistanceKind::Euclid,
+            0,
+            0,
+            std::slice::from_ref(&point),
+            &[63],
+            &[0],
+        )
+        .unwrap();
+        let block = build
+            .buckets
+            .iter()
+            .flat_map(|bucket| bucket.blocks.iter().flatten())
+            .find(|block| block.node_id == point.node_id)
+            .unwrap();
+        assert_eq!(block.level_mask, u64::MAX);
+        assert!(private_hnsw_node_reaches_level(block, 63));
+        assert!(!private_hnsw_node_reaches_level(block, 64));
+
+        assert_eq!(
+            build_private_hnsw_oram_plaintext_index_from_layered_f32_points(
+                config,
+                DistanceKind::Euclid,
+                0,
+                0,
+                &[point],
+                &[64],
+                &[0],
+            ),
+            Err(PrivateHnswClientError::InvalidBuildConfig("levels"))
+        );
     }
 
     #[test]
