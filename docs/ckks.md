@@ -1069,11 +1069,11 @@ single-read-batch limit. Its signed writeback entrypoint verifies the SDK
 Ed25519 commit signature against the stored manifest lineage
 before delegating to that helper, so an invalid commit signature leaves the
 current epoch, buckets, and Merkle metadata unchanged. The REST/gRPC commit
-handlers also verify the canonical commit signature before returning detailed
-duplicate-bucket writeback shape errors. SDK commit planning,
-signing, and verification also reject empty commit bucket lists and malformed
-updated bucket ciphertext hashes, and validate each updated bucket commitment
-against the bucket ciphertext hash plus
+handlers use the canonical commit signature validator to stop malformed
+duplicate bucket refs on the generic signature-failure path before Merkle or
+writeback validation runs. SDK commit planning, signing, and verification also
+reject empty commit bucket lists and malformed updated bucket ciphertext hashes,
+and validate each updated bucket commitment against the bucket ciphertext hash plus
 collection/key lineage and the proposed bucket epoch before preparing Merkle
 metadata.
 For result ORAM `read_buckets` and `commit`, the request signature shape is
