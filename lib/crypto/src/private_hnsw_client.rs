@@ -76,7 +76,7 @@ pub enum PrivateHnswClientError {
     UnsupportedVectorEncoding(u8),
     #[error("private HNSW node block padding is invalid")]
     InvalidBlockPadding,
-    #[error("private HNSW bucket context field {0} is invalid")]
+    #[error("private HNSW bucket context is invalid")]
     InvalidBucketContext(&'static str),
     #[error("private HNSW bucket ciphertext is not base64url")]
     InvalidBucketCiphertextEncoding,
@@ -106,7 +106,7 @@ pub enum PrivateHnswClientError {
     InvalidLeafLabelLength,
     #[error("private HNSW ORAM bucket_count does not match tree_height")]
     BucketCountMismatch,
-    #[error("private HNSW ORAM client config field {0} is invalid")]
+    #[error("private HNSW ORAM client config is invalid")]
     InvalidOramClientConfig(&'static str),
     #[error("private HNSW ORAM bucket plaintext is malformed")]
     InvalidBucketPlaintext,
@@ -122,7 +122,7 @@ pub enum PrivateHnswClientError {
     MissingBlock,
     #[error("private HNSW ORAM path contains duplicate node blocks")]
     DuplicateBlock,
-    #[error("private HNSW ORAM build config field {0} is invalid")]
+    #[error("private HNSW ORAM build config is invalid")]
     InvalidBuildConfig(&'static str),
     #[error("private HNSW ORAM initial placement overflowed path")]
     OramInitialPlacementOverflow { leaf: u64 },
@@ -130,7 +130,7 @@ pub enum PrivateHnswClientError {
     UnsupportedClientStateSnapshotVersion(u16),
     #[error("private HNSW ORAM client state snapshot is malformed")]
     InvalidClientStateSnapshot,
-    #[error("private HNSW ORAM client state context field {0} is invalid")]
+    #[error("private HNSW ORAM client state context is invalid")]
     InvalidClientStateContext(&'static str),
     #[error("private HNSW ORAM client state ciphertext is not base64url")]
     InvalidClientStateCiphertextEncoding,
@@ -140,7 +140,7 @@ pub enum PrivateHnswClientError {
     UnsupportedClientStateCiphertextVersion(u16),
     #[error("private HNSW ORAM client state decryption authentication failed")]
     ClientStateOpenFailed,
-    #[error("private HNSW search config field {0} is invalid")]
+    #[error("private HNSW search config is invalid")]
     InvalidSearchConfig(&'static str),
     #[error("private HNSW search currently requires f32_le node vectors")]
     UnsupportedSearchVectorEncoding,
@@ -183,9 +183,9 @@ pub enum PrivateHnswClientError {
     },
     #[error("private HNSW ORAM bucket uses unsupported version")]
     UnsupportedBucketVersion(u16),
-    #[error("private HNSW ORAM commit signature context field {0} is invalid")]
+    #[error("private HNSW ORAM commit signature context is invalid")]
     InvalidCommitSignatureContext(&'static str),
-    #[error("private HNSW ORAM manifest signature context field {0} is invalid")]
+    #[error("private HNSW ORAM manifest signature context is invalid")]
     InvalidManifestSignatureContext(&'static str),
     #[error("private HNSW ORAM manifest epoch/root does not match commit old epoch/root")]
     ManifestCommitMismatch,
@@ -3909,16 +3909,22 @@ mod tests {
             .to_string(),
             PrivateHnswClientError::UnsupportedBlockVersion(99).to_string(),
             PrivateHnswClientError::UnsupportedVectorEncoding(88).to_string(),
+            PrivateHnswClientError::InvalidBucketContext("bucket-context-sentinel").to_string(),
             PrivateHnswClientError::BucketCiphertextSizeMismatch {
                 bucket_id: 123,
                 expected_bytes: 4096,
                 actual_bytes: 2048,
             }
             .to_string(),
+            PrivateHnswClientError::InvalidOramClientConfig("client-config-sentinel").to_string(),
+            PrivateHnswClientError::InvalidBuildConfig("build-config-sentinel").to_string(),
             PrivateHnswClientError::UnsupportedBucketCiphertextVersion(66).to_string(),
             PrivateHnswClientError::OramInitialPlacementOverflow { leaf: 777 }.to_string(),
+            PrivateHnswClientError::InvalidClientStateContext("client-state-context-sentinel")
+                .to_string(),
             PrivateHnswClientError::UnsupportedClientStateSnapshotVersion(44).to_string(),
             PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(33).to_string(),
+            PrivateHnswClientError::InvalidSearchConfig("search-config-sentinel").to_string(),
             PrivateHnswClientError::BucketOutOfRange {
                 bucket_id: 123,
                 bucket_count: 456,
@@ -3934,10 +3940,29 @@ mod tests {
             }
             .to_string(),
             PrivateHnswClientError::UnsupportedBucketVersion(22).to_string(),
+            PrivateHnswClientError::InvalidCommitSignatureContext(
+                "commit-signature-context-sentinel",
+            )
+            .to_string(),
+            PrivateHnswClientError::InvalidManifestSignatureContext(
+                "manifest-signature-context-sentinel",
+            )
+            .to_string(),
         ];
 
         for rendered in cases {
             assert!(!rendered.contains("aead-alg-sentinel"), "{rendered}");
+            for leaked in [
+                "bucket-context-sentinel",
+                "client-config-sentinel",
+                "build-config-sentinel",
+                "client-state-context-sentinel",
+                "search-config-sentinel",
+                "commit-signature-context-sentinel",
+                "manifest-signature-context-sentinel",
+            ] {
+                assert!(!rendered.contains(leaked), "{rendered}");
+            }
             for leaked in [
                 "77", "55", "99", "88", "123", "4096", "2048", "66", "777", "44", "33", "456",
                 "42", "43", "22",

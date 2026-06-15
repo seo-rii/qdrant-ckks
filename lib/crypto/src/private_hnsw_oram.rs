@@ -34,9 +34,9 @@ pub enum PrivateHnswOramError {
     InvalidProvider,
     #[error("private HNSW ORAM manifest binding is invalid")]
     InvalidBinding,
-    #[error("private HNSW ORAM manifest field {0} is invalid")]
+    #[error("private HNSW ORAM manifest field is invalid")]
     InvalidManifestField(&'static str),
-    #[error("private HNSW ORAM manifest field {0} does not match runtime context")]
+    #[error("private HNSW ORAM manifest field does not match runtime context")]
     ManifestContextMismatch(&'static str),
     #[error("private HNSW ORAM manifest signature is missing")]
     MissingManifestSignature,
@@ -770,12 +770,19 @@ mod tests {
     fn private_hnsw_oram_error_display_does_not_reflect_structured_values() {
         let cases = [
             PrivateHnswOramError::UnsupportedManifestVersion(99).to_string(),
+            PrivateHnswOramError::InvalidManifestField("manifest-field-sentinel").to_string(),
+            PrivateHnswOramError::ManifestContextMismatch("manifest-context-sentinel").to_string(),
             PrivateHnswOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
                 .to_string(),
         ];
 
         for rendered in cases {
             assert!(!rendered.contains("rsa-pss-sentinel"), "{rendered}");
+            assert!(!rendered.contains("manifest-field-sentinel"), "{rendered}");
+            assert!(
+                !rendered.contains("manifest-context-sentinel"),
+                "{rendered}"
+            );
             assert!(!rendered.contains("99"), "{rendered}");
         }
     }

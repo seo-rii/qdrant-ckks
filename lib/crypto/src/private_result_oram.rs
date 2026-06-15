@@ -64,9 +64,9 @@ pub enum PrivateResultOramError {
     InvalidProvider,
     #[error("private result ORAM manifest binding is invalid")]
     InvalidBinding,
-    #[error("private result ORAM manifest field {0} is invalid")]
+    #[error("private result ORAM manifest field is invalid")]
     InvalidManifestField(&'static str),
-    #[error("private result ORAM manifest field {0} does not match runtime context")]
+    #[error("private result ORAM manifest field does not match runtime context")]
     ManifestContextMismatch(&'static str),
     #[error("private result ORAM manifest signature is missing")]
     MissingManifestSignature,
@@ -88,7 +88,7 @@ pub enum PrivateResultOramError {
     UnsupportedBucketVersion(u16),
     #[error("private result ORAM bucket is out of range")]
     BucketOutOfRange { bucket_id: u64, bucket_count: u64 },
-    #[error("private result ORAM bucket field {0} is invalid")]
+    #[error("private result ORAM bucket field is invalid")]
     InvalidBucketField(&'static str),
     #[error("private result ORAM bucket ciphertext exceeds maximum size")]
     BucketOversized,
@@ -104,7 +104,7 @@ pub enum PrivateResultOramError {
     BucketOpenFailed,
     #[error("private result ORAM bucket metadata does not match context")]
     BucketMetadataMismatch,
-    #[error("private result ORAM bucket context field {0} is invalid")]
+    #[error("private result ORAM bucket context is invalid")]
     InvalidBucketContext(&'static str),
     #[error("private result ORAM bucket commitment context mismatch")]
     InvalidBucketCommitment,
@@ -130,7 +130,7 @@ pub enum PrivateResultOramError {
     InvalidMerkleProofJson,
     #[error("private result ORAM Merkle proof does not match bucket commitments")]
     MerkleProofMismatch,
-    #[error("private result ORAM fetch plan field {0} is invalid")]
+    #[error("private result ORAM fetch plan field is invalid")]
     InvalidFetchPlanField(&'static str),
     #[error("private result ORAM fetch token position is missing")]
     MissingPayloadFetchTokenPosition,
@@ -138,7 +138,7 @@ pub enum PrivateResultOramError {
     DuplicatePayloadFetchToken,
     #[error("private result ORAM fetch token position appears more than once")]
     DuplicatePayloadFetchTokenPosition,
-    #[error("private result ORAM client config field {0} is invalid")]
+    #[error("private result ORAM client config is invalid")]
     InvalidClientConfig(&'static str),
     #[error("private result ORAM payload block uses unsupported version")]
     UnsupportedPayloadBlockVersion(u16),
@@ -162,7 +162,7 @@ pub enum PrivateResultOramError {
     UnsupportedClientStateSnapshotVersion(u16),
     #[error("private result ORAM client state snapshot is malformed")]
     InvalidClientStateSnapshot,
-    #[error("private result ORAM client state context field {0} is invalid")]
+    #[error("private result ORAM client state context is invalid")]
     InvalidClientStateContext(&'static str),
     #[error("private result ORAM client state ciphertext is not base64url")]
     InvalidClientStateCiphertextEncoding,
@@ -2968,12 +2968,21 @@ mod tests {
             ))
             .to_string(),
             PrivateResultOramError::UnsupportedManifestVersion(99).to_string(),
+            PrivateResultOramError::InvalidManifestField("manifest-field-sentinel").to_string(),
+            PrivateResultOramError::ManifestContextMismatch("manifest-context-sentinel")
+                .to_string(),
             PrivateResultOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
                 .to_string(),
             PrivateResultOramError::UnsupportedBucketVersion(88).to_string(),
+            PrivateResultOramError::InvalidBucketField("bucket-field-sentinel").to_string(),
+            PrivateResultOramError::InvalidBucketContext("bucket-context-sentinel").to_string(),
             PrivateResultOramError::UnsupportedBucketCiphertextVersion(77).to_string(),
+            PrivateResultOramError::InvalidFetchPlanField("fetch-plan-field-sentinel").to_string(),
+            PrivateResultOramError::InvalidClientConfig("client-config-sentinel").to_string(),
             PrivateResultOramError::UnsupportedPayloadBlockVersion(99).to_string(),
             PrivateResultOramError::UnsupportedClientStateSnapshotVersion(55).to_string(),
+            PrivateResultOramError::InvalidClientStateContext("client-state-context-sentinel")
+                .to_string(),
             PrivateResultOramError::UnsupportedClientStateCiphertextVersion(66).to_string(),
             PrivateResultOramError::BucketOutOfRange {
                 bucket_id: 123,
@@ -2992,6 +3001,17 @@ mod tests {
         for rendered in cases {
             assert!(!rendered.contains("aead-alg-sentinel"), "{rendered}");
             assert!(!rendered.contains("rsa-pss-sentinel"), "{rendered}");
+            for leaked in [
+                "manifest-field-sentinel",
+                "manifest-context-sentinel",
+                "bucket-field-sentinel",
+                "bucket-context-sentinel",
+                "fetch-plan-field-sentinel",
+                "client-config-sentinel",
+                "client-state-context-sentinel",
+            ] {
+                assert!(!rendered.contains(leaked), "{rendered}");
+            }
             for leaked in ["99", "88", "77", "66", "55", "123", "456", "42", "43"] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
