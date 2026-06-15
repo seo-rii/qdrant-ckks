@@ -2603,16 +2603,24 @@ pub fn plan_private_result_oram_commit_for_manifest(
     if current_leaf_commitments.len() != manifest_bucket_count {
         return Err(PrivateResultOramError::InvalidManifestField("bucket_count"));
     }
-    let plan = plan_private_result_oram_commit(
-        manifest.index_epoch,
-        new_epoch,
-        &manifest.root_hash,
-        current_leaf_commitments,
-        updated_buckets,
-    )?;
+    if new_epoch <= manifest.index_epoch {
+        return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
+    }
+    if updated_buckets.is_empty() {
+        return Err(PrivateResultOramError::EmptyCommit);
+    }
+    if private_result_oram_merkle_root_for_commitments(current_leaf_commitments)?
+        != manifest.root_hash
+    {
+        return Err(PrivateResultOramError::MerkleRootMismatch);
+    }
     let max_ciphertext_bytes = private_result_oram_upload_max_ciphertext_bytes(manifest)?;
     let expected_ciphertext_bytes = private_result_oram_bucket_ciphertext_bytes(&manifest.oram)?;
     for bucket in updated_buckets {
+        validate_private_result_oram_bucket_ciphertext_fixed_size(
+            bucket,
+            expected_ciphertext_bytes,
+        )?;
         validate_private_result_oram_bucket_shape(
             bucket,
             PrivateResultOramBucketValidationContext {
@@ -2620,10 +2628,6 @@ pub fn plan_private_result_oram_commit_for_manifest(
                 bucket_count: manifest.bucket_count,
                 max_ciphertext_bytes,
             },
-        )?;
-        validate_private_result_oram_bucket_ciphertext_fixed_size(
-            bucket,
-            expected_ciphertext_bytes,
         )?;
         let expected_commitment = private_result_oram_bucket_commitment(
             PrivateResultOramBucketCommitmentContext {
@@ -2640,6 +2644,13 @@ pub fn plan_private_result_oram_commit_for_manifest(
             return Err(PrivateResultOramError::InvalidBucketCommitment);
         }
     }
+    let plan = plan_private_result_oram_commit(
+        manifest.index_epoch,
+        new_epoch,
+        &manifest.root_hash,
+        current_leaf_commitments,
+        updated_buckets,
+    )?;
     Ok(plan)
 }
 
@@ -5221,6 +5232,24 @@ mod tests {
                 43,
                 &leaf_commitments,
                 std::slice::from_ref(&short_ciphertext),
+            ),
+            Err(PrivateResultOramError::InvalidBucketField("ciphertext"))
+        );
+
+        let mut long_ciphertext = updated_bucket.clone();
+        let expected_bytes = private_result_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap();
+        let long_raw = vec![7; expected_bytes + 1];
+        let long_hash = BASE64URL_NOPAD.encode(Sha256::digest(&long_raw).as_ref());
+        long_ciphertext.ciphertext = BASE64URL_NOPAD.encode(&long_raw);
+        long_ciphertext.ciphertext_sha256 = long_hash.clone();
+        long_ciphertext.bucket_commitment =
+            fixture_bucket_commitment(2, long_ciphertext.index_epoch, &long_hash);
+        assert_eq!(
+            plan_private_result_oram_commit_for_manifest(
+                &manifest,
+                43,
+                &leaf_commitments,
+                std::slice::from_ref(&long_ciphertext),
             ),
             Err(PrivateResultOramError::InvalidBucketField("ciphertext"))
         );

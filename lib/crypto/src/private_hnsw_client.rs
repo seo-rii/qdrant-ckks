@@ -2999,13 +2999,17 @@ pub fn plan_private_hnsw_oram_commit_for_manifest(
     if current_leaf_commitments.len() != manifest_bucket_count {
         return Err(PrivateHnswClientError::BucketCountMismatch);
     }
-    let plan = plan_private_hnsw_oram_commit(
-        manifest.index_epoch,
-        new_epoch,
-        &manifest.root_hash,
-        current_leaf_commitments,
-        updated_buckets,
-    )?;
+    if new_epoch <= manifest.index_epoch {
+        return Err(PrivateHnswClientError::InvalidCommitEpoch);
+    }
+    if updated_buckets.is_empty() {
+        return Err(PrivateHnswClientError::EmptyCommit);
+    }
+    if private_hnsw_oram_merkle_root_for_commitments(current_leaf_commitments)?
+        != manifest.root_hash
+    {
+        return Err(PrivateHnswClientError::MerkleRootMismatch);
+    }
     let base_context = PrivateHnswBucketAeadBaseContext {
         collection_id: &manifest.collection_id,
         vector_name: &manifest.vector_name,
@@ -3024,6 +3028,13 @@ pub fn plan_private_hnsw_oram_commit_for_manifest(
             expected_ciphertext_bytes,
         )?;
     }
+    let plan = plan_private_hnsw_oram_commit(
+        manifest.index_epoch,
+        new_epoch,
+        &manifest.root_hash,
+        current_leaf_commitments,
+        updated_buckets,
+    )?;
     Ok(plan)
 }
 
@@ -5004,6 +5015,31 @@ mod tests {
                 bucket_id: short_ciphertext.bucket_id,
                 expected_bytes: private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap(),
                 actual_bytes: short_raw.len(),
+            })
+        );
+
+        let mut long_ciphertext = updated_bucket.clone();
+        let expected_bytes = private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap();
+        let long_raw = vec![BUCKET_AEAD_VERSION; expected_bytes + 1];
+        long_ciphertext.ciphertext = BASE64URL_NOPAD.encode(&long_raw);
+        long_ciphertext.ciphertext_sha256 = base64url_sha256(&long_raw);
+        long_ciphertext.bucket_commitment = private_hnsw_bucket_commitment(
+            bucket_base_context()
+                .for_bucket(long_ciphertext.bucket_id, long_ciphertext.index_epoch),
+            &long_ciphertext.ciphertext_sha256,
+        )
+        .unwrap();
+        assert_eq!(
+            plan_private_hnsw_oram_commit_for_manifest(
+                &manifest,
+                43,
+                &leaf_commitments,
+                std::slice::from_ref(&long_ciphertext),
+            ),
+            Err(PrivateHnswClientError::BucketCiphertextSizeMismatch {
+                bucket_id: long_ciphertext.bucket_id,
+                expected_bytes,
+                actual_bytes: expected_bytes + 1,
             })
         );
 
