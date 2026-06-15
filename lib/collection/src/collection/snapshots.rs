@@ -14,8 +14,9 @@ use qdrant_sec::{
     PrivateHnswOramManifest, PrivateHnswOramSignature, PrivateResultOramBucket,
     PrivateResultOramBucketCommitmentContext, PrivateResultOramManifest,
     PrivateResultOramSignature, ResultPrivacyMode, private_hnsw_bucket_commitment,
-    private_hnsw_oram_bucket_ciphertext_bytes, private_result_oram_bucket_commitment,
-    validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature_shape,
+    private_hnsw_oram_bucket_ciphertext_bytes, private_result_oram_bucket_ciphertext_bytes,
+    private_result_oram_bucket_commitment, validate_private_hnsw_oram_manifest_shape,
+    validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_result_oram_manifest_shape,
     validate_private_result_oram_manifest_signature_shape,
 };
@@ -781,6 +782,8 @@ fn validate_private_result_oram_snapshot(
     }
 
     let max_ciphertext_bytes = private_result_restore_max_bucket_ciphertext_bytes(&manifest)?;
+    let expected_ciphertext_bytes =
+        private_result_restore_expected_bucket_ciphertext_bytes(&manifest)?;
     let mut bucket_commitments = Vec::new();
     for bucket_id in 0..manifest.bucket_count {
         let bucket = store.read_bucket(
@@ -789,7 +792,11 @@ fn validate_private_result_oram_snapshot(
             manifest.bucket_count,
             max_ciphertext_bytes,
         )?;
-        validate_private_result_restore_bucket_contract(&manifest, &bucket)?;
+        validate_private_result_restore_bucket_contract(
+            &manifest,
+            &bucket,
+            expected_ciphertext_bytes,
+        )?;
         bucket_commitments.push(bucket.bucket_commitment);
     }
     let bucket_root = PrivateResultOramStore::merkle_root_for_commitments(&bucket_commitments)?;
@@ -1140,6 +1147,13 @@ fn validate_private_hnsw_restore_bucket_contract(
     bucket: &PrivateHnswOramBucket,
     expected_ciphertext_bytes: usize,
 ) -> CollectionResult<()> {
+    let expected_ciphertext_b64_len =
+        private_oram_snapshot_base64url_nopad_encoded_len(expected_ciphertext_bytes)?;
+    if bucket.ciphertext.len() != expected_ciphertext_b64_len {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM snapshot bucket ciphertext must match fixed ciphertext size",
+        ));
+    }
     let ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| {
@@ -1194,13 +1208,41 @@ fn private_result_restore_max_bucket_ciphertext_bytes(
         })
 }
 
+fn private_result_restore_expected_bucket_ciphertext_bytes(
+    manifest: &PrivateResultOramManifest,
+) -> CollectionResult<usize> {
+    private_result_oram_bucket_ciphertext_bytes(&manifest.oram).map_err(|_| {
+        CollectionError::bad_request("private result ORAM snapshot bucket size is invalid")
+    })
+}
+
 fn validate_private_result_restore_bucket_contract(
     manifest: &PrivateResultOramManifest,
     bucket: &PrivateResultOramBucket,
+    expected_ciphertext_bytes: usize,
 ) -> CollectionResult<()> {
     if bucket.index_epoch != manifest.index_epoch {
         return Err(CollectionError::bad_request(
             "private result ORAM snapshot bucket epoch does not match manifest",
+        ));
+    }
+    let expected_ciphertext_b64_len =
+        private_oram_snapshot_base64url_nopad_encoded_len(expected_ciphertext_bytes)?;
+    if bucket.ciphertext.len() != expected_ciphertext_b64_len {
+        return Err(CollectionError::bad_request(
+            "private result ORAM snapshot bucket ciphertext must match fixed ciphertext size",
+        ));
+    }
+    let ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| {
+            CollectionError::bad_request(
+                "private result ORAM snapshot bucket ciphertext is not base64url",
+            )
+        })?;
+    if ciphertext.len() != expected_ciphertext_bytes {
+        return Err(CollectionError::bad_request(
+            "private result ORAM snapshot bucket ciphertext must match fixed ciphertext size",
         ));
     }
     let expected_commitment = private_result_oram_bucket_commitment(
@@ -1225,6 +1267,26 @@ fn validate_private_result_restore_bucket_contract(
         ));
     }
     Ok(())
+}
+
+fn private_oram_snapshot_base64url_nopad_encoded_len(byte_len: usize) -> CollectionResult<usize> {
+    let full_chunks = byte_len / 3;
+    let tail_len = match byte_len % 3 {
+        0 => 0,
+        1 => 2,
+        2 => 3,
+        _ => {
+            return Err(CollectionError::bad_request(
+                "private ORAM snapshot bucket ciphertext size is invalid",
+            ));
+        }
+    };
+    full_chunks
+        .checked_mul(4)
+        .and_then(|len| len.checked_add(tail_len))
+        .ok_or_else(|| {
+            CollectionError::bad_request("private ORAM snapshot bucket ciphertext size is invalid")
+        })
 }
 
 fn private_hnsw_restore_error(_err: qdrant_sec::PrivateHnswOramError) -> CollectionError {
@@ -1542,7 +1604,11 @@ mod tests {
         manifest: &PrivateResultOramManifest,
         bucket_id: u64,
     ) -> PrivateResultOramBucket {
-        let ciphertext_bytes = vec![19 + bucket_id as u8; 16];
+        let ciphertext_bytes =
+            vec![
+                19 + bucket_id as u8;
+                private_result_restore_expected_bucket_ciphertext_bytes(manifest).unwrap()
+            ];
         let ciphertext = BASE64URL_NOPAD.encode(&ciphertext_bytes);
         let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext_bytes).as_ref());
         let bucket_commitment = private_result_oram_bucket_commitment(
@@ -2218,7 +2284,8 @@ mod tests {
                 max_ciphertext_bytes,
             )
             .unwrap();
-        let replacement_bytes = vec![77; 32];
+        let replacement_bytes =
+            vec![77; private_result_restore_expected_bucket_ciphertext_bytes(&manifest).unwrap()];
         bucket.ciphertext = BASE64URL_NOPAD.encode(&replacement_bytes);
         bucket.ciphertext_sha256 =
             BASE64URL_NOPAD.encode(Sha256::digest(&replacement_bytes).as_ref());
@@ -2253,6 +2320,68 @@ mod tests {
         assert!(rendered.contains("bucket commitments"));
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_bucket_fixed_size_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-bad-bucket-size")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let store = PrivateResultOramStore::new(temp_dir.path());
+        let max_ciphertext_bytes =
+            private_result_restore_max_bucket_ciphertext_bytes(&manifest).unwrap();
+        let mut bucket = store
+            .read_bucket(
+                0,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                max_ciphertext_bytes,
+            )
+            .unwrap();
+        let mut ciphertext_bytes = BASE64URL_NOPAD
+            .decode(bucket.ciphertext.as_bytes())
+            .unwrap();
+        ciphertext_bytes.pop();
+        bucket.ciphertext = BASE64URL_NOPAD.encode(&ciphertext_bytes);
+        bucket.ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext_bytes).as_ref());
+        bucket.bucket_commitment = private_result_oram_bucket_commitment(
+            PrivateResultOramBucketCommitmentContext {
+                collection_id: &manifest.collection_id,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id: bucket.bucket_id,
+                index_epoch: bucket.index_epoch,
+            },
+            &bucket.ciphertext_sha256,
+        )
+        .unwrap();
+        store
+            .write_bucket(
+                &bucket,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                max_ciphertext_bytes,
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("fixed ciphertext size"));
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
     }
 
     #[test]
@@ -3182,6 +3311,29 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("fixed ciphertext size"));
         assert!(!rendered.contains("0"), "{rendered}");
+    }
+
+    #[test]
+    fn private_hnsw_restore_bucket_contract_rejects_oversized_encoded_bucket_before_decode() {
+        let uuid = Uuid::from_u128(7);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        let mut bucket = private_hnsw_snapshot_bucket(&manifest, 0);
+        bucket
+            .ciphertext
+            .push_str("private-hnsw-restore-oversized-ciphertext-sentinel");
+        let err = validate_private_hnsw_restore_bucket_contract(
+            &manifest,
+            &bucket,
+            private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest).unwrap(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("fixed ciphertext size"));
+        assert!(
+            !rendered.contains("private-hnsw-restore-oversized-ciphertext-sentinel"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
     }
 
     #[test]
