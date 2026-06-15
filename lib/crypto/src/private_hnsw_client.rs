@@ -3074,6 +3074,11 @@ pub fn sign_private_hnsw_oram_read_paths(
             "requested_paths",
         ));
     }
+    if !dummy_paths_included {
+        return Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+            "dummy_paths_included",
+        ));
+    }
     for path in paths {
         decode_private_hnsw_oram_leaf_label_shape(path)?;
     }
@@ -5110,6 +5115,12 @@ mod tests {
             sign_private_hnsw_oram_read_paths(&key_pair, context, 42, &root_hash, &paths, 2, true,),
             Err(PrivateHnswClientError::InvalidCommitSignatureContext(
                 "requested_paths"
+            ))
+        );
+        assert_eq!(
+            sign_private_hnsw_oram_read_paths(&key_pair, context, 42, &root_hash, &paths, 1, false,),
+            Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+                "dummy_paths_included"
             ))
         );
         assert_eq!(
