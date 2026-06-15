@@ -193,14 +193,23 @@ mod tests {
             "private ORAM read failed for session_id=session-sentinel \
              sessionId=session-camel-sentinel \
              paths=raw-path-sentinel \
+             accessPath=access-path-camel-sentinel \
              read_paths=read-path-sentinel \
              root_hash=root-hash-sentinel \
              oldRootHash=old-root-hash-camel-sentinel \
              new_root_hash=new-root-hash-sentinel \
              path_label=leaf-sentinel candidate_heap=candidate-sentinel \
+             candidateNodes=candidate-node-camel-sentinel \
              pathLabels=leaf-camel-sentinel \
              readPathLabels=read-path-labels-camel-sentinel \
+             oramPaths=oram-path-camel-sentinel \
+             accessedLeafLabels=accessed-leaf-camel-sentinel \
+             entryNodeId=entry-node-camel-sentinel \
+             levelMask=level-mask-camel-sentinel \
+             visitedNodeIds=visited-node-camel-sentinel \
              neighbors=neighbors-sentinel \
+             neighborId=neighbor-id-camel-sentinel \
+             neighborLevels=neighbor-level-camel-sentinel \
              client_signature=client-signature-sentinel \
              request_signature=request-signature-sentinel \
              readSignature=read-signature-camel-sentinel \
@@ -229,14 +238,23 @@ mod tests {
         assert!(!rendered.contains("session-sentinel"));
         assert!(!rendered.contains("session-camel-sentinel"));
         assert!(!rendered.contains("raw-path-sentinel"));
+        assert!(!rendered.contains("access-path-camel-sentinel"));
         assert!(!rendered.contains("read-path-sentinel"));
         assert!(!rendered.contains("root-hash-sentinel"));
         assert!(!rendered.contains("old-root-hash-camel-sentinel"));
         assert!(!rendered.contains("new-root-hash-sentinel"));
         assert!(!rendered.contains("leaf-sentinel"));
+        assert!(!rendered.contains("candidate-node-camel-sentinel"));
         assert!(!rendered.contains("leaf-camel-sentinel"));
         assert!(!rendered.contains("read-path-labels-camel-sentinel"));
+        assert!(!rendered.contains("oram-path-camel-sentinel"));
+        assert!(!rendered.contains("accessed-leaf-camel-sentinel"));
+        assert!(!rendered.contains("entry-node-camel-sentinel"));
+        assert!(!rendered.contains("level-mask-camel-sentinel"));
+        assert!(!rendered.contains("visited-node-camel-sentinel"));
         assert!(!rendered.contains("neighbors-sentinel"));
+        assert!(!rendered.contains("neighbor-id-camel-sentinel"));
+        assert!(!rendered.contains("neighbor-level-camel-sentinel"));
         assert!(!rendered.contains("candidate-sentinel"));
         assert!(!rendered.contains("client-signature-sentinel"));
         assert!(!rendered.contains("request-signature-sentinel"));

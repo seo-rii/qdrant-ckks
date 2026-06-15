@@ -267,6 +267,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "read_path_labels"
                         | "read_paths"
                         | "paths"
+                        | "access_path"
+                        | "access_paths"
                         | "bucket_commitment"
                         | "bucket_commitments"
                         | "merkle_proof"
@@ -283,6 +285,10 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "bucket_ids"
                         | "updated_bucket"
                         | "updated_buckets"
+                        | "accessed_leaf_label"
+                        | "accessed_leaf_labels"
+                        | "oram_path"
+                        | "oram_paths"
                         | "path_label"
                         | "path_labels"
                         | "leaf_label"
@@ -292,12 +298,23 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "oram_position_map"
                         | "token_position_map"
                         | "stash"
+                        | "entry_node_id"
+                        | "entry_node_ids"
+                        | "level_mask"
+                        | "level_masks"
                         | "node_id"
                         | "node_ids"
                         | "neighbor"
+                        | "neighbor_id"
                         | "neighbors"
                         | "neighbor_ids"
+                        | "neighbor_level"
+                        | "neighbor_levels"
+                        | "candidate_id"
+                        | "candidate_ids"
                         | "candidate_heap"
+                        | "candidate_node"
+                        | "candidate_nodes"
                         | "client_signature"
                         | "commit_signature"
                         | "manifest_signature"
@@ -319,6 +336,10 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "root_hashes"
                         | "old_root_hash"
                         | "new_root_hash"
+                        | "visited_node"
+                        | "visited_nodes"
+                        | "visited_node_id"
+                        | "visited_node_ids"
                 ) || matches!(
                     key_without_separators,
                     "xapikey"
@@ -392,6 +413,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "readpathlabels"
                         | "readpath"
                         | "readpaths"
+                        | "accesspath"
+                        | "accesspaths"
                         | "bucketcommitment"
                         | "bucketcommitments"
                         | "merkleproof"
@@ -408,16 +431,33 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "bucketids"
                         | "updatedbucket"
                         | "updatedbuckets"
+                        | "accessedleaflabel"
+                        | "accessedleaflabels"
+                        | "orampath"
+                        | "orampaths"
                         | "leaflabel"
                         | "leaflabels"
                         | "clientstate"
                         | "positionmap"
                         | "orampositionmap"
                         | "tokenpositionmap"
+                        | "entrynodeid"
+                        | "entrynodeids"
+                        | "levelmask"
+                        | "levelmasks"
                         | "nodeid"
                         | "nodeids"
+                        | "neighbor"
+                        | "neighbors"
+                        | "neighborid"
                         | "neighborids"
+                        | "neighborlevel"
+                        | "neighborlevels"
+                        | "candidateid"
+                        | "candidateids"
                         | "candidateheap"
+                        | "candidatenode"
+                        | "candidatenodes"
                         | "clientsignature"
                         | "commitsignature"
                         | "manifestsignature"
@@ -438,6 +478,10 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "roothashes"
                         | "oldroothash"
                         | "newroothash"
+                        | "visitednode"
+                        | "visitednodes"
+                        | "visitednodeid"
+                        | "visitednodeids"
                         | "unknownfield"
                 ) {
                     *value = Value::String("[redacted]".to_string());
@@ -864,6 +908,8 @@ mod tests {
                 "client_id": "qdrant-sec-private-hnsw-client-id-log-sentinel",
                 "session_id": "qdrant-sec-private-hnsw-session-id-log-sentinel",
                 "paths": ["qdrant-sec-private-hnsw-path-log-sentinel"],
+                "access_path": ["qdrant-sec-private-hnsw-access-path-log-sentinel"],
+                "accessPaths": ["qdrant-sec-private-hnsw-camel-access-path-log-sentinel"],
                 "root_hash": "qdrant-sec-private-hnsw-root-hash-log-sentinel",
                 "rootHash": "qdrant-sec-private-hnsw-camel-root-hash-log-sentinel",
                 "old_root_hash": "qdrant-sec-private-hnsw-old-root-hash-log-sentinel",
@@ -908,6 +954,10 @@ mod tests {
                 "leaf_label": "qdrant-sec-private-hnsw-leaf-label-log-sentinel",
                 "leafLabel": "qdrant-sec-private-hnsw-camel-single-leaf-label-log-sentinel",
                 "leafLabels": ["qdrant-sec-private-hnsw-camel-leaf-label-log-sentinel"],
+                "accessed_leaf_labels": ["qdrant-sec-private-hnsw-accessed-leaf-label-log-sentinel"],
+                "accessedLeafLabels": ["qdrant-sec-private-hnsw-camel-accessed-leaf-label-log-sentinel"],
+                "oram_path": ["qdrant-sec-private-hnsw-oram-path-log-sentinel"],
+                "oramPaths": ["qdrant-sec-private-hnsw-camel-oram-path-log-sentinel"],
                 "client_state": {
                     "position_map": "qdrant-sec-private-hnsw-position-map-log-sentinel",
                     "oram_position_map": "qdrant-sec-private-hnsw-oram-position-map-log-sentinel",
@@ -923,10 +973,22 @@ mod tests {
                 "node_id": "qdrant-sec-private-hnsw-node-id-log-sentinel",
                 "nodeId": "qdrant-sec-private-hnsw-camel-single-node-id-log-sentinel",
                 "nodeIds": ["qdrant-sec-private-hnsw-camel-node-id-log-sentinel"],
+                "entry_node_id": "qdrant-sec-private-hnsw-entry-node-id-log-sentinel",
+                "entryNodeId": "qdrant-sec-private-hnsw-camel-entry-node-id-log-sentinel",
+                "level_mask": "qdrant-sec-private-hnsw-level-mask-log-sentinel",
+                "levelMask": "qdrant-sec-private-hnsw-camel-level-mask-log-sentinel",
+                "visited_nodes": ["qdrant-sec-private-hnsw-visited-node-log-sentinel"],
+                "visitedNodeIds": ["qdrant-sec-private-hnsw-camel-visited-node-id-log-sentinel"],
                 "neighbors": ["qdrant-sec-private-hnsw-neighbor-log-sentinel"],
+                "neighbor_id": "qdrant-sec-private-hnsw-neighbor-id-log-sentinel",
+                "neighborId": "qdrant-sec-private-hnsw-camel-single-neighbor-id-log-sentinel",
                 "neighborIds": ["qdrant-sec-private-hnsw-camel-neighbor-id-log-sentinel"],
+                "neighbor_levels": ["qdrant-sec-private-hnsw-neighbor-level-log-sentinel"],
+                "neighborLevels": ["qdrant-sec-private-hnsw-camel-neighbor-level-log-sentinel"],
                 "candidate_heap": "qdrant-sec-private-hnsw-candidate-heap-log-sentinel",
                 "candidateHeap": "qdrant-sec-private-hnsw-camel-candidate-heap-log-sentinel",
+                "candidate_nodes": ["qdrant-sec-private-hnsw-candidate-node-log-sentinel"],
+                "candidateNodes": ["qdrant-sec-private-hnsw-camel-candidate-node-log-sentinel"],
                 "client_signature": "qdrant-sec-private-hnsw-client-signature-log-sentinel",
                 "clientSignature": "qdrant-sec-private-hnsw-camel-client-signature-log-sentinel",
                 "commit_signature": "qdrant-sec-private-hnsw-commit-signature-log-sentinel",
@@ -1013,6 +1075,8 @@ mod tests {
             "qdrant-sec-private-hnsw-client-id-log-sentinel",
             "qdrant-sec-private-hnsw-session-id-log-sentinel",
             "qdrant-sec-private-hnsw-path-log-sentinel",
+            "qdrant-sec-private-hnsw-access-path-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-access-path-log-sentinel",
             "qdrant-sec-private-hnsw-root-hash-log-sentinel",
             "qdrant-sec-private-hnsw-camel-root-hash-log-sentinel",
             "qdrant-sec-private-hnsw-old-root-hash-log-sentinel",
@@ -1043,6 +1107,10 @@ mod tests {
             "qdrant-sec-private-hnsw-leaf-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-single-leaf-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-leaf-label-log-sentinel",
+            "qdrant-sec-private-hnsw-accessed-leaf-label-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-accessed-leaf-label-log-sentinel",
+            "qdrant-sec-private-hnsw-oram-path-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-oram-path-log-sentinel",
             "qdrant-sec-private-hnsw-position-map-log-sentinel",
             "qdrant-sec-private-hnsw-oram-position-map-log-sentinel",
             "qdrant-sec-private-hnsw-stash-log-sentinel",
@@ -1050,10 +1118,22 @@ mod tests {
             "qdrant-sec-private-hnsw-node-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-single-node-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-node-id-log-sentinel",
+            "qdrant-sec-private-hnsw-entry-node-id-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-entry-node-id-log-sentinel",
+            "qdrant-sec-private-hnsw-level-mask-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-level-mask-log-sentinel",
+            "qdrant-sec-private-hnsw-visited-node-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-visited-node-id-log-sentinel",
             "qdrant-sec-private-hnsw-neighbor-log-sentinel",
+            "qdrant-sec-private-hnsw-neighbor-id-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-single-neighbor-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-neighbor-id-log-sentinel",
+            "qdrant-sec-private-hnsw-neighbor-level-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-neighbor-level-log-sentinel",
             "qdrant-sec-private-hnsw-candidate-heap-log-sentinel",
             "qdrant-sec-private-hnsw-camel-candidate-heap-log-sentinel",
+            "qdrant-sec-private-hnsw-candidate-node-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-candidate-node-log-sentinel",
             "qdrant-sec-private-hnsw-client-signature-log-sentinel",
             "qdrant-sec-private-hnsw-camel-client-signature-log-sentinel",
             "qdrant-sec-private-hnsw-commit-signature-log-sentinel",
@@ -1130,8 +1210,14 @@ mod tests {
                 "old_root_hash": "private-oram-old-root-a",
                 "new_root_hash": "private-oram-new-root-a",
                 "read_paths": ["read-path-a"],
+                "access_paths": ["access-path-a"],
+                "accessed_leaf_labels": ["accessed-leaf-a"],
+                "oram_paths": ["oram-path-a"],
                 "bucket_ids": [1, 2, 3],
                 "bucket_commitments": ["bucket-commitment-a"],
+                "visited_node_ids": ["visited-node-a"],
+                "neighbor_id": "neighbor-a",
+                "candidate_nodes": ["candidate-a"],
                 "read_signature": "read-signature-a",
                 "commit_signature": "commit-signature-a",
                 "unknown_field": "unknown-field-a",
@@ -1153,8 +1239,14 @@ mod tests {
                 "old_root_hash": "private-oram-old-root-b",
                 "new_root_hash": "private-oram-new-root-b",
                 "read_paths": ["read-path-b"],
+                "access_paths": ["access-path-b"],
+                "accessed_leaf_labels": ["accessed-leaf-b"],
+                "oram_paths": ["oram-path-b"],
                 "bucket_ids": [9, 10, 11],
                 "bucket_commitments": ["bucket-commitment-b", "bucket-commitment-c"],
+                "visited_node_ids": ["visited-node-b"],
+                "neighbor_id": "neighbor-b",
+                "candidate_nodes": ["candidate-b"],
                 "read_signature": "read-signature-b",
                 "commit_signature": "commit-signature-b",
                 "unknown_field": "unknown-field-b",
@@ -1181,7 +1273,13 @@ mod tests {
                 "oldRootHash": "private-oram-camel-old-root-a",
                 "newRootHash": "private-oram-camel-new-root-a",
                 "bucketIds": [1, 2, 3],
+                "accessPaths": ["private-oram-camel-access-path-a"],
+                "accessedLeafLabels": ["private-oram-camel-accessed-leaf-a"],
+                "oramPaths": ["private-oram-camel-oram-path-a"],
                 "bucketCommitments": ["private-oram-camel-bucket-commitment-a"],
+                "visitedNodeIds": ["private-oram-camel-visited-node-a"],
+                "neighborId": "private-oram-camel-neighbor-a",
+                "candidateNodes": ["private-oram-camel-candidate-a"],
                 "readSignature": "private-oram-camel-read-signature-a",
                 "commitSignature": "private-oram-camel-commit-signature-a",
                 "unknownField": "private-oram-camel-unknown-field-a",
@@ -1205,10 +1303,16 @@ mod tests {
                 "oldRootHash": "private-oram-camel-old-root-b",
                 "newRootHash": "private-oram-camel-new-root-b",
                 "bucketIds": [9, 10, 11],
+                "accessPaths": ["private-oram-camel-access-path-b"],
+                "accessedLeafLabels": ["private-oram-camel-accessed-leaf-b"],
+                "oramPaths": ["private-oram-camel-oram-path-b"],
                 "bucketCommitments": [
                     "private-oram-camel-bucket-commitment-b",
                     "private-oram-camel-bucket-commitment-c"
                 ],
+                "visitedNodeIds": ["private-oram-camel-visited-node-b"],
+                "neighborId": "private-oram-camel-neighbor-b",
+                "candidateNodes": ["private-oram-camel-candidate-b"],
                 "readSignature": "private-oram-camel-read-signature-b",
                 "commitSignature": "private-oram-camel-commit-signature-b",
                 "unknownField": "private-oram-camel-unknown-field-b",
