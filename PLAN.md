@@ -3,7 +3,7 @@
 이 문서는 `RISK_REGISTER.md`의 대형 작업을 구현 순서대로 정리한다. 작은 방어 패치는 이미 별도 커밋으로 일부 처리됐고, 여기서는 설계, migration, 테스트 인프라, 구조 변경이 필요한 작업만 다룬다.
 
 기준 브랜치: `sec`
-최종 갱신: 2026-05-14
+최종 갱신: 2026-06-15
 
 ## 작업 원칙
 
@@ -31,6 +31,8 @@
 - OpenFHE bridge path/hash validation, parent-dir checks, env secret stripping, timeout/stdout/stderr malicious-behavior coverage, worker pool, batch protocol이 들어가 있다.
 - Encrypted payload read policy는 raw/redacted/decrypted 모드로 연결되어 있다. `decrypted`는 server-side `$qdrant_sec` payload text와 metadata value AEAD markers에만 적용되고 runtime settings와 global manage 또는 collection-scoped `payload_decrypt` 권한이 필요하며, client-side `$qdrant_client_aead`는 계속 raw/redacted만 지원한다.
 - Metadata value AEAD와 client-generated blind-index token field는 canonical provider로 들어갔다. Blind-index token은 exact-match 전용이고 range/geo/full-text searchable encryption은 계속 unsupported다.
+- `vector/private-hnsw-oram@v1`와 `payload/private-result-oram@v1`는 Phase 11 provider/API/store/SDK helper surface까지 연결되어 있다. Qdrant는 private HNSW ORAM에서 encrypted bucket store, manifest/signature validation, session lease, fixed-budget read/commit, epoch/root CAS만 수행하고, client SDK가 HNSW traversal, distance 계산, top-k, result payload ORAM fetch planning을 수행한다.
+- Private ORAM REST/gRPC surface, OpenAPI Beta paths, metrics endpoint labels, snapshot/restore preflight, active-session snapshot guard, ordinary search/upsert/payload read fail-closed guard, redaction/leakage tests가 들어가 있다.
 
 남은 대형 작업:
 
@@ -41,6 +43,7 @@
 - Encrypted payload read policy: raw envelope 반환은 기본값이고, REST/gRPC redacted/decrypted modes와 collection-scoped `payload_decrypt` capability는 연결되어 있다. 남은 범위는 export/read dump 정책과 SDK-side client envelope decrypt flow다.
 - KMS/Vault key providers: local/env/file/fd/`unix_socket`/`vault_kv2`/wrapped material 기반은 있지만 external KMS lifecycle은 future work다.
 - Broader distributed integration: current unit/integration coverage는 많지만 multi-node parity/restore/replay ledger e2e는 남아 있다.
+- Private HNSW ORAM productionization: read-only bulk-built single-writer MVP와 result ORAM fetch path는 들어갔지만 dynamic online HNSW insertion, multi-writer/consensus-backed ORAM epoch ownership, private ORAM bucket shard transfer/resharding, and broader multi-node e2e benchmark coverage는 future work다.
 
 ## Phase 0: 기준선 고정
 
