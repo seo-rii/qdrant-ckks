@@ -1369,15 +1369,18 @@ fn ensure_private_hnsw_restored_snapshot_storage_matches(
             "private HNSW ORAM restored snapshot manifest or epoch does not match current storage",
         ));
     }
-    store
-        .read_bucket_batch_with_proof(
-            &[0],
-            expected_epoch.index_epoch,
-            &expected_epoch.root_hash,
-            expected_manifest.bucket_count,
-            max_bucket_ciphertext_bytes(expected_manifest)?,
-        )
-        .map_err(private_hnsw_read_batch_store_error)?;
+    let max_bucket_ciphertext_bytes = max_bucket_ciphertext_bytes(expected_manifest)?;
+    for bucket_id in 0..expected_manifest.bucket_count {
+        store
+            .read_bucket_batch_with_proof(
+                &[bucket_id],
+                expected_epoch.index_epoch,
+                &expected_epoch.root_hash,
+                expected_manifest.bucket_count,
+                max_bucket_ciphertext_bytes,
+            )
+            .map_err(private_hnsw_read_batch_store_error)?;
+    }
     Ok(())
 }
 
@@ -3062,8 +3065,14 @@ mod private_hnsw_tests {
     #[test]
     fn restored_snapshot_storage_recheck_requires_bucket_file() {
         let mut session = fixture_session("session-1", 20);
-        session.bucket_count = 1;
-        session.manifest.bucket_count = 1;
+        let bucket_count = 3;
+        let leaf_commitments = recovered_snapshot_leaf_commitments(bucket_count, 53);
+        let root_hash =
+            PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+        session.bucket_count = bucket_count;
+        session.root_hash = root_hash.clone();
+        session.manifest.bucket_count = bucket_count;
+        session.manifest.root_hash = root_hash;
         let expected_epoch = PrivateHnswOramEpochState {
             index_epoch: session.index_epoch,
             root_hash: session.root_hash.clone(),
@@ -3078,19 +3087,25 @@ mod private_hnsw_tests {
             .write_merkle_tree_from_commitments(
                 expected_epoch.index_epoch,
                 expected_epoch.root_hash.clone(),
-                vec![expected_epoch.root_hash.clone()],
+                leaf_commitments.clone(),
             )
             .unwrap();
-        let bucket =
-            fixture_readable_bucket(0, expected_epoch.index_epoch, 17, &expected_epoch.root_hash);
-        store
-            .write_bucket(
-                &bucket,
+        for (bucket_id, bucket_commitment) in leaf_commitments.iter().enumerate() {
+            let bucket = fixture_readable_bucket(
+                bucket_id as u64,
                 expected_epoch.index_epoch,
-                session.manifest.bucket_count,
-                4096,
-            )
-            .unwrap();
+                17,
+                bucket_commitment,
+            );
+            store
+                .write_bucket(
+                    &bucket,
+                    expected_epoch.index_epoch,
+                    session.manifest.bucket_count,
+                    4096,
+                )
+                .unwrap();
+        }
         ensure_private_hnsw_restored_snapshot_storage_matches(
             &store,
             &expected_epoch,
@@ -3107,9 +3122,28 @@ mod private_hnsw_tests {
             .write_merkle_tree_from_commitments(
                 expected_epoch.index_epoch,
                 expected_epoch.root_hash.clone(),
-                vec![expected_epoch.root_hash.clone()],
+                leaf_commitments.clone(),
             )
             .unwrap();
+        for (bucket_id, bucket_commitment) in leaf_commitments.iter().enumerate() {
+            if bucket_id == 1 {
+                continue;
+            }
+            let bucket = fixture_readable_bucket(
+                bucket_id as u64,
+                expected_epoch.index_epoch,
+                19,
+                bucket_commitment,
+            );
+            store
+                .write_bucket(
+                    &bucket,
+                    expected_epoch.index_epoch,
+                    session.manifest.bucket_count,
+                    4096,
+                )
+                .unwrap();
+        }
         let err = ensure_private_hnsw_restored_snapshot_storage_matches(
             &store,
             &expected_epoch,
@@ -3121,6 +3155,8 @@ mod private_hnsw_tests {
             err.to_string()
                 .contains("encrypted bucket data is unavailable")
         );
+        assert!(!err.to_string().contains("00000001.bucket"));
+        assert!(!err.to_string().contains(&expected_epoch.root_hash));
     }
 
     #[test]
