@@ -1,3 +1,4 @@
+use std::fmt::{self, Debug, Formatter};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -36,19 +37,36 @@ const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
 const MAX_EPOCH_BYTES: u64 = 16 * 1024;
 const MAX_MERKLE_BYTES: u64 = 256 * 1024 * 1024;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PrivateResultOramStore {
     root: PathBuf,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateResultOramStore {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramStore")
+            .field("root", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramEpochState {
     pub index_epoch: u64,
     pub root_hash: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateResultOramEpochState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramEpochState")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrivateResultOramMerkleTree {
     version: u16,
@@ -58,10 +76,31 @@ struct PrivateResultOramMerkleTree {
     leaf_hashes: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+impl Debug for PrivateResultOramMerkleTree {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramMerkleTree")
+            .field("version", &self.version)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.bucket_count)
+            .field("leaf_hash_count", &self.leaf_hashes.len())
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct PrivateResultPreparedMerkleCommit {
     store: PrivateResultOramStore,
     tree: PrivateResultOramMerkleTree,
+}
+
+impl Debug for PrivateResultPreparedMerkleCommit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultPreparedMerkleCommit")
+            .field("store", &self.store)
+            .field("tree", &self.tree)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1449,6 +1488,41 @@ mod tests {
 
     fn root_hash(byte: u8) -> String {
         BASE64URL_NOPAD.encode(&[byte; 32])
+    }
+
+    #[test]
+    fn private_result_oram_store_debug_redacts_paths_and_hashes() {
+        let store = PrivateResultOramStore::new("/tmp/result-oram-store-debug-sentinel");
+        let epoch = PrivateResultOramEpochState {
+            index_epoch: 42,
+            root_hash: "RESULT-STORE-ROOT-SENTINEL".to_string(),
+        };
+        let tree = PrivateResultOramMerkleTree {
+            version: 1,
+            index_epoch: 42,
+            root_hash: "RESULT-STORE-ROOT-SENTINEL".to_string(),
+            bucket_count: 8,
+            leaf_hashes: vec!["RESULT-STORE-LEAF-SENTINEL".to_string()],
+        };
+        let prepared = PrivateResultPreparedMerkleCommit {
+            store: store.clone(),
+            tree: tree.clone(),
+        };
+
+        let rendered = [
+            format!("{store:?}"),
+            format!("{epoch:?}"),
+            format!("{tree:?}"),
+            format!("{prepared:?}"),
+        ]
+        .join("\n");
+        for leaked in [
+            "/tmp/result-oram-store-debug-sentinel",
+            "RESULT-STORE-ROOT-SENTINEL",
+            "RESULT-STORE-LEAF-SENTINEL",
+        ] {
+            assert!(!rendered.contains(leaked), "{rendered}");
+        }
     }
 
     fn bucket_ciphertext(bytes: &[u8]) -> (String, String) {

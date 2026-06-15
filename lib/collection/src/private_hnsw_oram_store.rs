@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fmt::{self, Debug, Formatter};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -33,19 +34,36 @@ const MAX_EPOCH_BYTES: u64 = 16 * 1024;
 const MAX_MERKLE_BYTES: u64 = 256 * 1024 * 1024;
 pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PrivateHnswOramStore {
     root: PathBuf,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateHnswOramStore {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramStore")
+            .field("root", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramEpochState {
     pub index_epoch: u64,
     pub root_hash: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateHnswOramEpochState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramEpochState")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramMerkleProof {
     pub kind: String,
@@ -55,7 +73,19 @@ pub struct PrivateHnswOramMerkleProof {
     pub leaves: Vec<PrivateHnswOramMerkleProofLeaf>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateHnswOramMerkleProof {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramMerkleProof")
+            .field("kind", &self.kind)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.bucket_count)
+            .field("leaf_count", &self.leaves.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramMerkleProofLeaf {
     pub bucket_id: u64,
@@ -63,12 +93,32 @@ pub struct PrivateHnswOramMerkleProofLeaf {
     pub siblings: Vec<PrivateHnswOramMerkleSibling>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateHnswOramMerkleProofLeaf {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramMerkleProofLeaf")
+            .field("bucket_id", &"[redacted]")
+            .field("leaf_hash", &"[redacted]")
+            .field("sibling_count", &self.siblings.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramMerkleSibling {
     pub level: u32,
     pub position: MerkleSiblingPosition,
     pub hash: String,
+}
+
+impl Debug for PrivateHnswOramMerkleSibling {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramMerkleSibling")
+            .field("level", &self.level)
+            .field("position", &self.position)
+            .field("hash", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,7 +128,7 @@ pub enum MerkleSiblingPosition {
     Right,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrivateHnswOramMerkleTree {
     version: u16,
@@ -88,16 +138,37 @@ struct PrivateHnswOramMerkleTree {
     leaf_hashes: Vec<String>,
 }
 
+impl Debug for PrivateHnswOramMerkleTree {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramMerkleTree")
+            .field("version", &self.version)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.bucket_count)
+            .field("leaf_hash_count", &self.leaf_hashes.len())
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum InitialEpochStatus {
     Absent,
     Matching,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct PrivateHnswPreparedMerkleCommit {
     store: PrivateHnswOramStore,
     tree: PrivateHnswOramMerkleTree,
+}
+
+impl Debug for PrivateHnswPreparedMerkleCommit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswPreparedMerkleCommit")
+            .field("store", &self.store)
+            .field("tree", &self.tree)
+            .finish()
+    }
 }
 
 impl PrivateHnswOramStore {
@@ -1597,6 +1668,59 @@ mod tests {
 
     fn root_hash(byte: u8) -> String {
         BASE64URL_NOPAD.encode(&[byte; 32])
+    }
+
+    #[test]
+    fn private_hnsw_store_debug_redacts_paths_and_hashes() {
+        let store = PrivateHnswOramStore::new("/tmp/hnsw-store-debug-sentinel", "text").unwrap();
+        let epoch = PrivateHnswOramEpochState {
+            index_epoch: 42,
+            root_hash: "HNSW-STORE-ROOT-SENTINEL".to_string(),
+        };
+        let proof = PrivateHnswOramMerkleProof {
+            kind: PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND.to_string(),
+            index_epoch: 42,
+            root_hash: "HNSW-STORE-ROOT-SENTINEL".to_string(),
+            bucket_count: 8,
+            leaves: vec![PrivateHnswOramMerkleProofLeaf {
+                bucket_id: 123_456,
+                leaf_hash: "HNSW-STORE-LEAF-SENTINEL".to_string(),
+                siblings: vec![PrivateHnswOramMerkleSibling {
+                    level: 0,
+                    position: MerkleSiblingPosition::Left,
+                    hash: "HNSW-STORE-SIBLING-SENTINEL".to_string(),
+                }],
+            }],
+        };
+        let tree = PrivateHnswOramMerkleTree {
+            version: 1,
+            index_epoch: 42,
+            root_hash: "HNSW-STORE-ROOT-SENTINEL".to_string(),
+            bucket_count: 8,
+            leaf_hashes: vec!["HNSW-STORE-LEAF-SENTINEL".to_string()],
+        };
+        let prepared = PrivateHnswPreparedMerkleCommit {
+            store: store.clone(),
+            tree: tree.clone(),
+        };
+
+        let rendered = [
+            format!("{store:?}"),
+            format!("{epoch:?}"),
+            format!("{proof:?}"),
+            format!("{tree:?}"),
+            format!("{prepared:?}"),
+        ]
+        .join("\n");
+        for leaked in [
+            "/tmp/hnsw-store-debug-sentinel",
+            "HNSW-STORE-ROOT-SENTINEL",
+            "HNSW-STORE-LEAF-SENTINEL",
+            "HNSW-STORE-SIBLING-SENTINEL",
+            "123456",
+        ] {
+            assert!(!rendered.contains(leaked), "{rendered}");
+        }
     }
 
     fn bucket_ciphertext(bytes: &[u8]) -> (String, String) {
