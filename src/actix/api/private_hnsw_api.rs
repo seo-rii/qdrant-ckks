@@ -2806,8 +2806,8 @@ mod private_hnsw_rest_tests {
                     })
                     .collect(),
             };
-            let duplicate_commit_signature = fixture.sign_commit(&duplicate_commit_plan);
-            post_json_error_contains!(
+            let duplicate_commit_signature = fixture.sign_commit_unchecked(&duplicate_commit_plan);
+            let duplicate_bucket_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
                     session_id: session_id.clone(),
@@ -2823,8 +2823,9 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "duplicate bucket id"
+                "request validation failed"
             );
+            assert!(!duplicate_bucket_error.contains("duplicate bucket id"));
             let invalid_signature_duplicate_bucket_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {

@@ -3293,7 +3293,7 @@ mod private_hnsw_grpc_tests {
                     })
                     .collect(),
             };
-            let duplicate_commit_signature = fixture.sign_commit(&duplicate_commit_plan);
+            let duplicate_commit_signature = fixture.sign_commit_unchecked(&duplicate_commit_plan);
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -3315,7 +3315,8 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("duplicate bucket id"));
+            assert!(err.message().contains("request validation failed"));
+            assert!(!err.message().contains("duplicate bucket id"));
 
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
