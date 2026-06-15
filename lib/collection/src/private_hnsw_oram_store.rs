@@ -974,6 +974,12 @@ fn validate_bucket_ciphertext_fixed_size(
 ) -> CollectionResult<()> {
     let expected = private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram)
         .map_err(private_hnsw_oram_error)?;
+    let expected_b64_len = max_base64url_nopad_encoded_len(expected)?;
+    if bucket.ciphertext.len() != expected_b64_len {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM bucket ciphertext must match fixed ciphertext size",
+        ));
+    }
     let ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| {
@@ -1305,17 +1311,19 @@ fn private_hnsw_oram_error(err: qdrant_sec::PrivateHnswOramError) -> CollectionE
 
 fn max_base64url_nopad_encoded_len(byte_len: usize) -> CollectionResult<usize> {
     let full_chunks = byte_len / 3;
-    let remainder = byte_len % 3;
+    let tail_len = match byte_len % 3 {
+        0 => 0,
+        1 => 2,
+        2 => 3,
+        _ => {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM bucket ciphertext size overflows",
+            ));
+        }
+    };
     full_chunks
         .checked_mul(4)
-        .and_then(|len| {
-            len.checked_add(match remainder {
-                0 => 0,
-                1 => 2,
-                2 => 3,
-                _ => unreachable!("remainder modulo 3"),
-            })
-        })
+        .and_then(|len| len.checked_add(tail_len))
         .ok_or_else(|| {
             CollectionError::bad_request("private HNSW ORAM bucket ciphertext size overflows")
         })
@@ -2423,6 +2431,50 @@ mod tests {
         assert!(rendered.contains("newer than requested epoch"));
         assert!(!rendered.contains("42"), "{rendered}");
         assert!(!rendered.contains("1"), "{rendered}");
+    }
+
+    #[test]
+    fn writeback_commit_rejects_non_fixed_size_ciphertext_before_merkle_update() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[23; 32]).unwrap();
+        let (bundle, updated_bucket, new, _) = fixture_signed_commit_update(&key_pair);
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old = store.write_initial_upload_bundle(&bundle, 4096).unwrap();
+        let original_bucket = bundle.buckets[0].clone();
+
+        let expected_bytes =
+            private_hnsw_oram_bucket_ciphertext_bytes(&bundle.manifest.oram).unwrap();
+        let mut oversized_bucket = updated_bucket.clone();
+        let oversized_raw = vec![7; expected_bytes + 1];
+        oversized_bucket.ciphertext = BASE64URL_NOPAD.encode(&oversized_raw);
+        oversized_bucket.ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest(&oversized_raw).as_ref());
+
+        let err = store
+            .commit_writeback(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&oversized_bucket),
+                4096,
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("fixed ciphertext size"));
+        assert!(!err.contains(&oversized_bucket.ciphertext));
+        assert_eq!(store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            store
+                .read_bucket(0, old.index_epoch, bundle.bucket_count(), 4096)
+                .unwrap(),
+            original_bucket
+        );
+        let proof = store
+            .read_merkle_path_batch(&[0], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(proof.leaves[0].leaf_hash, original_bucket.bucket_commitment);
     }
 
     #[test]

@@ -932,6 +932,12 @@ fn validate_bucket_ciphertext_fixed_size(
 ) -> CollectionResult<()> {
     let expected = private_result_oram_bucket_ciphertext_bytes(&manifest.oram)
         .map_err(private_result_oram_error)?;
+    let expected_b64_len = base64url_nopad_encoded_len(expected)?;
+    if bucket.ciphertext.len() != expected_b64_len {
+        return Err(CollectionError::bad_request(
+            "private result ORAM bucket ciphertext must match fixed ciphertext size",
+        ));
+    }
     let ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| {
@@ -1015,6 +1021,26 @@ fn validate_upload_bundle_with_signature(
 fn validate_epoch_state(epoch: &PrivateResultOramEpochState) -> CollectionResult<()> {
     decode_base64url_32(&epoch.root_hash, "root_hash")?;
     Ok(())
+}
+
+fn base64url_nopad_encoded_len(byte_len: usize) -> CollectionResult<usize> {
+    let full_chunks = byte_len / 3;
+    let tail_len = match byte_len % 3 {
+        0 => 0,
+        1 => 2,
+        2 => 3,
+        _ => {
+            return Err(CollectionError::bad_request(
+                "private result ORAM bucket ciphertext size overflows",
+            ));
+        }
+    };
+    full_chunks
+        .checked_mul(4)
+        .and_then(|len| len.checked_add(tail_len))
+        .ok_or_else(|| {
+            CollectionError::bad_request("private result ORAM bucket ciphertext size overflows")
+        })
 }
 
 fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> CollectionError {
@@ -2814,6 +2840,39 @@ mod tests {
         assert!(err.contains("fixed ciphertext size"));
         assert!(!err.contains("short-result-commit"));
         assert!(!err.contains(&short_ciphertext_bucket.ciphertext));
+        assert_writeback_target_unchanged();
+
+        let expected_bytes =
+            private_result_oram_bucket_ciphertext_bytes(&bundle.manifest.oram).unwrap();
+        let mut long_ciphertext_bucket =
+            fixture_bucket(1, 43, b"valid hash with long result bucket");
+        let long_raw = vec![7; expected_bytes + 1];
+        let long_hash = BASE64URL_NOPAD.encode(Sha256::digest(&long_raw).as_ref());
+        long_ciphertext_bucket.ciphertext = BASE64URL_NOPAD.encode(&long_raw);
+        long_ciphertext_bucket.ciphertext_sha256 = long_hash.clone();
+        long_ciphertext_bucket.bucket_commitment = fixture_bucket_commitment(1, 43, &long_hash);
+        let mut long_ciphertext_commitments = bundle.bucket_commitments();
+        long_ciphertext_commitments[1] = long_ciphertext_bucket.bucket_commitment.clone();
+        let long_ciphertext_new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateResultOramStore::merkle_root_for_commitments(
+                &long_ciphertext_commitments,
+            )
+            .unwrap(),
+        };
+
+        let err = store
+            .commit_writeback(
+                &old,
+                &long_ciphertext_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&long_ciphertext_bucket),
+                128,
+            )
+            .unwrap_err();
+        let err = err.to_string();
+        assert!(err.contains("fixed ciphertext size"));
+        assert!(!err.contains(&long_ciphertext_bucket.ciphertext));
         assert_writeback_target_unchanged();
 
         let valid_bucket = fixture_bucket(1, 43, b"valid result bucket with wrong root");
