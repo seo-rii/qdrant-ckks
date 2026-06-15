@@ -2789,7 +2789,9 @@ fn private_result_oram_merkle_levels(
 
     let mut levels = vec![leaves];
     while levels.last().is_some_and(|level| level.len() > 1) {
-        let previous = levels.last().expect("checked above");
+        let Some(previous) = levels.last() else {
+            return Err(PrivateResultOramError::InvalidMerkleProof);
+        };
         let mut next = Vec::with_capacity(previous.len() / 2);
         for pair in previous.chunks_exact(2) {
             next.push(private_result_oram_merkle_parent_hash(&pair[0], &pair[1]));
