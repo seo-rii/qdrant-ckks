@@ -1578,10 +1578,10 @@ mod tests {
         PrivateHnswClientCommitBucketRef, PrivateHnswClientCommitPlan, PrivateHnswClientError,
         PrivateHnswClientKeys, PrivateHnswCommitSignatureContext, PrivateHnswEncryptedPathBatch,
         PrivateHnswManifestBuildContext, PrivateHnswManifestValidationContext,
-        PrivateHnswNodeBlockPlaintext, PrivateHnswOramClientConfig, PrivateHnswOramPlaintextBucket,
-        PrivateHnswParams, PrivateHnswSearchParams, PrivateHnswSignatureVerification,
-        PrivateHnswVectorEncoding, ResultPrivacyMode, SecretKey, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
-        build_private_hnsw_oram_manifest_from_encrypted_index,
+        PrivateHnswNodeBlockPlaintext, PrivateHnswOramClientConfig, PrivateHnswOramError,
+        PrivateHnswOramPlaintextBucket, PrivateHnswParams, PrivateHnswSearchParams,
+        PrivateHnswSignatureVerification, PrivateHnswVectorEncoding, ResultPrivacyMode, SecretKey,
+        VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, build_private_hnsw_oram_manifest_from_encrypted_index,
         build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points,
         decode_private_hnsw_oram_bucket_plaintext, empty_private_hnsw_oram_plaintext_bucket,
         encode_private_hnsw_oram_bucket_plaintext, open_private_hnsw_oram_bucket,
@@ -1669,6 +1669,41 @@ mod tests {
                     fixed_steps: 888_888,
                 }),
                 vec!["777777", "888888"],
+            ),
+        ];
+
+        for (err, needles) in cases {
+            let rendered = err.to_string();
+            for needle in needles {
+                assert!(!rendered.contains(needle), "{rendered}");
+            }
+        }
+    }
+
+    #[test]
+    fn private_hnsw_oram_error_mapping_redacts_structured_values() {
+        let cases = [
+            (
+                private_hnsw_oram_error(PrivateHnswOramError::UnsupportedManifestVersion(65_000)),
+                vec!["65000"],
+            ),
+            (
+                private_hnsw_oram_error(PrivateHnswOramError::UnsupportedSignatureAlgorithm(
+                    "rsa-pss-777777".to_string(),
+                )),
+                vec!["rsa-pss-777777", "777777"],
+            ),
+            (
+                private_hnsw_oram_error(PrivateHnswOramError::InvalidManifestField(
+                    "manifest-field-777777",
+                )),
+                vec!["manifest-field-777777", "777777"],
+            ),
+            (
+                private_hnsw_oram_error(PrivateHnswOramError::ManifestContextMismatch(
+                    "manifest-context-777777",
+                )),
+                vec!["manifest-context-777777", "777777"],
             ),
         ];
 

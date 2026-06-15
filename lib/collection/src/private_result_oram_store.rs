@@ -1492,14 +1492,56 @@ mod tests {
                 vec!["rsa-pss-777777", "777777"],
             ),
             (
+                private_result_oram_error(PrivateResultOramError::InvalidManifestField(
+                    "manifest-field-777777",
+                )),
+                vec!["manifest-field-777777", "777777"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::ManifestContextMismatch(
+                    "manifest-context-777777",
+                )),
+                vec!["manifest-context-777777", "777777"],
+            ),
+            (
                 private_result_oram_error(PrivateResultOramError::UnsupportedBucketVersion(65_000)),
                 vec!["65000"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::InvalidBucketField(
+                    "bucket-field-777777",
+                )),
+                vec!["bucket-field-777777", "777777"],
             ),
             (
                 private_result_oram_error(
                     PrivateResultOramError::UnsupportedBucketCiphertextVersion(77),
                 ),
                 vec!["77"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::InvalidBucketContext(
+                    "bucket-context-777777",
+                )),
+                vec!["bucket-context-777777", "777777"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::InvalidFetchPlanField(
+                    "fetch-plan-field-777777",
+                )),
+                vec!["fetch-plan-field-777777", "777777"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::InvalidClientConfig(
+                    "client-config-777777",
+                )),
+                vec!["client-config-777777", "777777"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::InvalidClientStateContext(
+                    "client-state-context-777777",
+                )),
+                vec!["client-state-context-777777", "777777"],
             ),
             (
                 private_result_oram_error(PrivateResultOramError::UnsupportedPayloadBlockVersion(
