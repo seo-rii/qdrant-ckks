@@ -213,7 +213,7 @@ pub struct PrivateResultOramSignature {
     pub sig: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramPayloadBlockPlaintext {
     pub version: u16,
@@ -224,6 +224,19 @@ pub struct PrivateResultOramPayloadBlockPlaintext {
     pub generation: u64,
 }
 
+impl Debug for PrivateResultOramPayloadBlockPlaintext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramPayloadBlockPlaintext")
+            .field("version", &self.version)
+            .field("payload_fetch_token", &"[redacted; 32 bytes]")
+            .field("point_token", &"[redacted; 32 bytes]")
+            .field("payload_len", &self.payload.len())
+            .field("deleted", &self.deleted)
+            .field("generation", &self.generation)
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrivateResultOramClientConfig {
     pub tree_height: u32,
@@ -231,10 +244,23 @@ pub struct PrivateResultOramClientConfig {
     pub block_size_bytes: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramPlaintextBucket {
     pub bucket_id: u64,
     pub blocks: Vec<Option<PrivateResultOramPayloadBlockPlaintext>>,
+}
+
+impl Debug for PrivateResultOramPlaintextBucket {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramPlaintextBucket")
+            .field("bucket_id", &"[redacted]")
+            .field("blocks_len", &self.blocks.len())
+            .field(
+                "occupied_blocks",
+                &self.blocks.iter().filter(|block| block.is_some()).count(),
+            )
+            .finish()
+    }
 }
 
 pub fn private_result_oram_bucket_ciphertext_bytes(
@@ -261,12 +287,23 @@ pub fn private_result_oram_bucket_ciphertext_bytes(
         .ok_or(PrivateResultOramError::InvalidManifestField("oram"))
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramAccessResult {
     pub old_leaf: u64,
     pub new_leaf: u64,
     pub block: PrivateResultOramPayloadBlockPlaintext,
     pub writeback_buckets: Vec<PrivateResultOramPlaintextBucket>,
+}
+
+impl Debug for PrivateResultOramAccessResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramAccessResult")
+            .field("old_leaf", &"[redacted]")
+            .field("new_leaf", &"[redacted]")
+            .field("block", &"[redacted]")
+            .field("writeback_bucket_count", &self.writeback_buckets.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -813,23 +850,51 @@ pub struct PrivateResultOramClientCommitBucketRef {
     pub ciphertext_sha256: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramFetchTokenPosition {
     pub payload_fetch_token: [u8; 32],
     pub leaf: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl Debug for PrivateResultOramFetchTokenPosition {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramFetchTokenPosition")
+            .field("payload_fetch_token", &"[redacted; 32 bytes]")
+            .field("leaf", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramReadBucketBatchPlan {
     pub bucket_ids: Vec<u64>,
     pub token_count: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl Debug for PrivateResultOramReadBucketBatchPlan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramReadBucketBatchPlan")
+            .field("bucket_id_count", &self.bucket_ids.len())
+            .field("token_count", &self.token_count)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramReadBucketPlan {
     pub batches: Vec<PrivateResultOramReadBucketBatchPlan>,
     pub token_count: usize,
     pub path_batch_size: usize,
+}
+
+impl Debug for PrivateResultOramReadBucketPlan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramReadBucketPlan")
+            .field("batch_count", &self.batches.len())
+            .field("token_count", &self.token_count)
+            .field("path_batch_size", &self.path_batch_size)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -841,7 +906,7 @@ pub struct PrivateResultOramEncryptedBucketBatch {
     pub buckets: Vec<PrivateResultOramBucket>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramTokenFetchAccess {
     pub payload_fetch_token: [u8; 32],
     pub old_leaf: u64,
@@ -849,10 +914,30 @@ pub struct PrivateResultOramTokenFetchAccess {
     pub block: PrivateResultOramPayloadBlockPlaintext,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl Debug for PrivateResultOramTokenFetchAccess {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramTokenFetchAccess")
+            .field("payload_fetch_token", &"[redacted; 32 bytes]")
+            .field("old_leaf", &"[redacted]")
+            .field("new_leaf", &"[redacted]")
+            .field("block", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramTokenFetchResult {
     pub accesses: Vec<PrivateResultOramTokenFetchAccess>,
     pub updated_buckets: Vec<PrivateResultOramBucket>,
+}
+
+impl Debug for PrivateResultOramTokenFetchResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramTokenFetchResult")
+            .field("access_count", &self.accesses.len())
+            .field("updated_bucket_count", &self.updated_buckets.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3376,6 +3461,57 @@ mod tests {
             first.bucket_aead_key().as_bytes(),
             other_epoch_keys.bucket_aead_key().as_bytes()
         );
+    }
+
+    #[test]
+    fn result_oram_debug_redacts_plaintext_and_access_pattern_values() {
+        let block = payload_block(44);
+        let bucket = PrivateResultOramPlaintextBucket {
+            bucket_id: 123_456,
+            blocks: vec![Some(block.clone()), None],
+        };
+        let access = PrivateResultOramAccessResult {
+            old_leaf: 654_321,
+            new_leaf: 654_322,
+            block: block.clone(),
+            writeback_buckets: vec![bucket.clone()],
+        };
+        let token_position = PrivateResultOramFetchTokenPosition {
+            payload_fetch_token: block.payload_fetch_token,
+            leaf: 777_888,
+        };
+        let read_batch = PrivateResultOramReadBucketBatchPlan {
+            bucket_ids: vec![123_456, 123_457],
+            token_count: 1,
+        };
+        let token_access = PrivateResultOramTokenFetchAccess {
+            payload_fetch_token: block.payload_fetch_token,
+            old_leaf: 654_321,
+            new_leaf: 654_322,
+            block,
+        };
+        let fetch_result = PrivateResultOramTokenFetchResult {
+            accesses: vec![token_access],
+            updated_buckets: Vec::new(),
+        };
+
+        let rendered = [
+            format!("{bucket:?}"),
+            format!("{access:?}"),
+            format!("{token_position:?}"),
+            format!("{read_batch:?}"),
+            format!("{fetch_result:?}"),
+        ]
+        .join("\n");
+        for leaked in [
+            BASE64URL_NOPAD.encode(&[44; 32]),
+            serde_json::to_string(&vec![44_u8, 45, 46]).unwrap(),
+            "123456".to_string(),
+            "654321".to_string(),
+            "777888".to_string(),
+        ] {
+            assert!(!rendered.contains(&leaked), "{rendered}");
+        }
     }
 
     #[test]

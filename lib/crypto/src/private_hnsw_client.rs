@@ -375,7 +375,7 @@ impl PrivateHnswVectorEncoding {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswNodeBlockPlaintext {
     pub version: u16,
@@ -389,6 +389,30 @@ pub struct PrivateHnswNodeBlockPlaintext {
     pub deleted: bool,
     pub generation: u64,
     pub payload_fetch_token: Option<[u8; 32]>,
+}
+
+impl Debug for PrivateHnswNodeBlockPlaintext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswNodeBlockPlaintext")
+            .field("version", &self.version)
+            .field("node_id", &"[redacted; 32 bytes]")
+            .field("point_token", &"[redacted; 32 bytes]")
+            .field("level_mask", &"[redacted]")
+            .field("vector_encoding", &self.vector_encoding)
+            .field("vector_len", &self.vector.len())
+            .field("neighbor_count", &self.neighbors.len())
+            .field("neighbor_levels_len", &self.neighbor_levels.len())
+            .field("deleted", &self.deleted)
+            .field("generation", &self.generation)
+            .field(
+                "payload_fetch_token",
+                &self
+                    .payload_fetch_token
+                    .as_ref()
+                    .map(|_| "[redacted; 32 bytes]"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -444,10 +468,23 @@ pub struct PrivateHnswOramClientConfig {
     pub fixed_neighbor_slots: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswOramPlaintextBucket {
     pub bucket_id: u64,
     pub blocks: Vec<Option<PrivateHnswNodeBlockPlaintext>>,
+}
+
+impl Debug for PrivateHnswOramPlaintextBucket {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramPlaintextBucket")
+            .field("bucket_id", &"[redacted]")
+            .field("blocks_len", &self.blocks.len())
+            .field(
+                "occupied_blocks",
+                &self.blocks.iter().filter(|block| block.is_some()).count(),
+            )
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -518,7 +555,7 @@ pub struct PrivateHnswEncryptedPathBatch {
     pub buckets: Vec<PrivateHnswOramBucket>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswOramAccessResult {
     pub old_leaf: u64,
     pub new_leaf: u64,
@@ -527,7 +564,19 @@ pub struct PrivateHnswOramAccessResult {
     pub writeback_buckets: Vec<PrivateHnswOramPlaintextBucket>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateHnswOramAccessResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramAccessResult")
+            .field("old_leaf", &"[redacted]")
+            .field("new_leaf", &"[redacted]")
+            .field("old_leaf_label", &"[redacted]")
+            .field("block", &"[redacted]")
+            .field("writeback_bucket_count", &self.writeback_buckets.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswSearchParams {
     pub entry_node_id: [u8; 32],
     pub k: usize,
@@ -537,7 +586,20 @@ pub struct PrivateHnswSearchParams {
     pub padding_node_id: Option<[u8; 32]>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl Debug for PrivateHnswSearchParams {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswSearchParams")
+            .field("entry_node_id", &"[redacted; 32 bytes]")
+            .field("k", &self.k)
+            .field("ef", &self.ef)
+            .field("fixed_steps", &self.fixed_steps)
+            .field("distance", &self.distance)
+            .field("has_padding_node_id", &self.padding_node_id.is_some())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct PrivateHnswSearchHit {
     pub node_id: [u8; 32],
     pub point_token: [u8; 32],
@@ -545,21 +607,61 @@ pub struct PrivateHnswSearchHit {
     pub distance: f32,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl Debug for PrivateHnswSearchHit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswSearchHit")
+            .field("node_id", &"[redacted; 32 bytes]")
+            .field("point_token", &"[redacted; 32 bytes]")
+            .field(
+                "has_payload_fetch_token",
+                &self.payload_fetch_token.is_some(),
+            )
+            .field("distance", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct PrivateHnswSearchResult {
     pub hits: Vec<PrivateHnswSearchHit>,
     pub accessed_leaf_labels: Vec<String>,
     pub completed_steps: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl Debug for PrivateHnswSearchResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswSearchResult")
+            .field("hit_count", &self.hits.len())
+            .field(
+                "accessed_leaf_label_count",
+                &self.accessed_leaf_labels.len(),
+            )
+            .field("completed_steps", &self.completed_steps)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswPrivateResultFetchPlan {
     pub payload_fetch_tokens: Vec<[u8; 32]>,
     pub real_result_count: usize,
     pub fixed_result_k: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl Debug for PrivateHnswPrivateResultFetchPlan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswPrivateResultFetchPlan")
+            .field(
+                "payload_fetch_token_count",
+                &self.payload_fetch_tokens.len(),
+            )
+            .field("real_result_count", &self.real_result_count)
+            .field("fixed_result_k", &self.fixed_result_k)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct PrivateHnswPrivateResultPayload {
     pub node_id: [u8; 32],
     pub point_token: [u8; 32],
@@ -569,12 +671,36 @@ pub struct PrivateHnswPrivateResultPayload {
     pub payload_generation: u64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl Debug for PrivateHnswPrivateResultPayload {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswPrivateResultPayload")
+            .field("node_id", &"[redacted; 32 bytes]")
+            .field("point_token", &"[redacted; 32 bytes]")
+            .field("payload_fetch_token", &"[redacted; 32 bytes]")
+            .field("distance", &"[redacted]")
+            .field("payload_len", &self.payload.len())
+            .field("payload_generation", &self.payload_generation)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct PrivateHnswPrivateResultPayloadFetch {
     pub results: Vec<PrivateHnswPrivateResultPayload>,
     pub real_result_count: usize,
     pub fixed_result_k: usize,
     pub fetched_token_count: usize,
+}
+
+impl Debug for PrivateHnswPrivateResultPayloadFetch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswPrivateResultPayloadFetch")
+            .field("result_count", &self.results.len())
+            .field("real_result_count", &self.real_result_count)
+            .field("fixed_result_k", &self.fixed_result_k)
+            .field("fetched_token_count", &self.fetched_token_count)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -791,26 +917,54 @@ fn validate_private_hnsw_result_payload_block(
     Ok(())
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswSpeculativePrefetchPlan {
     pub leaf_labels: Vec<String>,
     pub real_path_count: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl Debug for PrivateHnswSpeculativePrefetchPlan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswSpeculativePrefetchPlan")
+            .field("leaf_label_count", &self.leaf_labels.len())
+            .field("real_path_count", &self.real_path_count)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswGraphTraversalPathBatchPlan {
     pub leaf_labels: Vec<String>,
     pub real_path_count: usize,
     pub retained_neighbor_count: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl Debug for PrivateHnswGraphTraversalPathBatchPlan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswGraphTraversalPathBatchPlan")
+            .field("leaf_label_count", &self.leaf_labels.len())
+            .field("real_path_count", &self.real_path_count)
+            .field("retained_neighbor_count", &self.retained_neighbor_count)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswDirectionalNeighborFilterPlan {
     pub node_ids: Vec<[u8; 32]>,
     pub retained_count: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl Debug for PrivateHnswDirectionalNeighborFilterPlan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswDirectionalNeighborFilterPlan")
+            .field("node_id_count", &self.node_ids.len())
+            .field("retained_count", &self.retained_count)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub struct PrivateHnswBuildPoint {
     pub node_id: [u8; 32],
     pub point_token: [u8; 32],
@@ -818,13 +972,39 @@ pub struct PrivateHnswBuildPoint {
     pub payload_fetch_token: Option<[u8; 32]>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl Debug for PrivateHnswBuildPoint {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswBuildPoint")
+            .field("node_id", &"[redacted; 32 bytes]")
+            .field("point_token", &"[redacted; 32 bytes]")
+            .field("vector_len", &self.vector.len())
+            .field(
+                "has_payload_fetch_token",
+                &self.payload_fetch_token.is_some(),
+            )
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswPlaintextIndexBuild {
     pub entry_node_id: [u8; 32],
     pub state: PrivateHnswOramClientState,
     pub buckets: Vec<PrivateHnswOramPlaintextBucket>,
     pub logical_node_count: u64,
     pub dummy_node_count: u64,
+}
+
+impl Debug for PrivateHnswPlaintextIndexBuild {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswPlaintextIndexBuild")
+            .field("entry_node_id", &"[redacted; 32 bytes]")
+            .field("state", &self.state)
+            .field("bucket_count", &self.buckets.len())
+            .field("logical_node_count", &self.logical_node_count)
+            .field("dummy_node_count", &self.dummy_node_count)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -838,9 +1018,17 @@ pub struct PrivateHnswEncryptedIndexBuild {
     pub buckets: Vec<PrivateHnswOramBucket>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct PrivateHnswClientNodeCache {
     nodes: BTreeMap<[u8; 32], PrivateHnswNodeBlockPlaintext>,
+}
+
+impl Debug for PrivateHnswClientNodeCache {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswClientNodeCache")
+            .field("node_count", &self.nodes.len())
+            .finish()
+    }
 }
 
 impl PrivateHnswClientNodeCache {
@@ -4592,6 +4780,111 @@ mod tests {
             first.bucket_aead_key().as_bytes(),
             other_epoch_keys.bucket_aead_key().as_bytes()
         );
+    }
+
+    #[test]
+    fn hnsw_debug_redacts_plaintext_and_access_pattern_values() {
+        let mut block = node_block_with_vector(44, &[1.25, 2.5], vec![[45; 32]]);
+        block.payload_fetch_token = Some([46; 32]);
+        let bucket = PrivateHnswOramPlaintextBucket {
+            bucket_id: 123_456,
+            blocks: vec![Some(block.clone()), None],
+        };
+        let access = PrivateHnswOramAccessResult {
+            old_leaf: 654_321,
+            new_leaf: 654_322,
+            old_leaf_label: "leaf-label-sentinel".to_string(),
+            block: block.clone(),
+            writeback_buckets: vec![bucket.clone()],
+        };
+        let params = PrivateHnswSearchParams {
+            entry_node_id: block.node_id,
+            k: 1,
+            ef: 4,
+            fixed_steps: 8,
+            distance: DistanceKind::Cosine,
+            padding_node_id: Some([47; 32]),
+        };
+        let hit = PrivateHnswSearchHit {
+            node_id: block.node_id,
+            point_token: block.point_token,
+            payload_fetch_token: block.payload_fetch_token,
+            distance: 0.125,
+        };
+        let result = PrivateHnswSearchResult {
+            hits: vec![hit.clone()],
+            accessed_leaf_labels: vec!["leaf-label-sentinel".to_string()],
+            completed_steps: 8,
+        };
+        let fetch_plan = PrivateHnswPrivateResultFetchPlan {
+            payload_fetch_tokens: vec![[46; 32], [47; 32]],
+            real_result_count: 1,
+            fixed_result_k: 2,
+        };
+        let payload = PrivateHnswPrivateResultPayload {
+            node_id: hit.node_id,
+            point_token: hit.point_token,
+            payload_fetch_token: [46; 32],
+            distance: hit.distance,
+            payload: b"HNSW-PRIVATE-PAYLOAD-RAW".to_vec(),
+            payload_generation: 9,
+        };
+        let payload_debug = format!("{payload:?}");
+        let payload_fetch = PrivateHnswPrivateResultPayloadFetch {
+            results: vec![payload],
+            real_result_count: 1,
+            fixed_result_k: 2,
+            fetched_token_count: 2,
+        };
+        let speculative = PrivateHnswSpeculativePrefetchPlan {
+            leaf_labels: vec!["leaf-label-sentinel".to_string()],
+            real_path_count: 1,
+        };
+        let traversal = PrivateHnswGraphTraversalPathBatchPlan {
+            leaf_labels: vec!["leaf-label-sentinel".to_string()],
+            real_path_count: 1,
+            retained_neighbor_count: 1,
+        };
+        let directional = PrivateHnswDirectionalNeighborFilterPlan {
+            node_ids: vec![block.node_id],
+            retained_count: 1,
+        };
+        let build_point = PrivateHnswBuildPoint {
+            node_id: block.node_id,
+            point_token: block.point_token,
+            vector: vec![1.25, 2.5],
+            payload_fetch_token: block.payload_fetch_token,
+        };
+
+        let rendered = [
+            format!("{block:?}"),
+            format!("{bucket:?}"),
+            format!("{access:?}"),
+            format!("{params:?}"),
+            format!("{hit:?}"),
+            format!("{result:?}"),
+            format!("{fetch_plan:?}"),
+            payload_debug,
+            format!("{payload_fetch:?}"),
+            format!("{speculative:?}"),
+            format!("{traversal:?}"),
+            format!("{directional:?}"),
+            format!("{build_point:?}"),
+        ]
+        .join("\n");
+        for leaked in [
+            BASE64URL_NOPAD.encode(&[44; 32]),
+            BASE64URL_NOPAD.encode(&[45; 32]),
+            BASE64URL_NOPAD.encode(&[46; 32]),
+            BASE64URL_NOPAD.encode(&[47; 32]),
+            serde_json::to_string(&block.vector).unwrap(),
+            "leaf-label-sentinel".to_string(),
+            "123456".to_string(),
+            "654321".to_string(),
+            "HNSW-PRIVATE-PAYLOAD-RAW".to_string(),
+        ] {
+            assert!(!rendered.contains(&leaked), "{rendered}");
+        }
     }
 
     #[test]
