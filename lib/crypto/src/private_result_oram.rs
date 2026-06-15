@@ -1867,15 +1867,15 @@ pub fn validate_private_result_oram_bucket_shape(
 
 fn max_base64url_nopad_encoded_len(byte_len: usize) -> Option<usize> {
     let full_chunks = byte_len / 3;
-    let remainder = byte_len % 3;
-    full_chunks.checked_mul(4).and_then(|len| {
-        len.checked_add(match remainder {
-            0 => 0,
-            1 => 2,
-            2 => 3,
-            _ => unreachable!("remainder modulo 3"),
-        })
-    })
+    let tail_len = match byte_len % 3 {
+        0 => 0,
+        1 => 2,
+        2 => 3,
+        _ => return None,
+    };
+    full_chunks
+        .checked_mul(4)
+        .and_then(|len| len.checked_add(tail_len))
 }
 
 pub fn validate_private_result_oram_manifest_signature_shape(
@@ -4950,6 +4950,16 @@ mod tests {
             ),
             Err(PrivateResultOramError::BucketOversized)
         );
+    }
+
+    #[test]
+    fn max_base64url_nopad_encoded_len_handles_tail_lengths_and_overflow() {
+        assert_eq!(max_base64url_nopad_encoded_len(0), Some(0));
+        assert_eq!(max_base64url_nopad_encoded_len(1), Some(2));
+        assert_eq!(max_base64url_nopad_encoded_len(2), Some(3));
+        assert_eq!(max_base64url_nopad_encoded_len(3), Some(4));
+        assert_eq!(max_base64url_nopad_encoded_len(4), Some(6));
+        assert_eq!(max_base64url_nopad_encoded_len(usize::MAX), None);
     }
 
     #[test]
