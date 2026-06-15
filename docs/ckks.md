@@ -71,6 +71,18 @@ shard-key layout changes, replica removal, shard snapshot export/recovery, and
 automatic dead-replica shard transfer recovery fail closed until encrypted ORAM
 bucket movement and epoch/root ownership are consensus-backed.
 
+Private ORAM search and result-fetch providers have their own client-led
+contract:
+
+| API/path | `vector/private-hnsw-oram@v1` | `payload/private-result-oram@v1` |
+| --- | --- | --- |
+| Runtime profile | Strict zero-trust compatible. Server materials and backends are forbidden, RK epoch must be pinned, fixed-budget search is required, and signing verifiers are mandatory. | Strict zero-trust compatible. Server materials and backends are forbidden, RK epoch must be pinned, Path ORAM policy is allowlisted, and signing verifiers are mandatory. |
+| Collection binding | One vector name per `private-hnsw-oram/v1` rule. It cannot overlap `vector/openfhe-ckks@v1` or `vector/client-ckks@v1` on the same vector name. | One `private-result-oram/v1` payload binding in v1. It is required when a private HNSW manifest uses `result_privacy: private_payload_oram_required`. |
+| Normal Qdrant reads/writes | Dense vector upsert/update and ordinary search/query/recommend/discover fail closed for the private vector; clients must use the private HNSW session APIs. | Ordinary payload writes, deletes, indexes, filters, ordering, grouping, facets, formulas, and raw payload reads fail closed for the private result path; clients must use result ORAM session APIs. |
+| Dedicated APIs | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_paths`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_buckets`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. |
+| Snapshot/restore | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and paired result ORAM policy before accepting a restored store. | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and configured binding/runtime policy before accepting a restored store. |
+| Cluster mode | Session open fails closed in distributed mode until consensus-backed ORAM epoch/root ownership is implemented; layout movement operations are blocked before shard transfer or resharding proceeds. | Session open fails closed in distributed mode until consensus-backed ORAM epoch/root ownership is implemented; result ORAM bucket movement follows the same cluster guard policy. |
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:
