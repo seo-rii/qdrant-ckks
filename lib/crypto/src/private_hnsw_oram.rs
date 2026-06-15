@@ -375,6 +375,7 @@ pub fn validate_private_hnsw_oram_read_paths_signature(
         || input.requested_paths == 0
         || input.paths.len() > u32::MAX as usize
         || input.requested_paths as usize != input.paths.len()
+        || !input.dummy_paths_included
     {
         return Err(PrivateHnswOramError::InvalidReadPathsSignature);
     }
@@ -1020,6 +1021,18 @@ mod tests {
             validate_private_hnsw_oram_read_paths_signature(
                 tampered_padding,
                 &signature,
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
+        let tampered_padding_signature = sign_b64(
+            &key_pair,
+            &private_hnsw_oram_read_paths_signature_message(tampered_padding),
+        );
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                tampered_padding,
+                &tampered_padding_signature,
                 verification,
             ),
             Err(PrivateHnswOramError::InvalidReadPathsSignature)
