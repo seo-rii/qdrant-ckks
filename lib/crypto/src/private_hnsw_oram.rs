@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use data_encoding::BASE64URL_NOPAD;
 use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
@@ -343,12 +345,19 @@ pub fn validate_private_hnsw_oram_commit_signature(
     if input.updated_buckets.is_empty() {
         return Err(PrivateHnswOramError::EmptyCommit);
     }
+    if input.updated_buckets.len() > u32::MAX as usize {
+        return Err(PrivateHnswOramError::InvalidCommitSignature);
+    }
     if input.new_epoch <= input.old_epoch {
         return Err(PrivateHnswOramError::InvalidManifestField("new_epoch"));
     }
     decode_base64url_32(input.old_root_hash, "old_root_hash")?;
     decode_base64url_32(input.new_root_hash, "new_root_hash")?;
+    let mut seen_bucket_ids = BTreeSet::new();
     for bucket in input.updated_buckets {
+        if !seen_bucket_ids.insert(bucket.bucket_id) {
+            return Err(PrivateHnswOramError::InvalidCommitSignature);
+        }
         decode_base64url_32(bucket.ciphertext_sha256, "ciphertext_sha256")?;
     }
     let signature_bytes = decode_base64url_64(signature)?;
@@ -1351,6 +1360,33 @@ mod tests {
             Err(PrivateHnswOramError::InvalidManifestField(
                 "ciphertext_sha256"
             ))
+        );
+
+        let duplicate_buckets = [
+            PrivateHnswOramCommitBucketRef {
+                bucket_id: 9,
+                ciphertext_sha256: &BASE64URL_NOPAD.encode(&[9; 32]),
+            },
+            PrivateHnswOramCommitBucketRef {
+                bucket_id: 9,
+                ciphertext_sha256: &BASE64URL_NOPAD.encode(&[10; 32]),
+            },
+        ];
+        let duplicate_input = PrivateHnswOramCommitSignatureInput {
+            updated_buckets: &duplicate_buckets,
+            ..input
+        };
+        let duplicate_signature = sign_b64(
+            &key_pair,
+            &private_hnsw_oram_commit_signature_message(duplicate_input),
+        );
+        assert_eq!(
+            validate_private_hnsw_oram_commit_signature(
+                duplicate_input,
+                &duplicate_signature,
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidCommitSignature)
         );
 
         let wrong_signature_key_input = PrivateHnswOramCommitSignatureInput {
