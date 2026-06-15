@@ -1150,11 +1150,12 @@ fn ensure_private_result_oram_session_open_storage_matches(
         ));
     }
     store
-        .read_merkle_path_batch(
+        .read_bucket_batch_with_proof(
             &[0],
             expected_epoch.index_epoch,
             &expected_epoch.root_hash,
             expected_manifest.bucket_count,
+            max_bucket_ciphertext_bytes(&expected_manifest.oram)?,
         )
         .map_err(private_result_oram_read_store_error)?;
     Ok(())
@@ -2382,6 +2383,96 @@ mod private_result_oram_tests {
             owner_signing_key_id: SIGNING_KEY_ID.to_string(),
             created_at_unix: 1_700_000_000,
         }
+    }
+
+    fn fixture_signature() -> PrivateResultOramSignature {
+        PrivateResultOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: SIGNING_KEY_ID.to_string(),
+            sig: BASE64URL_NOPAD.encode(&[7; 64]),
+        }
+    }
+
+    fn fixture_readable_bucket(
+        bucket_id: u64,
+        epoch: u64,
+        domain: u8,
+        bucket_commitment: &str,
+    ) -> qdrant_sec::PrivateResultOramBucket {
+        let ciphertext = vec![domain, bucket_id as u8];
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(sha2::Sha256::digest(&ciphertext).as_ref());
+        qdrant_sec::PrivateResultOramBucket {
+            version: 1,
+            bucket_id,
+            index_epoch: epoch,
+            ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
+            ciphertext_sha256,
+            bucket_commitment: bucket_commitment.to_string(),
+        }
+    }
+
+    #[test]
+    fn session_open_storage_recheck_requires_bucket_file() {
+        let mut session = fixture_session("session-1", 20);
+        session.bucket_count = 1;
+        session.manifest.bucket_count = 1;
+        let expected_epoch = PrivateResultOramEpochState {
+            index_epoch: session.index_epoch,
+            root_hash: session.root_hash.clone(),
+        };
+        let signature = fixture_signature();
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateResultOramStore::new(temp.path());
+        store.write_initial_epoch(&expected_epoch).unwrap();
+        store.write_manifest(&session.manifest, &signature).unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                expected_epoch.index_epoch,
+                expected_epoch.root_hash.clone(),
+                vec![expected_epoch.root_hash.clone()],
+            )
+            .unwrap();
+        let bucket =
+            fixture_readable_bucket(0, expected_epoch.index_epoch, 11, &expected_epoch.root_hash);
+        store
+            .write_bucket(
+                &bucket,
+                expected_epoch.index_epoch,
+                session.manifest.bucket_count,
+                4096,
+            )
+            .unwrap();
+        ensure_private_result_oram_session_open_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap();
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateResultOramStore::new(temp.path());
+        store.write_initial_epoch(&expected_epoch).unwrap();
+        store.write_manifest(&session.manifest, &signature).unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                expected_epoch.index_epoch,
+                expected_epoch.root_hash.clone(),
+                vec![expected_epoch.root_hash.clone()],
+            )
+            .unwrap();
+        let err = ensure_private_result_oram_session_open_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("encrypted bucket data is unavailable")
+        );
     }
 
     fn recovered_snapshot_manifest() -> PrivateResultOramManifest {

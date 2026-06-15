@@ -1340,13 +1340,14 @@ fn ensure_private_hnsw_session_open_storage_matches(
         ));
     }
     store
-        .read_merkle_path_batch(
+        .read_bucket_batch_with_proof(
             &[0],
             expected_epoch.index_epoch,
             &expected_epoch.root_hash,
             expected_manifest.bucket_count,
+            max_bucket_ciphertext_bytes(expected_manifest)?,
         )
-        .map_err(private_hnsw_read_store_error)?;
+        .map_err(private_hnsw_read_batch_store_error)?;
     Ok(())
 }
 
@@ -2407,6 +2408,24 @@ mod private_hnsw_tests {
         }
     }
 
+    fn fixture_readable_bucket(
+        bucket_id: u64,
+        epoch: u64,
+        domain: u8,
+        bucket_commitment: &str,
+    ) -> PrivateHnswOramBucket {
+        let ciphertext = vec![domain, bucket_id as u8];
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext).as_ref());
+        PrivateHnswOramBucket {
+            version: 1,
+            bucket_id,
+            index_epoch: epoch,
+            ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
+            ciphertext_sha256,
+            bucket_commitment: bucket_commitment.to_string(),
+        }
+    }
+
     #[test]
     fn initial_bucket_upload_requires_complete_orderable_bucket_set() {
         let buckets = vec![fixture_bucket(1, 42), fixture_bucket(0, 42)];
@@ -3085,6 +3104,16 @@ mod private_hnsw_tests {
                 vec![expected_epoch.root_hash.clone()],
             )
             .unwrap();
+        let bucket =
+            fixture_readable_bucket(0, expected_epoch.index_epoch, 11, &expected_epoch.root_hash);
+        store
+            .write_bucket(
+                &bucket,
+                expected_epoch.index_epoch,
+                session.manifest.bucket_count,
+                4096,
+            )
+            .unwrap();
         ensure_private_hnsw_session_open_storage_matches(
             &store,
             &expected_epoch,
@@ -3124,6 +3153,16 @@ mod private_hnsw_tests {
                 vec![expected_epoch.root_hash.clone()],
             )
             .unwrap();
+        let bucket =
+            fixture_readable_bucket(0, expected_epoch.index_epoch, 12, &expected_epoch.root_hash);
+        store
+            .write_bucket(
+                &bucket,
+                expected_epoch.index_epoch,
+                session.manifest.bucket_count,
+                4096,
+            )
+            .unwrap();
         let mut changed_manifest = session.manifest.clone();
         changed_manifest.logical_node_count += 1;
         store.write_manifest(&changed_manifest, &signature).unwrap();
@@ -3143,6 +3182,29 @@ mod private_hnsw_tests {
         let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
         store.write_initial_epoch(&expected_epoch).unwrap();
         store.write_manifest(&session.manifest, &signature).unwrap();
+        let err = ensure_private_hnsw_session_open_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("encrypted bucket data is unavailable")
+        );
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
+        store.write_initial_epoch(&expected_epoch).unwrap();
+        store.write_manifest(&session.manifest, &signature).unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                expected_epoch.index_epoch,
+                expected_epoch.root_hash.clone(),
+                vec![expected_epoch.root_hash.clone()],
+            )
+            .unwrap();
         let err = ensure_private_hnsw_session_open_storage_matches(
             &store,
             &expected_epoch,
