@@ -214,6 +214,19 @@ fn encrypted_vector_search_error(
     None
 }
 
+fn encrypted_vector_filter_error(rule: &EncryptionRuleRef, filter_vector: &str) -> CollectionError {
+    if encryption_rule_uses_private_hnsw_oram(rule) {
+        return CollectionError::bad_input(format!(
+            "cannot filter on private HNSW ORAM vector; {}",
+            private_hnsw_oram_api_required_message(filter_vector),
+        ));
+    }
+
+    CollectionError::bad_input(format!(
+        "cannot filter on encrypted vector '{filter_vector}'; use CKKS sidecar vector search APIs instead",
+    ))
+}
+
 fn reject_private_result_oram_payload_point_operation(
     operation: &CollectionUpdateOperations,
     encryption: &CollectionEncryptionConfig,
@@ -3324,9 +3337,7 @@ impl Collection {
                         if let Some(filter_vector) =
                             filter_touches_encrypted_vector(filter, encrypted_name)
                         {
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot filter on encrypted vector '{filter_vector}'; use CKKS sidecar vector search APIs instead",
-                            )));
+                            return Err(encrypted_vector_filter_error(rule, filter_vector));
                         }
                     }
                 }
@@ -4369,6 +4380,36 @@ mod tests {
         let message = format!("{err}");
         assert!(message.contains("cannot return encrypted vector 'embedding'"));
         assert!(message.contains("CKKS vector ciphertext read path"));
+        assert!(!message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+    }
+
+    #[test]
+    fn private_hnsw_filter_error_uses_session_api() {
+        let rule = private_hnsw_vector_rule("embedding");
+
+        let err = encrypted_vector_filter_error(&rule, "embedding");
+        let message = format!("{err}");
+        assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        assert!(message.contains("/private-hnsw/{vector}/session"));
+        assert!(!message.contains("embedding"));
+        assert!(!message.contains("CKKS sidecar"));
+    }
+
+    #[test]
+    fn ckks_filter_error_keeps_sidecar_message() {
+        let rule = EncryptionRuleRef {
+            id: "vector_conf".to_string(),
+            selector: EncryptionSelector::VectorNames {
+                names: vec!["embedding".to_string()],
+            },
+            instance: "docs_vector_v1".to_string(),
+            binding: Some("vector-envelope/v1".to_string()),
+        };
+
+        let err = encrypted_vector_filter_error(&rule, "embedding");
+        let message = format!("{err}");
+        assert!(message.contains("cannot filter on encrypted vector 'embedding'"));
+        assert!(message.contains("CKKS sidecar vector search APIs"));
         assert!(!message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
     }
 

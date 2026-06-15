@@ -295,6 +295,7 @@ impl CommandOpenFheBackend {
         self
     }
 
+    #[doc(hidden)]
     #[cfg(any(test, feature = "test-utils"))]
     pub fn shares_worker_pool_for_tests(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.workers, &other.workers)
