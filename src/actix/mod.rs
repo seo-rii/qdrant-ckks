@@ -688,4 +688,36 @@ mod tests {
             "/collections/docs/points/scroll?offset=7"
         );
     }
+
+    #[test]
+    fn private_oram_access_log_request_line_redacts_dynamic_values() {
+        let cases = [
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-hnsw/text/oram/read_paths/leaf-label-sentinel?leaf=query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-hnsw/text/oram/read_paths/[redacted]?[redacted] HTTP/1.1",
+                ["leaf-label-sentinel", "query-sentinel"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-result-oram/session/result-session-id-sentinel/close?token=query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-result-oram/session/{session_id}/close?[redacted] HTTP/1.1",
+                ["result-session-id-sentinel", "query-sentinel"],
+            ),
+        ];
+
+        for (request, expected, sentinels) in cases {
+            let line = access_log_request_line(&request);
+            assert_eq!(line, expected);
+            for sentinel in sentinels {
+                assert!(!line.contains(sentinel), "{line}");
+            }
+        }
+    }
 }
