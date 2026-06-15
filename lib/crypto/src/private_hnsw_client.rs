@@ -5973,6 +5973,40 @@ mod tests {
                 "payload_fetch_tokens"
             ))
         );
+
+        let mut wrong_real_result_count = plan.clone();
+        wrong_real_result_count.real_result_count = 0;
+        assert_eq!(
+            finalize_private_hnsw_private_result_fetch(
+                &result,
+                &wrong_real_result_count,
+                &wrong_point_token,
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "result_fetch_plan"
+            ))
+        );
+
+        let mut duplicate_fetch_plan = plan.clone();
+        duplicate_fetch_plan.fixed_result_k = 2;
+        duplicate_fetch_plan.payload_fetch_tokens = vec![[11; 32], [11; 32]];
+        let duplicate_token_fetch = PrivateResultOramTokenFetchResult {
+            accesses: vec![
+                result_token_access([11; 32], [21; 32], vec![1]),
+                result_token_access([11; 32], [21; 32], vec![2]),
+            ],
+            updated_buckets: Vec::new(),
+        };
+        assert_eq!(
+            finalize_private_hnsw_private_result_fetch(
+                &result,
+                &duplicate_fetch_plan,
+                &duplicate_token_fetch,
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "payload_fetch_tokens"
+            ))
+        );
     }
 
     #[test]
