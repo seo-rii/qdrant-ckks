@@ -1651,6 +1651,14 @@ where
             "path_batch_size",
         ));
     }
+    let leaf_count = private_result_oram_leaf_count(config.tree_height)?;
+    let path_batch_size = u64::try_from(read_plan.path_batch_size)
+        .map_err(|_| PrivateResultOramError::InvalidFetchPlanField("path_batch_size"))?;
+    if path_batch_size > leaf_count {
+        return Err(PrivateResultOramError::InvalidFetchPlanField(
+            "path_batch_size",
+        ));
+    }
     if payload_fetch_tokens.len() % read_plan.path_batch_size != 0 {
         return Err(PrivateResultOramError::InvalidFetchPlanField(
             "payload_fetch_tokens",
@@ -4158,6 +4166,42 @@ mod tests {
             token_count: 1,
             path_batch_size: 1,
         };
+        let oversized_path_batch_plan = PrivateResultOramReadBucketPlan {
+            batches: vec![PrivateResultOramReadBucketBatchPlan {
+                bucket_ids: Vec::new(),
+                token_count: 9,
+            }],
+            token_count: 9,
+            path_batch_size: 9,
+        };
+        let oversized_path_batch = PrivateResultOramEncryptedBucketBatch {
+            index_epoch: 42,
+            root_hash: root_hash.clone(),
+            bucket_count,
+            proof_value: "{}".to_string(),
+            buckets: Vec::new(),
+        };
+        let oversized_path_tokens = vec![[7u8; 32]; 9];
+        assert_eq!(
+            fetch_private_result_oram_tokens_encrypted_verified(
+                &keys,
+                base_context,
+                42,
+                &root_hash,
+                bucket_count,
+                43,
+                &mut state,
+                config,
+                &oversized_path_tokens,
+                &oversized_path_batch_plan,
+                &[oversized_path_batch],
+                || Ok(0),
+            ),
+            Err(PrivateResultOramError::InvalidFetchPlanField(
+                "path_batch_size"
+            ))
+        );
+
         let bad_metadata_batch = PrivateResultOramEncryptedBucketBatch {
             index_epoch: 42,
             root_hash: BASE64URL_NOPAD.encode(&[99; 32]),
