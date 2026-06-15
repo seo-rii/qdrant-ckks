@@ -111,6 +111,107 @@ const GRPC_ENDPOINT_WHITELIST: &[&str] = &[
     "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest",
 ];
 
+fn canonical_rest_endpoint_label(endpoint: &str) -> Option<&str> {
+    if REST_ENDPOINT_WHITELIST.binary_search(&endpoint).is_ok() {
+        return Some(endpoint);
+    }
+
+    let segments = endpoint
+        .trim_start_matches('/')
+        .split('/')
+        .collect::<Vec<_>>();
+    match segments.as_slice() {
+        ["collections", _, "private-hnsw", _, "buckets", ..] => {
+            Some("/collections/{collection_name}/private-hnsw/{vector_name}/buckets")
+        }
+        ["collections", _, "private-hnsw", _, "manifest", ..] => {
+            Some("/collections/{collection_name}/private-hnsw/{vector_name}/manifest")
+        }
+        ["collections", _, "private-hnsw", _, "oram", "commit", ..] => {
+            Some("/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit")
+        }
+        [
+            "collections",
+            _,
+            "private-hnsw",
+            _,
+            "oram",
+            "read_paths",
+            ..,
+        ] => Some("/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths"),
+        [
+            "collections",
+            _,
+            "private-hnsw",
+            _,
+            "session",
+            _,
+            "close",
+            ..,
+        ] => Some(
+            "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+        ),
+        ["collections", _, "private-hnsw", _, "session", ..] => {
+            Some("/collections/{collection_name}/private-hnsw/{vector_name}/session")
+        }
+        ["collections", _, "private-result-oram", "buckets", ..] => {
+            Some("/collections/{collection_name}/private-result-oram/buckets")
+        }
+        ["collections", _, "private-result-oram", "manifest", ..] => {
+            Some("/collections/{collection_name}/private-result-oram/manifest")
+        }
+        [
+            "collections",
+            _,
+            "private-result-oram",
+            "oram",
+            "commit",
+            ..,
+        ] => Some("/collections/{collection_name}/private-result-oram/oram/commit"),
+        [
+            "collections",
+            _,
+            "private-result-oram",
+            "oram",
+            "read_buckets",
+            ..,
+        ] => Some("/collections/{collection_name}/private-result-oram/oram/read_buckets"),
+        [
+            "collections",
+            _,
+            "private-result-oram",
+            "session",
+            _,
+            "close",
+            ..,
+        ] => Some("/collections/{collection_name}/private-result-oram/session/{session_id}/close"),
+        ["collections", _, "private-result-oram", "session", ..] => {
+            Some("/collections/{collection_name}/private-result-oram/session")
+        }
+        _ => None,
+    }
+}
+
+fn canonical_grpc_endpoint_label(endpoint: &str) -> Option<&str> {
+    if GRPC_ENDPOINT_WHITELIST.binary_search(&endpoint).is_ok() {
+        return Some(endpoint);
+    }
+
+    if !endpoint.starts_with("/qdrant.PrivateHnswOram/")
+        && !endpoint.starts_with("/qdrant.PrivateResultOram/")
+    {
+        return None;
+    }
+
+    GRPC_ENDPOINT_WHITELIST.iter().copied().find(|candidate| {
+        (candidate.starts_with("/qdrant.PrivateHnswOram/")
+            || candidate.starts_with("/qdrant.PrivateResultOram/"))
+            && endpoint
+                .strip_prefix(candidate)
+                .is_some_and(|suffix| suffix.starts_with('/'))
+    })
+}
+
 /// For REST requests, only report timings when having this HTTP response status.
 const REST_TIMINGS_FOR_STATUS: u16 = 200;
 
@@ -695,12 +796,12 @@ impl MetricsProvider for WebApiTelemetry {
             // Global mode: render global metrics as before
             let mut builder = OperationDurationMetricsBuilder::default();
             for (endpoint, responses) in &self.responses {
-                let Some((method, endpoint)) = endpoint.split_once(' ') else {
+                let Some((method, raw_endpoint)) = endpoint.split_once(' ') else {
                     continue;
                 };
-                if REST_ENDPOINT_WHITELIST.binary_search(&endpoint).is_err() {
+                let Some(endpoint) = canonical_rest_endpoint_label(raw_endpoint) else {
                     continue;
-                }
+                };
                 for (status, stats) in responses {
                     builder.add(
                         stats,
@@ -719,12 +820,12 @@ impl MetricsProvider for WebApiTelemetry {
             let mut builder = OperationDurationMetricsBuilder::default();
             for (collection, methods) in &self.per_collection_responses {
                 for (endpoint, responses) in methods {
-                    let Some((method, endpoint)) = endpoint.split_once(' ') else {
+                    let Some((method, raw_endpoint)) = endpoint.split_once(' ') else {
                         continue;
                     };
-                    if REST_ENDPOINT_WHITELIST.binary_search(&endpoint).is_err() {
+                    let Some(endpoint) = canonical_rest_endpoint_label(raw_endpoint) else {
                         continue;
-                    }
+                    };
                     for (status, stats) in responses {
                         builder.add(
                             stats,
@@ -751,19 +852,13 @@ impl MetricsProvider for GrpcTelemetry {
             // Global mode: render global metrics as before
             let mut builder = OperationDurationMetricsBuilder::default();
             for (endpoint, responses) in &self.responses {
-                if GRPC_ENDPOINT_WHITELIST
-                    .binary_search(&endpoint.as_str())
-                    .is_err()
-                {
+                let Some(endpoint) = canonical_grpc_endpoint_label(endpoint) else {
                     continue;
-                }
+                };
                 for (status, stats) in responses {
                     builder.add(
                         stats,
-                        &[
-                            ("endpoint", endpoint.as_str()),
-                            ("status", &status.to_string()),
-                        ],
+                        &[("endpoint", endpoint), ("status", &status.to_string())],
                         true,
                     );
                 }
@@ -774,17 +869,14 @@ impl MetricsProvider for GrpcTelemetry {
             let mut builder = OperationDurationMetricsBuilder::default();
             for (collection, methods) in &self.per_collection_responses {
                 for (endpoint, responses) in methods {
-                    if GRPC_ENDPOINT_WHITELIST
-                        .binary_search(&endpoint.as_str())
-                        .is_err()
-                    {
+                    let Some(endpoint) = canonical_grpc_endpoint_label(endpoint) else {
                         continue;
-                    }
+                    };
                     for (status, stats) in responses {
                         builder.add(
                             stats,
                             &[
-                                ("endpoint", endpoint.as_str()),
+                                ("endpoint", endpoint),
                                 ("status", &status.to_string()),
                                 ("collection", collection),
                             ],
@@ -1456,6 +1548,71 @@ mod tests {
                 "gRPC private ORAM endpoint `{endpoint}` must be whitelisted for metrics",
             );
         }
+    }
+
+    #[test]
+    fn test_private_oram_dynamic_metrics_paths_are_canonicalized() {
+        use super::{canonical_grpc_endpoint_label, canonical_rest_endpoint_label};
+
+        let rest_cases = [
+            (
+                "/collections/docs/private-hnsw/text/buckets/bucket-id-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/buckets",
+            ),
+            (
+                "/collections/docs/private-hnsw/text/manifest/root-hash-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/manifest",
+            ),
+            (
+                "/collections/docs/private-hnsw/text/oram/read_paths/leaf-label-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+            ),
+            (
+                "/collections/docs/private-hnsw/text/session/client-state-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/session",
+            ),
+            (
+                "/collections/docs/private-hnsw/text/session/session-id-sentinel/close",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+            ),
+            (
+                "/collections/docs/private-result-oram/session/token-position-map-sentinel",
+                "/collections/{collection_name}/private-result-oram/session",
+            ),
+            (
+                "/collections/docs/private-result-oram/oram/read_buckets/result-bucket-id-sentinel",
+                "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+            ),
+        ];
+        for (raw, canonical) in rest_cases {
+            assert_eq!(canonical_rest_endpoint_label(raw), Some(canonical));
+        }
+        assert_eq!(
+            canonical_rest_endpoint_label("/collections/docs/points/search/not-whitelisted"),
+            None,
+        );
+
+        let grpc_cases = [
+            (
+                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/client-state-sentinel",
+                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
+            ),
+            (
+                "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths/leaf-label-sentinel",
+                "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths",
+            ),
+            (
+                "/qdrant.PrivateResultOram/ClosePrivateResultOramSession/result-session-id-sentinel",
+                "/qdrant.PrivateResultOram/ClosePrivateResultOramSession",
+            ),
+        ];
+        for (raw, canonical) in grpc_cases {
+            assert_eq!(canonical_grpc_endpoint_label(raw), Some(canonical));
+        }
+        assert_eq!(
+            canonical_grpc_endpoint_label("/qdrant.Points/Search/vector-name-sentinel"),
+            None,
+        );
     }
 
     #[test]
