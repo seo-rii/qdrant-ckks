@@ -1977,12 +1977,21 @@ pub fn sign_private_result_oram_commit(
     if plan.updated_buckets.is_empty() {
         return Err(PrivateResultOramError::EmptyCommit);
     }
+    if plan.updated_buckets.len() > u32::MAX as usize {
+        return Err(PrivateResultOramError::InvalidCommitSignature);
+    }
     if plan.new_epoch <= plan.old_epoch {
         return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
     }
     decode_base64url_32(&plan.old_root_hash, "old_root_hash")?;
     decode_base64url_32(&plan.new_root_hash, "new_root_hash")?;
+    let mut seen_bucket_ids = BTreeSet::new();
     for bucket in &plan.updated_buckets {
+        if !seen_bucket_ids.insert(bucket.bucket_id) {
+            return Err(PrivateResultOramError::DuplicateUpdatedBucket {
+                bucket_id: bucket.bucket_id,
+            });
+        }
         decode_base64url_32(&bucket.ciphertext_sha256, "ciphertext_sha256")
             .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext_sha256"))?;
     }
@@ -5308,6 +5317,15 @@ mod tests {
             Err(PrivateResultOramError::InvalidBucketField(
                 "ciphertext_sha256"
             ))
+        );
+
+        let mut duplicate_bucket_plan = plan.clone();
+        duplicate_bucket_plan
+            .updated_buckets
+            .push(duplicate_bucket_plan.updated_buckets[0].clone());
+        assert_eq!(
+            sign_private_result_oram_commit(&key_pair, context, &duplicate_bucket_plan),
+            Err(PrivateResultOramError::DuplicateUpdatedBucket { bucket_id: 2 })
         );
     }
 

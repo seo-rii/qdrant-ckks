@@ -3022,12 +3022,23 @@ pub fn sign_private_hnsw_oram_commit(
     if plan.updated_buckets.is_empty() {
         return Err(PrivateHnswClientError::EmptyCommit);
     }
+    if plan.updated_buckets.len() > u32::MAX as usize {
+        return Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+            "updated_buckets",
+        ));
+    }
     if plan.new_epoch <= plan.old_epoch {
         return Err(PrivateHnswClientError::InvalidCommitEpoch);
     }
     decode_merkle_root(&plan.old_root_hash)?;
     decode_merkle_root(&plan.new_root_hash)?;
+    let mut seen_bucket_ids = BTreeSet::new();
     for bucket in &plan.updated_buckets {
+        if !seen_bucket_ids.insert(bucket.bucket_id) {
+            return Err(PrivateHnswClientError::DuplicateUpdatedBucket {
+                bucket_id: bucket.bucket_id,
+            });
+        }
         decode_bucket_ciphertext_hash(&bucket.ciphertext_sha256)?;
     }
     let bucket_refs = plan.signature_bucket_refs();
@@ -5061,6 +5072,15 @@ mod tests {
         assert_eq!(
             sign_private_hnsw_oram_commit(&key_pair, context, &malformed_hash_plan),
             Err(PrivateHnswClientError::InvalidBucketCiphertextHash)
+        );
+
+        let mut duplicate_bucket_plan = plan.clone();
+        duplicate_bucket_plan
+            .updated_buckets
+            .push(duplicate_bucket_plan.updated_buckets[0].clone());
+        assert_eq!(
+            sign_private_hnsw_oram_commit(&key_pair, context, &duplicate_bucket_plan),
+            Err(PrivateHnswClientError::DuplicateUpdatedBucket { bucket_id: 2 })
         );
     }
 
