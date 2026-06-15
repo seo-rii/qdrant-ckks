@@ -1069,6 +1069,46 @@ mod tests {
     }
 
     #[test]
+    fn manifest_signature_requires_owner_and_runtime_key_id_match() {
+        let key_pair = deterministic_key_pair();
+        let manifest = fixture_manifest();
+        let signature = PrivateHnswOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: manifest.owner_signing_key_id.clone(),
+            sig: sign_b64(
+                &key_pair,
+                &private_hnsw_oram_manifest_signature_message(&manifest),
+            ),
+        };
+
+        let mut wrong_owner_signature = signature.clone();
+        wrong_owner_signature.key_id = "tenant-a/private-hnsw-signing-v2".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_manifest(
+                &manifest,
+                Some(&wrong_owner_signature),
+                fixture_context(
+                    key_pair.public_key().as_ref(),
+                    &wrong_owner_signature.key_id
+                ),
+            ),
+            Err(PrivateHnswOramError::SignatureKeyIdMismatch)
+        );
+
+        assert_eq!(
+            validate_private_hnsw_oram_manifest(
+                &manifest,
+                Some(&signature),
+                fixture_context(
+                    key_pair.public_key().as_ref(),
+                    "tenant-a/private-hnsw-wrong"
+                ),
+            ),
+            Err(PrivateHnswOramError::SignatureKeyIdMismatch)
+        );
+    }
+
+    #[test]
     fn manifest_shape_rejects_node_count_over_capacity() {
         let mut manifest = fixture_manifest();
         manifest.oram.tree_height = 1;
