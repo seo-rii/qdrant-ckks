@@ -92,13 +92,78 @@ pub(crate) fn redact_private_oram_access_path(path_and_query: &str) -> String {
         .map_or((path_and_query, None), |(path, query)| (path, Some(query)));
     let private_oram_path =
         path.contains("/private-hnsw/") || path.contains("/private-result-oram");
-    let redacted_path = redact_private_oram_session_path(path);
+    let redacted_path = redact_private_oram_path(path);
 
     match (private_oram_path, query) {
         (true, Some(_)) => format!("{redacted_path}?[redacted]"),
         (_, Some(query)) => format!("{redacted_path}?{query}"),
         (_, None) => redacted_path,
     }
+}
+
+fn redact_private_oram_path(path: &str) -> String {
+    let session_redacted = redact_private_oram_session_path(path);
+    if session_redacted != path {
+        return session_redacted;
+    }
+
+    let segments = path.split('/').collect::<Vec<_>>();
+    let endpoint_idx = match segments.as_slice() {
+        ["", "collections", _, "private-hnsw", _, "buckets", ..] => Some(5),
+        ["", "collections", _, "private-hnsw", _, "manifest", ..] => Some(5),
+        [
+            "",
+            "collections",
+            _,
+            "private-hnsw",
+            _,
+            "oram",
+            "commit",
+            ..,
+        ] => Some(6),
+        [
+            "",
+            "collections",
+            _,
+            "private-hnsw",
+            _,
+            "oram",
+            "read_paths",
+            ..,
+        ] => Some(6),
+        ["", "collections", _, "private-result-oram", "buckets", ..] => Some(4),
+        ["", "collections", _, "private-result-oram", "manifest", ..] => Some(4),
+        [
+            "",
+            "collections",
+            _,
+            "private-result-oram",
+            "oram",
+            "commit",
+            ..,
+        ] => Some(5),
+        [
+            "",
+            "collections",
+            _,
+            "private-result-oram",
+            "oram",
+            "read_buckets",
+            ..,
+        ] => Some(5),
+        _ => None,
+    };
+
+    let Some(endpoint_idx) = endpoint_idx else {
+        return path.to_string();
+    };
+    if endpoint_idx + 1 >= segments.len() {
+        return path.to_string();
+    }
+
+    let mut redacted = segments[..=endpoint_idx].to_vec();
+    redacted.push("[redacted]");
+    redacted.join("/")
 }
 
 fn redact_private_oram_session_path(path: &str) -> String {
@@ -554,9 +619,33 @@ mod tests {
         );
         assert_eq!(
             redact_private_oram_access_path(
+                "/collections/docs/private-hnsw/text/buckets/bucket-id-sentinel"
+            ),
+            "/collections/docs/private-hnsw/text/buckets/[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-hnsw/text/manifest/root-hash-sentinel"
+            ),
+            "/collections/docs/private-hnsw/text/manifest/[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-hnsw/text/oram/read_paths/leaf-label-sentinel"
+            ),
+            "/collections/docs/private-hnsw/text/oram/read_paths/[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
                 "/collections/docs/private-hnsw/text/oram/commit?old_root=root-sentinel"
             ),
             "/collections/docs/private-hnsw/text/oram/commit?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-hnsw/text/oram/commit/updated-bucket-sentinel"
+            ),
+            "/collections/docs/private-hnsw/text/oram/commit/[redacted]"
         );
         assert_eq!(
             redact_private_oram_access_path(
@@ -566,9 +655,33 @@ mod tests {
         );
         assert_eq!(
             redact_private_oram_access_path(
+                "/collections/docs/private-result-oram/buckets/result-bucket-id-sentinel"
+            ),
+            "/collections/docs/private-result-oram/buckets/[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-result-oram/manifest/result-root-hash-sentinel"
+            ),
+            "/collections/docs/private-result-oram/manifest/[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-result-oram/oram/read_buckets/result-bucket-id-sentinel"
+            ),
+            "/collections/docs/private-result-oram/oram/read_buckets/[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
                 "/collections/docs/private-result-oram/oram/commit?updated_buckets=bucket-sentinel"
             ),
             "/collections/docs/private-result-oram/oram/commit?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-result-oram/oram/commit/result-updated-bucket-sentinel"
+            ),
+            "/collections/docs/private-result-oram/oram/commit/[redacted]"
         );
         assert_eq!(
             redact_private_oram_access_path("/collections/docs/points/scroll?offset=7"),
