@@ -5799,6 +5799,19 @@ mod tests {
             ))
         );
 
+        let wrong_signature_key_input = PrivateResultOramCommitSignatureInput {
+            signature_key_id: "tenant-a/private-result-signing-v2",
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_commit_signature(
+                wrong_signature_key_input,
+                &signature,
+                verification,
+            ),
+            Err(PrivateResultOramError::SignatureKeyIdMismatch)
+        );
+
         let tampered = PrivateResultOramCommitSignatureInput {
             new_epoch: 44,
             ..input

@@ -1340,6 +1340,19 @@ mod tests {
             ))
         );
 
+        let wrong_signature_key_input = PrivateHnswOramCommitSignatureInput {
+            signature_key_id: "tenant-a/private-hnsw-signing-v2",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_commit_signature(
+                wrong_signature_key_input,
+                &signature,
+                verification,
+            ),
+            Err(PrivateHnswOramError::SignatureKeyIdMismatch)
+        );
+
         let tampered = PrivateHnswOramCommitSignatureInput {
             new_epoch: 44,
             ..input
