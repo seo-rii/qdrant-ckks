@@ -2143,6 +2143,13 @@ fn validate_private_result_oram_bucket_ciphertext_fixed_size(
     bucket: &PrivateResultOramBucket,
     expected_ciphertext_bytes: usize,
 ) -> Result<(), PrivateResultOramError> {
+    let Some(expected_encoded_len) = max_base64url_nopad_encoded_len(expected_ciphertext_bytes)
+    else {
+        return Err(PrivateResultOramError::InvalidBucketField("ciphertext"));
+    };
+    if bucket.ciphertext.len() != expected_encoded_len {
+        return Err(PrivateResultOramError::InvalidBucketField("ciphertext"));
+    }
     let ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext"))?;
@@ -5754,6 +5761,20 @@ mod tests {
             fixture_bucket_commitment(0, short_ciphertext.manifest.index_epoch, &short_hash);
         assert_eq!(
             validate_private_result_oram_upload_bundle(&short_ciphertext),
+            Err(PrivateResultOramError::InvalidBucketField("ciphertext"))
+        );
+
+        let mut long_ciphertext = decoded.clone();
+        let expected_ciphertext_bytes =
+            private_result_oram_bucket_ciphertext_bytes(&long_ciphertext.manifest.oram).unwrap();
+        let long_raw = vec![7; expected_ciphertext_bytes + 1];
+        let long_hash = BASE64URL_NOPAD.encode(Sha256::digest(&long_raw).as_ref());
+        long_ciphertext.buckets[0].ciphertext = BASE64URL_NOPAD.encode(&long_raw);
+        long_ciphertext.buckets[0].ciphertext_sha256 = long_hash.clone();
+        long_ciphertext.buckets[0].bucket_commitment =
+            fixture_bucket_commitment(0, long_ciphertext.manifest.index_epoch, &long_hash);
+        assert_eq!(
+            validate_private_result_oram_upload_bundle(&long_ciphertext),
             Err(PrivateResultOramError::InvalidBucketField("ciphertext"))
         );
 
