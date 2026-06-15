@@ -707,7 +707,8 @@ pub fn finalize_private_hnsw_private_result_fetch(
         ResultPrivacyMode::PrivatePayloadOramRequired,
         result,
     )?;
-    if fetch_plan.real_result_count != result.hits.len()
+    if fetch_plan.fixed_result_k == 0
+        || fetch_plan.real_result_count != result.hits.len()
         || fetch_plan.fixed_result_k != fetch_plan.payload_fetch_tokens.len()
         || token_fetch_result.accesses.len() != fetch_plan.payload_fetch_tokens.len()
     {
@@ -6001,6 +6002,31 @@ mod tests {
                 &result,
                 &wrong_real_result_count,
                 &wrong_point_token,
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "result_fetch_plan"
+            ))
+        );
+
+        let empty_result = PrivateHnswSearchResult {
+            hits: Vec::new(),
+            accessed_leaf_labels: Vec::new(),
+            completed_steps: 1,
+        };
+        let zero_budget_plan = PrivateHnswPrivateResultFetchPlan {
+            payload_fetch_tokens: Vec::new(),
+            real_result_count: 0,
+            fixed_result_k: 0,
+        };
+        let empty_token_fetch = PrivateResultOramTokenFetchResult {
+            accesses: Vec::new(),
+            updated_buckets: Vec::new(),
+        };
+        assert_eq!(
+            finalize_private_hnsw_private_result_fetch(
+                &empty_result,
+                &zero_budget_plan,
+                &empty_token_fetch,
             ),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "result_fetch_plan"
