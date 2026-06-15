@@ -105,6 +105,7 @@ Selector components that collide with reserved envelope markers
 
 Runtime crypto instances currently accept only these provider IDs:
 `payload/aes-256-gcm@v1`, `payload/client-aead@v1`,
+`payload/private-result-oram@v1`,
 `metadata/aes-256-gcm@v1`, `metadata/blind-index-hmac@v1`,
 `vector/openfhe-ckks@v1`, `vector/client-ckks@v1`, and
 `vector/private-hnsw-oram@v1`.
@@ -533,8 +534,9 @@ zero trust rather than server-managed encryption. Strict mode is a fail-closed
 profile: it rejects server-held crypto materials, OpenFHE bridge backends,
 server-side payload/metadata AEAD providers, and the trusted-bridge
 `vector/openfhe-ckks@v1` provider. The accepted providers in strict mode are
-server-blind `payload/client-aead@v1`, `metadata/blind-index-hmac@v1`,
-`vector/client-ckks@v1`, and `vector/private-hnsw-oram@v1`. Use the non-strict trusted-bridge profile only when
+server-blind `payload/client-aead@v1`, `payload/private-result-oram@v1`,
+`metadata/blind-index-hmac@v1`, `vector/client-ckks@v1`, and
+`vector/private-hnsw-oram@v1`. Use the non-strict trusted-bridge profile only when
 operators explicitly accept that Qdrant/bridge may observe embeddings, scores,
 access patterns, and ranking order.
 

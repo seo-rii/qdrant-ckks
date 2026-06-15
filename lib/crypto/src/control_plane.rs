@@ -301,6 +301,7 @@ mod tests {
         fn register(&self, registry: &mut CryptoRegistry) {
             registry.register_payload_provider(PAYLOAD_AES_GCM_PROVIDER);
             registry.register_payload_provider(PAYLOAD_CLIENT_AEAD_PROVIDER);
+            registry.register_payload_provider(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER);
             registry.register_vector_provider(VECTOR_OPENFHE_CKKS_PROVIDER);
             registry.register_vector_provider(VECTOR_CLIENT_CKKS_PROVIDER);
             registry.register_vector_provider(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER);
@@ -474,7 +475,11 @@ mod tests {
 
         assert_eq!(
             registry.payload_provider_ids().collect::<Vec<_>>(),
-            vec![PAYLOAD_AES_GCM_PROVIDER, PAYLOAD_CLIENT_AEAD_PROVIDER],
+            vec![
+                PAYLOAD_AES_GCM_PROVIDER,
+                PAYLOAD_CLIENT_AEAD_PROVIDER,
+                PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+            ],
         );
         assert_eq!(
             registry.vector_provider_ids().collect::<Vec<_>>(),
