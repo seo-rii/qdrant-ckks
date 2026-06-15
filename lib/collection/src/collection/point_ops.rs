@@ -92,11 +92,9 @@ fn plaintext_vector_write_error_for_encryption_rule(
 ) -> CollectionError {
     if encryption_rule_uses_private_hnsw_oram(rule) {
         let prefix = if peer_update {
-            format!(
-                "peer update cannot write plaintext vector '{encrypted_name}' for encrypted vector rule"
-            )
+            "peer update cannot write plaintext vector for private HNSW ORAM vector".to_string()
         } else {
-            format!("cannot write plaintext vector '{encrypted_name}' for encrypted vector rule")
+            "cannot write plaintext vector for private HNSW ORAM vector".to_string()
         };
         return CollectionError::bad_input(format!(
             "{prefix}; {}",
@@ -155,11 +153,9 @@ fn reject_private_hnsw_oram_read_only_point_operation(
     };
 
     let prefix = if peer_update {
-        format!(
-            "peer update cannot {operation_kind} for read-only private HNSW ORAM vector '{vector_name}'",
-        )
+        format!("peer update cannot {operation_kind} for read-only private HNSW ORAM vector")
     } else {
-        format!("cannot {operation_kind} for read-only private HNSW ORAM vector '{vector_name}'",)
+        format!("cannot {operation_kind} for read-only private HNSW ORAM vector")
     };
     Err(CollectionError::bad_input(format!(
         "{prefix}; {}",
@@ -230,11 +226,9 @@ fn reject_private_result_oram_payload_point_operation(
     };
 
     let prefix = if peer_update {
-        format!(
-            "peer update cannot {operation_kind} for private result ORAM payload field '{payload_path}'",
-        )
+        format!("peer update cannot {operation_kind} for private result ORAM payload field")
     } else {
-        format!("cannot {operation_kind} for private result ORAM payload field '{payload_path}'",)
+        format!("cannot {operation_kind} for private result ORAM payload field")
     };
     Err(CollectionError::bad_input(format!(
         "{prefix}; {}",
@@ -257,7 +251,7 @@ fn private_result_oram_payload_operation_violation<'a>(
         for payload_path in paths {
             let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
                 CollectionError::bad_input(format!(
-                    "private result ORAM payload field path '{payload_path}' is invalid: {err:?}",
+                    "private result ORAM payload field path is invalid: {err:?}",
                 ))
             })?;
             if let Some(operation_kind) =
@@ -354,7 +348,7 @@ fn private_result_oram_raw_payload_read_violation<'a>(
         for payload_path in paths {
             let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
                 CollectionError::bad_input(format!(
-                    "private result ORAM payload field path '{payload_path}' is invalid: {err:?}",
+                    "private result ORAM payload field path is invalid: {err:?}",
                 ))
             })?;
             if private_result_oram_with_payload_touches_path(with_payload, &protected_path) {
@@ -3755,7 +3749,7 @@ impl Collection {
         };
 
         Err(CollectionError::bad_input(format!(
-            "cannot {operation} private result ORAM payload field '{payload_path}' through ordinary collection payload reads; {}",
+            "cannot {operation} private result ORAM payload field through ordinary collection payload reads; {}",
             private_result_oram_api_required_message(payload_path),
         )))
     }
@@ -4332,14 +4326,16 @@ mod tests {
         let err = plaintext_vector_write_error_for_encryption_rule("embedding", &rule, false);
         let message = format!("{err}");
         assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
-        assert!(message.contains("/private-hnsw/embedding/session"));
+        assert!(message.contains("/private-hnsw/{vector}/session"));
+        assert!(!message.contains("embedding"));
         assert!(!message.contains("CKKS vector encryption"));
 
         let peer_err = plaintext_vector_write_error_for_encryption_rule("embedding", &rule, true);
         let peer_message = format!("{peer_err}");
         assert!(peer_message.contains("peer update"));
         assert!(peer_message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
-        assert!(peer_message.contains("/private-hnsw/embedding/session"));
+        assert!(peer_message.contains("/private-hnsw/{vector}/session"));
+        assert!(!peer_message.contains("embedding"));
         assert!(!peer_message.contains("CKKS vector encryption"));
     }
 
@@ -4354,7 +4350,8 @@ mod tests {
             let err = encrypted_vector_return_error(&encryption, &with_vector).unwrap();
             let message = format!("{err}");
             assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
-            assert!(message.contains("/private-hnsw/embedding/session"));
+            assert!(message.contains("/private-hnsw/{vector}/session"));
+            assert!(!message.contains("embedding"));
             assert!(message.contains("Point-level vector reads"));
             assert!(!message.contains("CKKS vector ciphertext read path"));
         }
@@ -4410,7 +4407,8 @@ mod tests {
             let message = format!("{err}");
             assert!(message.contains(expected_kind), "{message}");
             assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
-            assert!(message.contains("/private-hnsw/embedding/session"));
+            assert!(message.contains("/private-hnsw/{vector}/session"));
+            assert!(!message.contains("embedding"), "{message}");
 
             let peer_err =
                 reject_private_hnsw_oram_read_only_point_operation(&operation, &encryption, true)
@@ -4418,7 +4416,8 @@ mod tests {
             let peer_message = format!("{peer_err}");
             assert!(peer_message.contains("peer update"), "{peer_message}");
             assert!(peer_message.contains(expected_kind), "{peer_message}");
-            assert!(peer_message.contains("/private-hnsw/embedding/session"));
+            assert!(peer_message.contains("/private-hnsw/{vector}/session"));
+            assert!(!peer_message.contains("embedding"), "{peer_message}");
         }
     }
 

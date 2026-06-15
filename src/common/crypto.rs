@@ -21876,7 +21876,8 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                    && description.contains("/private-hnsw/embedding/session")),
+                    && description.contains("/private-hnsw/{vector}/session")
+                    && !description.contains("embedding")),
             "unexpected error: {err:?}",
         );
 

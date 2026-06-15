@@ -3149,7 +3149,7 @@ fn private_result_oram_payload_upsert_violation<'a>(
         for payload_path in paths {
             let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
                 StorageError::bad_input(format!(
-                    "private result ORAM payload field path '{payload_path}' is invalid: {err:?}",
+                    "private result ORAM payload field path is invalid: {err:?}",
                 ))
             })?;
             if upsert_touches_payload_path(operation, &protected_path) {
@@ -3176,7 +3176,7 @@ fn private_result_oram_payload_update_violation<'a>(
         for payload_path in paths {
             let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
                 StorageError::bad_input(format!(
-                    "private result ORAM payload field path '{payload_path}' is invalid: {err:?}",
+                    "private result ORAM payload field path is invalid: {err:?}",
                 ))
             })?;
             if payload_touches_path(&operation.payload, operation.key.as_ref(), &protected_path) {
@@ -3235,7 +3235,7 @@ fn private_result_oram_payload_write_error(
     operation_kind: &str,
 ) -> StorageError {
     StorageError::bad_input(format!(
-        "cannot {operation_kind} for private result ORAM payload field '{payload_path}'; {}",
+        "cannot {operation_kind} for private result ORAM payload field; {}",
         private_result_oram_api_required_message(payload_path),
     ))
 }
@@ -4483,7 +4483,8 @@ esac
             err,
             StorageError::BadInput { description }
                 if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                    && description.contains("/private-hnsw/embedding/session")
+                    && description.contains("/private-hnsw/{vector}/session")
+                    && !description.contains("embedding")
                     && !description.contains("client-side encrypted vector envelope")
         ));
     }
@@ -4626,7 +4627,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/embedding/session")
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
                         && !description.contains("CKKS vector encryption runtime")
             ));
 
@@ -4663,7 +4665,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/embedding/session")
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
                         && !description.contains("CKKS vector encryption runtime")
             ));
 
@@ -4698,7 +4701,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/embedding/session")
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
                         && !description.contains("CKKS vector encryption runtime")
             ));
 
@@ -4726,7 +4730,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/embedding/session")
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
                         && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
             ));
 
@@ -4754,7 +4759,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/embedding/session")
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
                         && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
             ));
 
@@ -4780,7 +4786,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/embedding/session")
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
                         && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
             ));
 
@@ -4806,7 +4813,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/embedding/session")
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
                         && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
             ));
 
@@ -4843,7 +4851,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/embedding/session")
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
             ));
 
             let err = do_update_vectors(
@@ -4877,7 +4886,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/embedding/session")
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
             ));
 
             let err = do_batch_update_points(
@@ -4913,7 +4923,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/embedding/session")
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
                         && !description.contains("CKKS vector encryption runtime")
             ));
 
@@ -4945,7 +4956,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/embedding/session")
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
                         && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
             ));
         });

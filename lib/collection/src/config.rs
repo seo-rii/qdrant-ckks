@@ -386,8 +386,9 @@ mod ckks_tests {
 
         let message = private_hnsw_oram_api_required_message("embedding");
         assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
-        assert!(message.contains("/private-hnsw/embedding/session"));
+        assert!(message.contains("/private-hnsw/{vector}/session"));
         assert!(message.contains("compatible SDK traversal APIs"));
+        assert!(!message.contains("embedding"));
     }
 
     #[test]
@@ -2377,27 +2378,27 @@ pub fn encryption_rule_uses_private_result_oram(rule: &EncryptionRuleRef) -> boo
     rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING)
 }
 
-pub fn private_hnsw_oram_api_required_message(vector_name: &str) -> String {
+pub fn private_hnsw_oram_api_required_message(_vector_name: &str) -> String {
     format!(
-        "{} requires client-led private ORAM sessions for vector '{vector_name}'. Use /private-hnsw/{vector_name}/session and compatible SDK traversal APIs.",
+        "{} requires client-led private ORAM sessions. Use /private-hnsw/{{vector}}/session and compatible SDK traversal APIs.",
         qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
     )
 }
 
-pub fn private_result_oram_api_required_message(payload_path: &str) -> String {
+pub fn private_result_oram_api_required_message(_payload_path: &str) -> String {
     format!(
-        "{} requires client-led private result ORAM sessions for payload field '{payload_path}'. Use /private-result-oram/session and compatible SDK fetch APIs.",
+        "{} requires client-led private result ORAM sessions. Use /private-result-oram/session and compatible SDK fetch APIs.",
         qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
     )
 }
 
 pub fn private_result_oram_payload_selector_overlap_message(
     operation: &str,
-    requested_path: impl std::fmt::Display,
+    _requested_path: impl std::fmt::Display,
     payload_path: &str,
 ) -> String {
     format!(
-        "cannot {operation} private result ORAM payload field '{requested_path}' because it overlaps private result ORAM path '{payload_path}'; {}",
+        "cannot {operation} private result ORAM payload field because it overlaps a private result ORAM path; {}",
         private_result_oram_api_required_message(payload_path),
     )
 }

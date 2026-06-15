@@ -183,7 +183,7 @@ mod tests {
                 .expect_err("private result ORAM payload facets must fail closed");
             let message = err.to_string();
             assert!(message.contains("cannot facet on private result ORAM payload field"));
-            assert!(message.contains("document.body"));
+            assert!(!message.contains("document.body"));
             assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
             assert!(message.contains("/private-result-oram/session"));
             assert!(!message.contains("configure a blind index provider"));

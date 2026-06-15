@@ -6019,7 +6019,7 @@ async fn preflight_private_result_oram_raw_payload_read(
     };
 
     Err(StorageError::bad_input(format!(
-        "cannot {operation} private result ORAM payload field '{payload_path}' through ordinary collection payload reads; {}",
+        "cannot {operation} private result ORAM payload field through ordinary collection payload reads; {}",
         private_result_oram_api_required_message(payload_path),
     )))
 }
@@ -6045,7 +6045,7 @@ fn private_result_oram_raw_payload_read_violation<'a>(
         for payload_path in paths {
             let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
                 StorageError::bad_input(format!(
-                    "private result ORAM payload field path '{payload_path}' is invalid: {err:?}",
+                    "private result ORAM payload field path is invalid: {err:?}",
                 ))
             })?;
             if private_result_oram_with_payload_touches_path(with_payload, &protected_path) {
@@ -9018,7 +9018,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
 
             let err = do_query_points(
@@ -9062,7 +9062,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
         });
     }
@@ -9117,7 +9117,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
 
             let err = do_query_points(
@@ -9156,7 +9156,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
         });
     }
@@ -9204,7 +9204,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
 
             let err = do_search_batch_points(
@@ -9239,7 +9239,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
         });
     }
@@ -9289,7 +9289,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
                         && !description.contains("runtime CKKS")
                         && !description.contains("runtime OpenFHE")
             ));
@@ -9323,7 +9323,10 @@ mod tests {
                 message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER),
                 "{message}"
             );
-            assert!(message.contains("/private-hnsw/text/session"), "{message}");
+            assert!(
+                message.contains("/private-hnsw/{vector}/session"),
+                "{message}"
+            );
             assert!(!message.contains("runtime CKKS"), "{message}");
             assert!(!message.contains("runtime OpenFHE"), "{message}");
 
@@ -9359,7 +9362,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
                         && !description.contains("runtime CKKS")
                         && !description.contains("runtime OpenFHE")
             ));
@@ -9394,7 +9397,10 @@ mod tests {
                 message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER),
                 "{message}"
             );
-            assert!(message.contains("/private-hnsw/text/session"), "{message}");
+            assert!(
+                message.contains("/private-hnsw/{vector}/session"),
+                "{message}"
+            );
             assert!(!message.contains("runtime CKKS"), "{message}");
             assert!(!message.contains("runtime OpenFHE"), "{message}");
 
@@ -9429,7 +9435,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
                         && !description.contains("runtime CKKS")
                         && !description.contains("runtime OpenFHE")
             ));
@@ -9463,7 +9469,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
                         && !description.contains("runtime CKKS")
                         && !description.contains("runtime OpenFHE")
             ));
@@ -9491,7 +9497,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
                         && !description.contains("runtime CKKS")
                         && !description.contains("runtime OpenFHE")
             ));
@@ -9533,7 +9539,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
                         && !description.contains("runtime CKKS")
                         && !description.contains("runtime OpenFHE")
             ));
@@ -9572,7 +9578,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
                         && !description.contains("runtime CKKS")
                         && !description.contains("runtime OpenFHE")
             ));
@@ -9610,7 +9616,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
                         && !description.contains("CKKS vector ciphertext")
             ));
 
@@ -9639,7 +9645,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
                         && !description.contains("CKKS vector ciphertext")
             ));
         });
@@ -9683,7 +9689,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
 
             let err = private_hnsw_collection
@@ -9707,7 +9713,10 @@ mod tests {
                 message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER),
                 "{message}"
             );
-            assert!(message.contains("/private-hnsw/text/session"), "{message}");
+            assert!(
+                message.contains("/private-hnsw/{vector}/session"),
+                "{message}"
+            );
         });
     }
 
@@ -9757,7 +9766,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
 
             let err = collection::recommendations::recommend_by(
@@ -9790,7 +9799,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
 
             let err = do_discover_points(
@@ -9822,7 +9831,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
 
             let err = collection::discovery::discover(
@@ -9853,7 +9862,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
         });
     }
@@ -9906,7 +9915,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
 
             let err = do_query_point_groups(
@@ -9943,7 +9952,7 @@ mod tests {
                 err,
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                        && description.contains("/private-hnsw/text/session")
+                        && description.contains("/private-hnsw/{vector}/session")
             ));
         });
     }

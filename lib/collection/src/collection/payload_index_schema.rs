@@ -9,7 +9,10 @@ use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
 pub use shard::payload_index_schema::PayloadIndexSchema;
 
 use crate::collection::Collection;
-use crate::config::{CollectionParams, EncryptionSelector};
+use crate::config::{
+    CollectionParams, EncryptionSelector, encryption_rule_uses_private_result_oram,
+    private_result_oram_payload_selector_overlap_message,
+};
 use crate::operations::types::{CollectionError, CollectionResult, UpdateResult};
 use crate::operations::universal_query::formula::ExpressionInternal;
 use crate::operations::{CollectionUpdateOperations, CreateIndex, FieldIndexOperations};
@@ -61,6 +64,16 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
 
             for field_name in &field_names {
                 if field_name.compatible(&encrypted_json_path) {
+                    if encryption_rule_uses_private_result_oram(rule) {
+                        let private_result_action_label = format!("{action_label} on");
+                        return Err(CollectionError::bad_input(
+                            private_result_oram_payload_selector_overlap_message(
+                                &private_result_action_label,
+                                field_name,
+                                encrypted_path,
+                            ),
+                        ));
+                    }
                     return Err(CollectionError::bad_input(format!(
                         "cannot {action_label} on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
                     )));
@@ -592,8 +605,9 @@ mod tests {
                 err,
                 CollectionError::BadInput { description }
                     if description.contains("create payload index")
-                        && description.contains("encrypted payload field")
-                        && description.contains("document.body")
+                        && description.contains("private result ORAM payload field")
+                        && description.contains("/private-result-oram/session")
+                        && !description.contains("document.body")
             ));
 
             schema.clear();
@@ -611,8 +625,9 @@ mod tests {
                 err,
                 CollectionError::BadInput { description }
                     if description.contains("recover payload index schema")
-                        && description.contains("encrypted payload field")
-                        && description.contains("document.body")
+                        && description.contains("private result ORAM payload field")
+                        && description.contains("/private-result-oram/session")
+                        && !description.contains("document.body")
             ));
         }
     }
