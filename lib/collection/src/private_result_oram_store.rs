@@ -804,7 +804,11 @@ fn merkle_levels(commitments: &[String]) -> CollectionResult<Vec<Vec<[u8; 32]>>>
 
     let mut levels = vec![leaves];
     while levels.last().is_some_and(|level| level.len() > 1) {
-        let previous = levels.last().expect("checked above");
+        let Some(previous) = levels.last() else {
+            return Err(CollectionError::bad_request(
+                "private result ORAM Merkle tree is invalid",
+            ));
+        };
         let mut next = Vec::with_capacity(previous.len() / 2);
         for pair in previous.chunks_exact(2) {
             next.push(merkle_parent_hash(&pair[0], &pair[1]));
@@ -1538,7 +1542,7 @@ mod tests {
                 bucket_size: 4,
                 block_size_bytes: 8,
                 tree_height: 1,
-                path_batch_size: 8,
+                path_batch_size: 2,
             },
             index_epoch: 42,
             root_hash: root_hash(42),
