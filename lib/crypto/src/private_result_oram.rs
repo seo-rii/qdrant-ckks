@@ -295,10 +295,19 @@ pub struct PrivateResultOramEncryptedClientStateSnapshot {
     pub ciphertext_sha256: String,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct PrivateResultOramClientState {
     position_map: BTreeMap<[u8; 32], u64>,
     stash: BTreeMap<[u8; 32], PrivateResultOramPayloadBlockPlaintext>,
+}
+
+impl Debug for PrivateResultOramClientState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramClientState")
+            .field("position_map_len", &self.position_map.len())
+            .field("stash_len", &self.stash.len())
+            .finish()
+    }
 }
 
 impl PrivateResultOramClientState {
@@ -4386,6 +4395,12 @@ mod tests {
         )
         .unwrap();
         state.stash.insert(stash.payload_fetch_token, stash.clone());
+        let debug = format!("{state:?}");
+        assert!(debug.contains("position_map_len: 2"), "{debug}");
+        assert!(debug.contains("stash_len: 1"), "{debug}");
+        assert!(!debug.contains(&BASE64URL_NOPAD.encode(&entry.payload_fetch_token)));
+        assert!(!debug.contains(&BASE64URL_NOPAD.encode(&stash.payload_fetch_token)));
+        assert!(!debug.contains(&serde_json::to_string(&stash.payload).unwrap()));
 
         let snapshot = state.to_snapshot(config.tree_height).unwrap();
         assert_eq!(snapshot.version, 1);

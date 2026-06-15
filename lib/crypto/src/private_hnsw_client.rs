@@ -996,10 +996,19 @@ pub struct PrivateHnswCommitSignatureContext<'a> {
     pub signing_key_id: &'a str,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct PrivateHnswOramClientState {
     position_map: BTreeMap<[u8; 32], u64>,
     stash: BTreeMap<[u8; 32], PrivateHnswNodeBlockPlaintext>,
+}
+
+impl Debug for PrivateHnswOramClientState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramClientState")
+            .field("position_map_len", &self.position_map.len())
+            .field("stash_len", &self.stash.len())
+            .finish()
+    }
 }
 
 impl PrivateHnswOramClientState {
@@ -7215,12 +7224,18 @@ mod tests {
         )
         .unwrap();
         state.stash.insert(stash.node_id, stash.clone());
+        let debug = format!("{state:?}");
+        assert!(debug.contains("position_map_len: 2"), "{debug}");
+        assert!(debug.contains("stash_len: 1"), "{debug}");
+        assert!(!debug.contains(&BASE64URL_NOPAD.encode(&entry.node_id)));
+        assert!(!debug.contains(&BASE64URL_NOPAD.encode(&stash.node_id)));
+        assert!(!debug.contains(&serde_json::to_string(&stash.vector).unwrap()));
 
         let snapshot = state.to_snapshot(config.tree_height).unwrap();
         assert_eq!(snapshot.version, 1);
         assert_eq!(snapshot.tree_height, config.tree_height);
         assert_eq!(snapshot.positions.len(), 2);
-        assert_eq!(snapshot.stash, vec![stash]);
+        assert_eq!(snapshot.stash, vec![stash.clone()]);
 
         let encoded = serde_json::to_string(&snapshot).unwrap();
         let decoded: PrivateHnswOramClientStateSnapshot = serde_json::from_str(&encoded).unwrap();
