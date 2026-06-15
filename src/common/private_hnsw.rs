@@ -1370,13 +1370,14 @@ fn ensure_private_hnsw_restored_snapshot_storage_matches(
         ));
     }
     store
-        .read_merkle_path_batch(
+        .read_bucket_batch_with_proof(
             &[0],
             expected_epoch.index_epoch,
             &expected_epoch.root_hash,
             expected_manifest.bucket_count,
+            max_bucket_ciphertext_bytes(expected_manifest)?,
         )
-        .map_err(private_hnsw_read_store_error)?;
+        .map_err(private_hnsw_read_batch_store_error)?;
     Ok(())
 }
 
@@ -2971,7 +2972,10 @@ mod private_hnsw_tests {
         )
         .unwrap_err();
         let rendered = err.to_string();
-        assert!(rendered.contains("private HNSW ORAM instance"));
+        assert!(
+            rendered.contains("private HNSW ORAM key_id must match collection key_id"),
+            "{rendered}"
+        );
         assert!(!rendered.contains("tenant-a/other-private-hnsw-rk"));
         assert!(!rendered.contains(&manifest.key_id));
         assert!(!rendered.contains("manifest has not been uploaded"));
@@ -3034,9 +3038,89 @@ mod private_hnsw_tests {
             .write_merkle_tree_from_commitments(
                 manifest.index_epoch,
                 manifest.root_hash.clone(),
-                leaf_commitments,
+                leaf_commitments.clone(),
             )
             .unwrap();
+        for (bucket_id, bucket_commitment) in leaf_commitments.iter().enumerate() {
+            let bucket = fixture_readable_bucket(
+                bucket_id as u64,
+                manifest.index_epoch,
+                31,
+                bucket_commitment,
+            );
+            store
+                .write_bucket(
+                    &bucket,
+                    manifest.index_epoch,
+                    manifest.bucket_count,
+                    max_bucket_ciphertext_bytes(manifest).unwrap(),
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn restored_snapshot_storage_recheck_requires_bucket_file() {
+        let mut session = fixture_session("session-1", 20);
+        session.bucket_count = 1;
+        session.manifest.bucket_count = 1;
+        let expected_epoch = PrivateHnswOramEpochState {
+            index_epoch: session.index_epoch,
+            root_hash: session.root_hash.clone(),
+        };
+        let signature = fixture_signature();
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
+        store.write_initial_epoch(&expected_epoch).unwrap();
+        store.write_manifest(&session.manifest, &signature).unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                expected_epoch.index_epoch,
+                expected_epoch.root_hash.clone(),
+                vec![expected_epoch.root_hash.clone()],
+            )
+            .unwrap();
+        let bucket =
+            fixture_readable_bucket(0, expected_epoch.index_epoch, 17, &expected_epoch.root_hash);
+        store
+            .write_bucket(
+                &bucket,
+                expected_epoch.index_epoch,
+                session.manifest.bucket_count,
+                4096,
+            )
+            .unwrap();
+        ensure_private_hnsw_restored_snapshot_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap();
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
+        store.write_initial_epoch(&expected_epoch).unwrap();
+        store.write_manifest(&session.manifest, &signature).unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                expected_epoch.index_epoch,
+                expected_epoch.root_hash.clone(),
+                vec![expected_epoch.root_hash.clone()],
+            )
+            .unwrap();
+        let err = ensure_private_hnsw_restored_snapshot_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("encrypted bucket data is unavailable")
+        );
     }
 
     #[test]
