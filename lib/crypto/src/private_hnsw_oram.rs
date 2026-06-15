@@ -1012,6 +1012,19 @@ mod tests {
             Err(PrivateHnswOramError::InvalidReadPathsSignature)
         );
 
+        let tampered_padding = PrivateHnswOramReadPathsSignatureInput {
+            dummy_paths_included: false,
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                tampered_padding,
+                &signature,
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
+
         let mismatched = PrivateHnswOramReadPathsSignatureInput {
             requested_paths: 2,
             ..input
