@@ -709,6 +709,7 @@ pub fn finalize_private_hnsw_private_result_fetch(
     )?;
     if fetch_plan.fixed_result_k == 0
         || fetch_plan.real_result_count != result.hits.len()
+        || fetch_plan.real_result_count > fetch_plan.fixed_result_k
         || fetch_plan.fixed_result_k != fetch_plan.payload_fetch_tokens.len()
         || token_fetch_result.accesses.len() != fetch_plan.payload_fetch_tokens.len()
     {
@@ -6039,6 +6040,44 @@ mod tests {
                 &empty_result,
                 &zero_budget_plan,
                 &empty_token_fetch,
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "result_fetch_plan"
+            ))
+        );
+
+        let oversized_real_result = PrivateHnswSearchResult {
+            hits: vec![
+                PrivateHnswSearchHit {
+                    node_id: [1; 32],
+                    point_token: [21; 32],
+                    payload_fetch_token: Some([11; 32]),
+                    distance: 0.25,
+                },
+                PrivateHnswSearchHit {
+                    node_id: [2; 32],
+                    point_token: [22; 32],
+                    payload_fetch_token: Some([12; 32]),
+                    distance: 0.5,
+                },
+            ],
+            accessed_leaf_labels: Vec::new(),
+            completed_steps: 1,
+        };
+        let undersized_fetch_plan = PrivateHnswPrivateResultFetchPlan {
+            payload_fetch_tokens: vec![[11; 32]],
+            real_result_count: 2,
+            fixed_result_k: 1,
+        };
+        let undersized_token_fetch = PrivateResultOramTokenFetchResult {
+            accesses: vec![result_token_access([11; 32], [21; 32], vec![1])],
+            updated_buckets: Vec::new(),
+        };
+        assert_eq!(
+            finalize_private_hnsw_private_result_fetch(
+                &oversized_real_result,
+                &undersized_fetch_plan,
+                &undersized_token_fetch,
             ),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "result_fetch_plan"
