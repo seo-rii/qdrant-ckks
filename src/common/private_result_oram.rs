@@ -1505,6 +1505,13 @@ fn validate_bucket_ciphertext_fixed_size(
 ) -> StorageResult<()> {
     let expected = private_result_oram_bucket_ciphertext_bytes(&manifest.oram)
         .map_err(|_| StorageError::bad_request("private result ORAM bucket size is invalid"))?;
+    let expected_encoded_len = max_base64url_nopad_encoded_len(expected)
+        .ok_or_else(|| StorageError::bad_request("private result ORAM bucket size is invalid"))?;
+    if bucket.ciphertext.len() != expected_encoded_len {
+        return Err(StorageError::bad_request(
+            "private result ORAM bucket ciphertext validation failed",
+        ));
+    }
     let ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| {
@@ -1516,6 +1523,19 @@ fn validate_bucket_ciphertext_fixed_size(
         ));
     }
     Ok(())
+}
+
+fn max_base64url_nopad_encoded_len(byte_len: usize) -> Option<usize> {
+    let full_chunks = byte_len / 3;
+    let tail_len = match byte_len % 3 {
+        0 => 0,
+        1 => 2,
+        2 => 3,
+        _ => return None,
+    };
+    full_chunks
+        .checked_mul(4)
+        .and_then(|len| len.checked_add(tail_len))
 }
 
 fn validate_private_result_oram_read_bucket_ciphertexts_fixed_size(
@@ -1930,6 +1950,18 @@ mod private_result_oram_tests {
         assert!(rendered.contains("bucket ciphertext validation failed"));
         assert!(!rendered.contains("private-result-fixed-size-sentinel"));
         assert!(!rendered.contains(&bucket.ciphertext));
+
+        let mut oversized_bucket = bucket.clone();
+        oversized_bucket.ciphertext = BASE64URL_NOPAD.encode(&ciphertext);
+        oversized_bucket
+            .ciphertext
+            .push_str("private-result-oversized-ciphertext-sentinel");
+        let rendered = validate_bucket_ciphertext_fixed_size(&oversized_bucket, &manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("bucket ciphertext validation failed"));
+        assert!(!rendered.contains("private-result-oversized-ciphertext-sentinel"));
+        assert!(!rendered.contains(&oversized_bucket.ciphertext));
     }
 
     #[test]

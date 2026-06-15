@@ -1974,6 +1974,14 @@ fn validate_bucket_ciphertext_fixed_size(
     manifest: &PrivateHnswOramManifest,
 ) -> StorageResult<()> {
     let expected = expected_bucket_ciphertext_bytes(manifest)?;
+    let expected_encoded_len = max_base64url_nopad_encoded_len(expected).ok_or_else(|| {
+        StorageError::bad_request("private HNSW ORAM bucket ciphertext size is invalid")
+    })?;
+    if bucket.ciphertext.len() != expected_encoded_len {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM bucket ciphertext must match fixed ciphertext size",
+        ));
+    }
     let ciphertext = BASE64URL_NOPAD
         .decode(bucket.ciphertext.as_bytes())
         .map_err(|_| {
@@ -1985,6 +1993,19 @@ fn validate_bucket_ciphertext_fixed_size(
         ));
     }
     Ok(())
+}
+
+fn max_base64url_nopad_encoded_len(byte_len: usize) -> Option<usize> {
+    let full_chunks = byte_len / 3;
+    let tail_len = match byte_len % 3 {
+        0 => 0,
+        1 => 2,
+        2 => 3,
+        _ => return None,
+    };
+    full_chunks
+        .checked_mul(4)
+        .and_then(|len| len.checked_add(tail_len))
 }
 
 fn validate_private_hnsw_read_bucket_ciphertexts_fixed_size(
@@ -2671,6 +2692,24 @@ mod private_hnsw_tests {
         assert!(!rendered.contains("fixed ciphertext size"), "{rendered}");
         assert!(
             !rendered.contains(&short_ciphertext_bucket.ciphertext),
+            "{rendered}"
+        );
+
+        let mut oversized_ciphertext_bucket = encrypted_build.buckets[0].clone();
+        oversized_ciphertext_bucket
+            .ciphertext
+            .push_str("private-hnsw-oversized-ciphertext-sentinel");
+        let rendered =
+            validate_bucket_ciphertext_fixed_size(&oversized_ciphertext_bucket, &manifest)
+                .unwrap_err()
+                .to_string();
+        assert!(rendered.contains("fixed ciphertext size"));
+        assert!(
+            !rendered.contains("private-hnsw-oversized-ciphertext-sentinel"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&oversized_ciphertext_bucket.ciphertext),
             "{rendered}"
         );
 
