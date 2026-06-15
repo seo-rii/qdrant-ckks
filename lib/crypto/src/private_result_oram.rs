@@ -3415,6 +3415,43 @@ mod tests {
             Err(PrivateResultOramError::BucketMetadataMismatch)
         );
 
+        for wrong_context in [
+            PrivateResultOramBucketAeadContext {
+                collection_id: "collection-uuid-2",
+                ..context
+            },
+            PrivateResultOramBucketAeadContext {
+                key_id: "tenant-a/payload-private-rk-v2",
+                ..context
+            },
+            PrivateResultOramBucketAeadContext {
+                rk_id: "tenant-a/payload-private-rk-v2",
+                ..context
+            },
+            PrivateResultOramBucketAeadContext {
+                rk_epoch: 8,
+                ..context
+            },
+        ] {
+            let mut wrong_context_bucket = bucket.clone();
+            wrong_context_bucket.bucket_commitment = private_result_oram_bucket_commitment(
+                PrivateResultOramBucketCommitmentContext {
+                    collection_id: wrong_context.collection_id,
+                    key_id: wrong_context.key_id,
+                    rk_id: wrong_context.rk_id,
+                    rk_epoch: wrong_context.rk_epoch,
+                    bucket_id: wrong_context.bucket_id,
+                    index_epoch: wrong_context.index_epoch,
+                },
+                &wrong_context_bucket.ciphertext_sha256,
+            )
+            .unwrap();
+            assert_eq!(
+                open_private_result_oram_bucket(&keys, wrong_context, &wrong_context_bucket),
+                Err(PrivateResultOramError::BucketOpenFailed)
+            );
+        }
+
         let mut wrong_hash = bucket.clone();
         wrong_hash.ciphertext_sha256 = BASE64URL_NOPAD.encode(&[8; 32]);
         assert_eq!(

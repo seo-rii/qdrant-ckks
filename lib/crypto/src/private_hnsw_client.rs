@@ -7898,6 +7898,40 @@ mod tests {
             Err(PrivateHnswClientError::BucketMetadataMismatch)
         );
 
+        for wrong_context in [
+            PrivateHnswBucketAeadContext {
+                collection_id: "collection-uuid-2",
+                ..context
+            },
+            PrivateHnswBucketAeadContext {
+                vector_name: "body",
+                ..context
+            },
+            PrivateHnswBucketAeadContext {
+                key_id: "tenant-a/vector-private-rk-v2",
+                ..context
+            },
+            PrivateHnswBucketAeadContext {
+                rk_id: "tenant-a/vector-private-rk-v2",
+                ..context
+            },
+            PrivateHnswBucketAeadContext {
+                rk_epoch: 8,
+                ..context
+            },
+        ] {
+            let mut wrong_context_bucket = bucket.clone();
+            wrong_context_bucket.bucket_commitment = private_hnsw_bucket_commitment(
+                wrong_context,
+                &wrong_context_bucket.ciphertext_sha256,
+            )
+            .unwrap();
+            assert_eq!(
+                open_private_hnsw_oram_bucket(&keys, wrong_context, &wrong_context_bucket),
+                Err(PrivateHnswClientError::BucketOpenFailed)
+            );
+        }
+
         let mut wrong_hash = bucket.clone();
         wrong_hash.ciphertext_sha256 = BASE64URL_NOPAD.encode(&[8; 32]);
         assert_eq!(
