@@ -1474,11 +1474,10 @@ pub fn plan_private_hnsw_oram_neighbor_clustered_leaves(
         }
     }
 
-    let seed_node_id = if index_by_node.contains_key(&entry_node_id) {
-        entry_node_id
-    } else {
-        blocks[0].node_id
-    };
+    if !index_by_node.contains_key(&entry_node_id) {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("entry_node_id"));
+    }
+    let seed_node_id = entry_node_id;
     let mut queue = vec![seed_node_id];
     let mut queued = BTreeSet::from([seed_node_id]);
     let mut visited = BTreeSet::new();
@@ -6208,6 +6207,14 @@ mod tests {
         assert_eq!(
             plan_private_hnsw_oram_neighbor_clustered_leaves(config, &[], entry.node_id),
             Err(PrivateHnswClientError::InvalidBuildConfig("blocks"))
+        );
+        assert_eq!(
+            plan_private_hnsw_oram_neighbor_clustered_leaves(
+                config,
+                std::slice::from_ref(&entry),
+                [9; 32],
+            ),
+            Err(PrivateHnswClientError::InvalidBuildConfig("entry_node_id"))
         );
         assert_eq!(
             plan_private_hnsw_oram_neighbor_clustered_leaves(

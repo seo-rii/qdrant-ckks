@@ -1284,7 +1284,9 @@ count; runtime and manifest validation reject path budgets larger than the
 available unique ORAM leaves. `plan_private_hnsw_oram_neighbor_clustered_leaves` provides a
 deterministic graph-order leaf assignment helper for bulk builds, so SDK
 experiments can place entry-near neighbor chains on adjacent ORAM leaves before
-calling `build_private_hnsw_oram_plaintext_index_from_blocks`.
+calling `build_private_hnsw_oram_plaintext_index_from_blocks`; the helper
+requires the requested entry node to be present in the build block set and
+fails closed instead of silently falling back to the first block.
 `plan_private_hnsw_oram_directional_neighbor_filter` is an experimental
 client-local helper for Compass-style directional neighbor filtering: given the
 current node block, decrypted neighbor blocks, and the query vector, it keeps
