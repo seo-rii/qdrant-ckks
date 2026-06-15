@@ -951,6 +951,13 @@ pub fn validate_private_result_oram_manifest_shape(
     if manifest.bucket_count == 0 {
         return Err(PrivateResultOramError::InvalidManifestField("bucket_count"));
     }
+    let leaf_count = private_result_oram_leaf_count(manifest.oram.tree_height)
+        .map_err(|_| PrivateResultOramError::InvalidManifestField("oram"))?;
+    if u64::from(manifest.oram.path_batch_size) > leaf_count {
+        return Err(PrivateResultOramError::InvalidManifestField(
+            "oram.path_batch_size",
+        ));
+    }
     let expected_bucket_count = path_oram_bucket_count(manifest.oram.tree_height)
         .ok_or(PrivateResultOramError::InvalidManifestField("oram"))?;
     if manifest.bucket_count != expected_bucket_count {
@@ -4802,11 +4809,25 @@ mod tests {
         manifest.oram.tree_height = 1;
         manifest.bucket_count = 3;
         manifest.oram.bucket_size = 1;
+        manifest.oram.path_batch_size = 2;
         manifest.logical_result_count = 4;
         manifest.dummy_result_count = 0;
         assert_eq!(
             validate_private_result_oram_manifest_shape(&manifest),
             Err(PrivateResultOramError::InvalidManifestField("result_count"))
+        );
+
+        manifest = fixture_manifest();
+        manifest.oram.tree_height = 1;
+        manifest.bucket_count = 3;
+        manifest.oram.path_batch_size = 3;
+        manifest.logical_result_count = 1;
+        manifest.dummy_result_count = 0;
+        assert_eq!(
+            validate_private_result_oram_manifest_shape(&manifest),
+            Err(PrivateResultOramError::InvalidManifestField(
+                "oram.path_batch_size"
+            ))
         );
 
         manifest = fixture_manifest();
@@ -5495,6 +5516,7 @@ mod tests {
             dummy_result_count: 0,
             oram: OramParams {
                 tree_height: 1,
+                path_batch_size: 2,
                 ..fixture_manifest().oram
             },
             ..fixture_manifest()
