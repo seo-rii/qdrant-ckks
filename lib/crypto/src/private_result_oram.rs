@@ -5901,6 +5901,19 @@ mod tests {
             ),
             Err(PrivateResultOramError::InvalidReadBucketsSignature)
         );
+
+        let tampered_bucket_count = PrivateResultOramReadBucketsSignatureInput {
+            bucket_count: 8,
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_read_buckets_signature(
+                tampered_bucket_count,
+                &signature.sig,
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
     }
 
     #[test]
