@@ -7062,6 +7062,34 @@ mod tests {
             Err(PrivateHnswClientError::ClientStateOpenFailed)
         );
 
+        for wrong_context in [
+            PrivateHnswClientStateAeadContext {
+                collection_id: "collection-uuid-2",
+                ..context
+            },
+            PrivateHnswClientStateAeadContext {
+                vector_name: "body",
+                ..context
+            },
+            PrivateHnswClientStateAeadContext {
+                key_id: "tenant-a/vector-private-rk-v2",
+                ..context
+            },
+            PrivateHnswClientStateAeadContext {
+                rk_id: "tenant-a/vector-private-rk-v2",
+                ..context
+            },
+            PrivateHnswClientStateAeadContext {
+                rk_epoch: 8,
+                ..context
+            },
+        ] {
+            assert_eq!(
+                open_private_hnsw_oram_client_state_snapshot(&keys, wrong_context, &encrypted),
+                Err(PrivateHnswClientError::ClientStateOpenFailed)
+            );
+        }
+
         let mut tampered_hash = encrypted.clone();
         tampered_hash.ciphertext_sha256 = BASE64URL_NOPAD.encode(&[9; 32]);
         assert_eq!(

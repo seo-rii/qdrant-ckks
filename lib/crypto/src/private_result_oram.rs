@@ -4335,6 +4335,30 @@ mod tests {
             Err(PrivateResultOramError::ClientStateOpenFailed)
         );
 
+        for wrong_context in [
+            PrivateResultOramClientStateAeadContext {
+                collection_id: "collection-uuid-2",
+                ..context
+            },
+            PrivateResultOramClientStateAeadContext {
+                key_id: "tenant-a/payload-private-rk-v2",
+                ..context
+            },
+            PrivateResultOramClientStateAeadContext {
+                rk_id: "tenant-a/payload-private-rk-v2",
+                ..context
+            },
+            PrivateResultOramClientStateAeadContext {
+                rk_epoch: 8,
+                ..context
+            },
+        ] {
+            assert_eq!(
+                open_private_result_oram_client_state_snapshot(&keys, wrong_context, &encrypted),
+                Err(PrivateResultOramError::ClientStateOpenFailed)
+            );
+        }
+
         let mut tampered_hash = encrypted.clone();
         tampered_hash.ciphertext_sha256 = BASE64URL_NOPAD.encode(&[9; 32]);
         assert_eq!(
