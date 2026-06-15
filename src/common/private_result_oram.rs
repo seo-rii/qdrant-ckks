@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Debug, Formatter};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -43,13 +44,22 @@ const ED25519_PUBLIC_KEY_BYTES: usize = 32;
 const PRIVATE_RESULT_ORAM_CLIENT_ID_MAX_LEN: usize = 256;
 const PRIVATE_RESULT_ORAM_SESSION_ID_MAX_LEN: usize = 128;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateResultOramManifestRecord {
     pub manifest: PrivateResultOramManifest,
     pub signature: PrivateResultOramSignature,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+impl Debug for PrivateResultOramManifestRecord {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramManifestRecord")
+            .field("manifest", &self.manifest)
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateResultOramSessionResponse {
     pub session_id: String,
     pub collection_id: String,
@@ -59,7 +69,20 @@ pub struct PrivateResultOramSessionResponse {
     pub lease_expires_unix: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+impl Debug for PrivateResultOramSessionResponse {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramSessionResponse")
+            .field("session_id", &"[redacted]")
+            .field("collection_id", &self.collection_id)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("manifest", &self.manifest)
+            .field("lease_expires_unix", &self.lease_expires_unix)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateResultOramReadBucketsResponse {
     pub index_epoch: u64,
     pub root_hash: String,
@@ -67,13 +90,33 @@ pub struct PrivateResultOramReadBucketsResponse {
     pub proof: PrivateResultOramReadProof,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+impl Debug for PrivateResultOramReadBucketsResponse {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramReadBucketsResponse")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.buckets.len())
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateResultOramReadProof {
     pub kind: String,
     pub value: String,
 }
 
-#[derive(Clone, Debug)]
+impl Debug for PrivateResultOramReadProof {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramReadProof")
+            .field("kind", &self.kind)
+            .field("value", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 struct PrivateResultOramSession {
     session_id: String,
     _client_id: String,
@@ -85,6 +128,26 @@ struct PrivateResultOramSession {
     bucket_count: u64,
     max_bucket_ciphertext_bytes: usize,
     manifest: PrivateResultOramManifest,
+}
+
+impl Debug for PrivateResultOramSession {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramSession")
+            .field("session_id", &"[redacted]")
+            .field("client_id", &"[redacted]")
+            .field("collection_id", &self.collection_id)
+            .field("collection_path", &"[redacted]")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("lease_expires_unix", &self.lease_expires_unix)
+            .field("bucket_count", &self.bucket_count)
+            .field(
+                "max_bucket_ciphertext_bytes",
+                &self.max_bucket_ciphertext_bytes,
+            )
+            .field("manifest", &self.manifest)
+            .finish()
+    }
 }
 
 #[derive(Default)]

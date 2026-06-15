@@ -1,3 +1,5 @@
+use std::fmt::{self, Debug, Formatter};
+
 use actix_web::{HttpResponse, post, web};
 use actix_web_validator::{Json, Path};
 use collection::operations::verification::new_unchecked_verification_pass;
@@ -26,7 +28,7 @@ struct PrivateHnswPath {
     vector_name: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswClientSignature {
     pub alg: String,
@@ -34,14 +36,33 @@ pub struct PrivateHnswClientSignature {
     pub sig: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+impl Debug for PrivateHnswClientSignature {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswClientSignature")
+            .field("alg", &self.alg)
+            .field("key_id", &self.key_id)
+            .field("sig", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct UploadPrivateHnswManifestRequest {
     pub manifest: qdrant_sec::PrivateHnswOramManifest,
     pub signature: qdrant_sec::PrivateHnswOramSignature,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+impl Debug for UploadPrivateHnswManifestRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UploadPrivateHnswManifestRequest")
+            .field("manifest", &self.manifest)
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct UploadPrivateHnswBucketsRequest {
     pub index_epoch: u64,
@@ -49,7 +70,17 @@ pub struct UploadPrivateHnswBucketsRequest {
     pub buckets: Vec<qdrant_sec::PrivateHnswOramBucket>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+impl Debug for UploadPrivateHnswBucketsRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UploadPrivateHnswBucketsRequest")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.buckets.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct OpenPrivateHnswSessionRequest {
     pub client_id: String,
@@ -58,7 +89,18 @@ pub struct OpenPrivateHnswSessionRequest {
     pub result_privacy: qdrant_sec::ResultPrivacyMode,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for OpenPrivateHnswSessionRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenPrivateHnswSessionRequest")
+            .field("client_id", &"[redacted]")
+            .field("desired_epoch", &self.desired_epoch)
+            .field("fixed_budget", &self.fixed_budget)
+            .field("result_privacy", &self.result_privacy)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct PrivateHnswSessionResponse {
     pub session_id: String,
@@ -70,7 +112,21 @@ pub struct PrivateHnswSessionResponse {
     pub lease_expires_unix: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+impl Debug for PrivateHnswSessionResponse {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswSessionResponse")
+            .field("session_id", &"[redacted]")
+            .field("collection_id", &self.collection_id)
+            .field("vector_name", &self.vector_name)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("manifest", &self.manifest)
+            .field("lease_expires_unix", &self.lease_expires_unix)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct OramReadPathsRequest {
     pub session_id: String,
@@ -88,7 +144,20 @@ pub struct OramReadPadding {
     pub dummy_paths_included: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for OramReadPathsRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OramReadPathsRequest")
+            .field("session_id", &"[redacted]")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("path_count", &self.paths.len())
+            .field("padding", &self.padding)
+            .field("client_signature", &self.client_signature)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct OramReadPathsResponse {
     pub index_epoch: u64,
@@ -97,14 +166,34 @@ pub struct OramReadPathsResponse {
     pub proof: OramReadProof,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for OramReadPathsResponse {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OramReadPathsResponse")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.buckets.len())
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct OramReadProof {
     pub kind: String,
     pub value: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+impl Debug for OramReadProof {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OramReadProof")
+            .field("kind", &self.kind)
+            .field("value", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct OramCommitRequest {
     pub session_id: String,
@@ -114,6 +203,20 @@ pub struct OramCommitRequest {
     pub new_root_hash: String,
     pub updated_buckets: Vec<qdrant_sec::PrivateHnswOramBucket>,
     pub commit_signature: PrivateHnswClientSignature,
+}
+
+impl Debug for OramCommitRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OramCommitRequest")
+            .field("session_id", &"[redacted]")
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("updated_bucket_count", &self.updated_buckets.len())
+            .field("commit_signature", &self.commit_signature)
+            .finish()
+    }
 }
 
 #[post("/collections/{collection_name}/private-hnsw/{vector_name}/manifest")]
@@ -442,6 +545,76 @@ mod private_hnsw_rest_tests {
             },
         };
         assert_unknown_field_rejected(&commit_request);
+    }
+
+    #[test]
+    fn private_hnsw_rest_dto_debug_redacts_sensitive_values() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let client_signature = fixture.client_signature();
+        let entry_leaf_label = fixture.entry_leaf_label();
+        let read_request = OramReadPathsRequest {
+            session_id: SESSION_ID.to_string(),
+            index_epoch: fixture.encrypted_build.index_epoch,
+            root_hash: fixture.encrypted_build.root_hash.clone(),
+            paths: vec![entry_leaf_label.clone()],
+            padding: OramReadPadding {
+                requested_paths: 1,
+                dummy_paths_included: true,
+            },
+            client_signature: PrivateHnswClientSignature {
+                alg: "ed25519".to_string(),
+                key_id: SIGNING_KEY_ID.to_string(),
+                sig: client_signature.sig.clone(),
+            },
+        };
+        let search_run = fixture.run_single_search_collect_writeback();
+        let commit_signature = search_run.commit_signature.clone();
+        let commit_request = OramCommitRequest {
+            session_id: SESSION_ID.to_string(),
+            old_epoch: BASE_EPOCH,
+            new_epoch: NEXT_EPOCH,
+            old_root_hash: search_run.commit_plan.old_root_hash,
+            new_root_hash: search_run.commit_plan.new_root_hash,
+            updated_buckets: search_run.updated_buckets,
+            commit_signature: PrivateHnswClientSignature {
+                alg: commit_signature.alg,
+                key_id: commit_signature.key_id,
+                sig: commit_signature.sig.clone(),
+            },
+        };
+        let buckets_request = UploadPrivateHnswBucketsRequest {
+            index_epoch: fixture.encrypted_build.index_epoch,
+            root_hash: fixture.encrypted_build.root_hash.clone(),
+            buckets: fixture.encrypted_build.buckets.clone(),
+        };
+        let read_response = OramReadPathsResponse {
+            index_epoch: fixture.encrypted_build.index_epoch,
+            root_hash: fixture.encrypted_build.root_hash.clone(),
+            buckets: fixture.encrypted_build.buckets.clone(),
+            proof: OramReadProof {
+                kind: "merkle_path_batch/v1".to_string(),
+                value: "HNSW-REST-PROOF-SENTINEL".to_string(),
+            },
+        };
+
+        let rendered = [
+            format!("{read_request:?}"),
+            format!("{commit_request:?}"),
+            format!("{buckets_request:?}"),
+            format!("{read_response:?}"),
+        ]
+        .join("\n");
+        for leaked in [
+            SESSION_ID.to_string(),
+            fixture.encrypted_build.root_hash.clone(),
+            fixture.encrypted_build.buckets[0].ciphertext.clone(),
+            client_signature.sig,
+            commit_signature.sig,
+            entry_leaf_label,
+            "HNSW-REST-PROOF-SENTINEL".to_string(),
+        ] {
+            assert!(!rendered.contains(&leaked), "{rendered}");
+        }
     }
 
     #[test]

@@ -194,7 +194,7 @@ pub struct PrivateResultOramManifest {
     pub created_at_unix: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramBucket {
     pub version: u16,
@@ -205,12 +205,35 @@ pub struct PrivateResultOramBucket {
     pub bucket_commitment: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateResultOramBucket {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramBucket")
+            .field("version", &self.version)
+            .field("bucket_id", &"[redacted]")
+            .field("index_epoch", &self.index_epoch)
+            .field("ciphertext_len", &self.ciphertext.len())
+            .field("ciphertext_sha256", &"[redacted]")
+            .field("bucket_commitment", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramSignature {
     pub alg: String,
     pub key_id: String,
     pub sig: String,
+}
+
+impl Debug for PrivateResultOramSignature {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramSignature")
+            .field("alg", &self.alg)
+            .field("key_id", &self.key_id)
+            .field("sig", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,7 +329,7 @@ impl Debug for PrivateResultOramAccessResult {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramClientStateSnapshot {
     pub version: u16,
@@ -315,14 +338,34 @@ pub struct PrivateResultOramClientStateSnapshot {
     pub stash: Vec<PrivateResultOramPayloadBlockPlaintext>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateResultOramClientStateSnapshot {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramClientStateSnapshot")
+            .field("version", &self.version)
+            .field("tree_height", &self.tree_height)
+            .field("position_count", &self.positions.len())
+            .field("stash_len", &self.stash.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramPositionMapSnapshotEntry {
     pub payload_fetch_token: String,
     pub leaf_label: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateResultOramPositionMapSnapshotEntry {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramPositionMapSnapshotEntry")
+            .field("payload_fetch_token", &"[redacted]")
+            .field("leaf_label", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramEncryptedClientStateSnapshot {
     pub version: u16,
@@ -330,6 +373,18 @@ pub struct PrivateResultOramEncryptedClientStateSnapshot {
     pub root_hash: String,
     pub ciphertext: String,
     pub ciphertext_sha256: String,
+}
+
+impl Debug for PrivateResultOramEncryptedClientStateSnapshot {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramEncryptedClientStateSnapshot")
+            .field("version", &self.version)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("ciphertext_len", &self.ciphertext.len())
+            .field("ciphertext_sha256", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -701,7 +756,7 @@ pub fn open_private_result_oram_client_state_snapshot(
 
 pub const PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramMerkleProof {
     pub kind: String,
@@ -711,7 +766,19 @@ pub struct PrivateResultOramMerkleProof {
     pub leaves: Vec<PrivateResultOramMerkleProofLeaf>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateResultOramMerkleProof {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramMerkleProof")
+            .field("kind", &self.kind)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.bucket_count)
+            .field("leaf_count", &self.leaves.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramMerkleProofLeaf {
     pub bucket_id: u64,
@@ -719,12 +786,32 @@ pub struct PrivateResultOramMerkleProofLeaf {
     pub siblings: Vec<PrivateResultOramMerkleSibling>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateResultOramMerkleProofLeaf {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramMerkleProofLeaf")
+            .field("bucket_id", &"[redacted]")
+            .field("leaf_hash", &"[redacted]")
+            .field("sibling_count", &self.siblings.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramMerkleSibling {
     pub level: u32,
     pub position: PrivateResultOramMerkleSiblingPosition,
     pub hash: String,
+}
+
+impl Debug for PrivateResultOramMerkleSibling {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramMerkleSibling")
+            .field("level", &self.level)
+            .field("position", &self.position)
+            .field("hash", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -734,12 +821,22 @@ pub enum PrivateResultOramMerkleSiblingPosition {
     Right,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramUploadBundle {
     pub manifest: PrivateResultOramManifest,
     pub manifest_signature: PrivateResultOramSignature,
     pub buckets: Vec<PrivateResultOramBucket>,
+}
+
+impl Debug for PrivateResultOramUploadBundle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramUploadBundle")
+            .field("manifest", &self.manifest)
+            .field("manifest_signature", &self.manifest_signature)
+            .field("bucket_count", &self.buckets.len())
+            .finish()
+    }
 }
 
 impl PrivateResultOramUploadBundle {
@@ -844,10 +941,19 @@ pub struct PrivateResultOramBucketCommitmentContext<'a> {
     pub index_epoch: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramClientCommitBucketRef {
     pub bucket_id: u64,
     pub ciphertext_sha256: String,
+}
+
+impl Debug for PrivateResultOramClientCommitBucketRef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramClientCommitBucketRef")
+            .field("bucket_id", &"[redacted]")
+            .field("ciphertext_sha256", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -897,13 +1003,25 @@ impl Debug for PrivateResultOramReadBucketPlan {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramEncryptedBucketBatch {
     pub index_epoch: u64,
     pub root_hash: String,
     pub bucket_count: u64,
     pub proof_value: String,
     pub buckets: Vec<PrivateResultOramBucket>,
+}
+
+impl Debug for PrivateResultOramEncryptedBucketBatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramEncryptedBucketBatch")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.bucket_count)
+            .field("proof_value", &"[redacted]")
+            .field("returned_bucket_count", &self.buckets.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -940,7 +1058,7 @@ impl Debug for PrivateResultOramTokenFetchResult {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramCommitPlan {
     pub old_epoch: u64,
     pub new_epoch: u64,
@@ -948,6 +1066,19 @@ pub struct PrivateResultOramCommitPlan {
     pub new_root_hash: String,
     pub leaf_commitments: Vec<String>,
     pub updated_buckets: Vec<PrivateResultOramClientCommitBucketRef>,
+}
+
+impl Debug for PrivateResultOramCommitPlan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramCommitPlan")
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("leaf_commitment_count", &self.leaf_commitments.len())
+            .field("updated_bucket_count", &self.updated_buckets.len())
+            .finish()
+    }
 }
 
 impl PrivateResultOramCommitPlan {
@@ -962,13 +1093,22 @@ impl PrivateResultOramCommitPlan {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramCommitBucketRef<'a> {
     pub bucket_id: u64,
     pub ciphertext_sha256: &'a str,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateResultOramCommitBucketRef<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramCommitBucketRef")
+            .field("bucket_id", &"[redacted]")
+            .field("ciphertext_sha256", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramCommitSignatureInput<'a> {
     pub collection_id: &'a str,
     pub key_id: &'a str,
@@ -983,7 +1123,25 @@ pub struct PrivateResultOramCommitSignatureInput<'a> {
     pub signature_key_id: &'a str,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateResultOramCommitSignatureInput<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramCommitSignatureInput")
+            .field("collection_id", &self.collection_id)
+            .field("key_id", &self.key_id)
+            .field("rk_id", &self.rk_id)
+            .field("rk_epoch", &self.rk_epoch)
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("updated_bucket_count", &self.updated_buckets.len())
+            .field("signature_alg", &self.signature_alg)
+            .field("signature_key_id", &self.signature_key_id)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramReadBucketsSignatureInput<'a> {
     pub collection_id: &'a str,
     pub key_id: &'a str,
@@ -995,6 +1153,23 @@ pub struct PrivateResultOramReadBucketsSignatureInput<'a> {
     pub bucket_ids: &'a [u64],
     pub signature_alg: &'a str,
     pub signature_key_id: &'a str,
+}
+
+impl Debug for PrivateResultOramReadBucketsSignatureInput<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramReadBucketsSignatureInput")
+            .field("collection_id", &self.collection_id)
+            .field("key_id", &self.key_id)
+            .field("rk_id", &self.rk_id)
+            .field("rk_epoch", &self.rk_epoch)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.bucket_count)
+            .field("requested_bucket_count", &self.bucket_ids.len())
+            .field("signature_alg", &self.signature_alg)
+            .field("signature_key_id", &self.signature_key_id)
+            .finish()
+    }
 }
 
 pub fn validate_private_result_oram_manifest(
@@ -3488,11 +3663,105 @@ mod tests {
             payload_fetch_token: block.payload_fetch_token,
             old_leaf: 654_321,
             new_leaf: 654_322,
-            block,
+            block: block.clone(),
         };
         let fetch_result = PrivateResultOramTokenFetchResult {
             accesses: vec![token_access],
             updated_buckets: Vec::new(),
+        };
+        let encrypted_bucket = PrivateResultOramBucket {
+            version: 1,
+            bucket_id: 123_456,
+            index_epoch: 42,
+            ciphertext: "RESULT-CIPHERTEXT-SENTINEL".to_string(),
+            ciphertext_sha256: "RESULT-SHA-SENTINEL".to_string(),
+            bucket_commitment: "RESULT-COMMITMENT-SENTINEL".to_string(),
+        };
+        let signature = PrivateResultOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/private-result-signing-v1".to_string(),
+            sig: "RESULT-SIGNATURE-SENTINEL".to_string(),
+        };
+        let state_snapshot = PrivateResultOramClientStateSnapshot {
+            version: 1,
+            tree_height: 3,
+            positions: vec![PrivateResultOramPositionMapSnapshotEntry {
+                payload_fetch_token: BASE64URL_NOPAD.encode(&[44; 32]),
+                leaf_label: "leaf-label-sentinel".to_string(),
+            }],
+            stash: vec![block.clone()],
+        };
+        let encrypted_state_snapshot = PrivateResultOramEncryptedClientStateSnapshot {
+            version: 1,
+            index_epoch: 42,
+            root_hash: "RESULT-ROOT-SENTINEL".to_string(),
+            ciphertext: "RESULT-STATE-CIPHERTEXT-SENTINEL".to_string(),
+            ciphertext_sha256: "RESULT-STATE-SHA-SENTINEL".to_string(),
+        };
+        let proof = PrivateResultOramMerkleProof {
+            kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
+            index_epoch: 42,
+            root_hash: "RESULT-ROOT-SENTINEL".to_string(),
+            bucket_count: 8,
+            leaves: vec![PrivateResultOramMerkleProofLeaf {
+                bucket_id: 123_456,
+                leaf_hash: "RESULT-LEAF-HASH-SENTINEL".to_string(),
+                siblings: vec![PrivateResultOramMerkleSibling {
+                    level: 0,
+                    position: PrivateResultOramMerkleSiblingPosition::Left,
+                    hash: "RESULT-SIBLING-HASH-SENTINEL".to_string(),
+                }],
+            }],
+        };
+        let upload_bundle = PrivateResultOramUploadBundle {
+            manifest: fixture_manifest(),
+            manifest_signature: signature.clone(),
+            buckets: vec![encrypted_bucket.clone()],
+        };
+        let encrypted_batch = PrivateResultOramEncryptedBucketBatch {
+            index_epoch: 42,
+            root_hash: "RESULT-ROOT-SENTINEL".to_string(),
+            bucket_count: 8,
+            proof_value: "RESULT-PROOF-VALUE-SENTINEL".to_string(),
+            buckets: vec![encrypted_bucket.clone()],
+        };
+        let commit_plan = PrivateResultOramCommitPlan {
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: "RESULT-OLD-ROOT-SENTINEL".to_string(),
+            new_root_hash: "RESULT-NEW-ROOT-SENTINEL".to_string(),
+            leaf_commitments: vec!["RESULT-COMMITMENT-SENTINEL".to_string()],
+            updated_buckets: vec![PrivateResultOramClientCommitBucketRef {
+                bucket_id: 123_456,
+                ciphertext_sha256: "RESULT-SHA-SENTINEL".to_string(),
+            }],
+        };
+        let commit_refs = commit_plan.signature_bucket_refs();
+        let commit_signature_input = PrivateResultOramCommitSignatureInput {
+            collection_id: "collection-uuid-1",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: "RESULT-OLD-ROOT-SENTINEL",
+            new_root_hash: "RESULT-NEW-ROOT-SENTINEL",
+            updated_buckets: &commit_refs,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-result-signing-v1",
+        };
+        let read_bucket_ids = [123_456, 123_457];
+        let read_signature_input = PrivateResultOramReadBucketsSignatureInput {
+            collection_id: "collection-uuid-1",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: "RESULT-ROOT-SENTINEL",
+            bucket_count: 8,
+            bucket_ids: &read_bucket_ids,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-result-signing-v1",
         };
 
         let rendered = [
@@ -3501,6 +3770,16 @@ mod tests {
             format!("{token_position:?}"),
             format!("{read_batch:?}"),
             format!("{fetch_result:?}"),
+            format!("{encrypted_bucket:?}"),
+            format!("{signature:?}"),
+            format!("{state_snapshot:?}"),
+            format!("{encrypted_state_snapshot:?}"),
+            format!("{proof:?}"),
+            format!("{upload_bundle:?}"),
+            format!("{encrypted_batch:?}"),
+            format!("{commit_plan:?}"),
+            format!("{commit_signature_input:?}"),
+            format!("{read_signature_input:?}"),
         ]
         .join("\n");
         for leaked in [
@@ -3509,6 +3788,19 @@ mod tests {
             "123456".to_string(),
             "654321".to_string(),
             "777888".to_string(),
+            "leaf-label-sentinel".to_string(),
+            "RESULT-CIPHERTEXT-SENTINEL".to_string(),
+            "RESULT-SHA-SENTINEL".to_string(),
+            "RESULT-COMMITMENT-SENTINEL".to_string(),
+            "RESULT-SIGNATURE-SENTINEL".to_string(),
+            "RESULT-ROOT-SENTINEL".to_string(),
+            "RESULT-STATE-CIPHERTEXT-SENTINEL".to_string(),
+            "RESULT-STATE-SHA-SENTINEL".to_string(),
+            "RESULT-LEAF-HASH-SENTINEL".to_string(),
+            "RESULT-SIBLING-HASH-SENTINEL".to_string(),
+            "RESULT-PROOF-VALUE-SENTINEL".to_string(),
+            "RESULT-OLD-ROOT-SENTINEL".to_string(),
+            "RESULT-NEW-ROOT-SENTINEL".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }

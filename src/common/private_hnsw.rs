@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::{self, Debug, Formatter};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -54,13 +55,22 @@ const PRIVATE_HNSW_ORAM_SIGNATURE_B64_LEN: usize = 86;
 const PRIVATE_HNSW_ORAM_CLIENT_ID_MAX_LEN: usize = 256;
 const PRIVATE_HNSW_ORAM_SESSION_ID_MAX_LEN: usize = 128;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswManifestRecord {
     pub manifest: PrivateHnswOramManifest,
     pub signature: PrivateHnswOramSignature,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+impl Debug for PrivateHnswManifestRecord {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswManifestRecord")
+            .field("manifest", &self.manifest)
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswSessionResponse {
     pub session_id: String,
     pub collection_id: String,
@@ -71,7 +81,21 @@ pub struct PrivateHnswSessionResponse {
     pub lease_expires_unix: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+impl Debug for PrivateHnswSessionResponse {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswSessionResponse")
+            .field("session_id", &"[redacted]")
+            .field("collection_id", &self.collection_id)
+            .field("vector_name", &self.vector_name)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("manifest", &self.manifest)
+            .field("lease_expires_unix", &self.lease_expires_unix)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswReadPathsResponse {
     pub index_epoch: u64,
     pub root_hash: String,
@@ -79,10 +103,30 @@ pub struct PrivateHnswReadPathsResponse {
     pub proof: PrivateHnswReadProof,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+impl Debug for PrivateHnswReadPathsResponse {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswReadPathsResponse")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.buckets.len())
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswReadProof {
     pub kind: String,
     pub value: String,
+}
+
+impl Debug for PrivateHnswReadProof {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswReadProof")
+            .field("kind", &self.kind)
+            .field("value", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,14 +135,24 @@ pub struct PrivateHnswReadPadding {
     pub dummy_paths_included: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrivateHnswClientSignature {
     pub alg: String,
     pub key_id: String,
     pub sig: String,
 }
 
-#[derive(Clone, Debug)]
+impl Debug for PrivateHnswClientSignature {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswClientSignature")
+            .field("alg", &self.alg)
+            .field("key_id", &self.key_id)
+            .field("sig", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 struct PrivateHnswSession {
     session_id: String,
     _client_id: String,
@@ -113,6 +167,29 @@ struct PrivateHnswSession {
     path_batch_size: u32,
     max_bucket_ciphertext_bytes: usize,
     manifest: PrivateHnswOramManifest,
+}
+
+impl Debug for PrivateHnswSession {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswSession")
+            .field("session_id", &"[redacted]")
+            .field("client_id", &"[redacted]")
+            .field("collection_id", &self.collection_id)
+            .field("collection_path", &"[redacted]")
+            .field("vector_name", &self.vector_name)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("lease_expires_unix", &self.lease_expires_unix)
+            .field("bucket_count", &self.bucket_count)
+            .field("tree_height", &self.tree_height)
+            .field("path_batch_size", &self.path_batch_size)
+            .field(
+                "max_bucket_ciphertext_bytes",
+                &self.max_bucket_ciphertext_bytes,
+            )
+            .field("manifest", &self.manifest)
+            .finish()
+    }
 }
 
 #[derive(Default)]

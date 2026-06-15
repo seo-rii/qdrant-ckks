@@ -1,3 +1,5 @@
+use std::fmt::{self, Debug, Formatter};
+
 use actix_web::{HttpResponse, post, web};
 use actix_web_validator::{Json, Path};
 use collection::operations::verification::new_unchecked_verification_pass;
@@ -24,14 +26,23 @@ struct PrivateResultOramPath {
     collection: CollectionPath,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct UploadPrivateResultOramManifestRequest {
     pub manifest: qdrant_sec::PrivateResultOramManifest,
     pub signature: qdrant_sec::PrivateResultOramSignature,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+impl Debug for UploadPrivateResultOramManifestRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UploadPrivateResultOramManifestRequest")
+            .field("manifest", &self.manifest)
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct UploadPrivateResultOramBucketsRequest {
     pub index_epoch: u64,
@@ -39,7 +50,17 @@ pub struct UploadPrivateResultOramBucketsRequest {
     pub buckets: Vec<qdrant_sec::PrivateResultOramBucket>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+impl Debug for UploadPrivateResultOramBucketsRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UploadPrivateResultOramBucketsRequest")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.buckets.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct OpenPrivateResultOramSessionRequest {
     pub client_id: String,
@@ -47,7 +68,17 @@ pub struct OpenPrivateResultOramSessionRequest {
     pub fixed_budget: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for OpenPrivateResultOramSessionRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenPrivateResultOramSessionRequest")
+            .field("client_id", &"[redacted]")
+            .field("desired_epoch", &self.desired_epoch)
+            .field("fixed_budget", &self.fixed_budget)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct PrivateResultOramSessionResponse {
     pub session_id: String,
@@ -58,7 +89,20 @@ pub struct PrivateResultOramSessionResponse {
     pub lease_expires_unix: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+impl Debug for PrivateResultOramSessionResponse {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramSessionResponse")
+            .field("session_id", &"[redacted]")
+            .field("collection_id", &self.collection_id)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("manifest", &self.manifest)
+            .field("lease_expires_unix", &self.lease_expires_unix)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct ReadPrivateResultOramBucketsRequest {
     pub session_id: String,
@@ -68,7 +112,19 @@ pub struct ReadPrivateResultOramBucketsRequest {
     pub read_signature: qdrant_sec::PrivateResultOramSignature,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for ReadPrivateResultOramBucketsRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReadPrivateResultOramBucketsRequest")
+            .field("session_id", &"[redacted]")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_id_count", &self.bucket_ids.len())
+            .field("read_signature", &self.read_signature)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct PrivateResultOramReadBucketsResponse {
     pub index_epoch: u64,
@@ -77,14 +133,34 @@ pub struct PrivateResultOramReadBucketsResponse {
     pub proof: PrivateResultOramReadProof,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateResultOramReadBucketsResponse {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramReadBucketsResponse")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.buckets.len())
+            .field("proof", &self.proof)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct PrivateResultOramReadProof {
     pub kind: String,
     pub value: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+impl Debug for PrivateResultOramReadProof {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramReadProof")
+            .field("kind", &self.kind)
+            .field("value", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct CommitPrivateResultOramBucketsRequest {
     pub session_id: String,
@@ -94,6 +170,20 @@ pub struct CommitPrivateResultOramBucketsRequest {
     pub new_root_hash: String,
     pub updated_buckets: Vec<qdrant_sec::PrivateResultOramBucket>,
     pub commit_signature: qdrant_sec::PrivateResultOramSignature,
+}
+
+impl Debug for CommitPrivateResultOramBucketsRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommitPrivateResultOramBucketsRequest")
+            .field("session_id", &"[redacted]")
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("updated_bucket_count", &self.updated_buckets.len())
+            .field("commit_signature", &self.commit_signature)
+            .finish()
+    }
 }
 
 #[post("/collections/{collection_name}/private-result-oram/manifest")]
@@ -654,6 +744,68 @@ mod private_result_oram_rest_tests {
                 || rendered.contains("Write access to collection"),
             "expected write-access denial, got: {rendered}",
         );
+    }
+
+    #[test]
+    fn private_result_oram_rest_dto_debug_redacts_sensitive_values() {
+        let fixture = PrivateResultRouteFixture::build();
+        let bucket_ids = vec![123_456, 123_457];
+        let read_signature = qdrant_sec::PrivateResultOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: SIGNING_KEY_ID.to_string(),
+            sig: "RESULT-REST-READ-SIGNATURE-SENTINEL".to_string(),
+        };
+        let read_request = ReadPrivateResultOramBucketsRequest {
+            session_id: SESSION_ID.to_string(),
+            index_epoch: fixture.manifest.index_epoch,
+            root_hash: fixture.manifest.root_hash.clone(),
+            bucket_ids: bucket_ids.clone(),
+            read_signature: read_signature.clone(),
+        };
+        let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+        let commit_request = CommitPrivateResultOramBucketsRequest {
+            session_id: SESSION_ID.to_string(),
+            old_epoch: BASE_EPOCH,
+            new_epoch: NEXT_EPOCH,
+            old_root_hash: fixture.manifest.root_hash.clone(),
+            new_root_hash: new_root_hash.clone(),
+            updated_buckets: vec![updated_bucket],
+            commit_signature: commit_signature.clone(),
+        };
+        let buckets_request = UploadPrivateResultOramBucketsRequest {
+            index_epoch: fixture.manifest.index_epoch,
+            root_hash: fixture.manifest.root_hash.clone(),
+            buckets: fixture.buckets.clone(),
+        };
+        let read_response = PrivateResultOramReadBucketsResponse {
+            index_epoch: fixture.manifest.index_epoch,
+            root_hash: fixture.manifest.root_hash.clone(),
+            buckets: fixture.buckets.clone(),
+            proof: PrivateResultOramReadProof {
+                kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
+                value: "RESULT-REST-PROOF-SENTINEL".to_string(),
+            },
+        };
+
+        let rendered = [
+            format!("{read_request:?}"),
+            format!("{commit_request:?}"),
+            format!("{buckets_request:?}"),
+            format!("{read_response:?}"),
+        ]
+        .join("\n");
+        for leaked in [
+            SESSION_ID.to_string(),
+            fixture.manifest.root_hash.clone(),
+            new_root_hash,
+            fixture.buckets[0].ciphertext.clone(),
+            read_signature.sig,
+            commit_signature.sig,
+            "123456".to_string(),
+            "RESULT-REST-PROOF-SENTINEL".to_string(),
+        ] {
+            assert!(!rendered.contains(&leaked), "{rendered}");
+        }
     }
 
     async fn create_private_result_collection(dispatcher: &Dispatcher) {

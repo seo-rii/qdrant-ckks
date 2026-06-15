@@ -487,7 +487,7 @@ impl Debug for PrivateHnswOramPlaintextBucket {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramClientStateSnapshot {
     pub version: u16,
@@ -496,7 +496,18 @@ pub struct PrivateHnswOramClientStateSnapshot {
     pub stash: Vec<PrivateHnswNodeBlockPlaintext>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateHnswOramClientStateSnapshot {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramClientStateSnapshot")
+            .field("version", &self.version)
+            .field("tree_height", &self.tree_height)
+            .field("position_count", &self.positions.len())
+            .field("stash_len", &self.stash.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswEncryptedClientStateSnapshot {
     pub version: u16,
@@ -506,14 +517,35 @@ pub struct PrivateHnswEncryptedClientStateSnapshot {
     pub ciphertext_sha256: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateHnswEncryptedClientStateSnapshot {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswEncryptedClientStateSnapshot")
+            .field("version", &self.version)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("ciphertext_len", &self.ciphertext.len())
+            .field("ciphertext_sha256", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswPositionMapSnapshotEntry {
     pub node_id: String,
     pub leaf_label: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateHnswPositionMapSnapshotEntry {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswPositionMapSnapshotEntry")
+            .field("node_id", &"[redacted]")
+            .field("leaf_label", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramMerkleProof {
     pub kind: String,
@@ -523,7 +555,19 @@ pub struct PrivateHnswOramMerkleProof {
     pub leaves: Vec<PrivateHnswOramMerkleProofLeaf>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateHnswOramMerkleProof {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramMerkleProof")
+            .field("kind", &self.kind)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.bucket_count)
+            .field("leaf_count", &self.leaves.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramMerkleProofLeaf {
     pub bucket_id: u64,
@@ -531,12 +575,32 @@ pub struct PrivateHnswOramMerkleProofLeaf {
     pub siblings: Vec<PrivateHnswOramMerkleSibling>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateHnswOramMerkleProofLeaf {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramMerkleProofLeaf")
+            .field("bucket_id", &"[redacted]")
+            .field("leaf_hash", &"[redacted]")
+            .field("sibling_count", &self.siblings.len())
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramMerkleSibling {
     pub level: u32,
     pub position: PrivateHnswMerkleSiblingPosition,
     pub hash: String,
+}
+
+impl Debug for PrivateHnswOramMerkleSibling {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramMerkleSibling")
+            .field("level", &self.level)
+            .field("position", &self.position)
+            .field("hash", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -546,13 +610,25 @@ pub enum PrivateHnswMerkleSiblingPosition {
     Right,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswEncryptedPathBatch {
     pub index_epoch: u64,
     pub root_hash: String,
     pub bucket_count: u64,
     pub proof_value: String,
     pub buckets: Vec<PrivateHnswOramBucket>,
+}
+
+impl Debug for PrivateHnswEncryptedPathBatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswEncryptedPathBatch")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.bucket_count)
+            .field("proof_value", &"[redacted]")
+            .field("returned_bucket_count", &self.buckets.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1007,7 +1083,7 @@ impl Debug for PrivateHnswPlaintextIndexBuild {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswEncryptedIndexBuild {
     pub index_epoch: u64,
     pub entry_node_id: [u8; 32],
@@ -1016,6 +1092,20 @@ pub struct PrivateHnswEncryptedIndexBuild {
     pub logical_node_count: u64,
     pub dummy_node_count: u64,
     pub buckets: Vec<PrivateHnswOramBucket>,
+}
+
+impl Debug for PrivateHnswEncryptedIndexBuild {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswEncryptedIndexBuild")
+            .field("index_epoch", &self.index_epoch)
+            .field("entry_node_id", &"[redacted; 32 bytes]")
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.bucket_count)
+            .field("logical_node_count", &self.logical_node_count)
+            .field("dummy_node_count", &self.dummy_node_count)
+            .field("returned_bucket_count", &self.buckets.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -1089,12 +1179,22 @@ impl PrivateHnswClientNodeCache {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramUploadBundle {
     pub manifest: PrivateHnswOramManifest,
     pub manifest_signature: PrivateHnswOramSignature,
     pub buckets: Vec<PrivateHnswOramBucket>,
+}
+
+impl Debug for PrivateHnswOramUploadBundle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramUploadBundle")
+            .field("manifest", &self.manifest)
+            .field("manifest_signature", &self.manifest_signature)
+            .field("bucket_count", &self.buckets.len())
+            .finish()
+    }
 }
 
 impl PrivateHnswOramUploadBundle {
@@ -1146,13 +1246,22 @@ pub struct PrivateHnswManifestBuildContext<'a> {
     pub created_at_unix: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswClientCommitBucketRef {
     pub bucket_id: u64,
     pub ciphertext_sha256: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+impl Debug for PrivateHnswClientCommitBucketRef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswClientCommitBucketRef")
+            .field("bucket_id", &"[redacted]")
+            .field("ciphertext_sha256", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswClientCommitPlan {
     pub old_epoch: u64,
     pub new_epoch: u64,
@@ -1160,6 +1269,19 @@ pub struct PrivateHnswClientCommitPlan {
     pub new_root_hash: String,
     pub leaf_commitments: Vec<String>,
     pub updated_buckets: Vec<PrivateHnswClientCommitBucketRef>,
+}
+
+impl Debug for PrivateHnswClientCommitPlan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswClientCommitPlan")
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("leaf_commitment_count", &self.leaf_commitments.len())
+            .field("updated_bucket_count", &self.updated_buckets.len())
+            .finish()
+    }
 }
 
 impl PrivateHnswClientCommitPlan {
@@ -4855,6 +4977,112 @@ mod tests {
             vector: vec![1.25, 2.5],
             payload_fetch_token: block.payload_fetch_token,
         };
+        let encrypted_bucket = PrivateHnswOramBucket {
+            version: 1,
+            bucket_id: 123_456,
+            index_epoch: 42,
+            ciphertext: "HNSW-CIPHERTEXT-SENTINEL".to_string(),
+            ciphertext_sha256: "HNSW-SHA-SENTINEL".to_string(),
+            bucket_commitment: "HNSW-COMMITMENT-SENTINEL".to_string(),
+        };
+        let signature = PrivateHnswOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+            sig: "HNSW-SIGNATURE-SENTINEL".to_string(),
+        };
+        let state_snapshot = PrivateHnswOramClientStateSnapshot {
+            version: 1,
+            tree_height: 3,
+            positions: vec![PrivateHnswPositionMapSnapshotEntry {
+                node_id: BASE64URL_NOPAD.encode(&[44; 32]),
+                leaf_label: "leaf-label-sentinel".to_string(),
+            }],
+            stash: vec![block.clone()],
+        };
+        let encrypted_state_snapshot = PrivateHnswEncryptedClientStateSnapshot {
+            version: 1,
+            index_epoch: 42,
+            root_hash: "HNSW-ROOT-SENTINEL".to_string(),
+            ciphertext: "HNSW-STATE-CIPHERTEXT-SENTINEL".to_string(),
+            ciphertext_sha256: "HNSW-STATE-SHA-SENTINEL".to_string(),
+        };
+        let proof = PrivateHnswOramMerkleProof {
+            kind: PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND.to_string(),
+            index_epoch: 42,
+            root_hash: "HNSW-ROOT-SENTINEL".to_string(),
+            bucket_count: 8,
+            leaves: vec![PrivateHnswOramMerkleProofLeaf {
+                bucket_id: 123_456,
+                leaf_hash: "HNSW-LEAF-HASH-SENTINEL".to_string(),
+                siblings: vec![PrivateHnswOramMerkleSibling {
+                    level: 0,
+                    position: PrivateHnswMerkleSiblingPosition::Left,
+                    hash: "HNSW-SIBLING-HASH-SENTINEL".to_string(),
+                }],
+            }],
+        };
+        let encrypted_batch = PrivateHnswEncryptedPathBatch {
+            index_epoch: 42,
+            root_hash: "HNSW-ROOT-SENTINEL".to_string(),
+            bucket_count: 8,
+            proof_value: "HNSW-PROOF-VALUE-SENTINEL".to_string(),
+            buckets: vec![encrypted_bucket.clone()],
+        };
+        let encrypted_index = PrivateHnswEncryptedIndexBuild {
+            index_epoch: 42,
+            entry_node_id: block.node_id,
+            root_hash: "HNSW-ROOT-SENTINEL".to_string(),
+            bucket_count: 1,
+            logical_node_count: 1,
+            dummy_node_count: 0,
+            buckets: vec![encrypted_bucket.clone()],
+        };
+        let upload_bundle = PrivateHnswOramUploadBundle {
+            manifest: fixture_manifest(),
+            manifest_signature: signature.clone(),
+            buckets: vec![encrypted_bucket.clone()],
+        };
+        let commit_plan = PrivateHnswClientCommitPlan {
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: "HNSW-OLD-ROOT-SENTINEL".to_string(),
+            new_root_hash: "HNSW-NEW-ROOT-SENTINEL".to_string(),
+            leaf_commitments: vec!["HNSW-COMMITMENT-SENTINEL".to_string()],
+            updated_buckets: vec![PrivateHnswClientCommitBucketRef {
+                bucket_id: 123_456,
+                ciphertext_sha256: "HNSW-SHA-SENTINEL".to_string(),
+            }],
+        };
+        let commit_refs = commit_plan.signature_bucket_refs();
+        let commit_signature_input = PrivateHnswOramCommitSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: "HNSW-OLD-ROOT-SENTINEL",
+            new_root_hash: "HNSW-NEW-ROOT-SENTINEL",
+            updated_buckets: &commit_refs,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+        let read_path_labels = ["leaf-label-sentinel"];
+        let read_signature_input = PrivateHnswOramReadPathsSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: "HNSW-ROOT-SENTINEL",
+            paths: &read_path_labels,
+            requested_paths: 8,
+            dummy_paths_included: true,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
 
         let rendered = [
             format!("{block:?}"),
@@ -4870,6 +5098,17 @@ mod tests {
             format!("{traversal:?}"),
             format!("{directional:?}"),
             format!("{build_point:?}"),
+            format!("{encrypted_bucket:?}"),
+            format!("{signature:?}"),
+            format!("{state_snapshot:?}"),
+            format!("{encrypted_state_snapshot:?}"),
+            format!("{proof:?}"),
+            format!("{encrypted_batch:?}"),
+            format!("{encrypted_index:?}"),
+            format!("{upload_bundle:?}"),
+            format!("{commit_plan:?}"),
+            format!("{commit_signature_input:?}"),
+            format!("{read_signature_input:?}"),
         ]
         .join("\n");
         for leaked in [
@@ -4882,6 +5121,18 @@ mod tests {
             "123456".to_string(),
             "654321".to_string(),
             "HNSW-PRIVATE-PAYLOAD-RAW".to_string(),
+            "HNSW-CIPHERTEXT-SENTINEL".to_string(),
+            "HNSW-SHA-SENTINEL".to_string(),
+            "HNSW-COMMITMENT-SENTINEL".to_string(),
+            "HNSW-SIGNATURE-SENTINEL".to_string(),
+            "HNSW-ROOT-SENTINEL".to_string(),
+            "HNSW-STATE-CIPHERTEXT-SENTINEL".to_string(),
+            "HNSW-STATE-SHA-SENTINEL".to_string(),
+            "HNSW-LEAF-HASH-SENTINEL".to_string(),
+            "HNSW-SIBLING-HASH-SENTINEL".to_string(),
+            "HNSW-PROOF-VALUE-SENTINEL".to_string(),
+            "HNSW-OLD-ROOT-SENTINEL".to_string(),
+            "HNSW-NEW-ROOT-SENTINEL".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }

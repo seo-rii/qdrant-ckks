@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
 use ring::signature::{ED25519, UnparsedPublicKey};
@@ -190,7 +191,7 @@ pub struct PrivateHnswOramManifest {
     pub created_at_unix: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramBucket {
     pub version: u16,
@@ -201,12 +202,35 @@ pub struct PrivateHnswOramBucket {
     pub bucket_commitment: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for PrivateHnswOramBucket {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramBucket")
+            .field("version", &self.version)
+            .field("bucket_id", &"[redacted]")
+            .field("index_epoch", &self.index_epoch)
+            .field("ciphertext_len", &self.ciphertext.len())
+            .field("ciphertext_sha256", &"[redacted]")
+            .field("bucket_commitment", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramSignature {
     pub alg: String,
     pub key_id: String,
     pub sig: String,
+}
+
+impl Debug for PrivateHnswOramSignature {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramSignature")
+            .field("alg", &self.alg)
+            .field("key_id", &self.key_id)
+            .field("sig", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,13 +258,22 @@ pub struct PrivateHnswEpoch {
     pub root_hash: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswOramCommitBucketRef<'a> {
     pub bucket_id: u64,
     pub ciphertext_sha256: &'a str,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateHnswOramCommitBucketRef<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramCommitBucketRef")
+            .field("bucket_id", &"[redacted]")
+            .field("ciphertext_sha256", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswOramCommitSignatureInput<'a> {
     pub collection_id: &'a str,
     pub vector_name: &'a str,
@@ -256,7 +289,26 @@ pub struct PrivateHnswOramCommitSignatureInput<'a> {
     pub signature_key_id: &'a str,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateHnswOramCommitSignatureInput<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramCommitSignatureInput")
+            .field("collection_id", &self.collection_id)
+            .field("vector_name", &self.vector_name)
+            .field("key_id", &self.key_id)
+            .field("rk_id", &self.rk_id)
+            .field("rk_epoch", &self.rk_epoch)
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("updated_bucket_count", &self.updated_buckets.len())
+            .field("signature_alg", &self.signature_alg)
+            .field("signature_key_id", &self.signature_key_id)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswOramReadPathsSignatureInput<'a> {
     pub collection_id: &'a str,
     pub vector_name: &'a str,
@@ -270,6 +322,25 @@ pub struct PrivateHnswOramReadPathsSignatureInput<'a> {
     pub dummy_paths_included: bool,
     pub signature_alg: &'a str,
     pub signature_key_id: &'a str,
+}
+
+impl Debug for PrivateHnswOramReadPathsSignatureInput<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramReadPathsSignatureInput")
+            .field("collection_id", &self.collection_id)
+            .field("vector_name", &self.vector_name)
+            .field("key_id", &self.key_id)
+            .field("rk_id", &self.rk_id)
+            .field("rk_epoch", &self.rk_epoch)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("path_count", &self.paths.len())
+            .field("requested_paths", &self.requested_paths)
+            .field("dummy_paths_included", &self.dummy_paths_included)
+            .field("signature_alg", &self.signature_alg)
+            .field("signature_key_id", &self.signature_key_id)
+            .finish()
+    }
 }
 
 pub fn validate_private_hnsw_oram_manifest(
