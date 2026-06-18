@@ -108,7 +108,11 @@ impl TryFrom<ShardKeySelector> for rest::ShardKeySelector {
             .collect();
 
         if shard_keys.len() == 1 {
-            let key = shard_keys.into_iter().next().unwrap();
+            let Some(key) = shard_keys.into_iter().next() else {
+                return Err(Status::internal(
+                    "single shard key selector lost its only shard key during conversion",
+                ));
+            };
 
             match fallback.and_then(convert_shard_key_from_grpc) {
                 Some(fallback) => Ok(rest::ShardKeySelector::ShardKeyWithFallback(

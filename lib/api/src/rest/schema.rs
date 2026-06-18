@@ -155,7 +155,9 @@ impl Hash for Options {
             keys.sort();
             for key in keys {
                 key.hash(state);
-                options.get(key).unwrap().hash(state);
+                if let Some(value) = options.get(key) {
+                    value.hash(state);
+                }
             }
         }
     }
@@ -249,8 +251,9 @@ impl Bm25Config {
             "this code should never be called, it is only for schema generation",
         );
 
-        let value = serde_json::to_value(self)
-            .expect("conversion of internal structure to JSON should never fail");
+        let Ok(value) = serde_json::to_value(self) else {
+            return HashMap::default();
+        };
 
         match value {
             Value::Null
@@ -313,7 +316,9 @@ impl Hash for DocumentOptions {
         keys.sort();
         for key in keys {
             key.hash(state);
-            options.get(key).unwrap().hash(state);
+            if let Some(value) = options.get(key) {
+                value.hash(state);
+            }
         }
     }
 }
