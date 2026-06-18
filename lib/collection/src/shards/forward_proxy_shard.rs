@@ -288,7 +288,7 @@ impl ForwardProxyShard {
         filter: Option<&Filter>,
         runtime_handle: &Handle,
     ) -> CollectionResult<(Vec<PointStructPersisted>, Option<PointIdType>)> {
-        let limit = batch_size + 1;
+        let limit = batch_size.saturating_add(1);
 
         let mut batch = self
             .wrapped_shard
@@ -305,7 +305,9 @@ impl ForwardProxyShard {
             )
             .await?;
 
-        let next_page_offset = (batch.len() >= limit).then(|| batch.pop().unwrap().id);
+        let next_page_offset = (batch.len() >= limit)
+            .then(|| batch.pop().map(|point| point.id))
+            .flatten();
 
         let points = batch
             .into_iter()
@@ -351,7 +353,9 @@ impl ForwardProxyShard {
             // - resharding: 4 -> 3, transfer 33%,  factor 3
             HashRingRouter::Resharding { old: _, new } => new.len().max(1),
         };
-        let limit = (batch_size * oversample_factor) + 1;
+        let limit = batch_size
+            .saturating_mul(oversample_factor)
+            .saturating_add(1);
 
         // Read only point IDs without point data
         // We first make a preselection of those point IDs by applying the hash ring filter, and
@@ -374,7 +378,9 @@ impl ForwardProxyShard {
             )
             .await?;
 
-        let next_page_offset = (batch.len() >= limit).then(|| batch.pop().unwrap().id);
+        let next_page_offset = (batch.len() >= limit)
+            .then(|| batch.pop().map(|point| point.id))
+            .flatten();
 
         // Make preselection of point IDs by hash ring
         let ids = batch
