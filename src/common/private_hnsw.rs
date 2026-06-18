@@ -2606,8 +2606,14 @@ mod private_hnsw_tests {
             block_size_bytes: 512,
             fixed_neighbor_slots: 2,
         };
-        let keys = PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([9; 32]))
-            .unwrap();
+        let keys = PrivateHnswClientKeys::derive_from_resource_key_with_context(
+            &SecretKey::from_bytes([9; 32]),
+            collection_id,
+            vector_name,
+            key_id,
+            rk_epoch,
+        )
+        .unwrap();
         let base_context = PrivateHnswBucketAeadBaseContext {
             collection_id,
             vector_name,

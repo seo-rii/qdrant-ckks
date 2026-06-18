@@ -83,9 +83,14 @@ impl PrivateHnswRouteWireFixture {
     pub(crate) fn build_uploaded_with_path_batch_size(path_batch_size: u32) -> Self {
         let temp = TempDir::new().unwrap();
         let store = PrivateHnswOramStore::new(temp.path(), VECTOR_NAME).unwrap();
-        let keys =
-            PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([13; 32]))
-                .unwrap();
+        let keys = PrivateHnswClientKeys::derive_from_resource_key_with_context(
+            &SecretKey::from_bytes([13; 32]),
+            COLLECTION_ID,
+            VECTOR_NAME,
+            KEY_ID,
+            RK_EPOCH,
+        )
+        .unwrap();
         let base_context = PrivateHnswBucketAeadBaseContext {
             collection_id: COLLECTION_ID,
             vector_name: VECTOR_NAME,

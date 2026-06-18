@@ -1354,7 +1354,9 @@ rather than the legacy domain-only helper. The manifest-bound derivation
 length-prefixes collection id, vector name, RK id, and RK epoch into the HKDF
 info context before deriving node, bucket, position-map, payload-token, and
 blind-result subkeys, so accidental RK reuse across private HNSW indexes does
-not produce the same client subkeys.
+not produce the same client subkeys. The collection-store and REST/gRPC route
+fixtures now build their SDK-sealed private HNSW buckets with the same
+context-bound derivation path.
 
 The client CKKS vector sidecar signature message is canonical and
 length-prefixed for SDK interop. The byte string is:
