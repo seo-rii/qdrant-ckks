@@ -552,6 +552,19 @@ mod private_hnsw_rest_tests {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let client_signature = fixture.client_signature();
         let entry_leaf_label = fixture.entry_leaf_label();
+        let manifest_request = UploadPrivateHnswManifestRequest {
+            manifest: fixture.manifest.clone(),
+            signature: fixture.manifest_signature.clone(),
+        };
+        let session_response = PrivateHnswSessionResponse {
+            session_id: SESSION_ID.to_string(),
+            collection_id: COLLECTION_ID.to_string(),
+            vector_name: "text".to_string(),
+            index_epoch: fixture.manifest.index_epoch,
+            root_hash: fixture.manifest.root_hash.clone(),
+            manifest: fixture.manifest.clone(),
+            lease_expires_unix: 1_770_000_000,
+        };
         let read_request = OramReadPathsRequest {
             session_id: SESSION_ID.to_string(),
             index_epoch: fixture.encrypted_build.index_epoch,
@@ -598,6 +611,8 @@ mod private_hnsw_rest_tests {
         };
 
         let rendered = [
+            format!("{manifest_request:?}"),
+            format!("{session_response:?}"),
             format!("{read_request:?}"),
             format!("{commit_request:?}"),
             format!("{buckets_request:?}"),

@@ -165,7 +165,7 @@ pub struct FixedBudgetParams {
     pub fixed_result_k: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramManifest {
     pub version: u16,
@@ -189,6 +189,34 @@ pub struct PrivateHnswOramManifest {
     pub result_privacy: ResultPrivacyMode,
     pub owner_signing_key_id: String,
     pub created_at_unix: u64,
+}
+
+impl Debug for PrivateHnswOramManifest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramManifest")
+            .field("version", &self.version)
+            .field("provider", &self.provider)
+            .field("binding", &self.binding)
+            .field("collection_id", &self.collection_id)
+            .field("vector_name", &self.vector_name)
+            .field("key_id", &self.key_id)
+            .field("rk_id", &self.rk_id)
+            .field("rk_epoch", &self.rk_epoch)
+            .field("dim", &self.dim)
+            .field("distance", &self.distance)
+            .field("hnsw", &self.hnsw)
+            .field("oram", &self.oram)
+            .field("fixed_budget", &self.fixed_budget)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.bucket_count)
+            .field("logical_node_count", &self.logical_node_count)
+            .field("dummy_node_count", &self.dummy_node_count)
+            .field("result_privacy", &self.result_privacy)
+            .field("owner_signing_key_id", &self.owner_signing_key_id)
+            .field("created_at_unix", &self.created_at_unix)
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]

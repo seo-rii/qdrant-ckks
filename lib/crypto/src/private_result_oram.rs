@@ -174,7 +174,7 @@ pub enum PrivateResultOramError {
     ClientStateOpenFailed,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateResultOramManifest {
     pub version: u16,
@@ -192,6 +192,28 @@ pub struct PrivateResultOramManifest {
     pub dummy_result_count: u64,
     pub owner_signing_key_id: String,
     pub created_at_unix: u64,
+}
+
+impl Debug for PrivateResultOramManifest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramManifest")
+            .field("version", &self.version)
+            .field("provider", &self.provider)
+            .field("binding", &self.binding)
+            .field("collection_id", &self.collection_id)
+            .field("key_id", &self.key_id)
+            .field("rk_id", &self.rk_id)
+            .field("rk_epoch", &self.rk_epoch)
+            .field("oram", &self.oram)
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("bucket_count", &self.bucket_count)
+            .field("logical_result_count", &self.logical_result_count)
+            .field("dummy_result_count", &self.dummy_result_count)
+            .field("owner_signing_key_id", &self.owner_signing_key_id)
+            .field("created_at_unix", &self.created_at_unix)
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3713,8 +3735,10 @@ mod tests {
                 }],
             }],
         };
+        let mut manifest = fixture_manifest();
+        manifest.root_hash = "RESULT-MANIFEST-ROOT-SENTINEL".to_string();
         let upload_bundle = PrivateResultOramUploadBundle {
-            manifest: fixture_manifest(),
+            manifest: manifest.clone(),
             manifest_signature: signature.clone(),
             buckets: vec![encrypted_bucket.clone()],
         };
@@ -3775,6 +3799,7 @@ mod tests {
             format!("{state_snapshot:?}"),
             format!("{encrypted_state_snapshot:?}"),
             format!("{proof:?}"),
+            format!("{manifest:?}"),
             format!("{upload_bundle:?}"),
             format!("{encrypted_batch:?}"),
             format!("{commit_plan:?}"),
@@ -3801,6 +3826,7 @@ mod tests {
             "RESULT-PROOF-VALUE-SENTINEL".to_string(),
             "RESULT-OLD-ROOT-SENTINEL".to_string(),
             "RESULT-NEW-ROOT-SENTINEL".to_string(),
+            "RESULT-MANIFEST-ROOT-SENTINEL".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }

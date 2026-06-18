@@ -749,7 +749,19 @@ mod private_result_oram_rest_tests {
     #[test]
     fn private_result_oram_rest_dto_debug_redacts_sensitive_values() {
         let fixture = PrivateResultRouteFixture::build();
-        let bucket_ids = vec![123_456, 123_457];
+        let manifest_request = UploadPrivateResultOramManifestRequest {
+            manifest: fixture.manifest.clone(),
+            signature: fixture.signature.clone(),
+        };
+        let session_response = PrivateResultOramSessionResponse {
+            session_id: SESSION_ID.to_string(),
+            collection_id: COLLECTION_ID.to_string(),
+            index_epoch: fixture.manifest.index_epoch,
+            root_hash: fixture.manifest.root_hash.clone(),
+            manifest: fixture.manifest.clone(),
+            lease_expires_unix: 1_770_000_000,
+        };
+        let bucket_ids = vec![987_654, 987_655];
         let read_signature = qdrant_sec::PrivateResultOramSignature {
             alg: "ed25519".to_string(),
             key_id: SIGNING_KEY_ID.to_string(),
@@ -788,6 +800,8 @@ mod private_result_oram_rest_tests {
         };
 
         let rendered = [
+            format!("{manifest_request:?}"),
+            format!("{session_response:?}"),
             format!("{read_request:?}"),
             format!("{commit_request:?}"),
             format!("{buckets_request:?}"),
@@ -801,7 +815,7 @@ mod private_result_oram_rest_tests {
             fixture.buckets[0].ciphertext.clone(),
             read_signature.sig,
             commit_signature.sig,
-            "123456".to_string(),
+            "987654".to_string(),
             "RESULT-REST-PROOF-SENTINEL".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");

@@ -5037,8 +5037,10 @@ mod tests {
             dummy_node_count: 0,
             buckets: vec![encrypted_bucket.clone()],
         };
+        let mut manifest = fixture_manifest();
+        manifest.root_hash = "HNSW-MANIFEST-ROOT-SENTINEL".to_string();
         let upload_bundle = PrivateHnswOramUploadBundle {
-            manifest: fixture_manifest(),
+            manifest: manifest.clone(),
             manifest_signature: signature.clone(),
             buckets: vec![encrypted_bucket.clone()],
         };
@@ -5105,6 +5107,7 @@ mod tests {
             format!("{proof:?}"),
             format!("{encrypted_batch:?}"),
             format!("{encrypted_index:?}"),
+            format!("{manifest:?}"),
             format!("{upload_bundle:?}"),
             format!("{commit_plan:?}"),
             format!("{commit_signature_input:?}"),
@@ -5133,6 +5136,7 @@ mod tests {
             "HNSW-PROOF-VALUE-SENTINEL".to_string(),
             "HNSW-OLD-ROOT-SENTINEL".to_string(),
             "HNSW-NEW-ROOT-SENTINEL".to_string(),
+            "HNSW-MANIFEST-ROOT-SENTINEL".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }
