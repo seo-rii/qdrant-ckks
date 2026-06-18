@@ -444,7 +444,7 @@ pub fn validate_private_hnsw_oram_commit_signature(
     if input.updated_buckets.is_empty() {
         return Err(PrivateHnswOramError::EmptyCommit);
     }
-    if input.updated_buckets.len() > u32::MAX as usize {
+    if u32::try_from(input.updated_buckets.len()).is_err() {
         return Err(PrivateHnswOramError::InvalidCommitSignature);
     }
     if input.new_epoch <= input.old_epoch {
@@ -479,10 +479,14 @@ pub fn validate_private_hnsw_oram_read_paths_signature(
         input.rk_id,
     )?;
     decode_base64url_32(input.root_hash, "root_hash")?;
+    let requested_paths_len: usize = input
+        .requested_paths
+        .try_into()
+        .map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)?;
     if input.paths.is_empty()
         || input.requested_paths == 0
-        || input.paths.len() > u32::MAX as usize
-        || input.requested_paths as usize != input.paths.len()
+        || u32::try_from(input.paths.len()).is_err()
+        || requested_paths_len != input.paths.len()
         || !input.dummy_paths_included
     {
         return Err(PrivateHnswOramError::InvalidReadPathsSignature);
