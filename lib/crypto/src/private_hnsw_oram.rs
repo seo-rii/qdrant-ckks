@@ -611,7 +611,7 @@ fn validate_manifest_shape(manifest: &PrivateHnswOramManifest) -> Result<(), Pri
         return Err(PrivateHnswOramError::InvalidBinding);
     }
     validate_id(&manifest.collection_id, "collection_id")?;
-    validate_id(&manifest.vector_name, "vector_name")?;
+    validate_vector_name(&manifest.vector_name)?;
     validate_resource_id(&manifest.key_id)?;
     validate_resource_id(&manifest.rk_id)?;
     validate_resource_id(&manifest.owner_signing_key_id)?;
@@ -768,7 +768,7 @@ fn validate_signature_input_context(
 ) -> Result<(), PrivateHnswOramError> {
     validate_id(collection_id, "collection_id")?;
     if let Some(vector_name) = vector_name {
-        validate_id(vector_name, "vector_name")?;
+        validate_vector_name(vector_name)?;
     }
     validate_resource_id(key_id)?;
     validate_resource_id(rk_id)?;
@@ -783,6 +783,20 @@ fn validate_id(value: &str, field: &'static str) -> Result<(), PrivateHnswOramEr
         })
     {
         return Err(PrivateHnswOramError::InvalidManifestField(field));
+    }
+    Ok(())
+}
+
+fn validate_vector_name(value: &str) -> Result<(), PrivateHnswOramError> {
+    if value.is_empty()
+        || value.len() > 128
+        || value == "."
+        || value == ".."
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
+    {
+        return Err(PrivateHnswOramError::InvalidManifestField("vector_name"));
     }
     Ok(())
 }
@@ -1079,6 +1093,19 @@ mod tests {
             Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
         );
 
+        let unsafe_vector_context = PrivateHnswOramReadPathsSignatureInput {
+            vector_name: "text/private",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                unsafe_vector_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
+        );
+
         let malformed_root = PrivateHnswOramReadPathsSignatureInput {
             root_hash: "AAAA",
             ..input
@@ -1278,6 +1305,28 @@ mod tests {
     }
 
     #[test]
+    fn manifest_shape_rejects_vector_name_not_safe_for_store_path() {
+        let mut manifest = fixture_manifest();
+        manifest.vector_name = "text/private".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_manifest_shape(&manifest),
+            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
+        );
+
+        manifest.vector_name = "text:private".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_manifest_shape(&manifest),
+            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
+        );
+
+        manifest.vector_name = ".".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_manifest_shape(&manifest),
+            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
+        );
+    }
+
+    #[test]
     fn manifest_shape_rejects_impossible_path_batch_budget() {
         let mut manifest = fixture_manifest();
         manifest.oram.tree_height = 1;
@@ -1408,6 +1457,19 @@ mod tests {
                 verification,
             ),
             Err(PrivateHnswOramError::InvalidManifestField("collection_id"))
+        );
+
+        let invalid_vector_context = PrivateHnswOramCommitSignatureInput {
+            vector_name: "text:private",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_commit_signature(
+                invalid_vector_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
         );
 
         let invalid_key_context = PrivateHnswOramCommitSignatureInput {
