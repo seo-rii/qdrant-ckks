@@ -2270,7 +2270,7 @@ pub fn validate_private_result_oram_commit_signature(
             .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext_sha256"))?;
     }
     let signature_bytes = decode_base64url_64(signature)?;
-    let message = private_result_oram_commit_signature_message(input);
+    let message = try_private_result_oram_commit_signature_message(input)?;
     UnparsedPublicKey::new(&ED25519, verification.public_key)
         .verify(&message, &signature_bytes)
         .map_err(|_| PrivateResultOramError::InvalidCommitSignature)
@@ -2295,7 +2295,7 @@ pub fn validate_private_result_oram_read_buckets_signature(
         return Err(PrivateResultOramError::InvalidReadBucketsSignature);
     }
     let signature_bytes = decode_base64url_64(signature)?;
-    let message = private_result_oram_read_buckets_signature_message(input);
+    let message = try_private_result_oram_read_buckets_signature_message(input)?;
     UnparsedPublicKey::new(&ED25519, verification.public_key)
         .verify(&message, &signature_bytes)
         .map_err(|_| PrivateResultOramError::InvalidReadBucketsSignature)
@@ -2357,7 +2357,7 @@ pub fn sign_private_result_oram_commit(
         signature_alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM,
         signature_key_id: context.signing_key_id,
     };
-    let message = private_result_oram_commit_signature_message(input);
+    let message = try_private_result_oram_commit_signature_message(input)?;
     let signature = key_pair.sign(&message);
     Ok(PrivateResultOramSignature {
         alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM.to_string(),
@@ -2397,7 +2397,7 @@ pub fn sign_private_result_oram_read_buckets(
         signature_alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM,
         signature_key_id: context.signing_key_id,
     };
-    let message = private_result_oram_read_buckets_signature_message(input);
+    let message = try_private_result_oram_read_buckets_signature_message(input)?;
     let signature = key_pair.sign(&message);
     Ok(PrivateResultOramSignature {
         alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM.to_string(),
@@ -2640,6 +2640,13 @@ pub fn private_result_oram_manifest_signature_message(
 pub fn private_result_oram_commit_signature_message(
     input: PrivateResultOramCommitSignatureInput<'_>,
 ) -> Vec<u8> {
+    try_private_result_oram_commit_signature_message(input)
+        .expect("private result ORAM commit signature input length must fit u32")
+}
+
+pub fn try_private_result_oram_commit_signature_message(
+    input: PrivateResultOramCommitSignatureInput<'_>,
+) -> Result<Vec<u8>, PrivateResultOramError> {
     let mut message = Vec::new();
     push_domain(
         &mut message,
@@ -2653,19 +2660,28 @@ pub fn private_result_oram_commit_signature_message(
     push_u64(&mut message, input.new_epoch);
     push_str(&mut message, input.old_root_hash);
     push_str(&mut message, input.new_root_hash);
-    push_u32(&mut message, input.updated_buckets.len() as u32);
+    let updated_bucket_count = u32::try_from(input.updated_buckets.len())
+        .map_err(|_| PrivateResultOramError::InvalidCommitSignature)?;
+    push_u32(&mut message, updated_bucket_count);
     for bucket in input.updated_buckets {
         push_u64(&mut message, bucket.bucket_id);
         push_str(&mut message, bucket.ciphertext_sha256);
     }
     push_str(&mut message, input.signature_alg);
     push_str(&mut message, input.signature_key_id);
-    message
+    Ok(message)
 }
 
 pub fn private_result_oram_read_buckets_signature_message(
     input: PrivateResultOramReadBucketsSignatureInput<'_>,
 ) -> Vec<u8> {
+    try_private_result_oram_read_buckets_signature_message(input)
+        .expect("private result ORAM read_buckets signature input length must fit u32")
+}
+
+pub fn try_private_result_oram_read_buckets_signature_message(
+    input: PrivateResultOramReadBucketsSignatureInput<'_>,
+) -> Result<Vec<u8>, PrivateResultOramError> {
     let mut message = Vec::new();
     push_domain(
         &mut message,
@@ -2678,13 +2694,15 @@ pub fn private_result_oram_read_buckets_signature_message(
     push_u64(&mut message, input.index_epoch);
     push_str(&mut message, input.root_hash);
     push_u64(&mut message, input.bucket_count);
-    push_u32(&mut message, input.bucket_ids.len() as u32);
+    let bucket_id_count = u32::try_from(input.bucket_ids.len())
+        .map_err(|_| PrivateResultOramError::InvalidReadBucketsSignature)?;
+    push_u32(&mut message, bucket_id_count);
     for bucket_id in input.bucket_ids {
         push_u64(&mut message, *bucket_id);
     }
     push_str(&mut message, input.signature_alg);
     push_str(&mut message, input.signature_key_id);
-    message
+    Ok(message)
 }
 
 pub fn private_result_oram_bucket_commitment(
