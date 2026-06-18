@@ -770,9 +770,8 @@ constructing canonical signature messages. Server verification and SDK signing
 use the checked `try_private_hnsw_oram_*_signature_message` builders, so
 oversized canonical domain, string, path-count, or bucket-count fields fail
 closed instead of truncating length prefixes. The older infallible HNSW ORAM
-message-builder wrappers are compatibility-only, deprecated, and intentionally
-omitted from the crate-root exports; new callers should use the checked builders
-from the normal public surface.
+message-builder wrappers are not part of the public contract; callers must use
+the checked builders.
 The `read_paths` and `commit` client signatures use the same key-id shape check
 before verifier lookup; invalid key ids are rejected without echoing the
 submitted value. For active sessions, the request key id must match the session
@@ -1032,10 +1031,9 @@ HNSW vectors.
 The crypto crate defines the payload/result ORAM manifest shape through
 `PrivateResultOramManifest`, `PrivateResultOramBucket`, and the checked
 `try_private_result_oram_*_signature_message` builders. The older infallible
-message-builder wrappers are compatibility-only, deprecated, and intentionally
-omitted from the crate-root exports; production signing and verification use the
-checked builders so canonical field-length or bucket-count overflow fails closed
-before Ed25519 verification/signing. It can
+message-builder wrappers are not part of the public contract; production signing
+and verification use the checked builders so canonical field-length or
+bucket-count overflow fails closed before Ed25519 verification/signing. It can
 validate manifest shape, including
 canonical Path ORAM tree_height/bucket_count consistency,
 logical plus dummy count against ORAM bucket capacity, Ed25519 signatures,

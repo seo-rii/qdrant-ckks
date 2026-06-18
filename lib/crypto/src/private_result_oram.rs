@@ -2611,16 +2611,6 @@ pub fn sign_private_result_oram_manifest_refresh(
     Ok((refreshed, signature))
 }
 
-#[deprecated(
-    note = "use try_private_result_oram_manifest_signature_message to handle canonical length errors"
-)]
-pub fn private_result_oram_manifest_signature_message(
-    manifest: &PrivateResultOramManifest,
-) -> Vec<u8> {
-    try_private_result_oram_manifest_signature_message(manifest)
-        .expect("private result ORAM manifest signature fields must fit canonical length prefixes")
-}
-
 pub fn try_private_result_oram_manifest_signature_message(
     manifest: &PrivateResultOramManifest,
 ) -> Result<Vec<u8>, PrivateResultOramError> {
@@ -2667,16 +2657,6 @@ pub fn try_private_result_oram_manifest_signature_message(
     Ok(message)
 }
 
-#[deprecated(
-    note = "use try_private_result_oram_commit_signature_message to handle canonical length errors"
-)]
-pub fn private_result_oram_commit_signature_message(
-    input: PrivateResultOramCommitSignatureInput<'_>,
-) -> Vec<u8> {
-    try_private_result_oram_commit_signature_message(input)
-        .expect("private result ORAM commit signature input length must fit u32")
-}
-
 pub fn try_private_result_oram_commit_signature_message(
     input: PrivateResultOramCommitSignatureInput<'_>,
 ) -> Result<Vec<u8>, PrivateResultOramError> {
@@ -2720,16 +2700,6 @@ pub fn try_private_result_oram_commit_signature_message(
         PrivateResultOramError::InvalidCommitSignature
     })?;
     Ok(message)
-}
-
-#[deprecated(
-    note = "use try_private_result_oram_read_buckets_signature_message to handle canonical length errors"
-)]
-pub fn private_result_oram_read_buckets_signature_message(
-    input: PrivateResultOramReadBucketsSignatureInput<'_>,
-) -> Vec<u8> {
-    try_private_result_oram_read_buckets_signature_message(input)
-        .expect("private result ORAM read_buckets signature input length must fit u32")
 }
 
 pub fn try_private_result_oram_read_buckets_signature_message(
