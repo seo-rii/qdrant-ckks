@@ -1629,23 +1629,28 @@ fn validate_bucket_read_request_budget(
             "private result ORAM read_buckets request is empty",
         ));
     }
+    let path_len_u64 = u64::from(manifest.oram.tree_height)
+        .checked_add(1)
+        .ok_or_else(|| {
+            StorageError::bad_request("private result ORAM read_buckets budget is invalid")
+        })?;
     let expected_bucket_ids = u64::from(manifest.oram.path_batch_size)
-        .checked_mul(u64::from(manifest.oram.tree_height).saturating_add(1))
+        .checked_mul(path_len_u64)
         .ok_or_else(|| {
             StorageError::bad_request("private result ORAM read_buckets budget is invalid")
         })?;
-    let path_len = usize::try_from(manifest.oram.tree_height)
-        .ok()
-        .and_then(|height| height.checked_add(1))
-        .ok_or_else(|| {
-            StorageError::bad_request("private result ORAM read_buckets budget is invalid")
-        })?;
+    let path_len = usize::try_from(path_len_u64).map_err(|_| {
+        StorageError::bad_request("private result ORAM read_buckets budget is invalid")
+    })?;
+    let actual_bucket_ids = u64::try_from(bucket_ids.len()).map_err(|_| {
+        StorageError::bad_request("private result ORAM read_buckets budget is invalid")
+    })?;
     if bucket_ids.len() % path_len != 0 {
         return Err(StorageError::bad_request(
             "private result ORAM read_buckets must contain whole ORAM paths",
         ));
     }
-    if u64::try_from(bucket_ids.len()).unwrap_or(u64::MAX) != expected_bucket_ids {
+    if actual_bucket_ids != expected_bucket_ids {
         return Err(StorageError::bad_request(
             "private result ORAM read_buckets request must match fixed path budget",
         ));
