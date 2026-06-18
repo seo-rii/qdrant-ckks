@@ -57,7 +57,13 @@ fn main() {
             .and_then(|s| Uuid::try_parse(s.to_str()?).ok())
             .unwrap_or(Uuid::nil());
 
-        let segment = load_segment(path, segment_uuid, None, &AtomicBool::new(false)).unwrap();
+        let segment = match load_segment(path, segment_uuid, None, &AtomicBool::new(false)) {
+            Ok(segment) => segment,
+            Err(err) => {
+                eprintln!("Failed to load segment {segment_path}: {err}");
+                continue;
+            }
+        };
 
         eprintln!(
             "path = {:#?}, size-points = {}",
@@ -76,9 +82,13 @@ fn main() {
             let internal_id = segment.get_internal_id(point_id);
             if internal_id.is_some() {
                 let version = segment.point_version(point_id);
-                let payload = segment
-                    .payload(point_id, &HardwareCounterCell::disposable())
-                    .unwrap();
+                let payload = match segment.payload(point_id, &HardwareCounterCell::disposable()) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        eprintln!("Failed to read payload for point {point_id}: {err}");
+                        continue;
+                    }
+                };
                 // let vectors = segment.all_vectors(point_id).unwrap();
 
                 println!("Internal ID: {internal_id:?}");
@@ -99,7 +109,7 @@ fn payload_redacted_for_display(payload: Payload) -> Payload {
     redact_encrypted_payload_markers(&mut value);
     match value {
         Value::Object(map) => Payload(map),
-        _ => unreachable!("payload root remains an object"),
+        _ => Payload(Default::default()),
     }
 }
 

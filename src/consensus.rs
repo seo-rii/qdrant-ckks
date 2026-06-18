@@ -78,7 +78,11 @@ impl Consensus {
         let tls_client_config = helpers::load_tls_client_config(&settings)?;
 
         let p2p_host = settings.service.host.clone();
-        let p2p_port = settings.cluster.p2p.port.expect("P2P port is not set");
+        let p2p_port = settings
+            .cluster
+            .p2p
+            .port
+            .ok_or_else(|| anyhow::anyhow!("P2P port is not set"))?;
         let config = settings.cluster.consensus.clone();
 
         let (mut consensus, message_sender) = Self::new(
@@ -166,8 +170,7 @@ impl Consensus {
                     message_sender,
                     runtime,
                 )
-            })
-            .unwrap();
+            })?;
 
         Ok(handle)
     }
@@ -1133,9 +1136,11 @@ impl RaftMessageBroker {
 
                     self.senders.insert(peer_id, handle);
 
-                    self.senders
-                        .get_mut(&peer_id)
-                        .expect("message sender task spawned")
+                    let Some(sender) = self.senders.get_mut(&peer_id) else {
+                        log::error!("Failed to register message sender task for peer {peer_id}");
+                        continue;
+                    };
+                    sender
                 }
             };
 

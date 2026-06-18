@@ -107,8 +107,10 @@ fn save_schema<T: JsonSchema>() {
     let settings = SchemaSettings::draft07();
     let generator = settings.into_generator();
     let schema = generator.into_root_schema_for::<T>();
-    let schema_str = serde_json::to_string_pretty(&schema).unwrap();
-    println!("{schema_str}")
+    match serde_json::to_string_pretty(&schema) {
+        Ok(schema_str) => println!("{schema_str}"),
+        Err(err) => eprintln!("Failed to serialize schema: {err}"),
+    }
 }
 
 fn main() {
