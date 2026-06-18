@@ -773,6 +773,7 @@ pub async fn do_read_private_result_oram_buckets(
                 ));
             }
             validate_bucket_read_request_budget(&session.manifest, &bucket_ids)?;
+            validate_bucket_read_request_details(&session.manifest, &bucket_ids)?;
             validate_session_signature_owner_key(session, &read_signature.key_id)?;
             let public_key = request_context.signature_public_key(&read_signature.key_id)?;
             validate_private_result_oram_read_buckets_signature(
@@ -795,7 +796,6 @@ pub async fn do_read_private_result_oram_buckets(
                 },
             )
             .map_err(private_result_oram_error)?;
-            validate_bucket_read_request_details(&session.manifest, &bucket_ids)?;
             let store = PrivateResultOramStore::new(&session.collection_path);
             ensure_private_result_oram_active_session_current_epoch(
                 &store,

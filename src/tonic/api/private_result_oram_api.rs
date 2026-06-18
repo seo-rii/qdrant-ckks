@@ -1476,11 +1476,6 @@ mod private_result_oram_grpc_tests {
             assert!(
                 invalid_signature_bad_path
                     .message()
-                    .contains("read_buckets signature verification failed")
-            );
-            assert!(
-                !invalid_signature_bad_path
-                    .message()
                     .contains("valid ORAM paths")
             );
             assert!(
@@ -1511,11 +1506,6 @@ mod private_result_oram_grpc_tests {
             assert_eq!(invalid_signature_out_of_range.code(), Code::InvalidArgument);
             assert!(
                 invalid_signature_out_of_range
-                    .message()
-                    .contains("read_buckets signature verification failed")
-            );
-            assert!(
-                !invalid_signature_out_of_range
                     .message()
                     .contains("bucket id is out of range")
             );
