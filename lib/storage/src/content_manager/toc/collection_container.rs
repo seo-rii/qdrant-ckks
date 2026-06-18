@@ -298,7 +298,9 @@ impl TableOfContent {
                 }
 
                 let Some(collection) = collections.get(id) else {
-                    unreachable!()
+                    return Err(StorageError::service_error(format!(
+                        "collection {id} is missing after snapshot apply",
+                    )));
                 };
 
                 // Update collection state

@@ -156,14 +156,11 @@ async fn _do_create_full_snapshot(
             collections_mapping: collection_name_to_snapshot_path,
             collections_aliases: alias_mapping,
         };
+        let snapshot_config_json = serde_json::to_vec_pretty(&snapshot_config).map_err(|err| {
+            StorageError::service_error(format!("failed to serialize snapshot config: {err}"))
+        })?;
         let mut config_file = tokio_fs::File::create(&config_path).await?;
-        config_file
-            .write_all(
-                serde_json::to_string_pretty(&snapshot_config)
-                    .unwrap()
-                    .as_bytes(),
-            )
-            .await?;
+        config_file.write_all(&snapshot_config_json).await?;
     }
 
     let full_snapshot_path = snapshot_dir.join(&snapshot_name);

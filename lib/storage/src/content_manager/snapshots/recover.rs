@@ -478,7 +478,11 @@ async fn _do_recover_from_snapshot(
 
                 // `ShardTransfer` is only used during snapshot *shard transfer*.
                 // It is only exposed in internal gRPC API and only used for *shard* snapshot recovery.
-                SnapshotPriority::ShardTransfer => unreachable!(),
+                SnapshotPriority::ShardTransfer => {
+                    return Err(StorageError::bad_request(
+                        "shard-transfer snapshot priority is not valid for collection snapshot recovery",
+                    ));
+                }
             }
         }
     }
