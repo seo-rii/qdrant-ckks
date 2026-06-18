@@ -633,7 +633,11 @@ impl LocalShard {
                 .spawn(move || {
                     build_segment(&path_clone, &segment_config, deferred_internal_id, true)
                 })
-                .unwrap();
+                .map_err(|err| {
+                    CollectionError::service_error(format!(
+                        "Failed to spawn shard build thread for {collection_id}:{id}: {err}"
+                    ))
+                })?;
             build_handlers.push(segment);
         }
 
@@ -740,7 +744,11 @@ impl LocalShard {
 
         let progress_style = ProgressStyle::default_bar()
             .template("{msg} [{elapsed_precise}] {wide_bar} {pos}/{len} (eta:{eta})")
-            .expect("Failed to create progress style");
+            .map_err(|err| {
+                CollectionError::service_error(format!(
+                    "Failed to create WAL recovery progress style: {err}"
+                ))
+            })?;
         bar.set_style(progress_style);
 
         log::debug!(
