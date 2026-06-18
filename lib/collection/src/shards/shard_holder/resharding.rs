@@ -337,7 +337,11 @@ impl ShardHolder {
 
                 // Remove any points that might have been transferred from target shard
                 // Replica may be dead, so we force the delete operation
-                let filter = self.hash_ring_filter(id).expect("hash ring filter");
+                let filter = self.hash_ring_filter(id).ok_or_else(|| {
+                    CollectionError::service_error(format!(
+                        "Hash ring filter for shard {id} is missing during resharding abort",
+                    ))
+                })?;
                 let filter = Filter::new_must_not(Condition::new_custom(Arc::new(filter)));
                 shard
                     .delete_local_points(
@@ -538,7 +542,7 @@ impl ShardHolder {
         }
 
         let shard_key = self.shard_id_to_key_mapping.get(&shard_id).cloned();
-        let router = self.rings.get(&shard_key).expect("hashring exists");
+        let router = self.rings.get(&shard_key)?;
         Some(router)
     }
 
