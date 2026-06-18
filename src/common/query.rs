@@ -2635,7 +2635,9 @@ fn ckks_sidecar_hnsw_distance_cache_tag(distance: Distance) -> &'static str {
     }
 }
 
-fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) -> String {
+fn try_ckks_sidecar_hnsw_records_fingerprint(
+    records: &[CkksSidecarSearchRecord],
+) -> Result<String, StorageError> {
     let mut hasher = Sha256::new();
     macro_rules! hash_bytes {
         ($bytes:expr) => {{
@@ -2647,15 +2649,12 @@ fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) ->
 
     hasher.update((records.len() as u64).to_be_bytes());
     for record in records {
-        let id = serde_json::to_vec(&record.id).expect("serializing a point id should not fail");
-        hash_bytes!(id.as_slice());
+        hash_ckks_sidecar_fingerprint_json(&mut hasher, &record.id, "point id")?;
         hash_bytes!(record.point_id.as_bytes());
         match &record.shard_key {
             Some(shard_key) => {
-                let shard_key =
-                    serde_json::to_vec(shard_key).expect("serializing a shard key should not fail");
                 hasher.update([1]);
-                hash_bytes!(shard_key.as_slice());
+                hash_ckks_sidecar_fingerprint_json(&mut hasher, shard_key, "shard key")?;
             }
             None => hasher.update([0]),
         }
@@ -2680,7 +2679,28 @@ fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) ->
     }
 
     let digest = hasher.finalize();
-    BASE64URL_NOPAD.encode(digest.as_ref())
+    Ok(BASE64URL_NOPAD.encode(digest.as_ref()))
+}
+
+fn hash_ckks_sidecar_fingerprint_json<T: Serialize>(
+    hasher: &mut Sha256,
+    value: &T,
+    field_name: &str,
+) -> Result<(), StorageError> {
+    let serialized = serde_json::to_vec(value).map_err(|err| {
+        StorageError::service_error(format!(
+            "failed to serialize CKKS sidecar HNSW graph fingerprint {field_name}: {err}",
+        ))
+    })?;
+    hasher.update((serialized.len() as u64).to_be_bytes());
+    hasher.update(&serialized);
+    Ok(())
+}
+
+#[cfg(test)]
+fn ckks_sidecar_hnsw_records_fingerprint(records: &[CkksSidecarSearchRecord]) -> String {
+    try_ckks_sidecar_hnsw_records_fingerprint(records)
+        .expect("test CKKS sidecar records must serialize into fingerprint bytes")
 }
 
 fn ckks_sidecar_hnsw_graph_cache_file_name(key: &CkksSidecarHnswGraphCacheKey) -> String {
@@ -3529,7 +3549,7 @@ fn ckks_sidecar_hnsw_search_points(
         distance: ckks_sidecar_hnsw_distance_cache_tag(distance),
         score_order: ckks_sidecar_hnsw_score_order_cache_tag(score_order),
         m,
-        records_fingerprint: ckks_sidecar_hnsw_records_fingerprint(records),
+        records_fingerprint: try_ckks_sidecar_hnsw_records_fingerprint(records)?,
     };
     let graph = {
         let mut cache = CKKS_SIDECAR_HNSW_GRAPH_CACHE.lock().map_err(|_| {
