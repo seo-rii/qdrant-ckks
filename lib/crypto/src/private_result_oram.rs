@@ -2502,7 +2502,9 @@ pub fn validate_private_result_oram_upload_bundle(
         PrivateResultOramBucketValidationContext::from_manifest(manifest, max_ciphertext_bytes);
     let mut commitments = Vec::with_capacity(bundle.buckets.len());
     for (expected_bucket_id, bucket) in bundle.buckets.iter().enumerate() {
-        if bucket.bucket_id != expected_bucket_id as u64 {
+        let expected_bucket_id = u64::try_from(expected_bucket_id)
+            .map_err(|_| PrivateResultOramError::InvalidManifestField("bucket_count"))?;
+        if bucket.bucket_id != expected_bucket_id {
             return Err(PrivateResultOramError::InvalidBucketField("bucket_id"));
         }
         validate_private_result_oram_bucket_shape(bucket, validation_context)?;

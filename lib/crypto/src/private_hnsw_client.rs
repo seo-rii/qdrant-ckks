@@ -1712,8 +1712,12 @@ pub fn build_private_hnsw_oram_plaintext_index_from_blocks(
         .len()
         .try_into()
         .map_err(|_| PrivateHnswClientError::InvalidBuildConfig("blocks"))?;
+    let bucket_size: u64 = config
+        .bucket_size
+        .try_into()
+        .map_err(|_| PrivateHnswClientError::InvalidOramClientConfig("bucket_size"))?;
     let capacity = bucket_count
-        .checked_mul(config.bucket_size as u64)
+        .checked_mul(bucket_size)
         .ok_or(PrivateHnswClientError::BucketCountMismatch)?;
     let dummy_node_count = capacity
         .checked_sub(logical_node_count)
@@ -1874,7 +1878,9 @@ pub fn plan_private_hnsw_oram_neighbor_clustered_leaves(
 
     let mut leaves = vec![0; blocks.len()];
     for (rank, index) in clustered_indexes.into_iter().enumerate() {
-        leaves[index] = (rank as u64) % leaf_count;
+        let rank = u64::try_from(rank)
+            .map_err(|_| PrivateHnswClientError::InvalidBuildConfig("points"))?;
+        leaves[index] = rank % leaf_count;
     }
     Ok(leaves)
 }
@@ -2323,7 +2329,9 @@ pub fn seal_private_hnsw_oram_plaintext_index(
 
     let mut buckets = Vec::with_capacity(build.buckets.len());
     for (expected_bucket_id, bucket) in build.buckets.iter().enumerate() {
-        if bucket.bucket_id != expected_bucket_id as u64 {
+        let expected_bucket_id = u64::try_from(expected_bucket_id)
+            .map_err(|_| PrivateHnswClientError::BucketCountMismatch)?;
+        if bucket.bucket_id != expected_bucket_id {
             return Err(PrivateHnswClientError::PathBucketMismatch);
         }
         buckets.push(seal_private_hnsw_oram_plaintext_bucket(
@@ -2458,9 +2466,9 @@ pub fn validate_private_hnsw_oram_upload_bundle(
         .into_iter()
         .enumerate()
         .map(|(bucket_id, commitment)| {
-            commitment.ok_or(PrivateHnswClientError::MissingBucket {
-                bucket_id: bucket_id as u64,
-            })
+            let bucket_id = u64::try_from(bucket_id)
+                .map_err(|_| PrivateHnswClientError::BucketCountMismatch)?;
+            commitment.ok_or(PrivateHnswClientError::MissingBucket { bucket_id })
         })
         .collect::<Result<Vec<_>, _>>()?;
     if private_hnsw_oram_merkle_root_for_commitments(&commitments)? != manifest.root_hash {
