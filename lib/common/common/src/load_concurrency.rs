@@ -38,18 +38,22 @@ pub struct LoadConcurrencyConfig {
 impl LoadConcurrencyConfig {
     pub fn get_concurrent_collections(&self) -> NonZeroUsize {
         self.max_concurrent_collection_loads
-            .unwrap_or(NonZeroUsize::new(DEFAULT_MAX_CONCURRENT_COLLECTION_LOADS).unwrap())
+            .unwrap_or_else(|| nonzero_default(DEFAULT_MAX_CONCURRENT_COLLECTION_LOADS))
     }
 
     pub fn get_concurrent_shards(&self) -> NonZeroUsize {
         self.max_concurrent_shard_loads
-            .unwrap_or(NonZeroUsize::new(DEFAULT_MAX_CONCURRENT_SHARD_LOADS).unwrap())
+            .unwrap_or_else(|| nonzero_default(DEFAULT_MAX_CONCURRENT_SHARD_LOADS))
     }
 
     pub fn get_concurrent_segments(&self) -> NonZeroUsize {
         self.max_concurrent_segment_loads
-            .unwrap_or(NonZeroUsize::new(DEFAULT_MAX_CONCURRENT_SEGMENT_LOADS).unwrap())
+            .unwrap_or_else(|| nonzero_default(DEFAULT_MAX_CONCURRENT_SEGMENT_LOADS))
     }
+}
+
+fn nonzero_default(value: usize) -> NonZeroUsize {
+    NonZeroUsize::new(value).unwrap_or(NonZeroUsize::MIN)
 }
 
 /// Helper to accept string inputs from environment variables
