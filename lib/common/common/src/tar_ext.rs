@@ -46,8 +46,10 @@ struct FusedWriteSeek<W> {
 }
 
 impl<W: Write + Seek> BlowFuseOnDrop<W> {
-    fn tar(&mut self) -> &mut tar::Builder<FusedWriteSeek<W>> {
-        self.tar.as_mut().unwrap()
+    fn tar(&mut self) -> io::Result<&mut tar::Builder<FusedWriteSeek<W>>> {
+        self.tar
+            .as_mut()
+            .ok_or_else(|| io::Error::other("tar builder has already been finalized"))
     }
 }
 
@@ -159,7 +161,7 @@ impl<W: Write + Seek> BuilderExt<W> {
         let mut header = tar::Header::new_gnu();
         header.set_mode(0o644);
         let mut tar = self.tar.blocking_lock();
-        let mut writer = tar.tar().append_writer(&mut header, dst)?;
+        let mut writer = tar.tar()?.append_writer(&mut header, dst)?;
         let result = f(&mut writer);
         writer.finish()?;
         Ok(result)
@@ -175,7 +177,7 @@ impl<W: Write + Seek> BuilderExt<W> {
         let dst = join_relative(&self.path, dst)?;
         self.tar
             .blocking_lock()
-            .tar()
+            .tar()?
             .append_path_with_name(src, dst)
     }
 
@@ -186,7 +188,7 @@ impl<W: Write + Seek> BuilderExt<W> {
     /// This function panics if called within an asynchronous execution context.
     pub fn blocking_append_dir_all(&self, src: &Path, dst: &Path) -> io::Result<()> {
         let dst = join_relative(&self.path, dst)?;
-        self.tar.blocking_lock().tar().append_dir_all(dst, src)
+        self.tar.blocking_lock().tar()?.append_dir_all(dst, src)
     }
 
     /// Append a new entry to the tar archive with the given file contents.
@@ -202,7 +204,7 @@ impl<W: Write + Seek> BuilderExt<W> {
         header.set_size(src.len() as u64);
         self.tar
             .blocking_lock()
-            .tar()
+            .tar()?
             .append_data(&mut header, dst, src)
     }
 
@@ -216,7 +218,10 @@ impl<W: Write + Seek> BuilderExt<W> {
             .into_inner();
 
         // Extract the builder out of bb.
-        let tar: tar::Builder<FusedWriteSeek<_>> = bb.tar.take().unwrap();
+        let tar: tar::Builder<FusedWriteSeek<_>> = bb
+            .tar
+            .take()
+            .ok_or_else(|| io::Error::other("tar builder has already been finalized"))?;
 
         // Finish and flush before BuilderBox is dropped.
         let mut wb: FusedWriteSeek<_> = tar.into_inner()?; // calls finish()
@@ -260,10 +265,15 @@ impl<W: Send + Write + Seek + 'static> BuilderExt<W> {
     ) -> Result<T, E>
     where
         T: Send + 'static,
-        E: Send + 'static + From<JoinError>,
+        E: Send + 'static + From<io::Error> + From<JoinError>,
     {
         let tar = Arc::clone(&self.tar);
-        tokio::task::spawn_blocking(move || f(tar.blocking_lock().tar())).await?
+        tokio::task::spawn_blocking(move || {
+            let mut locked = tar.blocking_lock();
+            let tar = locked.tar()?;
+            f(tar)
+        })
+        .await?
     }
 }
 
