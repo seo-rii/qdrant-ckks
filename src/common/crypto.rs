@@ -8818,7 +8818,11 @@ fn decode_direct_material_key(
         });
     }
 
-    let source = material.source.as_deref().unwrap();
+    let source = material.source.as_deref().ok_or_else(|| {
+        PayloadWriteSetupError::MissingMaterialSource {
+            material: material_name.to_string(),
+        }
+    })?;
     let configured_sources = usize::from(material.env.is_some())
         + usize::from(material.path.is_some())
         + usize::from(material.fd.is_some())
