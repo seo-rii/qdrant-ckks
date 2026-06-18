@@ -229,7 +229,11 @@ impl ChannelService {
             })?;
 
         // Construct REST URL from URI
-        let mut url = Url::parse(&local_peer_uri.to_string()).expect("Malformed URL");
+        let mut url = Url::parse(&local_peer_uri.to_string()).map_err(|err| {
+            CollectionError::service_error(format!(
+                "Cannot determine REST address, peer URI {local_peer_uri} is malformed: {err}",
+            ))
+        })?;
         url.set_port(Some(self.current_rest_port))
             .map_err(|()| {
                 CollectionError::service_error(format!(

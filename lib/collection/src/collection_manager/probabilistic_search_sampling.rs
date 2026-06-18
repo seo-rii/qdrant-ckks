@@ -147,8 +147,20 @@ const POISSON_DISTRIBUTION_SEARCH_SAMPLING: [(f64, usize); 121] = [
 /// Uses binary search to find the sampling size for a given lambda.
 pub fn find_search_sampling_over_point_distribution(n: f64, p: f64) -> usize {
     let target_lambda = p * n;
-    let k = POISSON_DISTRIBUTION_SEARCH_SAMPLING
-        .binary_search_by(|&(lambda, _sampling)| lambda.partial_cmp(&target_lambda).unwrap());
+    if target_lambda.is_nan() || target_lambda <= 0.0 {
+        return POISSON_DISTRIBUTION_SEARCH_SAMPLING[0].1;
+    }
+    if !target_lambda.is_finite() || target_lambda >= f64::MAX {
+        return POISSON_DISTRIBUTION_SEARCH_SAMPLING
+            .last()
+            .map(|(_, sampling)| *sampling)
+            .unwrap_or(usize::MAX);
+    }
+    let k = POISSON_DISTRIBUTION_SEARCH_SAMPLING.binary_search_by(|&(lambda, _sampling)| {
+        lambda
+            .partial_cmp(&target_lambda)
+            .unwrap_or(std::cmp::Ordering::Less)
+    });
     match k {
         Ok(k) => POISSON_DISTRIBUTION_SEARCH_SAMPLING[k].1,
         Err(insert) => POISSON_DISTRIBUTION_SEARCH_SAMPLING[insert].1,

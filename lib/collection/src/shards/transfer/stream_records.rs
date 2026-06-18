@@ -50,11 +50,20 @@ pub(super) async fn transfer_stream_records(
     #[cfg(feature = "staging")]
     let staging_delay = std::env::var("QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC")
         .ok()
-        .map(|val| {
-            std::time::Duration::from_secs_f64(
-                val.parse::<f64>()
-                    .expect("invalid QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC value"),
-            )
+        .and_then(|val| match val.parse::<f64>() {
+            Ok(delay) if delay.is_finite() && delay >= 0.0 => {
+                Some(std::time::Duration::from_secs_f64(delay))
+            }
+            Ok(delay) => {
+                log::warn!(
+                    "Ignoring invalid QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC value: {delay}",
+                );
+                None
+            }
+            Err(err) => {
+                log::warn!("Ignoring invalid QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC value: {err}");
+                None
+            }
         });
 
     // Whether we need an intermediate replica state (ActiveRead) during transfer to sync nodes
