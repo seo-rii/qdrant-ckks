@@ -985,6 +985,7 @@ pub async fn do_read_private_hnsw_paths(
                     "private HNSW ORAM read_paths request must match fixed path budget",
                 ));
             }
+            validate_private_hnsw_read_path_labels(&paths, session.tree_height)?;
             validate_session_signature_owner_key(session, &client_signature.key_id)?;
             let public_key = request_context.signature_public_key(&client_signature.key_id)?;
             let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
@@ -1010,7 +1011,6 @@ pub async fn do_read_private_hnsw_paths(
                 },
             )
             .map_err(private_hnsw_error)?;
-            validate_private_hnsw_read_path_labels(&paths, session.tree_height)?;
             let bucket_ids =
                 bucket_ids_for_path_batch(&paths, session.tree_height, session.bucket_count)?;
             let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
