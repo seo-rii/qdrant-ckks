@@ -7,10 +7,9 @@ use common::budget::ResourceBudget;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     DistanceKind, FixedBudgetParams, OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
-    PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, PrivateHnswBucketAeadBaseContext,
-    PrivateHnswClientKeys, PrivateHnswOramManifest, PrivateHnswOramSignature, PrivateHnswParams,
-    PrivateResultOramManifest, PrivateResultOramSignature, ResultPrivacyMode, SecretKey,
-    VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, seal_private_hnsw_oram_bucket,
+    PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, PrivateHnswOramManifest,
+    PrivateHnswOramSignature, PrivateHnswParams, PrivateResultOramManifest,
+    PrivateResultOramSignature, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
 };
 use segment::types::Distance;
 use sha2::{Digest, Sha256};
@@ -51,12 +50,6 @@ pub fn dummy_abort_shard_transfer() -> AbortShardTransfer {
 
 fn init_logger() {
     let _ = env_logger::builder().is_test(true).try_init();
-}
-
-fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|window| window == needle)
 }
 
 async fn _test_snapshot_collection(node_type: NodeType) {
@@ -122,36 +115,6 @@ async fn _test_snapshot_collection(node_type: NodeType) {
     .await
     .unwrap();
 
-    let private_hnsw_plaintext_sentinel = b"qdrant-sec-private-hnsw-plaintext-sentinel";
-    let private_hnsw_bucket = collection_dir
-        .path()
-        .join(PRIVATE_HNSW_ORAM_DIR)
-        .join("text")
-        .join("buckets")
-        .join("00000000.bucket");
-    std::fs::create_dir_all(private_hnsw_bucket.parent().unwrap()).unwrap();
-    let keys =
-        PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([91; 32])).unwrap();
-    let bucket = seal_private_hnsw_oram_bucket(
-        &keys,
-        PrivateHnswBucketAeadBaseContext {
-            collection_id: "test-private-hnsw-collection",
-            vector_name: "text",
-            key_id: "tenant-a/vector-private-rk",
-            rk_id: "tenant-a/vector-private-rk",
-            rk_epoch: 7,
-        }
-        .for_bucket(0, 42),
-        private_hnsw_plaintext_sentinel,
-    )
-    .unwrap();
-    let bucket_json = serde_json::to_vec(&bucket).unwrap();
-    assert!(!contains_bytes(
-        &bucket_json,
-        private_hnsw_plaintext_sentinel
-    ));
-    std::fs::write(&private_hnsw_bucket, &bucket_json).unwrap();
-
     let snapshots_temp_dir = Builder::new().prefix("temp_dir").tempdir().unwrap();
     let snapshot_description = collection
         .create_snapshot(snapshots_temp_dir.path(), 0)
@@ -160,15 +123,6 @@ async fn _test_snapshot_collection(node_type: NodeType) {
 
     assert_eq!(snapshot_description.checksum.unwrap().len(), 64);
     let snapshot_path = snapshots_path.path().join(&snapshot_description.name);
-    let snapshot_bytes = std::fs::read(&snapshot_path).unwrap();
-    assert!(contains_bytes(
-        &snapshot_bytes,
-        PRIVATE_HNSW_ORAM_DIR.as_bytes()
-    ));
-    assert!(!contains_bytes(
-        &snapshot_bytes,
-        private_hnsw_plaintext_sentinel
-    ));
 
     {
         let recover_dir = Builder::new()
@@ -191,19 +145,6 @@ async fn _test_snapshot_collection(node_type: NodeType) {
     if let Err(err) = Collection::restore_snapshot(snapshot_data, recover_dir.path(), 0, true) {
         panic!("Failed to restore snapshot: {err}")
     }
-    assert_eq!(
-        std::fs::read(
-            recover_dir
-                .path()
-                .join(PRIVATE_HNSW_ORAM_DIR)
-                .join("text")
-                .join("buckets")
-                .join("00000000.bucket"),
-        )
-        .unwrap(),
-        bucket_json,
-    );
-
     let recovered_collection = Collection::load(
         collection_name_rec,
         1,
@@ -328,6 +269,108 @@ async fn test_snapshot_private_result_oram_unconfigured_store_fails_before_archi
     );
     assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
     assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+    assert!(!err.contains(&ciphertext));
+    assert!(!err.contains("00000000.bucket"));
+    assert!(
+        std::fs::read_dir(snapshots_path.path())
+            .unwrap()
+            .next()
+            .is_none()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_snapshot_private_hnsw_unconfigured_store_fails_before_archive() {
+    init_logger();
+
+    let config = CollectionConfigInternal {
+        params: CollectionParams {
+            vectors: VectorsConfig::Single(VectorParamsBuilder::new(4, Distance::Dot).build()),
+            shard_number: NonZeroU32::new(1).unwrap(),
+            replication_factor: NonZeroU32::new(1).unwrap(),
+            write_consistency_factor: NonZeroU32::new(1).unwrap(),
+            ..CollectionParams::empty()
+        },
+        optimizer_config: TEST_OPTIMIZERS_CONFIG.clone(),
+        wal_config: WalConfig {
+            wal_capacity_mb: 1,
+            wal_segments_ahead: 0,
+            wal_retain_closed: 1,
+        },
+        hnsw_config: Default::default(),
+        quantization_config: Default::default(),
+        strict_mode_config: Default::default(),
+        uuid: None,
+        metadata: None,
+    };
+
+    let snapshots_path = Builder::new()
+        .prefix("test_hnsw_oram_snapshots")
+        .tempdir()
+        .unwrap();
+    let collection_dir = Builder::new()
+        .prefix("test_hnsw_oram_collection")
+        .tempdir()
+        .unwrap();
+    let mut shards = AHashMap::new();
+    shards.insert(0, HashSet::from([1]));
+
+    let collection = Collection::new(
+        "test_hnsw_oram".to_string(),
+        1,
+        collection_dir.path(),
+        snapshots_path.path(),
+        &config,
+        Arc::new(SharedStorageConfig::default()),
+        CollectionShardDistribution { shards },
+        None,
+        ChannelService::default(),
+        dummy_on_replica_failure(),
+        dummy_request_shard_transfer(),
+        dummy_abort_shard_transfer(),
+        None,
+        None,
+        ResourceBudget::default(),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let bucket_path = collection_dir
+        .path()
+        .join(PRIVATE_HNSW_ORAM_DIR)
+        .join("text")
+        .join("buckets")
+        .join("00000000.bucket");
+    std::fs::create_dir_all(bucket_path.parent().unwrap()).unwrap();
+    let ciphertext = BASE64URL_NOPAD.encode(b"encrypted hnsw bucket 0");
+    let ciphertext_sha256 =
+        BASE64URL_NOPAD.encode(Sha256::digest(b"encrypted hnsw bucket 0").as_ref());
+    let bucket_json = serde_json::to_vec(&serde_json::json!({
+        "version": 1,
+        "bucket_id": 0,
+        "index_epoch": 42,
+        "ciphertext": ciphertext,
+        "ciphertext_sha256": ciphertext_sha256,
+        "bucket_commitment": BASE64URL_NOPAD.encode(&[7; 32]),
+    }))
+    .unwrap();
+    std::fs::write(&bucket_path, &bucket_json).unwrap();
+
+    let snapshots_temp_dir = Builder::new().prefix("temp_dir").tempdir().unwrap();
+    let err = collection
+        .create_snapshot(snapshots_temp_dir.path(), 0)
+        .await
+        .unwrap_err();
+    let err = err.to_string();
+    assert!(
+        err.contains(
+            "private HNSW ORAM snapshot store is present without a matching collection encryption rule"
+        ),
+        "{err}"
+    );
+    assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
+    assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
     assert!(!err.contains(&ciphertext));
     assert!(!err.contains("00000000.bucket"));
     assert!(

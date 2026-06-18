@@ -1932,6 +1932,17 @@ mod tests {
         }
     }
 
+    fn fixture_client_keys() -> PrivateHnswClientKeys {
+        PrivateHnswClientKeys::derive_from_resource_key_with_context(
+            &SecretKey::from_bytes([13; 32]),
+            "collection-uuid-1",
+            "text",
+            "tenant-a/vector-private-rk",
+            7,
+        )
+        .unwrap()
+    }
+
     fn client_oram_config() -> PrivateHnswOramClientConfig {
         PrivateHnswOramClientConfig {
             tree_height: 1,
@@ -1942,9 +1953,7 @@ mod tests {
     }
 
     fn fixture_upload_bundle(key_pair: &Ed25519KeyPair) -> PrivateHnswOramUploadBundle {
-        let keys =
-            PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([13; 32]))
-                .unwrap();
+        let keys = fixture_client_keys();
         let config = client_oram_config();
         let points = vec![
             PrivateHnswBuildPoint {
@@ -2027,9 +2036,7 @@ mod tests {
         PrivateHnswOramSignature,
     ) {
         let bundle = fixture_upload_bundle(key_pair);
-        let keys =
-            PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([13; 32]))
-                .unwrap();
+        let keys = fixture_client_keys();
         let config = client_oram_config();
         let plaintext_bucket = empty_private_hnsw_oram_plaintext_bucket(0, config).unwrap();
         let encoded_bucket =
@@ -2475,9 +2482,7 @@ mod tests {
     fn store_accepts_client_sealed_buckets_and_merkle_root_roundtrips() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
-        let keys =
-            PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([13; 32]))
-                .unwrap();
+        let keys = fixture_client_keys();
 
         let config = client_oram_config();
         let plaintext_bucket0 = PrivateHnswOramPlaintextBucket {
@@ -2961,9 +2966,7 @@ mod tests {
     fn sdk_upload_search_fixture_roundtrips_store_read_paths_and_commit() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
-        let keys =
-            PrivateHnswClientKeys::derive_from_resource_key(&SecretKey::from_bytes([13; 32]))
-                .unwrap();
+        let keys = fixture_client_keys();
         let base_context = client_bucket_base_context();
         let config = PrivateHnswOramClientConfig {
             tree_height: 2,

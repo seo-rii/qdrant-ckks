@@ -360,7 +360,14 @@ fn bench_config() -> PrivateHnswOramClientConfig {
 
 fn client_keys() -> PrivateHnswClientKeys {
     let resource_key = SecretKey::from_bytes([9; 32]);
-    PrivateHnswClientKeys::derive_from_resource_key(&resource_key).unwrap()
+    PrivateHnswClientKeys::derive_from_resource_key_with_context(
+        &resource_key,
+        "bench-collection",
+        "text",
+        "bench/vector-rk",
+        7,
+    )
+    .unwrap()
 }
 
 fn bucket_base_context() -> PrivateHnswBucketAeadBaseContext<'static> {
