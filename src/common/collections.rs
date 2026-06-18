@@ -158,7 +158,9 @@ fn generate_even_placement(
     for _shard in 0..shard_number {
         let mut shard_placement = Vec::new();
         for _replica in 0..max_replication_factor {
-            shard_placement.push(*loop_iter.next().unwrap());
+            if let Some(peer_id) = loop_iter.next() {
+                shard_placement.push(*peer_id);
+            }
         }
         exact_placement.push(shard_placement);
     }
@@ -270,12 +272,11 @@ pub async fn do_update_collection_cluster(
         "update_collection_cluster",
     )?;
 
-    if dispatcher.consensus_state().is_none() {
+    let Some(consensus_state) = dispatcher.consensus_state() else {
         return Err(StorageError::BadRequest {
             description: "Distributed mode disabled".to_string(),
         });
-    }
-    let consensus_state = dispatcher.consensus_state().unwrap();
+    };
 
     let get_all_peer_ids = || {
         consensus_state
@@ -758,13 +759,21 @@ pub async fn do_update_collection_cluster(
             let shard_id = match (direction, shard_key.as_ref()) {
                 // When scaling up, just pick the next shard ID
                 (ReshardingDirection::Up, _) => {
-                    collection_state
+                    let max_shard_id = collection_state
                         .shards
                         .keys()
                         .copied()
                         .max()
-                        .expect("collection must contain shards")
-                        + 1
+                        .ok_or_else(|| {
+                            StorageError::service_error(format!(
+                                "cannot reshard collection {collection_name}: collection has no shards",
+                            ))
+                        })?;
+                    max_shard_id.checked_add(1).ok_or_else(|| {
+                        StorageError::service_error(format!(
+                            "cannot reshard collection {collection_name}: next shard id overflows",
+                        ))
+                    })?
                 }
                 // When scaling down without shard keys, pick the last shard ID
                 (ReshardingDirection::Down, None) => collection_state
@@ -772,16 +781,27 @@ pub async fn do_update_collection_cluster(
                     .keys()
                     .copied()
                     .max()
-                    .expect("collection must contain shards"),
+                    .ok_or_else(|| {
+                        StorageError::service_error(format!(
+                            "cannot reshard collection {collection_name}: collection has no shards",
+                        ))
+                    })?,
                 // When scaling down with shard keys, pick the last shard ID of that key
-                (ReshardingDirection::Down, Some(shard_key)) => collection_state
-                    .shards_key_mapping
-                    .get(shard_key)
-                    .expect("specified shard key must exist")
-                    .iter()
-                    .copied()
-                    .max()
-                    .expect("collection must contain shards"),
+                (ReshardingDirection::Down, Some(shard_key)) => {
+                    let shard_ids = collection_state
+                        .shards_key_mapping
+                        .get(shard_key)
+                        .ok_or_else(|| {
+                            StorageError::bad_request(format!(
+                                "sharding key {shard_key} does not exist for collection {collection_name}",
+                            ))
+                        })?;
+                    shard_ids.iter().copied().max().ok_or_else(|| {
+                        StorageError::service_error(format!(
+                            "cannot reshard collection {collection_name}: sharding key {shard_key} has no shards",
+                        ))
+                    })?
+                }
             };
 
             let peer_id = match (peer_id, direction) {
@@ -809,20 +829,32 @@ pub async fn do_update_collection_cluster(
                         .into_iter()
                         .min_by_key(|(_, count)| *count)
                         .map(|(peer_id, _)| peer_id)
-                        .expect("expected at least one peer")
+                        .ok_or_else(|| {
+                            StorageError::service_error(format!(
+                                "cannot reshard collection {collection_name}: no peers are available",
+                            ))
+                        })?
                 }
 
                 // When scaling down, select random peer that contains the shard we're dropping
                 // Other peers work, but are less efficient due to remote operations
-                (None, ReshardingDirection::Down) => collection_state
-                    .shards
-                    .get(&shard_id)
-                    .expect("select shard ID must always exist in collection state")
-                    .replicas
-                    .keys()
-                    .choose(&mut rand::rng())
-                    .copied()
-                    .unwrap(),
+                (None, ReshardingDirection::Down) => {
+                    let shard_info = collection_state.shards.get(&shard_id).ok_or_else(|| {
+                        StorageError::service_error(format!(
+                            "cannot reshard collection {collection_name}: selected shard {shard_id} is missing",
+                        ))
+                    })?;
+                    shard_info
+                        .replicas
+                        .keys()
+                        .choose(&mut rand::rng())
+                        .copied()
+                        .ok_or_else(|| {
+                            StorageError::service_error(format!(
+                                "cannot reshard collection {collection_name}: selected shard {shard_id} has no replicas",
+                            ))
+                        })?
+                }
             };
 
             if let Some(resharding) = &collection_state.resharding {
