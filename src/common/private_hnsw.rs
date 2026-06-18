@@ -890,7 +890,7 @@ pub async fn do_open_private_hnsw_session(
         vector_name: vector_name.to_string(),
         index_epoch: current_epoch.index_epoch,
         root_hash: current_epoch.root_hash.clone(),
-        lease_expires_unix: now_unix.saturating_add(SESSION_LEASE_SECS),
+        lease_expires_unix: session_lease_expires_unix(now_unix)?,
         bucket_count: manifest.bucket_count,
         tree_height: manifest.oram.tree_height,
         path_batch_size: manifest.oram.path_batch_size,
@@ -1165,7 +1165,7 @@ pub async fn do_commit_private_hnsw_paths(
             .map_err(private_hnsw_commit_writeback_store_error)?;
         session.index_epoch = committed.index_epoch;
         session.root_hash = committed.root_hash.clone();
-        session.lease_expires_unix = now_unix.saturating_add(SESSION_LEASE_SECS);
+        session.lease_expires_unix = session_lease_expires_unix(now_unix)?;
         Ok(committed)
     })
 }
@@ -1997,6 +1997,12 @@ fn current_unix_secs() -> StorageResult<u64> {
         .map_err(|err| {
             StorageError::service_error(format!("system clock before UNIX epoch: {err}"))
         })
+}
+
+fn session_lease_expires_unix(now_unix: u64) -> StorageResult<u64> {
+    now_unix.checked_add(SESSION_LEASE_SECS).ok_or_else(|| {
+        StorageError::service_error("private HNSW ORAM session lease calculation overflowed")
+    })
 }
 
 fn new_session_id() -> String {
@@ -2835,6 +2841,18 @@ mod private_hnsw_tests {
 
         let err = validate_private_hnsw_session_cluster_epoch_mode(true).unwrap_err();
         assert!(err.to_string().contains("consensus-backed epoch/root CAS"));
+    }
+
+    #[test]
+    fn session_lease_expiry_fails_closed_on_overflow() {
+        assert_eq!(
+            session_lease_expires_unix(10).unwrap(),
+            10 + SESSION_LEASE_SECS
+        );
+        let err = session_lease_expires_unix(u64::MAX).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("lease calculation overflowed"));
+        assert!(!rendered.contains(&u64::MAX.to_string()), "{rendered}");
     }
 
     #[test]

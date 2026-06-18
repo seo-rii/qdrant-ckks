@@ -606,7 +606,7 @@ pub async fn do_open_private_result_oram_session(
         collection_path: collection.path().to_path_buf(),
         index_epoch: current_epoch.index_epoch,
         root_hash: current_epoch.root_hash.clone(),
-        lease_expires_unix: now_unix.saturating_add(SESSION_LEASE_SECS),
+        lease_expires_unix: session_lease_expires_unix(now_unix)?,
         bucket_count: manifest.bucket_count,
         max_bucket_ciphertext_bytes: max_bucket_ciphertext_bytes(&manifest.oram)?,
         manifest,
@@ -950,7 +950,7 @@ pub async fn do_commit_private_result_oram_buckets(
                 .map_err(private_result_oram_commit_writeback_store_error)?;
             session.index_epoch = committed.index_epoch;
             session.root_hash = committed.root_hash.clone();
-            session.lease_expires_unix = now_unix.saturating_add(SESSION_LEASE_SECS);
+            session.lease_expires_unix = session_lease_expires_unix(now_unix)?;
             Ok(committed)
         },
     )
@@ -1409,6 +1409,12 @@ fn current_unix_secs() -> StorageResult<u64> {
         .map_err(|err| {
             StorageError::service_error(format!("system clock before UNIX epoch: {err}"))
         })
+}
+
+fn session_lease_expires_unix(now_unix: u64) -> StorageResult<u64> {
+    now_unix.checked_add(SESSION_LEASE_SECS).ok_or_else(|| {
+        StorageError::service_error("private result ORAM session lease calculation overflowed")
+    })
 }
 
 fn new_session_id() -> String {
@@ -2204,6 +2210,18 @@ mod private_result_oram_tests {
             max_updated_buckets < usize::try_from(session.bucket_count).unwrap(),
             "writeback budget must not expand to the full ORAM bucket count",
         );
+    }
+
+    #[test]
+    fn session_lease_expiry_fails_closed_on_overflow() {
+        assert_eq!(
+            session_lease_expires_unix(10).unwrap(),
+            10 + SESSION_LEASE_SECS
+        );
+        let err = session_lease_expires_unix(u64::MAX).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("lease calculation overflowed"));
+        assert!(!rendered.contains(&u64::MAX.to_string()), "{rendered}");
     }
 
     #[test]
