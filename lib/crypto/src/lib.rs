@@ -118,11 +118,6 @@ pub use private_hnsw_oram::{
     validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_hnsw_oram_read_paths_signature,
 };
-#[allow(deprecated)]
-pub use private_hnsw_oram::{
-    private_hnsw_oram_commit_signature_message, private_hnsw_oram_manifest_signature_message,
-    private_hnsw_oram_read_paths_signature_message,
-};
 pub use private_result_oram::{
     PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN, PRIVATE_RESULT_ORAM_BUCKET_COMMITMENT_DOMAIN,
     PRIVATE_RESULT_ORAM_CLIENT_STATE_AEAD_DOMAIN, PRIVATE_RESULT_ORAM_COMMIT_SIGNATURE_DOMAIN,
@@ -176,11 +171,6 @@ pub use private_result_oram::{
     validate_private_result_oram_upload_bundle,
     validate_private_result_oram_upload_bundle_with_signature,
     verify_private_result_oram_merkle_proof, verify_private_result_oram_merkle_proof_json,
-};
-#[allow(deprecated)]
-pub use private_result_oram::{
-    private_result_oram_commit_signature_message, private_result_oram_manifest_signature_message,
-    private_result_oram_read_buckets_signature_message,
 };
 pub use vector::{
     CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES,

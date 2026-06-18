@@ -668,12 +668,17 @@ fn validate_raw_ciphertext_size(ciphertext: &[u8]) -> Result<(), CkksError> {
     Ok(())
 }
 
-fn decode_stored_ciphertext(ciphertext_b64: &str) -> Result<Vec<u8>, CkksError> {
+fn validate_stored_ciphertext_encoded_size(ciphertext_b64: &str) -> Result<(), CkksError> {
     if ciphertext_b64.len() > CKKS_VECTOR_CIPHERTEXT_MAX_B64_LEN {
         return Err(CkksError::MalformedEnvelope(
             "stored ciphertext exceeds maximum size".to_string(),
         ));
     }
+    Ok(())
+}
+
+fn decode_stored_ciphertext(ciphertext_b64: &str) -> Result<Vec<u8>, CkksError> {
+    validate_stored_ciphertext_encoded_size(ciphertext_b64)?;
     let ciphertext = BASE64URL_NOPAD
         .decode(ciphertext_b64.as_bytes())
         .map_err(|_| CkksError::MalformedEnvelope("stored ciphertext is invalid".to_string()))?;
@@ -727,6 +732,7 @@ pub fn ckks_vector_sidecar_envelope_key(
     if encrypted.scheme != CKKS_SCHEME {
         return Err(CkksError::UnsupportedScheme(encrypted.scheme));
     }
+    validate_stored_ciphertext_encoded_size(&encrypted.envelope.ciphertext)?;
     validate_encrypted_envelope_metadata(&encrypted.envelope)?;
     let ciphertext = decode_stored_ciphertext(&encrypted.envelope.ciphertext)?;
     let ciphertext_sha256_b64 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext).as_ref());
