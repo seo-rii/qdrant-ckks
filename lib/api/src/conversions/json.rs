@@ -26,8 +26,10 @@ pub fn json_to_proto(json_value: serde_json::Value) -> Value {
         serde_json::Value::Number(n) => {
             if let Some(int) = n.as_i64() {
                 Kind::IntegerValue(int)
+            } else if let Some(float) = n.as_f64() {
+                Kind::DoubleValue(float)
             } else {
-                Kind::DoubleValue(n.as_f64().unwrap())
+                Kind::StringValue(n.to_string())
             }
         }
         serde_json::Value::String(s) => Kind::StringValue(s),
