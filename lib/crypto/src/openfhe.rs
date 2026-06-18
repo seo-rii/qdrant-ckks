@@ -207,7 +207,7 @@ impl CommandOpenFheBackend {
             args: Vec::new(),
             timeout: DEFAULT_BRIDGE_TIMEOUT,
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
-            pool_size: NonZeroUsize::new(1).expect("pool size must be non-zero"),
+            pool_size: NonZeroUsize::MIN,
             checked_program: false,
             expected_sha256_b64: None,
             sandbox: BridgeSandbox::ProcessHardening,
