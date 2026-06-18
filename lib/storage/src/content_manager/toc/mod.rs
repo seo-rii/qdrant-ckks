@@ -429,7 +429,14 @@ impl TableOfContent {
             Self::resolve_name(collection_name, &read_collection, &alias_persistence)?
         };
 
-        Ok(read_collection.get(&real_collection_name).unwrap().clone())
+        read_collection
+            .get(&real_collection_name)
+            .cloned()
+            .ok_or_else(|| {
+                StorageError::service_error(format!(
+                    "Resolved collection '{real_collection_name}' is missing from the collection registry",
+                ))
+            })
     }
 
     pub async fn get_collection(
