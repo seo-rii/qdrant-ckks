@@ -180,22 +180,19 @@ impl TableOfContent {
         channel_service: ChannelService,
         this_peer_id: PeerId,
         consensus_proposal_sender: Option<OperationSender>,
-    ) -> Self {
+    ) -> Result<Self, StorageError> {
         let collections_path = storage_config.storage_path.join(COLLECTIONS_DIR);
-        fs::create_dir_all(&collections_path).expect("Can't create Collections directory");
+        fs::create_dir_all(&collections_path)?;
         if let Some(path) = storage_config.temp_path.as_deref() {
-            fs::create_dir_all(path).expect("Can't create temporary files directory");
+            fs::create_dir_all(path)?;
         }
-        let collection_paths =
-            fs::read_dir(&collections_path).expect("Can't read Collections directory");
+        let collection_paths = fs::read_dir(&collections_path)?;
         let is_distributed = consensus_proposal_sender.is_some();
 
         // Collect valid collection paths for loading
         let mut collection_load_tasks = Vec::new();
         for entry in collection_paths {
-            let collection_path = entry
-                .expect("Can't access of one of the collection files")
-                .path();
+            let collection_path = entry?.path();
 
             if !CollectionConfigInternal::check(&collection_path) {
                 log::warn!(
@@ -207,9 +204,19 @@ impl TableOfContent {
 
             let collection_name = collection_path
                 .file_name()
-                .expect("Can't resolve a filename of one of the collection files")
+                .ok_or_else(|| {
+                    StorageError::service_error(format!(
+                        "Can't resolve collection directory filename: {}",
+                        collection_path.display(),
+                    ))
+                })?
                 .to_str()
-                .expect("A filename of one of the collection files is not a valid UTF-8")
+                .ok_or_else(|| {
+                    StorageError::service_error(format!(
+                        "Collection directory filename is not valid UTF-8: {}",
+                        collection_path.display(),
+                    ))
+                })?
                 .to_string();
 
             let collection_snapshots_path =
@@ -286,8 +293,7 @@ impl TableOfContent {
         }
 
         let alias_path = storage_config.storage_path.join(ALIASES_PATH);
-        let alias_persistence = AliasPersistence::open(&alias_path)
-            .expect("Can't open database by the provided config");
+        let alias_persistence = AliasPersistence::open(&alias_path)?;
 
         let rate_limiter = match storage_config.performance.update_rate_limit {
             Some(limit) => Some(Semaphore::new(limit)),
@@ -306,7 +312,7 @@ impl TableOfContent {
             }
         };
 
-        TableOfContent {
+        Ok(TableOfContent {
             collections: Arc::new(RwLock::new(collections)),
             storage_config: Arc::new(storage_config.clone()),
             search_runtime,
@@ -323,7 +329,7 @@ impl TableOfContent {
             collection_hw_metrics: DashMap::new(),
             client_payload_nonce_replay_cache: Mutex::new(ClientPayloadNonceReplayCache::default()),
             telemetry,
-        }
+        })
     }
 
     pub async fn record_client_payload_nonce_replay_keys(

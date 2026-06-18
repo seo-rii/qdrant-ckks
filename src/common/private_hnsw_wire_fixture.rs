@@ -567,16 +567,19 @@ fn test_dispatcher_with_consensus_sender(distributed: bool) -> (TempDir, Dispatc
         let (sender, _receiver) = std::sync::mpsc::channel();
         OperationSender::new(sender)
     });
-    let toc = Arc::new(TableOfContent::new(
-        &storage_config,
-        Runtime::new().unwrap(),
-        Runtime::new().unwrap(),
-        Runtime::new().unwrap(),
-        ResourceBudget::default(),
-        ChannelService::new(6333, false, None, None),
-        0,
-        consensus_proposal_sender,
-    ));
+    let toc = Arc::new(
+        TableOfContent::new(
+            &storage_config,
+            Runtime::new().unwrap(),
+            Runtime::new().unwrap(),
+            Runtime::new().unwrap(),
+            ResourceBudget::default(),
+            ChannelService::new(6333, false, None, None),
+            0,
+            consensus_proposal_sender,
+        )
+        .unwrap(),
+    );
     (temp, Dispatcher::new(toc))
 }
 

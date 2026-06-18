@@ -3413,16 +3413,19 @@ mod tests {
     }
 
     fn update_test_toc(storage_config: &StorageConfig) -> Arc<TableOfContent> {
-        Arc::new(TableOfContent::new(
-            storage_config,
-            Runtime::new().unwrap(),
-            Runtime::new().unwrap(),
-            Runtime::new().unwrap(),
-            ResourceBudget::default(),
-            ChannelService::new(6333, false, None, None),
-            0,
-            None,
-        ))
+        Arc::new(
+            TableOfContent::new(
+                storage_config,
+                Runtime::new().unwrap(),
+                Runtime::new().unwrap(),
+                Runtime::new().unwrap(),
+                ResourceBudget::default(),
+                ChannelService::new(6333, false, None, None),
+                0,
+                None,
+            )
+            .unwrap(),
+        )
     }
 
     fn fake_ckks_query_signing_key_pair() -> Ed25519KeyPair {
@@ -5915,16 +5918,19 @@ esac
             collection: None,
             max_collections: None,
         };
-        let toc = Arc::new(TableOfContent::new(
-            &storage_config,
-            Runtime::new().unwrap(),
-            Runtime::new().unwrap(),
-            Runtime::new().unwrap(),
-            ResourceBudget::default(),
-            ChannelService::new(6333, false, None, None),
-            0,
-            None,
-        ));
+        let toc = Arc::new(
+            TableOfContent::new(
+                &storage_config,
+                Runtime::new().unwrap(),
+                Runtime::new().unwrap(),
+                Runtime::new().unwrap(),
+                ResourceBudget::default(),
+                ChannelService::new(6333, false, None, None),
+                0,
+                None,
+            )
+            .unwrap(),
+        );
         let dispatcher = Dispatcher::new(toc.clone());
         let auth = Auth::new_internal(Access::full("For test"));
 
@@ -8564,16 +8570,19 @@ esac
             collection: None,
             max_collections: None,
         };
-        let toc = Arc::new(TableOfContent::new(
-            &storage_config,
-            Runtime::new().unwrap(),
-            Runtime::new().unwrap(),
-            Runtime::new().unwrap(),
-            ResourceBudget::default(),
-            ChannelService::new(6333, false, None, None),
-            0,
-            None,
-        ));
+        let toc = Arc::new(
+            TableOfContent::new(
+                &storage_config,
+                Runtime::new().unwrap(),
+                Runtime::new().unwrap(),
+                Runtime::new().unwrap(),
+                ResourceBudget::default(),
+                ChannelService::new(6333, false, None, None),
+                0,
+                None,
+            )
+            .unwrap(),
+        );
         let dispatcher = Dispatcher::new(toc.clone());
         let auth = Auth::new_internal(Access::full("For test"));
         let settings = payload_runtime_settings();
@@ -10567,16 +10576,19 @@ esac
             collection: None,
             max_collections: None,
         };
-        let toc = Arc::new(TableOfContent::new(
-            &storage_config,
-            Runtime::new().unwrap(),
-            Runtime::new().unwrap(),
-            Runtime::new().unwrap(),
-            ResourceBudget::default(),
-            ChannelService::new(6333, false, None, None),
-            0,
-            None,
-        ));
+        let toc = Arc::new(
+            TableOfContent::new(
+                &storage_config,
+                Runtime::new().unwrap(),
+                Runtime::new().unwrap(),
+                Runtime::new().unwrap(),
+                ResourceBudget::default(),
+                ChannelService::new(6333, false, None, None),
+                0,
+                None,
+            )
+            .unwrap(),
+        );
         let dispatcher = Dispatcher::new(toc.clone());
         let auth = Auth::new_internal(Access::full("For test"));
         let settings = metadata_value_runtime_settings();
@@ -10943,16 +10955,19 @@ esac
         let search_runtime = Runtime::new().unwrap();
         let update_runtime = Runtime::new().unwrap();
         let general_runtime = Runtime::new().unwrap();
-        let toc = Arc::new(TableOfContent::new(
-            &storage_config,
-            search_runtime,
-            update_runtime,
-            general_runtime,
-            ResourceBudget::default(),
-            ChannelService::new(6333, false, None, None),
-            0,
-            None,
-        ));
+        let toc = Arc::new(
+            TableOfContent::new(
+                &storage_config,
+                search_runtime,
+                update_runtime,
+                general_runtime,
+                ResourceBudget::default(),
+                ChannelService::new(6333, false, None, None),
+                0,
+                None,
+            )
+            .unwrap(),
+        );
         let dispatcher = Dispatcher::new(toc.clone());
         let auth = Auth::new_internal(Access::full("For test"));
 
