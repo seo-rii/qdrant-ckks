@@ -1626,6 +1626,7 @@ fn validate_private_result_oram_read_bucket_ciphertexts_fixed_size(
     Ok(())
 }
 
+#[cfg(test)]
 fn validate_bucket_read_request(
     manifest: &PrivateResultOramManifest,
     bucket_ids: &[u64],
