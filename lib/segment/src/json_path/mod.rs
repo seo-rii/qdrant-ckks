@@ -348,21 +348,23 @@ fn value_set(path: &[JsonPathItem], dest: &mut Value, src: &serde_json::Map<Stri
                 if !dest.is_object() {
                     *dest = Value::Object(serde_json::Map::new());
                 }
-                let map = dest.as_object_mut().unwrap();
-                value_set_map(key, rest, map, src);
+                if let Some(map) = dest.as_object_mut() {
+                    value_set_map(key, rest, map, src);
+                }
             }
             &JsonPathItem::Index(i) => {
                 if !dest.is_array() {
                     *dest = Value::Array(Vec::new());
                 }
-                let array = dest.as_array_mut().unwrap();
-                if let Some(v) = array.get_mut(i) {
+                if let Some(array) = dest.as_array_mut()
+                    && let Some(v) = array.get_mut(i)
+                {
                     value_set(rest, v, src);
                 }
             }
             JsonPathItem::WildcardIndex => {
-                if dest.is_array() {
-                    for value in dest.as_array_mut().unwrap() {
+                if let Some(array) = dest.as_array_mut() {
+                    for value in array {
                         value_set(rest, value, src);
                     }
                 } else {
@@ -374,8 +376,9 @@ fn value_set(path: &[JsonPathItem], dest: &mut Value, src: &serde_json::Map<Stri
         if !dest.is_object() {
             *dest = Value::Object(serde_json::Map::new());
         }
-        let map = dest.as_object_mut().unwrap();
-        merge_map(map, src);
+        if let Some(map) = dest.as_object_mut() {
+            merge_map(map, src);
+        }
     }
 }
 
