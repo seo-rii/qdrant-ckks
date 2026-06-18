@@ -1081,10 +1081,24 @@ mod tests {
         BASE64URL_NOPAD.encode(key_pair.sign(message).as_ref())
     }
 
+    fn checked_manifest_signature_message(manifest: &PrivateHnswOramManifest) -> Vec<u8> {
+        try_private_hnsw_oram_manifest_signature_message(manifest).unwrap()
+    }
+
+    fn checked_commit_signature_message(input: PrivateHnswOramCommitSignatureInput<'_>) -> Vec<u8> {
+        try_private_hnsw_oram_commit_signature_message(input).unwrap()
+    }
+
+    fn checked_read_paths_signature_message(
+        input: PrivateHnswOramReadPathsSignatureInput<'_>,
+    ) -> Vec<u8> {
+        try_private_hnsw_oram_read_paths_signature_message(input).unwrap()
+    }
+
     #[test]
     fn manifest_signature_message_is_stable() {
         let manifest = fixture_manifest();
-        let digest = Sha256::digest(private_hnsw_oram_manifest_signature_message(&manifest));
+        let digest = Sha256::digest(checked_manifest_signature_message(&manifest));
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
             "1hzG6sGJ3RkYa_N_fB91X83CT5gF19sXnVxGdo2hiOQ"
@@ -1118,7 +1132,7 @@ mod tests {
             signature_key_id: "tenant-a/private-hnsw-signing-v1",
         };
 
-        let digest = Sha256::digest(private_hnsw_oram_commit_signature_message(input));
+        let digest = Sha256::digest(checked_commit_signature_message(input));
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
             "K7D-QZtqOp7EBdqB0idlNYPSzjPMcg_Uripj067shYQ"
@@ -1143,7 +1157,7 @@ mod tests {
             signature_key_id: "tenant-a/private-hnsw-signing-v1",
         };
 
-        let digest = Sha256::digest(private_hnsw_oram_read_paths_signature_message(input));
+        let digest = Sha256::digest(checked_read_paths_signature_message(input));
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
             "n_ChN7eT7j4hxnccWt9L4u65CYHUnOMr5K3f80SJTaA"
@@ -1168,10 +1182,7 @@ mod tests {
             signature_alg: "ed25519",
             signature_key_id: "tenant-a/private-hnsw-signing-v1",
         };
-        let signature = sign_b64(
-            &key_pair,
-            &private_hnsw_oram_read_paths_signature_message(input),
-        );
+        let signature = sign_b64(&key_pair, &checked_read_paths_signature_message(input));
         let verification = PrivateHnswSignatureVerification {
             expected_key_id: "tenant-a/private-hnsw-signing-v1",
             public_key: key_pair.public_key().as_ref(),
@@ -1267,7 +1278,7 @@ mod tests {
         );
         let tampered_padding_signature = sign_b64(
             &key_pair,
-            &private_hnsw_oram_read_paths_signature_message(tampered_padding),
+            &checked_read_paths_signature_message(tampered_padding),
         );
         assert_eq!(
             validate_private_hnsw_oram_read_paths_signature(
@@ -1282,10 +1293,8 @@ mod tests {
             requested_paths: 2,
             ..input
         };
-        let mismatched_signature = sign_b64(
-            &key_pair,
-            &private_hnsw_oram_read_paths_signature_message(mismatched),
-        );
+        let mismatched_signature =
+            sign_b64(&key_pair, &checked_read_paths_signature_message(mismatched));
         assert_eq!(
             validate_private_hnsw_oram_read_paths_signature(
                 mismatched,
@@ -1303,10 +1312,7 @@ mod tests {
         let signature = PrivateHnswOramSignature {
             alg: "ed25519".to_string(),
             key_id: manifest.owner_signing_key_id.clone(),
-            sig: sign_b64(
-                &key_pair,
-                &private_hnsw_oram_manifest_signature_message(&manifest),
-            ),
+            sig: sign_b64(&key_pair, &checked_manifest_signature_message(&manifest)),
         };
         let context = fixture_context(key_pair.public_key().as_ref(), &signature.key_id);
 
@@ -1341,10 +1347,7 @@ mod tests {
         let signature = PrivateHnswOramSignature {
             alg: "ed25519".to_string(),
             key_id: manifest.owner_signing_key_id.clone(),
-            sig: sign_b64(
-                &key_pair,
-                &private_hnsw_oram_manifest_signature_message(&manifest),
-            ),
+            sig: sign_b64(&key_pair, &checked_manifest_signature_message(&manifest)),
         };
 
         let mut wrong_owner_signature = signature.clone();
@@ -1469,10 +1472,7 @@ mod tests {
         let signature = PrivateHnswOramSignature {
             alg: "ed25519".to_string(),
             key_id: manifest.owner_signing_key_id.clone(),
-            sig: sign_b64(
-                &key_pair,
-                &private_hnsw_oram_manifest_signature_message(&manifest),
-            ),
+            sig: sign_b64(&key_pair, &checked_manifest_signature_message(&manifest)),
         };
         let mut wrong_context = fixture_context(key_pair.public_key().as_ref(), &signature.key_id);
         wrong_context.expected_vector_name = "body";
@@ -1521,10 +1521,7 @@ mod tests {
             signature_alg: "ed25519",
             signature_key_id: "tenant-a/private-hnsw-signing-v1",
         };
-        let signature = sign_b64(
-            &key_pair,
-            &private_hnsw_oram_commit_signature_message(input),
-        );
+        let signature = sign_b64(&key_pair, &checked_commit_signature_message(input));
         let verification = PrivateHnswSignatureVerification {
             expected_key_id: "tenant-a/private-hnsw-signing-v1",
             public_key: key_pair.public_key().as_ref(),
@@ -1644,7 +1641,7 @@ mod tests {
         };
         let duplicate_signature = sign_b64(
             &key_pair,
-            &private_hnsw_oram_commit_signature_message(duplicate_input),
+            &checked_commit_signature_message(duplicate_input),
         );
         assert_eq!(
             validate_private_hnsw_oram_commit_signature(
@@ -1687,10 +1684,7 @@ mod tests {
         let signature = PrivateHnswOramSignature {
             alg: "ed25519".to_string(),
             key_id: manifest.owner_signing_key_id.clone(),
-            sig: sign_b64(
-                &key_pair,
-                &private_hnsw_oram_manifest_signature_message(&manifest),
-            ),
+            sig: sign_b64(&key_pair, &checked_manifest_signature_message(&manifest)),
         };
 
         validate_private_hnsw_oram_manifest(

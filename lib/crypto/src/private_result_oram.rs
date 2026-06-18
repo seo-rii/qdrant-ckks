@@ -3630,6 +3630,22 @@ mod tests {
         BASE64URL_NOPAD.encode(key_pair.sign(message).as_ref())
     }
 
+    fn checked_manifest_signature_message(manifest: &PrivateResultOramManifest) -> Vec<u8> {
+        try_private_result_oram_manifest_signature_message(manifest).unwrap()
+    }
+
+    fn checked_commit_signature_message(
+        input: PrivateResultOramCommitSignatureInput<'_>,
+    ) -> Vec<u8> {
+        try_private_result_oram_commit_signature_message(input).unwrap()
+    }
+
+    fn checked_read_buckets_signature_message(
+        input: PrivateResultOramReadBucketsSignatureInput<'_>,
+    ) -> Vec<u8> {
+        try_private_result_oram_read_buckets_signature_message(input).unwrap()
+    }
+
     fn bucket_validation_context() -> PrivateResultOramBucketValidationContext {
         let manifest = PrivateResultOramManifest {
             bucket_count: 16,
@@ -5613,9 +5629,7 @@ mod tests {
 
     #[test]
     fn manifest_signature_message_is_stable() {
-        let digest = Sha256::digest(private_result_oram_manifest_signature_message(
-            &fixture_manifest(),
-        ));
+        let digest = Sha256::digest(checked_manifest_signature_message(&fixture_manifest()));
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
             "mOy8vej616osyutILgm6MwoTDwZhq7tau_9wyHgaYGA"
@@ -5648,7 +5662,7 @@ mod tests {
             signature_key_id: "tenant-a/private-result-signing-v1",
         };
 
-        let digest = Sha256::digest(private_result_oram_commit_signature_message(input));
+        let digest = Sha256::digest(checked_commit_signature_message(input));
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
             "Dsso6H8kYZbPZHYG49vdmgVaLa02M2fP47VCQH4wPtM"
@@ -5671,7 +5685,7 @@ mod tests {
             signature_key_id: "tenant-a/private-result-signing-v1",
         };
 
-        let digest = Sha256::digest(private_result_oram_read_buckets_signature_message(input));
+        let digest = Sha256::digest(checked_read_buckets_signature_message(input));
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
             "lgqPWza4bMJhkNB3N3ceznqz8moFXvgbm-Ov3i6TkYQ"
@@ -6276,10 +6290,7 @@ mod tests {
         let signature = PrivateResultOramSignature {
             alg: "ed25519".to_string(),
             key_id: manifest.owner_signing_key_id.clone(),
-            sig: sign_b64(
-                &key_pair,
-                &private_result_oram_manifest_signature_message(&manifest),
-            ),
+            sig: sign_b64(&key_pair, &checked_manifest_signature_message(&manifest)),
         };
         let verification = PrivateResultOramSignatureVerification {
             expected_key_id: signature.key_id.as_str(),
@@ -6321,10 +6332,7 @@ mod tests {
         let signature = PrivateResultOramSignature {
             alg: "ed25519".to_string(),
             key_id: manifest.owner_signing_key_id.clone(),
-            sig: sign_b64(
-                &key_pair,
-                &private_result_oram_manifest_signature_message(&manifest),
-            ),
+            sig: sign_b64(&key_pair, &checked_manifest_signature_message(&manifest)),
         };
 
         let mut wrong_owner_signature = signature.clone();
@@ -6681,10 +6689,7 @@ mod tests {
             signature_alg: "ed25519",
             signature_key_id: "tenant-a/private-result-signing-v1",
         };
-        let signature = sign_b64(
-            &key_pair,
-            &private_result_oram_commit_signature_message(input),
-        );
+        let signature = sign_b64(&key_pair, &checked_commit_signature_message(input));
         let verification = PrivateResultOramSignatureVerification {
             expected_key_id: "tenant-a/private-result-signing-v1",
             public_key: key_pair.public_key().as_ref(),
@@ -6795,7 +6800,7 @@ mod tests {
         };
         let duplicate_signature = sign_b64(
             &key_pair,
-            &private_result_oram_commit_signature_message(duplicate_input),
+            &checked_commit_signature_message(duplicate_input),
         );
         assert_eq!(
             validate_private_result_oram_commit_signature(
@@ -7038,10 +7043,7 @@ mod tests {
         let signature = PrivateResultOramSignature {
             alg: "ed25519".to_string(),
             key_id: manifest.owner_signing_key_id.clone(),
-            sig: sign_b64(
-                &key_pair,
-                &private_result_oram_manifest_signature_message(&manifest),
-            ),
+            sig: sign_b64(&key_pair, &checked_manifest_signature_message(&manifest)),
         };
         let context = fixture_context(key_pair.public_key().as_ref(), &signature.key_id);
 
