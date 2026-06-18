@@ -4613,7 +4613,9 @@ async fn try_ckks_vector_recommend_batch_points(
     let mut results = Vec::with_capacity(core_requests.len());
     for request in core_requests {
         let Some(request) = request else {
-            unreachable!("plain recommend requests are represented explicitly");
+            return Err(StorageError::service_error(
+                "CKKS recommend batch contained an unresolved request slot",
+            ));
         };
         let result = match request {
             CkksResolvedRecommendRequest::Plain(request, shard_selection) => {
@@ -5502,7 +5504,9 @@ async fn try_ckks_vector_discover_batch_points(
     let mut results = Vec::with_capacity(core_requests.len());
     for request in core_requests {
         let Some(request) = request else {
-            unreachable!("plain discover requests are represented explicitly");
+            return Err(StorageError::service_error(
+                "CKKS discover batch contained an unresolved request slot",
+            ));
         };
         let result = match request {
             CkksResolvedDiscoverRequest::Plain(request, shard_selection) => {
@@ -7425,7 +7429,9 @@ pub async fn do_query_batch_points(
                 let mut results = Vec::with_capacity(core_requests.len());
                 for request in core_requests {
                     let Some(request) = request else {
-                        unreachable!("plain query requests are represented explicitly");
+                        return Err(StorageError::service_error(
+                            "CKKS query batch contained an unresolved request slot",
+                        ));
                     };
                     let result = match request {
                         CkksResolvedQueryRequest::Ready(result) => result,
