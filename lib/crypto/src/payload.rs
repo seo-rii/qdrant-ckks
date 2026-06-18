@@ -374,18 +374,14 @@ impl PayloadTextEncryptor {
         material_fingerprint_id: impl Into<String>,
     ) -> Result<Self, PayloadEncryptionError> {
         let payload_key = resource_key.derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)?;
-        // SAFETY: `payload_key` is derived above with the payload-text HKDF
-        // domain, so the raw-cipher constructor contract is satisfied.
-        unsafe {
-            Self::new_with_derived_cipher_unchecked(
-                collection,
-                AeadCipher::new_with_material_fingerprint(
-                    key_id,
-                    payload_key,
-                    material_fingerprint_id,
-                )?,
-            )
-        }
+        Self::new_with_derived_cipher_unchecked(
+            collection,
+            AeadCipher::new_with_material_fingerprint(
+                key_id,
+                payload_key,
+                material_fingerprint_id,
+            )?,
+        )
     }
 
     pub fn new_from_resource_key_with_metadata(
@@ -403,8 +399,7 @@ impl PayloadTextEncryptor {
             material_fingerprint_id,
         )?
         .with_resource_key_metadata(rk_id, rk_epoch)?;
-        // SAFETY: `cipher` is built from a payload-text HKDF subkey above.
-        unsafe { Self::new_with_derived_cipher_unchecked(collection, cipher) }
+        Self::new_with_derived_cipher_unchecked(collection, cipher)
     }
 
     pub fn new_metadata_value_from_resource_key_with_metadata(
@@ -422,53 +417,47 @@ impl PayloadTextEncryptor {
             material_fingerprint_id,
         )?
         .with_resource_key_metadata(rk_id, rk_epoch)?;
-        // SAFETY: `cipher` is built from the metadata-value HKDF subkey above.
-        unsafe {
-            Self::new_with_derived_keyring_for_domain_unchecked(
-                collection,
-                AeadKeyring::new(cipher),
-                METADATA_VALUE_KEY_DOMAIN,
-                EncryptionPurpose::MetadataValue,
-                METADATA_VALUE_ENVELOPE_KIND,
-            )
-        }
+        Self::new_with_derived_keyring_for_domain_unchecked(
+            collection,
+            AeadKeyring::new(cipher),
+            METADATA_VALUE_KEY_DOMAIN,
+            EncryptionPurpose::MetadataValue,
+            METADATA_VALUE_ENVELOPE_KIND,
+        )
     }
 
     /// Builds an encryptor from an already domain-separated AEAD cipher.
     ///
     /// Runtime code that starts from a collection/rule resource key should use
     /// `new_from_resource_key*` so the payload-text HKDF domain is applied in
-    /// one place.
-    pub unsafe fn new_with_derived_cipher_unchecked(
+    /// one place. This constructor is safe Rust because key provenance cannot
+    /// be checked by the type system; `unchecked` records the caller's
+    /// cryptographic responsibility rather than a memory-safety precondition.
+    pub fn new_with_derived_cipher_unchecked(
         collection: impl Into<String>,
         cipher: AeadCipher,
     ) -> Result<Self, PayloadEncryptionError> {
-        // SAFETY: caller guarantees `cipher` is already domain-separated for
-        // payload text encryption.
-        unsafe { Self::new_with_derived_keyring_unchecked(collection, AeadKeyring::new(cipher)) }
+        Self::new_with_derived_keyring_unchecked(collection, AeadKeyring::new(cipher))
     }
 
     /// Builds an encryptor from an already domain-separated AEAD keyring.
     ///
-    /// Prefer `new_from_resource_key*` for production runtime code.
-    pub unsafe fn new_with_derived_keyring_unchecked(
+    /// Prefer `new_from_resource_key*` for production runtime code. The caller
+    /// is still responsible for passing only payload-text domain key material.
+    pub fn new_with_derived_keyring_unchecked(
         collection: impl Into<String>,
         keyring: AeadKeyring,
     ) -> Result<Self, PayloadEncryptionError> {
-        // SAFETY: caller guarantees `keyring` is domain-separated for payload
-        // text encryption.
-        unsafe {
-            Self::new_with_derived_keyring_for_domain_unchecked(
-                collection,
-                keyring,
-                PAYLOAD_TEXT_KEY_DOMAIN,
-                EncryptionPurpose::PayloadText,
-                PAYLOAD_TEXT_ENVELOPE_KIND,
-            )
-        }
+        Self::new_with_derived_keyring_for_domain_unchecked(
+            collection,
+            keyring,
+            PAYLOAD_TEXT_KEY_DOMAIN,
+            EncryptionPurpose::PayloadText,
+            PAYLOAD_TEXT_ENVELOPE_KIND,
+        )
     }
 
-    unsafe fn new_with_derived_keyring_for_domain_unchecked(
+    fn new_with_derived_keyring_for_domain_unchecked(
         collection: impl Into<String>,
         keyring: AeadKeyring,
         key_domain: &'static [u8],

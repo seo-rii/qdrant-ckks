@@ -24,9 +24,7 @@ fn encryptor() -> PayloadTextEncryptor {
         "tenant-a/payload@v1",
     )
     .unwrap();
-    // SAFETY: test helper intentionally builds the encryptor from a
-    // pre-derived AEAD cipher to exercise envelope/keyring behavior directly.
-    unsafe { PayloadTextEncryptor::new_with_derived_cipher_unchecked("docs", cipher) }.unwrap()
+    PayloadTextEncryptor::new_with_derived_cipher_unchecked("docs", cipher).unwrap()
 }
 
 #[test]
@@ -45,19 +43,15 @@ fn resource_key_constructor_derives_payload_text_subkey() {
         .encrypt_selected_fields("point-1", &mut payload, &policy)
         .unwrap();
 
-    // SAFETY: this deliberately bypasses the resource-key constructor to prove
-    // raw resource keys cannot decrypt payload-domain ciphertext.
-    let wrong_raw_resource_key = unsafe {
-        PayloadTextEncryptor::new_with_derived_cipher_unchecked(
-            "docs",
-            AeadCipher::new_with_material_fingerprint(
-                "tenant-a:payload",
-                SecretKey::from_bytes([71u8; 32]),
-                "tenant-a/payload@v1",
-            )
-            .unwrap(),
+    let wrong_raw_resource_key = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+        "docs",
+        AeadCipher::new_with_material_fingerprint(
+            "tenant-a:payload",
+            SecretKey::from_bytes([71u8; 32]),
+            "tenant-a/payload@v1",
         )
-    }
+        .unwrap(),
+    )
     .unwrap();
     assert_eq!(
         wrong_raw_resource_key.decrypt_selected_fields("point-1", &mut payload, &policy),
@@ -1472,10 +1466,8 @@ fn payload_decrypt_accepts_retired_key_but_new_writes_use_active_key() {
         "tenant-a/payload-old@v1",
     )
     .unwrap();
-    // SAFETY: rotation test builds a known old derived cipher directly.
     let old_encryptor =
-        unsafe { PayloadTextEncryptor::new_with_derived_cipher_unchecked("docs", old_cipher) }
-            .unwrap();
+        PayloadTextEncryptor::new_with_derived_cipher_unchecked("docs", old_cipher).unwrap();
     let mut old_payload = object(json!({ "body": "rotation protected" }));
 
     old_encryptor
@@ -1498,11 +1490,8 @@ fn payload_decrypt_accepts_retired_key_but_new_writes_use_active_key() {
         )
         .unwrap(),
     );
-    // SAFETY: the keyring is intentionally assembled from pre-derived test
-    // ciphers to exercise active/retired fallback behavior.
     let rotated_encryptor =
-        unsafe { PayloadTextEncryptor::new_with_derived_keyring_unchecked("docs", keyring) }
-            .unwrap();
+        PayloadTextEncryptor::new_with_derived_keyring_unchecked("docs", keyring).unwrap();
 
     assert_eq!(
         rotated_encryptor

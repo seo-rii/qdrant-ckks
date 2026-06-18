@@ -1774,6 +1774,11 @@ The configured 32-byte RK is not used directly
 as an AEAD key. Qdrant derives purpose-specific HKDF-SHA256 subkeys for payload text
 (`qdrant-sec/payload-text/v1`) and CKKS vector envelopes
 (`qdrant-sec/vector-envelope/v1`) before constructing AES-GCM ciphers.
+Runtime payload code must use the resource-key constructors so this derivation
+is centralized. The `PayloadTextEncryptor::new_with_derived_*_unchecked`
+constructors are safe-Rust fixture and compatibility escape hatches for ciphers
+or keyrings that have already been domain-separated; `unchecked` is a
+cryptographic provenance warning, not a Rust `unsafe` contract.
 `crypto.allow_inline_key_material` defaults to `false` so inline key material is
 rejected at startup unless explicitly enabled for local development fixtures.
 Decrypt paths can be configured with active plus retired AEAD keys; new writes
