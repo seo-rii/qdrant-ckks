@@ -887,6 +887,16 @@ pub async fn do_commit_private_result_oram_buckets(
                     "private result ORAM commit updated_buckets must contain at least one bucket and fit the fixed writeback budget",
                 ));
             }
+            let mut seen_bucket_ids = HashSet::new();
+            for bucket in &updated_buckets {
+                if !seen_bucket_ids.insert(bucket.bucket_id) {
+                    return Err(StorageError::bad_request(
+                        "private result ORAM commit updated_buckets contains duplicate bucket id",
+                    ));
+                }
+                validate_base64url_32_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
+                validate_bucket_ciphertext_fixed_size(bucket, &session.manifest)?;
+            }
             let updated_bucket_refs = updated_buckets
                 .iter()
                 .map(|bucket| PrivateResultOramCommitBucketRef {
@@ -917,16 +927,6 @@ pub async fn do_commit_private_result_oram_buckets(
                 },
             )
             .map_err(private_result_oram_error)?;
-            let mut seen_bucket_ids = HashSet::new();
-            for bucket in &updated_buckets {
-                if !seen_bucket_ids.insert(bucket.bucket_id) {
-                    return Err(StorageError::bad_request(
-                        "private result ORAM commit updated_buckets contains duplicate bucket id",
-                    ));
-                }
-                validate_base64url_32_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
-                validate_bucket_ciphertext_fixed_size(bucket, &session.manifest)?;
-            }
             let store = PrivateResultOramStore::new(&session.collection_path);
             ensure_private_result_oram_active_session_current_epoch(
                 &store,

@@ -2057,9 +2057,8 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "request validation failed"
+                "invalid path label"
             );
-            assert!(!read_error.contains("invalid path label"), "{read_error}");
             assert!(!read_error.contains(path_label_sentinel), "{read_error}");
             assert!(
                 !read_error.contains(&fixture.encrypted_build.buckets[0].ciphertext),
@@ -2965,7 +2964,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "request validation failed"
+                "ciphertext_sha256 must encode 32 bytes"
             );
             assert!(
                 !commit_hash_error.contains(commit_hash_sentinel),
@@ -2995,7 +2994,7 @@ mod private_hnsw_rest_tests {
                     .collect(),
             };
             let duplicate_commit_signature = fixture.sign_commit_unchecked(&duplicate_commit_plan);
-            let duplicate_bucket_error = post_json_error_contains!(
+            post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
                     session_id: session_id.clone(),
@@ -3011,10 +3010,9 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "request validation failed"
+                "duplicate bucket id"
             );
-            assert!(!duplicate_bucket_error.contains("duplicate bucket id"));
-            let invalid_signature_duplicate_bucket_error = post_json_error_contains!(
+            post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
                     session_id: session_id.clone(),
@@ -3030,9 +3028,8 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "request validation failed"
+                "duplicate bucket id"
             );
-            assert!(!invalid_signature_duplicate_bucket_error.contains("duplicate bucket id"));
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
             while oversized_writeback_buckets.len() <= 3 {
                 oversized_writeback_buckets.push(search_run.updated_buckets[0].clone());

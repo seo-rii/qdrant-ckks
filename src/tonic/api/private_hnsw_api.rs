@@ -2239,8 +2239,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("request validation failed"));
-            assert!(!err.message().contains("invalid path label"));
+            assert!(err.message().contains("invalid path label"));
             assert!(!err.message().contains(path_label_sentinel));
             assert!(
                 !err.message()
@@ -3261,7 +3260,10 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("request validation failed"));
+            assert!(
+                err.message()
+                    .contains("ciphertext_sha256 must encode 32 bytes")
+            );
             assert!(
                 !err.message().contains(commit_hash_sentinel),
                 "{}",
@@ -3315,8 +3317,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("request validation failed"));
-            assert!(!err.message().contains("duplicate bucket id"));
+            assert!(err.message().contains("duplicate bucket id"));
 
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
@@ -3338,8 +3339,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("request validation failed"));
-            assert!(!err.message().contains("duplicate bucket id"));
+            assert!(err.message().contains("duplicate bucket id"));
 
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
             while oversized_writeback_buckets.len() <= 3 {

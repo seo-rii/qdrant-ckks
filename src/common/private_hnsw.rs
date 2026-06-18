@@ -1098,6 +1098,19 @@ pub async fn do_commit_private_hnsw_paths(
                 "private HNSW ORAM commit updated_buckets must contain 1..={max_updated_buckets} buckets",
             )));
         }
+        let mut seen_bucket_ids = HashSet::new();
+        for bucket in &updated_buckets {
+            if !seen_bucket_ids.insert(bucket.bucket_id) {
+                return Err(StorageError::bad_request(
+                    "private HNSW ORAM commit updated_buckets contains duplicate bucket id",
+                ));
+            }
+            validate_root_hash_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
+            validate_private_hnsw_commit_bucket_ciphertexts_fixed_size(
+                &session.manifest,
+                std::slice::from_ref(bucket),
+            )?;
+        }
         let updated_bucket_refs = updated_buckets
             .iter()
             .map(|bucket| PrivateHnswOramCommitBucketRef {
@@ -1129,19 +1142,6 @@ pub async fn do_commit_private_hnsw_paths(
             },
         )
         .map_err(private_hnsw_error)?;
-        let mut seen_bucket_ids = HashSet::new();
-        for bucket in &updated_buckets {
-            if !seen_bucket_ids.insert(bucket.bucket_id) {
-                return Err(StorageError::bad_request(
-                    "private HNSW ORAM commit updated_buckets contains duplicate bucket id",
-                ));
-            }
-            validate_root_hash_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
-            validate_private_hnsw_commit_bucket_ciphertexts_fixed_size(
-                &session.manifest,
-                std::slice::from_ref(bucket),
-            )?;
-        }
 
         let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
         ensure_private_hnsw_active_session_current_epoch(
