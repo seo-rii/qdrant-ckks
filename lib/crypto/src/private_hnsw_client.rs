@@ -3486,6 +3486,31 @@ pub fn sign_private_hnsw_oram_read_paths(
     })
 }
 
+pub fn sign_private_hnsw_oram_read_paths_for_manifest(
+    key_pair: &Ed25519KeyPair,
+    manifest: &PrivateHnswOramManifest,
+    paths: &[String],
+) -> Result<PrivateHnswOramSignature, PrivateHnswClientError> {
+    validate_private_hnsw_oram_manifest_shape(manifest)
+        .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest"))?;
+    sign_private_hnsw_oram_read_paths(
+        key_pair,
+        PrivateHnswCommitSignatureContext {
+            collection_id: &manifest.collection_id,
+            vector_name: &manifest.vector_name,
+            key_id: &manifest.key_id,
+            rk_id: &manifest.rk_id,
+            rk_epoch: manifest.rk_epoch,
+            signing_key_id: &manifest.owner_signing_key_id,
+        },
+        manifest.index_epoch,
+        &manifest.root_hash,
+        paths,
+        manifest.oram.path_batch_size,
+        true,
+    )
+}
+
 pub fn sign_private_hnsw_oram_manifest(
     key_pair: &Ed25519KeyPair,
     manifest: &PrivateHnswOramManifest,
@@ -5900,6 +5925,59 @@ mod tests {
                 true,
             ),
             Err(PrivateHnswClientError::InvalidLeafLabelEncoding)
+        );
+    }
+
+    #[test]
+    fn read_paths_manifest_signer_enforces_fixed_batch_context() {
+        use ring::signature::{Ed25519KeyPair, KeyPair};
+
+        use crate::private_hnsw_oram::{
+            PrivateHnswOramReadPathsSignatureInput, PrivateHnswSignatureVerification,
+            validate_private_hnsw_oram_read_paths_signature,
+        };
+
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+        let mut manifest = fixture_manifest();
+        manifest.oram.path_batch_size = 2;
+        manifest.fixed_budget.paths_per_round = 2;
+        let paths = vec![
+            encode_private_hnsw_oram_leaf_label(0, manifest.oram.tree_height).unwrap(),
+            encode_private_hnsw_oram_leaf_label(1, manifest.oram.tree_height).unwrap(),
+        ];
+
+        let signature =
+            sign_private_hnsw_oram_read_paths_for_manifest(&key_pair, &manifest, &paths).unwrap();
+        let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
+        validate_private_hnsw_oram_read_paths_signature(
+            PrivateHnswOramReadPathsSignatureInput {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                index_epoch: manifest.index_epoch,
+                root_hash: &manifest.root_hash,
+                paths: &path_refs,
+                requested_paths: manifest.oram.path_batch_size,
+                dummy_paths_included: true,
+                signature_alg: &signature.alg,
+                signature_key_id: &signature.key_id,
+            },
+            &signature.sig,
+            PrivateHnswSignatureVerification {
+                expected_key_id: &manifest.owner_signing_key_id,
+                public_key: key_pair.public_key().as_ref(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(signature.key_id, manifest.owner_signing_key_id);
+        assert_eq!(
+            sign_private_hnsw_oram_read_paths_for_manifest(&key_pair, &manifest, &paths[..1]),
+            Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+                "requested_paths",
+            ))
         );
     }
 

@@ -1240,6 +1240,9 @@ The collection-local private HNSW ORAM store exposes matching initial upload
 bundle entrypoints; the signed variant verifies the owner Ed25519 manifest
 signature before creating the private index layout, so a bad signature leaves
 `epochs/current.json` absent and does not write bucket files.
+For ORAM path reads, `sign_private_hnsw_oram_read_paths_for_manifest` derives
+the signed read context from the current manifest and enforces the manifest's
+fixed `oram.path_batch_size` before producing the Ed25519 request signature.
 Before submitting an ORAM writeback, clients can call
 `plan_private_hnsw_oram_commit_for_manifest` to bind commit planning to the
 current signed manifest, updated bucket ciphertext hashes,
