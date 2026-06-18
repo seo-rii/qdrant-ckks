@@ -112,7 +112,7 @@ static INFERENCE_SERVICE: RwLock<Option<Arc<InferenceService>>> = RwLock::new(No
 static DEFAULT_INFERENCE_TIMEOUT_SECS: u64 = 10 * 60; // 10 minutes
 
 impl InferenceService {
-    pub fn new(config: Option<InferenceConfig>) -> Self {
+    pub fn new(config: Option<InferenceConfig>) -> Result<Self, StorageError> {
         let config = config.unwrap_or_default();
         let InferenceConfig {
             address: _,
@@ -128,18 +128,17 @@ impl InferenceService {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(timeout));
 
-        Self {
-            config,
-            client: client_builder
-                .build()
-                .expect("Invalid timeout value for HTTP client"),
-        }
+        let client = client_builder.build().map_err(|err| {
+            StorageError::service_error(format!("failed to build inference HTTP client: {err}"))
+        })?;
+
+        Ok(Self { config, client })
     }
 
     pub fn init_global(config: Option<InferenceConfig>) -> Result<(), StorageError> {
         let mut inference_service = INFERENCE_SERVICE.write();
 
-        let service = Self::new(config);
+        let service = Self::new(config)?;
         service.validate()?;
 
         *inference_service = Some(Arc::new(service));
@@ -653,7 +652,8 @@ mod test {
                 token: None,
                 allowed_api_key_headers: Vec::new(),
                 expected_host: expected_host.map(str::to_string),
-            }));
+            }))
+            .unwrap();
 
             let err = service
                 .validate()
@@ -682,7 +682,8 @@ mod test {
             token: None,
             allowed_api_key_headers: Vec::new(),
             expected_host: Some("inference.local".to_string()),
-        }));
+        }))
+        .unwrap();
 
         service
             .validate()
@@ -702,7 +703,8 @@ mod test {
                 token: None,
                 allowed_api_key_headers: Vec::new(),
                 expected_host: None,
-            }));
+            }))
+            .unwrap();
 
             service
                 .validate()
@@ -809,7 +811,8 @@ mod test {
             token: Some("inference-token".to_string()),
             allowed_api_key_headers: vec!["openai-api-key".to_string()],
             expected_host: None,
-        }));
+        }))
+        .unwrap();
 
         let mut api_keys = InferenceApiKeys::new(None);
         api_keys.keys.insert(
@@ -846,7 +849,8 @@ mod test {
             token: None,
             allowed_api_key_headers: Vec::new(),
             expected_host: None,
-        }));
+        }))
+        .unwrap();
 
         let err = service
             .infer_remote(
@@ -879,7 +883,8 @@ mod test {
             token: None,
             allowed_api_key_headers: Vec::new(),
             expected_host: Some("inference.local".to_string()),
-        }));
+        }))
+        .unwrap();
 
         let err = service
             .infer_remote(
@@ -925,7 +930,8 @@ mod test {
             token: None,
             allowed_api_key_headers: vec!["cohere-api-key".to_string()],
             expected_host: None,
-        }));
+        }))
+        .unwrap();
 
         let mut api_keys = InferenceApiKeys::new(None);
         api_keys
@@ -1045,7 +1051,7 @@ mod test {
             expected_host: None,
         };
 
-        let service = InferenceService::new(Some(config));
+        let service = InferenceService::new(Some(config)).unwrap();
 
         let has_remote_inference_items = inference_inputs
             .iter()
