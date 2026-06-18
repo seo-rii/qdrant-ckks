@@ -455,8 +455,12 @@ async fn _do_recover_from_snapshot(
 
                 SnapshotPriority::Replica => {
                     // Replica is the source of truth, we need to sync recovered data with this replica
-                    let (replica_peer_id, _state) =
-                        other_active_replicas.into_iter().next().unwrap();
+                    let Some((replica_peer_id, _state)) = other_active_replicas.into_iter().next()
+                    else {
+                        return Err(StorageError::service_error(
+                            "snapshot recovery with replica priority requires another active replica",
+                        ));
+                    };
                     log::debug!(
                         "Running synchronization for shard {shard_id} of collection {collection_pass} from {replica_peer_id}",
                     );
