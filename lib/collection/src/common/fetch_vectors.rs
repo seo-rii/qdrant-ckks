@@ -295,15 +295,25 @@ pub fn convert_to_vectors_owned(
     all_vectors_records_map: &ReferencedVectors,
     vector_name: &VectorName,
     collection_name: Option<&String>,
-) -> Vec<VectorInternal> {
+) -> CollectionResult<Vec<VectorInternal>> {
     examples
         .into_iter()
-        .filter_map(|example| match example {
-            RecommendExample::Dense(vector) => Some(vector.into()),
-            RecommendExample::Sparse(vector) => Some(vector.into()),
+        .map(|example| match example {
+            RecommendExample::Dense(vector) => Ok(vector.into()),
+            RecommendExample::Sparse(vector) => Ok(vector.into()),
             RecommendExample::PointId(vid) => {
-                let rec = all_vectors_records_map.get(collection_name, vid).unwrap();
-                rec.get_vector_by_name(vector_name).map(|v| v.to_owned())
+                let rec = all_vectors_records_map.get(collection_name, vid).ok_or(
+                    CollectionError::PointNotFound {
+                        missed_point_id: vid,
+                    },
+                )?;
+                rec.get_vector_by_name(vector_name)
+                    .map(|v| v.to_owned())
+                    .ok_or_else(|| {
+                        CollectionError::bad_input(format!(
+                            "Referenced point {vid} does not have vector '{vector_name}'",
+                        ))
+                    })
             }
         })
         .collect()
@@ -314,15 +324,25 @@ pub fn convert_to_vectors<'a>(
     all_vectors_records_map: &'a ReferencedVectors,
     vector_name: &'a VectorName,
     collection_name: Option<&'a String>,
-) -> impl Iterator<Item = VectorRef<'a>> + 'a {
-    examples.filter_map(move |example| match example {
-        RecommendExample::Dense(vector) => Some(vector.into()),
-        RecommendExample::Sparse(vector) => Some(vector.into()),
-        RecommendExample::PointId(vid) => {
-            let rec = all_vectors_records_map.get(collection_name, *vid).unwrap();
-            rec.get_vector_by_name(vector_name)
-        }
-    })
+) -> CollectionResult<Vec<VectorRef<'a>>> {
+    examples
+        .map(move |example| match example {
+            RecommendExample::Dense(vector) => Ok(vector.into()),
+            RecommendExample::Sparse(vector) => Ok(vector.into()),
+            RecommendExample::PointId(vid) => {
+                let rec = all_vectors_records_map.get(collection_name, *vid).ok_or(
+                    CollectionError::PointNotFound {
+                        missed_point_id: *vid,
+                    },
+                )?;
+                rec.get_vector_by_name(vector_name).ok_or_else(|| {
+                    CollectionError::bad_input(format!(
+                        "Referenced point {vid} does not have vector '{vector_name}'",
+                    ))
+                })
+            }
+        })
+        .collect()
 }
 
 pub async fn resolve_referenced_vectors_batch<F, Fut, Req: RetrieveRequest>(

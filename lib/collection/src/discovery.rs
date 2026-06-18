@@ -51,7 +51,8 @@ fn discover_into_core_search(
         all_vectors_records_map,
         &lookup_vector_name,
         lookup_collection_name,
-    )
+    )?
+    .into_iter()
     .next()
     .map(|v| v.to_owned());
 
@@ -65,7 +66,8 @@ fn discover_into_core_search(
                 all_vectors_records_map,
                 &lookup_vector_name,
                 lookup_collection_name,
-            )
+            )?
+            .into_iter()
             .map(|v| v.to_owned());
 
             let positive = vector_pair.next().ok_or_else(|| {
@@ -325,10 +327,6 @@ mod tests {
         let err = discover_into_core_search("docs", request, &referenced_vectors)
             .expect_err("missing context vectors must fail closed");
 
-        assert!(
-            err.to_string()
-                .contains("Discover context pair positive vector is missing"),
-            "{err}",
-        );
+        assert!(err.to_string().contains("does not have vector"), "{err}",);
     }
 }

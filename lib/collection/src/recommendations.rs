@@ -229,18 +229,18 @@ pub fn recommend_into_core_search(
             reference_vectors_ids_to_exclude,
             all_vectors_records_map,
         ),
-        RecommendStrategy::BestScore => Ok(recommend_by_custom_score(
+        RecommendStrategy::BestScore => recommend_by_custom_score(
             request,
             reference_vectors_ids_to_exclude,
             all_vectors_records_map,
             QueryEnum::RecommendBestScore,
-        )),
-        RecommendStrategy::SumScores => Ok(recommend_by_custom_score(
+        ),
+        RecommendStrategy::SumScores => recommend_by_custom_score(
             request,
             reference_vectors_ids_to_exclude,
             all_vectors_records_map,
             QueryEnum::RecommendSumScores,
-        )),
+        ),
     }
 }
 
@@ -402,17 +402,17 @@ fn recommend_by_avg_vector(
         all_vectors_records_map,
         &lookup_vector_name,
         lookup_collection_name,
-    );
+    )?;
 
     let negative_vectors = convert_to_vectors(
         negative.iter(),
         all_vectors_records_map,
         &lookup_vector_name,
         lookup_collection_name,
-    );
+    )?;
 
     let search_vector =
-        avg_vector_for_recommendation(positive_vectors, negative_vectors.peekable())?;
+        avg_vector_for_recommendation(positive_vectors, negative_vectors.into_iter().peekable())?;
 
     Ok(CoreSearchRequest {
         query: QueryEnum::Nearest(NamedQuery {
@@ -442,7 +442,7 @@ fn recommend_by_custom_score(
     reference_vectors_ids_to_exclude: Vec<PointIdType>,
     all_vectors_records_map: &ReferencedVectors,
     query_variant: impl Fn(NamedQuery<RecoQuery<VectorInternal>>) -> QueryEnum,
-) -> CoreSearchRequest {
+) -> CollectionResult<CoreSearchRequest> {
     let lookup_vector_name = request.get_lookup_vector_name();
 
     let RecommendRequestInternal {
@@ -467,14 +467,14 @@ fn recommend_by_custom_score(
         all_vectors_records_map,
         &lookup_vector_name,
         lookup_collection_name,
-    );
+    )?;
 
     let negative = convert_to_vectors_owned(
         negative,
         all_vectors_records_map,
         &lookup_vector_name,
         lookup_collection_name,
-    );
+    )?;
 
     let query = query_variant(NamedQuery {
         query: RecoQuery::new(positive, negative),
@@ -483,7 +483,7 @@ fn recommend_by_custom_score(
         }),
     });
 
-    CoreSearchRequest {
+    Ok(CoreSearchRequest {
         query,
         filter: Some(Filter {
             should: None,
@@ -499,7 +499,7 @@ fn recommend_by_custom_score(
         with_payload,
         with_vector,
         score_threshold,
-    }
+    })
 }
 
 #[cfg(test)]
