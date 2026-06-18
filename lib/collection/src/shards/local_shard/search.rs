@@ -151,7 +151,7 @@ impl LocalShard {
             .zip(core_request.searches.iter())
             .map(|(vector_res, req)| {
                 let vector_name = req.query.get_vector_name();
-                let distance = collection_params.get_distance(vector_name).unwrap();
+                let distance = collection_params.get_distance(vector_name)?;
                 let processed_res = vector_res.into_iter().map(|mut scored_point| {
                     match req.query {
                         QueryEnum::Nearest(_) => {
@@ -167,7 +167,7 @@ impl LocalShard {
                     scored_point
                 });
 
-                if let Some(threshold) = req.score_threshold {
+                let processed_res = if let Some(threshold) = req.score_threshold {
                     processed_res
                         .take_while(|scored_point| {
                             distance.check_threshold(scored_point.score, threshold)
@@ -175,9 +175,11 @@ impl LocalShard {
                         .collect()
                 } else {
                     processed_res.collect()
-                }
+                };
+
+                Ok(processed_res)
             })
-            .collect();
+            .collect::<CollectionResult<_>>()?;
         Ok(top_results)
     }
 }
