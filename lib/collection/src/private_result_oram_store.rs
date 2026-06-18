@@ -523,11 +523,14 @@ impl PrivateResultOramStore {
         leaf_hashes: Vec<String>,
     ) -> CollectionResult<()> {
         self.ensure_layout()?;
+        let bucket_count = u64::try_from(leaf_hashes.len()).map_err(|_| {
+            CollectionError::bad_request("private result ORAM Merkle tree bucket_count exceeds u64")
+        })?;
         let tree = PrivateResultOramMerkleTree {
             version: 1,
             index_epoch,
             root_hash,
-            bucket_count: leaf_hashes.len() as u64,
+            bucket_count,
             leaf_hashes,
         };
         validate_merkle_tree(&tree)?;
@@ -788,7 +791,10 @@ fn validate_merkle_tree(tree: &PrivateResultOramMerkleTree) -> CollectionResult<
             "private result ORAM Merkle tree bucket_count must be non-zero",
         ));
     }
-    if tree.leaf_hashes.len() as u64 != tree.bucket_count {
+    let leaf_hash_count = u64::try_from(tree.leaf_hashes.len()).map_err(|_| {
+        CollectionError::bad_request("private result ORAM Merkle tree leaf count exceeds u64")
+    })?;
+    if leaf_hash_count != tree.bucket_count {
         return Err(CollectionError::bad_request(
             "private result ORAM Merkle tree leaf count does not match bucket_count",
         ));

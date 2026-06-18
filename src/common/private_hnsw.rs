@@ -963,8 +963,14 @@ pub async fn do_read_private_hnsw_paths(
                     "private HNSW ORAM session epoch/root mismatch",
                 ));
             }
+            let session_path_batch_size: usize =
+                session.path_batch_size.try_into().map_err(|_| {
+                    StorageError::bad_request(
+                        "private HNSW ORAM session path budget exceeds platform capacity",
+                    )
+                })?;
             if padding.requested_paths != session.path_batch_size
-                || paths.len() != session.path_batch_size as usize
+                || paths.len() != session_path_batch_size
                 || !padding.dummy_paths_included
             {
                 return Err(StorageError::bad_request(
