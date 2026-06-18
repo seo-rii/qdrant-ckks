@@ -594,7 +594,7 @@ impl ShardReplicaSet {
             return Ok(None);
         }
 
-        let res = Self::merge_successful_update_results(&successes);
+        let res = Self::merge_successful_update_results(&successes)?;
 
         Ok(Some(res))
     }
@@ -755,14 +755,22 @@ impl ShardReplicaSet {
     /// Pick a successful update result to return from a replica set.
     ///
     /// We pick the reply from the highest peer ID. This makes the returned response deterministic.
-    fn merge_successful_update_results(successes: &[(PeerId, UpdateResult)]) -> UpdateResult {
-        debug_assert!(!successes.is_empty());
+    fn merge_successful_update_results(
+        successes: &[(PeerId, UpdateResult)],
+    ) -> CollectionResult<UpdateResult> {
         debug_assert!(
             !successes
                 .iter()
                 .any(|(_, r)| r.status == UpdateStatus::ClockRejected),
             "ClockRejected must be handled before merging successful results",
         );
+
+        let Some((_, highest_peer_result)) = successes.iter().max_by_key(|(peer_id, _)| *peer_id)
+        else {
+            return Err(CollectionError::service_error(
+                "Cannot merge update results without successful replica updates",
+            ));
+        };
 
         // Aggregate status: WaitTimeout > .. > ClockRejected
         let status = successes
@@ -771,14 +779,10 @@ impl ShardReplicaSet {
             .max_by_key(|s| s.priority())
             .unwrap_or(UpdateStatus::Acknowledged);
 
-        let mut result = successes
-            .iter()
-            .max_by_key(|(peer_id, _)| *peer_id)
-            .map(|(_, res)| *res)
-            .expect("successes is not empty");
+        let mut result = *highest_peer_result;
 
         result.status = status;
-        result
+        Ok(result)
     }
 
     /// Send plunger operation
@@ -897,7 +901,8 @@ mod tests {
             ),
         ];
 
-        let merged = ShardReplicaSet::merge_successful_update_results(&successes);
+        let merged = ShardReplicaSet::merge_successful_update_results(&successes)
+            .expect("merge should succeed");
 
         assert_eq!(merged.status, UpdateStatus::WaitTimeout);
         assert_eq!(merged.operation_id, Some(20));
@@ -930,7 +935,8 @@ mod tests {
             ),
         ];
 
-        let merged = ShardReplicaSet::merge_successful_update_results(&successes);
+        let merged = ShardReplicaSet::merge_successful_update_results(&successes)
+            .expect("merge should succeed");
 
         assert_eq!(merged.status, UpdateStatus::Completed);
         assert_eq!(merged.operation_id, Some(20));
