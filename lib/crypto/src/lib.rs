@@ -113,6 +113,7 @@ pub use private_hnsw_oram::{
     private_hnsw_oram_bucket_ciphertext_bytes, private_hnsw_oram_commit_signature_message,
     private_hnsw_oram_manifest_signature_message, private_hnsw_oram_read_paths_signature_message,
     try_private_hnsw_oram_commit_signature_message,
+    try_private_hnsw_oram_manifest_signature_message,
     try_private_hnsw_oram_read_paths_signature_message,
     validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_manifest,
     validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature,

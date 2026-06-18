@@ -423,7 +423,7 @@ pub fn validate_private_hnsw_oram_manifest_signature(
         verification,
     )?;
     let signature_bytes = decode_base64url_64(&signature.sig)?;
-    let message = private_hnsw_oram_manifest_signature_message(manifest);
+    let message = try_private_hnsw_oram_manifest_signature_message(manifest)?;
     UnparsedPublicKey::new(&ED25519, verification.public_key)
         .verify(&message, &signature_bytes)
         .map_err(|_| PrivateHnswOramError::InvalidManifestSignature)
@@ -511,26 +511,50 @@ pub fn private_hnsw_min_f32_node_block_bytes(dim: u32, fixed_neighbor_slots: u32
 }
 
 pub fn private_hnsw_oram_manifest_signature_message(manifest: &PrivateHnswOramManifest) -> Vec<u8> {
+    try_private_hnsw_oram_manifest_signature_message(manifest)
+        .expect("private HNSW manifest signature fields must fit canonical length prefixes")
+}
+
+pub fn try_private_hnsw_oram_manifest_signature_message(
+    manifest: &PrivateHnswOramManifest,
+) -> Result<Vec<u8>, PrivateHnswOramError> {
     let mut message = Vec::new();
-    push_domain(
+    try_push_domain(
         &mut message,
         PRIVATE_HNSW_ORAM_MANIFEST_SIGNATURE_DOMAIN.as_bytes(),
-    );
+        || PrivateHnswOramError::InvalidManifestField("signature_message"),
+    )?;
     push_u16(&mut message, manifest.version);
-    push_str(&mut message, &manifest.provider);
-    push_str(&mut message, &manifest.binding);
-    push_str(&mut message, &manifest.collection_id);
-    push_str(&mut message, &manifest.vector_name);
-    push_str(&mut message, &manifest.key_id);
-    push_str(&mut message, &manifest.rk_id);
+    try_push_str(&mut message, &manifest.provider, || {
+        PrivateHnswOramError::InvalidManifestField("signature_message")
+    })?;
+    try_push_str(&mut message, &manifest.binding, || {
+        PrivateHnswOramError::InvalidManifestField("signature_message")
+    })?;
+    try_push_str(&mut message, &manifest.collection_id, || {
+        PrivateHnswOramError::InvalidManifestField("signature_message")
+    })?;
+    try_push_str(&mut message, &manifest.vector_name, || {
+        PrivateHnswOramError::InvalidManifestField("signature_message")
+    })?;
+    try_push_str(&mut message, &manifest.key_id, || {
+        PrivateHnswOramError::InvalidManifestField("signature_message")
+    })?;
+    try_push_str(&mut message, &manifest.rk_id, || {
+        PrivateHnswOramError::InvalidManifestField("signature_message")
+    })?;
     push_u64(&mut message, manifest.rk_epoch);
     push_u32(&mut message, manifest.dim);
-    push_str(&mut message, manifest.distance.as_str());
+    try_push_str(&mut message, manifest.distance.as_str(), || {
+        PrivateHnswOramError::InvalidManifestField("signature_message")
+    })?;
     push_u32(&mut message, manifest.hnsw.m);
     push_u32(&mut message, manifest.hnsw.ef_construction);
     push_u32(&mut message, manifest.hnsw.max_layers);
     push_u32(&mut message, manifest.hnsw.fixed_neighbor_slots);
-    push_str(&mut message, manifest.oram.kind.as_str());
+    try_push_str(&mut message, manifest.oram.kind.as_str(), || {
+        PrivateHnswOramError::InvalidManifestField("signature_message")
+    })?;
     push_u32(&mut message, manifest.oram.bucket_size);
     push_u32(&mut message, manifest.oram.block_size_bytes);
     push_u32(&mut message, manifest.oram.tree_height);
@@ -541,12 +565,16 @@ pub fn private_hnsw_oram_manifest_signature_message(manifest: &PrivateHnswOramMa
     push_u32(&mut message, manifest.fixed_budget.paths_per_round);
     push_u32(&mut message, manifest.fixed_budget.fixed_result_k);
     push_u64(&mut message, manifest.index_epoch);
-    push_str(&mut message, &manifest.root_hash);
+    try_push_str(&mut message, &manifest.root_hash, || {
+        PrivateHnswOramError::InvalidManifestField("signature_message")
+    })?;
     push_u64(&mut message, manifest.bucket_count);
     push_u64(&mut message, manifest.logical_node_count);
     push_u64(&mut message, manifest.dummy_node_count);
-    push_str(&mut message, manifest.result_privacy.as_str());
-    message
+    try_push_str(&mut message, manifest.result_privacy.as_str(), || {
+        PrivateHnswOramError::InvalidManifestField("signature_message")
+    })?;
+    Ok(message)
 }
 
 pub fn private_hnsw_oram_read_paths_signature_message(
@@ -560,27 +588,44 @@ pub fn try_private_hnsw_oram_read_paths_signature_message(
     input: PrivateHnswOramReadPathsSignatureInput<'_>,
 ) -> Result<Vec<u8>, PrivateHnswOramError> {
     let mut message = Vec::new();
-    push_domain(
+    try_push_domain(
         &mut message,
         PRIVATE_HNSW_ORAM_READ_PATHS_SIGNATURE_DOMAIN.as_bytes(),
-    );
-    push_str(&mut message, input.collection_id);
-    push_str(&mut message, input.vector_name);
-    push_str(&mut message, input.key_id);
-    push_str(&mut message, input.rk_id);
+        || PrivateHnswOramError::InvalidReadPathsSignature,
+    )?;
+    try_push_str(&mut message, input.collection_id, || {
+        PrivateHnswOramError::InvalidReadPathsSignature
+    })?;
+    try_push_str(&mut message, input.vector_name, || {
+        PrivateHnswOramError::InvalidReadPathsSignature
+    })?;
+    try_push_str(&mut message, input.key_id, || {
+        PrivateHnswOramError::InvalidReadPathsSignature
+    })?;
+    try_push_str(&mut message, input.rk_id, || {
+        PrivateHnswOramError::InvalidReadPathsSignature
+    })?;
     push_u64(&mut message, input.rk_epoch);
     push_u64(&mut message, input.index_epoch);
-    push_str(&mut message, input.root_hash);
+    try_push_str(&mut message, input.root_hash, || {
+        PrivateHnswOramError::InvalidReadPathsSignature
+    })?;
     let path_count = u32::try_from(input.paths.len())
         .map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)?;
     push_u32(&mut message, path_count);
     for path in input.paths {
-        push_str(&mut message, path);
+        try_push_str(&mut message, path, || {
+            PrivateHnswOramError::InvalidReadPathsSignature
+        })?;
     }
     push_u32(&mut message, input.requested_paths);
     push_bool(&mut message, input.dummy_paths_included);
-    push_str(&mut message, input.signature_alg);
-    push_str(&mut message, input.signature_key_id);
+    try_push_str(&mut message, input.signature_alg, || {
+        PrivateHnswOramError::InvalidReadPathsSignature
+    })?;
+    try_push_str(&mut message, input.signature_key_id, || {
+        PrivateHnswOramError::InvalidReadPathsSignature
+    })?;
     Ok(message)
 }
 
@@ -595,28 +640,47 @@ pub fn try_private_hnsw_oram_commit_signature_message(
     input: PrivateHnswOramCommitSignatureInput<'_>,
 ) -> Result<Vec<u8>, PrivateHnswOramError> {
     let mut message = Vec::new();
-    push_domain(
+    try_push_domain(
         &mut message,
         PRIVATE_HNSW_ORAM_COMMIT_SIGNATURE_DOMAIN.as_bytes(),
-    );
-    push_str(&mut message, input.collection_id);
-    push_str(&mut message, input.vector_name);
-    push_str(&mut message, input.key_id);
-    push_str(&mut message, input.rk_id);
+        || PrivateHnswOramError::InvalidCommitSignature,
+    )?;
+    try_push_str(&mut message, input.collection_id, || {
+        PrivateHnswOramError::InvalidCommitSignature
+    })?;
+    try_push_str(&mut message, input.vector_name, || {
+        PrivateHnswOramError::InvalidCommitSignature
+    })?;
+    try_push_str(&mut message, input.key_id, || {
+        PrivateHnswOramError::InvalidCommitSignature
+    })?;
+    try_push_str(&mut message, input.rk_id, || {
+        PrivateHnswOramError::InvalidCommitSignature
+    })?;
     push_u64(&mut message, input.rk_epoch);
     push_u64(&mut message, input.old_epoch);
     push_u64(&mut message, input.new_epoch);
-    push_str(&mut message, input.old_root_hash);
-    push_str(&mut message, input.new_root_hash);
+    try_push_str(&mut message, input.old_root_hash, || {
+        PrivateHnswOramError::InvalidCommitSignature
+    })?;
+    try_push_str(&mut message, input.new_root_hash, || {
+        PrivateHnswOramError::InvalidCommitSignature
+    })?;
     let updated_bucket_count = u32::try_from(input.updated_buckets.len())
         .map_err(|_| PrivateHnswOramError::InvalidCommitSignature)?;
     push_u32(&mut message, updated_bucket_count);
     for bucket in input.updated_buckets {
         push_u64(&mut message, bucket.bucket_id);
-        push_str(&mut message, bucket.ciphertext_sha256);
+        try_push_str(&mut message, bucket.ciphertext_sha256, || {
+            PrivateHnswOramError::InvalidCommitSignature
+        })?;
     }
-    push_str(&mut message, input.signature_alg);
-    push_str(&mut message, input.signature_key_id);
+    try_push_str(&mut message, input.signature_alg, || {
+        PrivateHnswOramError::InvalidCommitSignature
+    })?;
+    try_push_str(&mut message, input.signature_key_id, || {
+        PrivateHnswOramError::InvalidCommitSignature
+    })?;
     Ok(message)
 }
 
@@ -866,14 +930,26 @@ fn decode_base64url_64(value: &str) -> Result<[u8; 64], PrivateHnswOramError> {
         .map_err(|_| PrivateHnswOramError::MalformedSignature)
 }
 
-fn push_domain(message: &mut Vec<u8>, value: &[u8]) {
-    message.extend_from_slice(&(value.len() as u32).to_be_bytes());
+fn try_push_domain(
+    message: &mut Vec<u8>,
+    value: &[u8],
+    error: impl FnOnce() -> PrivateHnswOramError,
+) -> Result<(), PrivateHnswOramError> {
+    let len: u32 = value.len().try_into().map_err(|_| error())?;
+    message.extend_from_slice(&len.to_be_bytes());
     message.extend_from_slice(value);
+    Ok(())
 }
 
-fn push_str(message: &mut Vec<u8>, value: &str) {
-    message.extend_from_slice(&(value.len() as u64).to_be_bytes());
+fn try_push_str(
+    message: &mut Vec<u8>,
+    value: &str,
+    error: impl FnOnce() -> PrivateHnswOramError,
+) -> Result<(), PrivateHnswOramError> {
+    let len: u64 = value.len().try_into().map_err(|_| error())?;
+    message.extend_from_slice(&len.to_be_bytes());
     message.extend_from_slice(value.as_bytes());
+    Ok(())
 }
 
 fn push_bool(message: &mut Vec<u8>, value: bool) {
