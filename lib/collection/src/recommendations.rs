@@ -186,7 +186,10 @@ where
         hw_measurement_acc,
     )
     .await?;
-    Ok(results.into_iter().next().unwrap())
+    results
+        .into_iter()
+        .next()
+        .ok_or_else(|| CollectionError::service_error("recommend batch returned no result"))
 }
 
 pub fn recommend_into_core_search(

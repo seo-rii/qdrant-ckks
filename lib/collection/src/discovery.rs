@@ -166,7 +166,10 @@ where
         hw_measurement_acc,
     )
     .await?;
-    Ok(results.into_iter().next().unwrap())
+    results
+        .into_iter()
+        .next()
+        .ok_or_else(|| CollectionError::service_error("discover batch returned no result"))
 }
 
 pub async fn discover_batch<F, Fut>(

@@ -73,7 +73,10 @@ impl Collection {
                 hw_measurement_acc,
             )
             .await?;
-        Ok(results.into_iter().next().unwrap())
+        results
+            .into_iter()
+            .next()
+            .ok_or_else(|| CollectionError::service_error("query batch returned no result"))
     }
 
     /// If the query limit above this value, it will be a subject to undersampling.

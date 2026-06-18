@@ -64,7 +64,10 @@ impl Collection {
                 hw_measurement_acc,
             )
             .await?;
-        Ok(results.into_iter().next().unwrap())
+        results
+            .into_iter()
+            .next()
+            .ok_or_else(|| CollectionError::service_error("search batch returned no result"))
     }
 
     pub async fn core_search_batch(
