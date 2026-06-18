@@ -1,6 +1,5 @@
 use std::cmp::{self, Reverse};
 use std::collections::BinaryHeap;
-use std::iter::repeat_with;
 use std::num::NonZeroU32;
 
 use collection::shards::collection_shard_distribution::CollectionShardDistribution;
@@ -90,10 +89,13 @@ impl ShardDistributionProposal {
         // Get fair distribution of shards on peers
         let distribution = (0..shard_number.get())
             .map(|shard_id| {
-                let replicas =
-                    repeat_with(|| min_heap.peek_mut().unwrap().0.get_and_inc_shard_count())
-                        .take(replica_number)
-                        .collect();
+                let replicas = (0..replica_number)
+                    .filter_map(|_| {
+                        min_heap
+                            .peek_mut()
+                            .map(|mut peer| peer.0.get_and_inc_shard_count())
+                    })
+                    .collect();
                 (shard_id, replicas)
             })
             .collect();
@@ -146,6 +148,23 @@ mod tests {
         assert_eq!(shard_counts.iter().sum::<usize>(), 6);
         assert_eq!(shard_counts.iter().min(), Some(&1));
         assert_eq!(shard_counts.iter().max(), Some(&2));
+    }
+
+    #[test]
+    fn test_distribution_with_no_known_peers_is_empty_per_shard() {
+        let distribution = ShardDistributionProposal::new(
+            NonZeroU32::new(3).unwrap(),
+            NonZeroU32::new(2).unwrap(),
+            &[],
+        );
+
+        assert_eq!(distribution.distribution.len(), 3);
+        assert!(
+            distribution
+                .distribution
+                .iter()
+                .all(|(_, peers)| peers.is_empty()),
+        );
     }
 
     #[test]
