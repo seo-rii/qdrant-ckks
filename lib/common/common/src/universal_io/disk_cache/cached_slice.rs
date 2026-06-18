@@ -51,17 +51,38 @@ impl<T: bytemuck::Pod> CachedSlice<T> {
         let t_size = size_of::<T>();
         debug_assert!(t_size != 0, "cannot use zero-sized type");
 
-        let total_elements = range.end - range.start;
+        let total_elements = range.end.checked_sub(range.start).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cached slice range end is before start",
+            )
+        })?;
         if total_elements == 0 {
             return Ok(Cow::Borrowed(&[]));
         }
 
-        let byte_range = range.start * t_size..range.end * t_size;
-        let mut blocks_iter = self.blocks_for(byte_range);
+        let byte_start = range.start.checked_mul(t_size).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cached slice range start overflows bytes",
+            )
+        })?;
+        let byte_end = range.end.checked_mul(t_size).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cached slice range end overflows bytes",
+            )
+        })?;
+        let byte_range = byte_start..byte_end;
+        let mut blocks_iter = self.blocks_for(byte_range)?.into_iter();
 
         // TODO(perf): if blocks are consecutive in the big cache file, we can still return without allocating.
         if blocks_iter.len() == 1 {
-            let req = blocks_iter.next().expect("We just checked len() == 1");
+            let Some(req) = blocks_iter.next() else {
+                return Err(io::Error::other(
+                    "cached slice single-block iterator is empty",
+                ));
+            };
             let result = self.controller.get_from_cache(req, |bytes| {
                 let mut vec_t = vec![T::zeroed(); bytes.len() / t_size];
                 bytemuck::cast_slice_mut::<T, u8>(&mut vec_t).copy_from_slice(bytes);
@@ -106,9 +127,9 @@ impl<T: bytemuck::Pod> CachedSlice<T> {
             let req = BlockRequest {
                 key: BlockId {
                     file_id: self.file_id,
-                    offset: BlockOffset(
-                        u32::try_from(block_idx).expect("file too large disk cache"),
-                    ),
+                    offset: BlockOffset(u32::try_from(block_idx).map_err(|_| {
+                        io::Error::new(io::ErrorKind::InvalidInput, "file too large for disk cache")
+                    })?),
                 },
                 // Request a single byte — enough to trigger caching the whole block.
                 range: 0..1,
@@ -140,7 +161,7 @@ impl<T: bytemuck::Pod> CachedSlice<T> {
     }
 
     /// Returns the block descriptor for the provided bytes range.
-    fn blocks_for(&self, bytes_range: Range<usize>) -> impl ExactSizeIterator<Item = BlockRequest> {
+    fn blocks_for(&self, bytes_range: Range<usize>) -> io::Result<Vec<BlockRequest>> {
         debug_assert!(bytes_range.start <= bytes_range.end);
         debug_assert!(bytes_range.end <= self.len_bytes);
         debug_assert!(!bytes_range.is_empty(), "empty range would underflow");
@@ -154,38 +175,43 @@ impl<T: bytemuck::Pod> CachedSlice<T> {
 fn blocks_for_range_in_file(
     file_id: FileId,
     bytes_range: Range<usize>,
-) -> impl ExactSizeIterator<Item = BlockRequest> {
+) -> io::Result<Vec<BlockRequest>> {
     let first_block = bytes_range.start / BLOCK_SIZE;
     let leading_offset = bytes_range.start - (first_block * BLOCK_SIZE);
     let last_block = (bytes_range.end - 1) / BLOCK_SIZE;
     let trailing_offset = bytes_range.end - (last_block * BLOCK_SIZE);
 
     // Not a RangeInclusive (..=) because it doesn't implement ExactSizeIterator
-    (first_block..last_block + 1).map(move |block_offset| {
-        let block_id = BlockId {
-            file_id,
-            offset: BlockOffset(
-                u32::try_from(block_offset).expect("file too large for block cache (>70 TiB)"),
-            ),
-        };
+    (first_block..last_block + 1)
+        .map(move |block_offset| {
+            let block_id = BlockId {
+                file_id,
+                offset: BlockOffset(u32::try_from(block_offset).map_err(|_| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "file too large for block cache (>70 TiB)",
+                    )
+                })?),
+            };
 
-        let range_start = if block_offset == first_block {
-            leading_offset
-        } else {
-            0
-        };
+            let range_start = if block_offset == first_block {
+                leading_offset
+            } else {
+                0
+            };
 
-        let range_end = if block_offset == last_block {
-            trailing_offset
-        } else {
-            BLOCK_SIZE
-        };
+            let range_end = if block_offset == last_block {
+                trailing_offset
+            } else {
+                BLOCK_SIZE
+            };
 
-        BlockRequest {
-            key: block_id,
-            range: range_start..range_end,
-        }
-    })
+            Ok(BlockRequest {
+                key: block_id,
+                range: range_start..range_end,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -86,7 +86,7 @@ impl CacheController {
                 .weight_capacity(cache_capacity)
                 .estimated_items_capacity(cache_capacity as usize)
                 .build()
-                .unwrap(),
+                .map_err(|err| io::Error::other(format!("failed to build disk cache: {err}")))?,
             UnitWeighter,
             ahash::RandomState::default(),
             blocks_lifecycle.clone(),
@@ -169,9 +169,12 @@ impl CacheController {
                 let mut buf = [0u8; BLOCK_SIZE];
 
                 let files = self.files.read();
-                let file = files
-                    .get(&key.file_id)
-                    .expect("cached file descriptor is not open");
+                let file = files.get(&key.file_id).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "cached file descriptor is not open",
+                    )
+                })?;
                 if range.len() == BLOCK_SIZE {
                     file.read_exact_at(&mut buf, key.offset.bytes() as u64)?;
                 } else {
@@ -202,12 +205,16 @@ impl CacheController {
                 // 3. Commit.
                 // ----------
 
-                // FIXME: unwrap panics when `key` deleted while guard is still alive.
-                guard.insert(allocated_offset).unwrap();
+                guard
+                    .insert(allocated_offset)
+                    .map_err(|_| io::Error::other("cache insert guard was invalidated"))?;
 
                 Ok(CacheRead::Miss(on_miss(&buf[range])))
             }
-            GuardResult::Timeout => unreachable!("We didn't set a timeout"),
+            GuardResult::Timeout => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "disk cache read timed out",
+            )),
         }
     }
 }
@@ -224,12 +231,20 @@ pub(super) enum CacheRead<'a, O> {
 static GLOBAL: OnceLock<Arc<CacheController>> = OnceLock::new();
 
 impl CacheController {
-    pub fn initialize_global(path: &Path, size_bytes: u64) {
-        assert!(GLOBAL.get().is_none(), "disk cacher is already initialized");
-        let cacher = Self::new(path, size_bytes).expect("failed to initialize disk cacher");
-        GLOBAL
-            .set(cacher)
-            .expect("disk cacher is already initialized");
+    pub fn initialize_global(path: &Path, size_bytes: u64) -> io::Result<()> {
+        if GLOBAL.get().is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "disk cacher is already initialized",
+            ));
+        }
+        let cacher = Self::new(path, size_bytes)?;
+        GLOBAL.set(cacher).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "disk cacher is already initialized",
+            )
+        })
     }
 
     pub fn global() -> Option<&'static Arc<CacheController>> {

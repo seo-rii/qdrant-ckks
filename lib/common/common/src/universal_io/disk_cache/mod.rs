@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::io;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -87,11 +88,26 @@ impl<T: bytemuck::Pod> UniversalRead<T> for CachedSlice<T> {
     }
 
     fn read<P: AccessPattern>(&self, range: ReadRange) -> Result<Cow<'_, [T]>> {
-        let elem_start = usize::try_from(range.byte_offset).expect("range.start is within usize")
-            / size_of::<T>();
-        let elem_length = usize::try_from(range.length).expect("range.length is within usize");
+        let elem_start = usize::try_from(range.byte_offset).map_err(|_| {
+            UniversalIoError::from(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "range start is not within usize",
+            ))
+        })? / size_of::<T>();
+        let elem_length = usize::try_from(range.length).map_err(|_| {
+            UniversalIoError::from(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "range length is not within usize",
+            ))
+        })?;
 
-        let range = elem_start..elem_start + elem_length;
+        let range_end = elem_start.checked_add(elem_length).ok_or_else(|| {
+            UniversalIoError::from(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "range end overflows usize",
+            ))
+        })?;
+        let range = elem_start..range_end;
 
         Ok(self.get_range(range)?)
     }
