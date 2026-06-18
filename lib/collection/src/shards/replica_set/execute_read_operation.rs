@@ -348,7 +348,7 @@ impl ShardReplicaSet {
             );
 
             for error in errors {
-                write!(&mut message, "\n  {error}").expect("writing into String always succeeds");
+                let _ = write!(&mut message, "\n  {error}");
             }
 
             Err(CollectionError::service_error(message))
