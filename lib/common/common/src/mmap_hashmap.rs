@@ -110,8 +110,25 @@ impl<K: Key + ?Sized, V: Sized + FromBytes + Immutable + IntoBytes + KnownLayout
         let mut last_bucket = 0usize;
         for (k, v) in map.clone() {
             last_bucket = last_bucket.next_multiple_of(K::ALIGN);
-            buckets[phf.get(k).expect("Key not found in phf") as usize] =
-                last_bucket as BucketOffset;
+            let bucket_index = phf.get(k).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "perfect hash is missing a key during mmap hashmap creation",
+                )
+            })?;
+            let bucket_index: usize = bucket_index.try_into().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "perfect hash bucket index does not fit usize",
+                )
+            })?;
+            let Some(bucket) = buckets.get_mut(bucket_index) else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "perfect hash bucket index is out of range",
+                ));
+            };
+            *bucket = last_bucket as BucketOffset;
             last_bucket += Self::entry_bytes(k, v.len());
         }
         file_size += last_bucket;
@@ -167,7 +184,7 @@ impl<K: Key + ?Sized, V: Sized + FromBytes + Immutable + IntoBytes + KnownLayout
 
         // Explicitly flush write buffer so we can catch IO errors
         bufw.flush()?;
-        let file = bufw.into_inner().unwrap();
+        let file = bufw.into_inner().map_err(|err| err.into_error())?;
 
         file.sync_all()?;
         drop(file);
