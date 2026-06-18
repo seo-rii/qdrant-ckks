@@ -975,7 +975,8 @@ root hash, bucket count, and the exact padded bucket-id sequence; REST and gRPC
 read or detailed path-shape errors are returned.
 `sign_private_result_oram_read_buckets_for_manifest` derives that read signature
 context from the signed manifest and enforces the fixed
-`oram.path_batch_size * (oram.tree_height + 1)` bucket-id volume before signing.
+`oram.path_batch_size * (oram.tree_height + 1)` bucket-id volume and canonical
+Path ORAM heap path shape before signing.
 The planner also rejects missing token positions, duplicate fetch tokens,
 duplicate token-position entries, and out-of-range leaves before a server
 request is built. The crypto crate also has a client-only private result ORAM
@@ -1247,7 +1248,8 @@ signature before creating the private index layout, so a bad signature leaves
 `epochs/current.json` absent and does not write bucket files.
 For ORAM path reads, `sign_private_hnsw_oram_read_paths_for_manifest` derives
 the signed read context from the current manifest and enforces the manifest's
-fixed `oram.path_batch_size` before producing the Ed25519 request signature.
+fixed `oram.path_batch_size` and tree-bounded leaf labels before producing the
+Ed25519 request signature.
 Before submitting an ORAM writeback, clients can call
 `plan_private_hnsw_oram_commit_for_manifest` to bind commit planning to the
 current signed manifest, updated bucket ciphertext hashes,

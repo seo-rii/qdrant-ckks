@@ -2391,6 +2391,10 @@ pub fn sign_private_result_oram_read_buckets_for_manifest(
     bucket_ids: &[u64],
 ) -> Result<PrivateResultOramSignature, PrivateResultOramError> {
     validate_private_result_oram_manifest_shape(manifest)?;
+    let path_len = usize::try_from(manifest.oram.tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or(PrivateResultOramError::InvalidReadBucketsSignature)?;
     let expected_bucket_ids = u64::from(manifest.oram.tree_height)
         .checked_add(1)
         .and_then(|path_len| path_len.checked_mul(u64::from(manifest.oram.path_batch_size)))
@@ -2399,6 +2403,9 @@ pub fn sign_private_result_oram_read_buckets_for_manifest(
         .map_err(|_| PrivateResultOramError::InvalidReadBucketsSignature)?;
     if actual_bucket_ids != expected_bucket_ids {
         return Err(PrivateResultOramError::InvalidReadBucketsSignature);
+    }
+    for path in bucket_ids.chunks(path_len) {
+        validate_private_result_oram_read_bucket_path_shape(path)?;
     }
     sign_private_result_oram_read_buckets(
         key_pair,
@@ -2414,6 +2421,28 @@ pub fn sign_private_result_oram_read_buckets_for_manifest(
         manifest.bucket_count,
         bucket_ids,
     )
+}
+
+fn validate_private_result_oram_read_bucket_path_shape(
+    path: &[u64],
+) -> Result<(), PrivateResultOramError> {
+    if path.first().copied() != Some(0) {
+        return Err(PrivateResultOramError::InvalidReadBucketsSignature);
+    }
+    for window in path.windows(2) {
+        let parent = window[0];
+        let child = window[1];
+        let Some(left_child) = parent.checked_mul(2).and_then(|value| value.checked_add(1)) else {
+            return Err(PrivateResultOramError::InvalidReadBucketsSignature);
+        };
+        let Some(right_child) = parent.checked_mul(2).and_then(|value| value.checked_add(2)) else {
+            return Err(PrivateResultOramError::InvalidReadBucketsSignature);
+        };
+        if child != left_child && child != right_child {
+            return Err(PrivateResultOramError::InvalidReadBucketsSignature);
+        }
+    }
+    Ok(())
 }
 
 pub fn package_private_result_oram_upload_bundle(
@@ -6713,6 +6742,16 @@ mod tests {
                 &key_pair,
                 &manifest,
                 &bucket_ids[..3],
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+
+        let malformed_path_bucket_ids = [0, 1, 3, 0, 6, 5];
+        assert_eq!(
+            sign_private_result_oram_read_buckets_for_manifest(
+                &key_pair,
+                &manifest,
+                &malformed_path_bucket_ids,
             ),
             Err(PrivateResultOramError::InvalidReadBucketsSignature)
         );

@@ -3493,6 +3493,9 @@ pub fn sign_private_hnsw_oram_read_paths_for_manifest(
 ) -> Result<PrivateHnswOramSignature, PrivateHnswClientError> {
     validate_private_hnsw_oram_manifest_shape(manifest)
         .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest"))?;
+    for path in paths {
+        decode_private_hnsw_oram_leaf_label(path, manifest.oram.tree_height)?;
+    }
     sign_private_hnsw_oram_read_paths(
         key_pair,
         PrivateHnswCommitSignatureContext {
@@ -5978,6 +5981,18 @@ mod tests {
             Err(PrivateHnswClientError::InvalidCommitSignatureContext(
                 "requested_paths",
             ))
+        );
+
+        let mut out_of_range_paths = paths.clone();
+        out_of_range_paths[1] =
+            BASE64URL_NOPAD.encode(&(1u64 << manifest.oram.tree_height).to_be_bytes());
+        assert_eq!(
+            sign_private_hnsw_oram_read_paths_for_manifest(
+                &key_pair,
+                &manifest,
+                &out_of_range_paths,
+            ),
+            Err(PrivateHnswClientError::LeafOutOfRange)
         );
     }
 
