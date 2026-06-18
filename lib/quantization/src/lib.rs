@@ -55,16 +55,20 @@ pub struct ConditionalVariable {
 
 impl ConditionalVariable {
     pub fn wait(&self) -> bool {
-        let mut guard = self.mutex.lock().unwrap();
+        let mut guard = self.mutex.lock().unwrap_or_else(|err| err.into_inner());
         while *guard == ConditionalVariableState::Waiting && Arc::strong_count(&self.mutex) > 1 {
-            guard = self.condvar.wait(guard).unwrap();
+            guard = self
+                .condvar
+                .wait(guard)
+                .unwrap_or_else(|err| err.into_inner());
         }
         *guard = ConditionalVariableState::Waiting;
         Arc::strong_count(&self.mutex) == 1
     }
 
     pub fn notify(&self) {
-        *self.mutex.lock().unwrap() = ConditionalVariableState::Notified;
+        *self.mutex.lock().unwrap_or_else(|err| err.into_inner()) =
+            ConditionalVariableState::Notified;
         self.condvar.notify_all();
     }
 }
