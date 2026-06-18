@@ -3800,14 +3800,14 @@ pub fn private_hnsw_bucket_commitment(
     let ciphertext_sha256_bytes = decode_bucket_ciphertext_hash(ciphertext_sha256)?;
 
     let mut message = Vec::new();
-    append_len_prefixed(
+    append_bucket_len_prefixed(
         &mut message,
         PRIVATE_HNSW_BUCKET_COMMITMENT_DOMAIN.as_bytes(),
-    );
-    append_len_prefixed(&mut message, context.collection_id.as_bytes());
-    append_len_prefixed(&mut message, context.vector_name.as_bytes());
-    append_len_prefixed(&mut message, context.key_id.as_bytes());
-    append_len_prefixed(&mut message, context.rk_id.as_bytes());
+    )?;
+    append_bucket_len_prefixed(&mut message, context.collection_id.as_bytes())?;
+    append_bucket_len_prefixed(&mut message, context.vector_name.as_bytes())?;
+    append_bucket_len_prefixed(&mut message, context.key_id.as_bytes())?;
+    append_bucket_len_prefixed(&mut message, context.rk_id.as_bytes())?;
     message.extend_from_slice(&context.rk_epoch.to_be_bytes());
     message.extend_from_slice(&context.bucket_id.to_be_bytes());
     message.extend_from_slice(&context.index_epoch.to_be_bytes());
@@ -3821,11 +3821,11 @@ fn private_hnsw_bucket_aead(
 ) -> Result<Vec<u8>, PrivateHnswClientError> {
     validate_bucket_context(context)?;
     let mut aad = Vec::new();
-    append_len_prefixed(&mut aad, PRIVATE_HNSW_BUCKET_AEAD_CONTEXT_DOMAIN.as_bytes());
-    append_len_prefixed(&mut aad, context.collection_id.as_bytes());
-    append_len_prefixed(&mut aad, context.vector_name.as_bytes());
-    append_len_prefixed(&mut aad, context.key_id.as_bytes());
-    append_len_prefixed(&mut aad, context.rk_id.as_bytes());
+    append_bucket_len_prefixed(&mut aad, PRIVATE_HNSW_BUCKET_AEAD_CONTEXT_DOMAIN.as_bytes())?;
+    append_bucket_len_prefixed(&mut aad, context.collection_id.as_bytes())?;
+    append_bucket_len_prefixed(&mut aad, context.vector_name.as_bytes())?;
+    append_bucket_len_prefixed(&mut aad, context.key_id.as_bytes())?;
+    append_bucket_len_prefixed(&mut aad, context.rk_id.as_bytes())?;
     aad.extend_from_slice(&context.rk_epoch.to_be_bytes());
     aad.extend_from_slice(&context.bucket_id.to_be_bytes());
     aad.extend_from_slice(&context.index_epoch.to_be_bytes());
@@ -3838,14 +3838,14 @@ fn private_hnsw_client_state_aead(
     validate_client_state_context(context)?;
     let root_hash = decode_merkle_root(context.root_hash)?;
     let mut aad = Vec::new();
-    append_len_prefixed(
+    append_client_state_len_prefixed(
         &mut aad,
         PRIVATE_HNSW_CLIENT_STATE_AEAD_CONTEXT_DOMAIN.as_bytes(),
-    );
-    append_len_prefixed(&mut aad, context.collection_id.as_bytes());
-    append_len_prefixed(&mut aad, context.vector_name.as_bytes());
-    append_len_prefixed(&mut aad, context.key_id.as_bytes());
-    append_len_prefixed(&mut aad, context.rk_id.as_bytes());
+    )?;
+    append_client_state_len_prefixed(&mut aad, context.collection_id.as_bytes())?;
+    append_client_state_len_prefixed(&mut aad, context.vector_name.as_bytes())?;
+    append_client_state_len_prefixed(&mut aad, context.key_id.as_bytes())?;
+    append_client_state_len_prefixed(&mut aad, context.rk_id.as_bytes())?;
     aad.extend_from_slice(&context.rk_epoch.to_be_bytes());
     aad.extend_from_slice(&context.index_epoch.to_be_bytes());
     aad.extend_from_slice(&root_hash);
@@ -4245,9 +4245,27 @@ fn base64url_sha256(bytes: &[u8]) -> String {
     BASE64URL_NOPAD.encode(Sha256::digest(bytes).as_ref())
 }
 
-fn append_len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+fn append_bucket_len_prefixed(
+    out: &mut Vec<u8>,
+    bytes: &[u8],
+) -> Result<(), PrivateHnswClientError> {
+    append_len_prefixed(out, bytes)
+        .map_err(|()| PrivateHnswClientError::InvalidBucketContext("context_length"))
+}
+
+fn append_client_state_len_prefixed(
+    out: &mut Vec<u8>,
+    bytes: &[u8],
+) -> Result<(), PrivateHnswClientError> {
+    append_len_prefixed(out, bytes)
+        .map_err(|()| PrivateHnswClientError::InvalidClientStateContext("context_length"))
+}
+
+fn append_len_prefixed(out: &mut Vec<u8>, bytes: &[u8]) -> Result<(), ()> {
+    let len: u32 = bytes.len().try_into().map_err(|_| ())?;
+    out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(bytes);
+    Ok(())
 }
 
 fn push_u16(out: &mut Vec<u8>, value: u16) {
