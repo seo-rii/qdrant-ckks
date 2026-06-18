@@ -1292,13 +1292,18 @@ pub fn private_result_oram_bucket_count(tree_height: u32) -> Result<u64, Private
         .ok_or(PrivateResultOramError::InvalidFetchPlanField("tree_height"))
 }
 
+fn private_result_oram_path_len(tree_height: u32) -> Result<usize, PrivateResultOramError> {
+    private_result_oram_leaf_count(tree_height)?;
+    usize::try_from(tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or(PrivateResultOramError::InvalidFetchPlanField("tree_height"))
+}
+
 pub fn private_result_oram_fixed_writeback_bucket_budget(
     oram: &OramParams,
 ) -> Result<usize, PrivateResultOramError> {
-    let path_len = usize::try_from(oram.tree_height)
-        .ok()
-        .and_then(|height| height.checked_add(1))
-        .ok_or(PrivateResultOramError::InvalidFetchPlanField("tree_height"))?;
+    let path_len = private_result_oram_path_len(oram.tree_height)?;
     let path_batch_size = usize::try_from(oram.path_batch_size)
         .map_err(|_| PrivateResultOramError::InvalidFetchPlanField("path_batch_size"))?;
     if path_batch_size == 0 {
@@ -1318,7 +1323,7 @@ pub fn private_result_oram_bucket_ids_for_leaf(
     tree_height: u32,
 ) -> Result<Vec<u64>, PrivateResultOramError> {
     validate_private_result_oram_leaf(leaf, tree_height)?;
-    let mut bucket_ids = Vec::with_capacity(tree_height as usize + 1);
+    let mut bucket_ids = Vec::with_capacity(private_result_oram_path_len(tree_height)?);
     for level in 0..=tree_height {
         let level_start = (1u64 << level) - 1;
         let prefix = if level == 0 {
@@ -1482,7 +1487,20 @@ pub fn validate_private_result_oram_client_config(
             "block_size_bytes",
         ));
     }
+    private_result_oram_bucket_plaintext_slots_len(config)?;
     Ok(())
+}
+
+fn private_result_oram_bucket_plaintext_slots_len(
+    config: PrivateResultOramClientConfig,
+) -> Result<usize, PrivateResultOramError> {
+    let slot_len = config.block_size_bytes.checked_add(1).ok_or(
+        PrivateResultOramError::InvalidClientConfig("block_size_bytes"),
+    )?;
+    config
+        .bucket_size
+        .checked_mul(slot_len)
+        .ok_or(PrivateResultOramError::InvalidClientConfig("bucket_size"))
 }
 
 pub fn empty_private_result_oram_plaintext_bucket(
@@ -1651,7 +1669,7 @@ pub fn decode_private_result_oram_payload_block(
         _ => return Err(PrivateResultOramError::InvalidPayloadBlock),
     };
     let generation = read_payload_u64(encoded, &mut cursor)?;
-    let payload_len = read_payload_u32(encoded, &mut cursor)? as usize;
+    let payload_len = read_payload_u32_usize(encoded, &mut cursor)?;
     let payload = read_payload_exact(encoded, &mut cursor, payload_len)?.to_vec();
     if encoded[cursor..].iter().any(|byte| *byte != 0) {
         return Err(PrivateResultOramError::InvalidPayloadBlockPadding);
@@ -1701,7 +1719,10 @@ pub fn encode_private_result_oram_bucket_plaintext(
             }
             None => {
                 encoded.push(0);
-                encoded.resize(encoded.len() + config.block_size_bytes, 0);
+                let next_len = encoded.len().checked_add(config.block_size_bytes).ok_or(
+                    PrivateResultOramError::InvalidClientConfig("block_size_bytes"),
+                )?;
+                encoded.resize(next_len, 0);
             }
         }
     }
@@ -1732,8 +1753,8 @@ pub fn decode_private_result_oram_bucket_plaintext(
     if encoded_bucket_id != bucket_id {
         return Err(PrivateResultOramError::InvalidBucketPlaintext);
     }
-    let encoded_bucket_size = read_bucket_u32(encoded, &mut cursor)? as usize;
-    let encoded_block_size = read_bucket_u32(encoded, &mut cursor)? as usize;
+    let encoded_bucket_size = read_bucket_u32_usize(encoded, &mut cursor)?;
+    let encoded_block_size = read_bucket_u32_usize(encoded, &mut cursor)?;
     if encoded_bucket_size != config.bucket_size || encoded_block_size != config.block_size_bytes {
         return Err(PrivateResultOramError::BucketPlaintextSlotCountMismatch);
     }
@@ -2232,7 +2253,7 @@ pub fn validate_private_result_oram_commit_signature(
     if input.updated_buckets.is_empty() {
         return Err(PrivateResultOramError::EmptyCommit);
     }
-    if input.updated_buckets.len() > u32::MAX as usize {
+    if u32::try_from(input.updated_buckets.len()).is_err() {
         return Err(PrivateResultOramError::InvalidCommitSignature);
     }
     if input.new_epoch <= input.old_epoch {
@@ -2265,7 +2286,7 @@ pub fn validate_private_result_oram_read_buckets_signature(
     decode_base64url_32(input.root_hash, "root_hash")?;
     if input.bucket_count == 0
         || input.bucket_ids.is_empty()
-        || input.bucket_ids.len() > u32::MAX as usize
+        || u32::try_from(input.bucket_ids.len()).is_err()
         || input
             .bucket_ids
             .iter()
@@ -2304,7 +2325,7 @@ pub fn sign_private_result_oram_commit(
     if plan.updated_buckets.is_empty() {
         return Err(PrivateResultOramError::EmptyCommit);
     }
-    if plan.updated_buckets.len() > u32::MAX as usize {
+    if u32::try_from(plan.updated_buckets.len()).is_err() {
         return Err(PrivateResultOramError::InvalidCommitSignature);
     }
     if plan.new_epoch <= plan.old_epoch {
@@ -2357,7 +2378,7 @@ pub fn sign_private_result_oram_read_buckets(
     decode_base64url_32(root_hash, "root_hash")?;
     if bucket_count == 0
         || bucket_ids.is_empty()
-        || bucket_ids.len() > u32::MAX as usize
+        || u32::try_from(bucket_ids.len()).is_err()
         || bucket_ids
             .iter()
             .any(|bucket_id| *bucket_id >= bucket_count)
@@ -3259,11 +3280,14 @@ fn read_payload_exact<'a>(
     cursor: &mut usize,
     len: usize,
 ) -> Result<&'a [u8], PrivateResultOramError> {
-    if bytes.len().saturating_sub(*cursor) < len {
+    let end = cursor
+        .checked_add(len)
+        .ok_or(PrivateResultOramError::InvalidPayloadBlock)?;
+    if end > bytes.len() {
         return Err(PrivateResultOramError::InvalidPayloadBlock);
     }
-    let out = &bytes[*cursor..*cursor + len];
-    *cursor += len;
+    let out = &bytes[*cursor..end];
+    *cursor = end;
     Ok(out)
 }
 
@@ -3279,6 +3303,14 @@ fn read_payload_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16, PrivateResu
 fn read_payload_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, PrivateResultOramError> {
     let bytes = read_payload_exact(bytes, cursor, 4)?;
     Ok(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn read_payload_u32_usize(
+    bytes: &[u8],
+    cursor: &mut usize,
+) -> Result<usize, PrivateResultOramError> {
+    usize::try_from(read_payload_u32(bytes, cursor)?)
+        .map_err(|_| PrivateResultOramError::InvalidPayloadBlock)
 }
 
 fn read_payload_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64, PrivateResultOramError> {
@@ -3302,11 +3334,14 @@ fn read_bucket_exact<'a>(
     cursor: &mut usize,
     len: usize,
 ) -> Result<&'a [u8], PrivateResultOramError> {
-    if bytes.len().saturating_sub(*cursor) < len {
+    let end = cursor
+        .checked_add(len)
+        .ok_or(PrivateResultOramError::InvalidBucketPlaintext)?;
+    if end > bytes.len() {
         return Err(PrivateResultOramError::InvalidBucketPlaintext);
     }
-    let out = &bytes[*cursor..*cursor + len];
-    *cursor += len;
+    let out = &bytes[*cursor..end];
+    *cursor = end;
     Ok(out)
 }
 
@@ -3322,6 +3357,14 @@ fn read_bucket_u16(bytes: &[u8], cursor: &mut usize) -> Result<u16, PrivateResul
 fn read_bucket_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, PrivateResultOramError> {
     let bytes = read_bucket_exact(bytes, cursor, 4)?;
     Ok(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+fn read_bucket_u32_usize(
+    bytes: &[u8],
+    cursor: &mut usize,
+) -> Result<usize, PrivateResultOramError> {
+    usize::try_from(read_bucket_u32(bytes, cursor)?)
+        .map_err(|_| PrivateResultOramError::InvalidBucketPlaintext)
 }
 
 fn read_bucket_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64, PrivateResultOramError> {
@@ -3969,7 +4012,12 @@ mod tests {
         let encoded = encode_private_result_oram_bucket_plaintext(&bucket, config).unwrap();
         assert_eq!(
             encoded.len(),
-            4 + 2 + 8 + 4 + 4 + config.bucket_size * (1 + config.block_size_bytes)
+            PRIVATE_RESULT_ORAM_BUCKET_PLAINTEXT_MAGIC.len()
+                + 2
+                + 8
+                + 4
+                + 4
+                + private_result_oram_bucket_plaintext_slots_len(config).unwrap()
         );
         assert_eq!(
             decode_private_result_oram_bucket_plaintext(3, &encoded, config).unwrap(),
@@ -3983,6 +4031,49 @@ mod tests {
             decode_private_result_oram_bucket_plaintext(3, &tampered, config),
             Err(PrivateResultOramError::InvalidBucketPlaintext)
         );
+    }
+
+    #[test]
+    fn bucket_plaintext_codec_rejects_overflowing_shape_config() {
+        let block_size_overflow = PrivateResultOramClientConfig {
+            block_size_bytes: usize::MAX,
+            ..result_client_config()
+        };
+        let bucket = PrivateResultOramPlaintextBucket {
+            bucket_id: 3,
+            blocks: Vec::new(),
+        };
+        assert_eq!(
+            encode_private_result_oram_bucket_plaintext(&bucket, block_size_overflow),
+            Err(PrivateResultOramError::InvalidClientConfig(
+                "block_size_bytes"
+            ))
+        );
+
+        let bucket_size_overflow = PrivateResultOramClientConfig {
+            bucket_size: usize::MAX,
+            block_size_bytes: 2,
+            ..result_client_config()
+        };
+        assert_eq!(
+            empty_private_result_oram_plaintext_bucket(3, bucket_size_overflow),
+            Err(PrivateResultOramError::InvalidClientConfig("bucket_size"))
+        );
+    }
+
+    #[test]
+    fn plaintext_readers_reject_cursor_overflow() {
+        let mut payload_cursor = usize::MAX;
+        assert!(matches!(
+            read_payload_exact(&[], &mut payload_cursor, 1),
+            Err(PrivateResultOramError::InvalidPayloadBlock)
+        ));
+
+        let mut bucket_cursor = usize::MAX;
+        assert!(matches!(
+            read_bucket_exact(&[], &mut bucket_cursor, 1),
+            Err(PrivateResultOramError::InvalidBucketPlaintext)
+        ));
     }
 
     #[test]

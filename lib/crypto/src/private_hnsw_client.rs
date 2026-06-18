@@ -1540,13 +1540,18 @@ pub fn private_hnsw_oram_bucket_count(tree_height: u32) -> Result<u64, PrivateHn
         .ok_or(PrivateHnswClientError::InvalidTreeHeight)
 }
 
+fn private_hnsw_oram_path_len(tree_height: u32) -> Result<usize, PrivateHnswClientError> {
+    private_hnsw_oram_leaf_count(tree_height)?;
+    usize::try_from(tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or(PrivateHnswClientError::InvalidTreeHeight)
+}
+
 pub fn private_hnsw_oram_fixed_writeback_bucket_budget(
     oram: &OramParams,
 ) -> Result<usize, PrivateHnswClientError> {
-    let path_len = usize::try_from(oram.tree_height)
-        .ok()
-        .and_then(|height| height.checked_add(1))
-        .ok_or(PrivateHnswClientError::InvalidTreeHeight)?;
+    let path_len = private_hnsw_oram_path_len(oram.tree_height)?;
     let path_batch_size = usize::try_from(oram.path_batch_size)
         .map_err(|_| PrivateHnswClientError::InvalidOramClientConfig("path_batch_size"))?;
     if path_batch_size == 0 {
@@ -1594,7 +1599,7 @@ pub fn private_hnsw_oram_bucket_ids_for_leaf(
     tree_height: u32,
 ) -> Result<Vec<u64>, PrivateHnswClientError> {
     validate_private_hnsw_oram_leaf(leaf, tree_height)?;
-    let mut bucket_ids = Vec::with_capacity(tree_height as usize + 1);
+    let mut bucket_ids = Vec::with_capacity(private_hnsw_oram_path_len(tree_height)?);
     for level in 0..=tree_height {
         let level_start = (1u64 << level) - 1;
         let prefix = if level == 0 {
@@ -1678,12 +1683,20 @@ pub fn build_private_hnsw_oram_plaintext_index_from_blocks(
             .into_iter()
             .rev()
         {
-            let bucket = buckets.get_mut(bucket_id as usize).ok_or(
-                PrivateHnswClientError::BucketOutOfRange {
-                    bucket_id,
-                    bucket_count,
-                },
-            )?;
+            let bucket_index: usize =
+                bucket_id
+                    .try_into()
+                    .map_err(|_| PrivateHnswClientError::BucketOutOfRange {
+                        bucket_id,
+                        bucket_count,
+                    })?;
+            let bucket =
+                buckets
+                    .get_mut(bucket_index)
+                    .ok_or(PrivateHnswClientError::BucketOutOfRange {
+                        bucket_id,
+                        bucket_count,
+                    })?;
             if let Some(slot) = bucket.blocks.iter_mut().find(|slot| slot.is_none()) {
                 *slot = Some(block.clone());
                 placed = true;
@@ -2167,13 +2180,7 @@ pub fn encode_private_hnsw_oram_bucket_plaintext(
         .try_into()
         .map_err(|_| PrivateHnswClientError::InvalidOramClientConfig("block_size_bytes"))?;
 
-    let mut encoded = Vec::with_capacity(
-        BUCKET_PLAINTEXT_MAGIC.len()
-            + 2
-            + 4
-            + 4
-            + config.bucket_size * (1 + config.block_size_bytes),
-    );
+    let mut encoded = Vec::with_capacity(private_hnsw_bucket_plaintext_len(config)?);
     encoded.extend_from_slice(BUCKET_PLAINTEXT_MAGIC);
     push_u16(&mut encoded, BUCKET_PLAINTEXT_VERSION);
     push_u32(&mut encoded, bucket_size_u32);
@@ -2191,7 +2198,10 @@ pub fn encode_private_hnsw_oram_bucket_plaintext(
             }
             None => {
                 encoded.push(0);
-                encoded.resize(encoded.len() + config.block_size_bytes, 0);
+                let next_len = encoded.len().checked_add(config.block_size_bytes).ok_or(
+                    PrivateHnswClientError::InvalidOramClientConfig("block_size_bytes"),
+                )?;
+                encoded.resize(next_len, 0);
             }
         }
     }
@@ -2204,20 +2214,7 @@ pub fn decode_private_hnsw_oram_bucket_plaintext(
     config: PrivateHnswOramClientConfig,
 ) -> Result<PrivateHnswOramPlaintextBucket, PrivateHnswClientError> {
     validate_oram_client_config(config)?;
-    let expected_len = BUCKET_PLAINTEXT_MAGIC
-        .len()
-        .checked_add(2)
-        .and_then(|len| len.checked_add(4))
-        .and_then(|len| len.checked_add(4))
-        .and_then(|len| {
-            config
-                .bucket_size
-                .checked_mul(1 + config.block_size_bytes)
-                .and_then(|slots_len| len.checked_add(slots_len))
-        })
-        .ok_or(PrivateHnswClientError::InvalidOramClientConfig(
-            "bucket_size",
-        ))?;
+    let expected_len = private_hnsw_bucket_plaintext_len(config)?;
     if encoded.len() != expected_len {
         return Err(PrivateHnswClientError::InvalidBucketPlaintext);
     }
@@ -2231,8 +2228,8 @@ pub fn decode_private_hnsw_oram_bucket_plaintext(
     if version != BUCKET_PLAINTEXT_VERSION {
         return Err(PrivateHnswClientError::InvalidBucketPlaintext);
     }
-    let encoded_bucket_size = read_u32(encoded, &mut cursor)? as usize;
-    let encoded_block_size = read_u32(encoded, &mut cursor)? as usize;
+    let encoded_bucket_size = read_u32_usize(encoded, &mut cursor)?;
+    let encoded_block_size = read_u32_usize(encoded, &mut cursor)?;
     if encoded_bucket_size != config.bucket_size || encoded_block_size != config.block_size_bytes {
         return Err(PrivateHnswClientError::BucketPlaintextMetadataMismatch);
     }
@@ -3393,7 +3390,7 @@ pub fn sign_private_hnsw_oram_commit(
     if plan.updated_buckets.is_empty() {
         return Err(PrivateHnswClientError::EmptyCommit);
     }
-    if plan.updated_buckets.len() > u32::MAX as usize {
+    if u32::try_from(plan.updated_buckets.len()).is_err() {
         return Err(PrivateHnswClientError::InvalidCommitSignatureContext(
             "updated_buckets",
         ));
@@ -3447,10 +3444,13 @@ pub fn sign_private_hnsw_oram_read_paths(
 ) -> Result<PrivateHnswOramSignature, PrivateHnswClientError> {
     validate_commit_signature_context(context)?;
     decode_merkle_root(root_hash)?;
+    let requested_paths_len: usize = requested_paths
+        .try_into()
+        .map_err(|_| PrivateHnswClientError::InvalidCommitSignatureContext("requested_paths"))?;
     if paths.is_empty()
         || requested_paths == 0
-        || paths.len() > u32::MAX as usize
-        || requested_paths as usize != paths.len()
+        || u32::try_from(paths.len()).is_err()
+        || requested_paths_len != paths.len()
     {
         return Err(PrivateHnswClientError::InvalidCommitSignatureContext(
             "requested_paths",
@@ -3638,15 +3638,15 @@ pub fn decode_private_hnsw_node_block(
         _ => return Err(PrivateHnswClientError::InvalidBlockEncoding),
     };
 
-    let neighbor_count = read_u32(encoded, &mut cursor)? as usize;
-    let fixed_neighbor_slots = read_u32(encoded, &mut cursor)? as usize;
+    let neighbor_count = read_u32_usize(encoded, &mut cursor)?;
+    let fixed_neighbor_slots = read_u32_usize(encoded, &mut cursor)?;
     if neighbor_count > fixed_neighbor_slots {
         return Err(PrivateHnswClientError::TooManyNeighbors {
             actual: neighbor_count,
             limit: fixed_neighbor_slots,
         });
     }
-    let vector_len = read_u32(encoded, &mut cursor)? as usize;
+    let vector_len = read_u32_usize(encoded, &mut cursor)?;
     let vector = read_exact(encoded, &mut cursor, vector_len)?.to_vec();
 
     let mut neighbors = Vec::with_capacity(neighbor_count);
@@ -3941,13 +3941,37 @@ fn validate_oram_client_config(
             "block_size_bytes",
         ));
     }
+    private_hnsw_bucket_plaintext_slots_len(config)?;
+    Ok(())
+}
+
+fn private_hnsw_bucket_plaintext_slots_len(
+    config: PrivateHnswOramClientConfig,
+) -> Result<usize, PrivateHnswClientError> {
+    let slot_len = config.block_size_bytes.checked_add(1).ok_or(
+        PrivateHnswClientError::InvalidOramClientConfig("block_size_bytes"),
+    )?;
     config
         .bucket_size
-        .checked_mul(1 + config.block_size_bytes)
+        .checked_mul(slot_len)
         .ok_or(PrivateHnswClientError::InvalidOramClientConfig(
             "bucket_size",
-        ))?;
-    Ok(())
+        ))
+}
+
+fn private_hnsw_bucket_plaintext_len(
+    config: PrivateHnswOramClientConfig,
+) -> Result<usize, PrivateHnswClientError> {
+    let slots_len = private_hnsw_bucket_plaintext_slots_len(config)?;
+    BUCKET_PLAINTEXT_MAGIC
+        .len()
+        .checked_add(2)
+        .and_then(|len| len.checked_add(4))
+        .and_then(|len| len.checked_add(4))
+        .and_then(|len| len.checked_add(slots_len))
+        .ok_or(PrivateHnswClientError::InvalidOramClientConfig(
+            "bucket_size",
+        ))
 }
 
 fn validate_search_params(
@@ -4255,6 +4279,11 @@ fn read_u32(bytes: &[u8], cursor: &mut usize) -> Result<u32, PrivateHnswClientEr
         .try_into()
         .map_err(|_| PrivateHnswClientError::InvalidBlockEncoding)?;
     Ok(u32::from_be_bytes(value))
+}
+
+fn read_u32_usize(bytes: &[u8], cursor: &mut usize) -> Result<usize, PrivateHnswClientError> {
+    usize::try_from(read_u32(bytes, cursor)?)
+        .map_err(|_| PrivateHnswClientError::InvalidBlockEncoding)
 }
 
 fn read_u64(bytes: &[u8], cursor: &mut usize) -> Result<u64, PrivateHnswClientError> {
@@ -5260,7 +5289,7 @@ mod tests {
         let encoded = encode_private_hnsw_oram_bucket_plaintext(&bucket, config).unwrap();
         assert_eq!(
             encoded.len(),
-            4 + 2 + 4 + 4 + config.bucket_size * (1 + config.block_size_bytes)
+            private_hnsw_bucket_plaintext_len(config).unwrap()
         );
         assert_eq!(
             decode_private_hnsw_oram_bucket_plaintext(3, &encoded, config).unwrap(),
@@ -5273,6 +5302,36 @@ mod tests {
         assert_eq!(
             decode_private_hnsw_oram_bucket_plaintext(3, &tampered, config),
             Err(PrivateHnswClientError::InvalidBucketPlaintext)
+        );
+    }
+
+    #[test]
+    fn bucket_plaintext_codec_rejects_overflowing_shape_config() {
+        let block_size_overflow = PrivateHnswOramClientConfig {
+            block_size_bytes: usize::MAX,
+            ..oram_config()
+        };
+        let bucket = PrivateHnswOramPlaintextBucket {
+            bucket_id: 3,
+            blocks: Vec::new(),
+        };
+        assert_eq!(
+            encode_private_hnsw_oram_bucket_plaintext(&bucket, block_size_overflow),
+            Err(PrivateHnswClientError::InvalidOramClientConfig(
+                "block_size_bytes"
+            ))
+        );
+
+        let bucket_size_overflow = PrivateHnswOramClientConfig {
+            bucket_size: usize::MAX,
+            block_size_bytes: 2,
+            ..oram_config()
+        };
+        assert_eq!(
+            empty_private_hnsw_oram_plaintext_bucket(3, bucket_size_overflow),
+            Err(PrivateHnswClientError::InvalidOramClientConfig(
+                "bucket_size"
+            ))
         );
     }
 
