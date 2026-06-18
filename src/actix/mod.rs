@@ -214,7 +214,10 @@ pub fn init(
         let auth = Auth::new_internal(Access::full("Service initialization"));
         let auth_keys =
             AuthKeys::try_create(&settings.service, dispatcher.toc(&auth, &pass).clone());
-        let upload_dir = dispatcher.toc(&auth, &pass).upload_dir().unwrap();
+        let upload_dir = dispatcher
+            .toc(&auth, &pass)
+            .upload_dir()
+            .map_err(|err| io::Error::other(format!("failed to resolve upload dir: {err}")))?;
         let dispatcher_data = web::Data::from(dispatcher);
         let actix_telemetry_collector = telemetry_collector
             .lock()
