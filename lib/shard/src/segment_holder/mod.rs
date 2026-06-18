@@ -236,7 +236,13 @@ impl SegmentHolder {
 
         self.add_existing(segment_id, segment);
 
-        Ok(removed.pop().unwrap())
+        let Some(removed_segment) = removed.pop() else {
+            return Err(OperationError::service_error(format!(
+                "cannot replace segment with ID {segment_id}, it does not exist",
+            )));
+        };
+
+        Ok(removed_segment)
     }
 
     pub fn get(&self, id: SegmentId) -> Option<&LockedSegment> {

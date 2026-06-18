@@ -6,7 +6,7 @@ use common::save_on_disk::SaveOnDisk;
 use common::storage_version::StorageVersion;
 use common::types::PointOffsetType;
 use parking_lot::{RwLockUpgradableReadGuard, RwLockWriteGuard};
-use segment::common::operation_error::OperationResult;
+use segment::common::operation_error::{OperationError, OperationResult};
 use segment::entry::ReadSegmentEntry as _;
 use segment::segment::SegmentVersion;
 use segment::types::SegmentConfig;
@@ -62,7 +62,11 @@ impl SegmentHolder {
         // Create proxy for all segments
         let mut new_proxies = Vec::with_capacity(segment_ids.len());
         for segment_id in segment_ids {
-            let segment = segments_lock.get(segment_id).unwrap();
+            let segment = segments_lock.get(segment_id).ok_or_else(|| {
+                OperationError::service_error(format!(
+                    "segment {segment_id} disappeared while preparing shard snapshot",
+                ))
+            })?;
             let proxy = ProxySegment::new(segment.clone());
 
             // Write segment is fresh, so it has no operations
@@ -78,7 +82,11 @@ impl SegmentHolder {
                 let segment_path = &segment.read().segment_path;
                 SegmentVersion::save(segment_path)?;
             }
-            LockedSegment::Proxy(_) => unreachable!(),
+            LockedSegment::Proxy(_) => {
+                return Err(OperationError::service_error(
+                    "temporary shard snapshot segment unexpectedly proxied",
+                ));
+            }
         }
 
         // Replace all segments with proxies
@@ -96,10 +104,12 @@ impl SegmentHolder {
 
             // We must keep existing segment IDs because ongoing optimizations might depend on the mapping being the same
             write_segments.replace(segment_id, proxy)?;
-            let locked_proxy_segment = write_segments
-                .get(segment_id)
-                .cloned()
-                .expect("failed to get segment from segment holder we just swapped in");
+            let locked_proxy_segment =
+                write_segments.get(segment_id).cloned().ok_or_else(|| {
+                    OperationError::service_error(format!(
+                        "segment {segment_id} missing after proxy replacement",
+                    ))
+                })?;
             proxies.push((segment_id, locked_proxy_segment));
         }
 
@@ -152,7 +162,11 @@ impl SegmentHolder {
         let mut write_segments = RwLockUpgradableReadGuard::upgrade(segments_lock);
 
         let wrapped_segment = proxy_segment.read().wrapped_segment.clone();
-        write_segments.replace(segment_id, wrapped_segment).unwrap();
+        if let Err(err) = write_segments.replace(segment_id, wrapped_segment) {
+            log::error!("Failed to replace proxy segment {segment_id} with wrapped segment: {err}");
+            let segments_lock = RwLockWriteGuard::downgrade_to_upgradable(write_segments);
+            return Err(segments_lock);
+        }
 
         drop(updates_guard); // Release updates lock as soon as possible
 

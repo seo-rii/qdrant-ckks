@@ -86,10 +86,16 @@ impl TelemetryReporter {
 
     pub async fn run(telemetry: Arc<Mutex<TelemetryCollector>>) {
         let reporter = Self::new(telemetry);
-        let client = Client::builder()
+        let client = match Client::builder()
             .user_agent(APP_USER_AGENT.as_str())
             .build()
-            .unwrap();
+        {
+            Ok(client) => client,
+            Err(err) => {
+                log::error!("Failed to build telemetry HTTP client: {err}");
+                return;
+            }
+        };
         loop {
             if let Err(err) = reporter.report(&client).await {
                 log::error!("Failed to report telemetry {err}")

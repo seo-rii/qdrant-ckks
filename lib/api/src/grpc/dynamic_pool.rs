@@ -147,23 +147,14 @@ impl<T: Clone> DynamicPool<T> {
             && self.items.len() > self.min_items
         {
             // We have too many items, and we have enough capacity to remove some of them
-            let item = self
-                .items
-                .remove(&min_usage_idx)
-                .expect("Item must exist, as we just found it");
+            let item = self.items.remove(&min_usage_idx)?;
             // Item enters a draining phase for a graceful shutdown
             self.draining.push(item.clone());
             return Some(CountedItem::new(min_usage_idx, item, self.init_at));
         }
 
-        Some(CountedItem::new(
-            min_usage_idx,
-            self.items
-                .get(&min_usage_idx)
-                .expect("Item must exist, as we just found it")
-                .clone(),
-            self.init_at,
-        ))
+        let item = self.items.get(&min_usage_idx)?.clone();
+        Some(CountedItem::new(min_usage_idx, item, self.init_at))
     }
 }
 

@@ -43,6 +43,10 @@ const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
 /// Try to recreate channel, if there were no successful requests within this time
 const CHANNEL_TTL: Duration = Duration::from_secs(5);
 
+fn nonzero_pool_size(pool_size: usize) -> NonZeroUsize {
+    NonZeroUsize::new(pool_size).unwrap_or(NonZeroUsize::MIN)
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum RequestError<E: std::error::Error> {
     #[error("Error in closure supplied to transport channel pool: {0}")]
@@ -107,7 +111,7 @@ impl Default for TransportChannelPool {
     fn default() -> Self {
         Self {
             uri_to_pool: tokio::sync::RwLock::new(HashMap::new()),
-            pool_size: NonZeroUsize::new(DEFAULT_POOL_SIZE).unwrap(),
+            pool_size: nonzero_pool_size(DEFAULT_POOL_SIZE),
             grpc_timeout: DEFAULT_GRPC_TIMEOUT,
             connection_timeout: DEFAULT_CONNECT_TIMEOUT,
             tls_config: None,
@@ -126,7 +130,7 @@ impl TransportChannelPool {
             uri_to_pool: Default::default(),
             grpc_timeout: p2p_grpc_timeout,
             connection_timeout,
-            pool_size: NonZeroUsize::new(pool_size).unwrap(),
+            pool_size: nonzero_pool_size(pool_size),
             tls_config,
         }
     }
