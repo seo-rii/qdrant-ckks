@@ -16,10 +16,13 @@ use collection::config::{
 use collection::operations::conversions::write_ordering_from_proto;
 use collection::operations::point_ops::*;
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
+#[cfg(test)]
+use collection::operations::types::CountRequestInternal;
 use collection::operations::types::{
-    CollectionError, CollectionResult, CollectionUpdateProvenance, CountRequestInternal,
-    UpdateResult, ckks_vector_sidecar_delete_target,
+    CollectionError, CollectionResult, CollectionUpdateProvenance, UpdateResult,
+    ckks_vector_sidecar_delete_target,
 };
+#[cfg(test)]
 use collection::operations::universal_query::formula::{ExpressionInternal, FormulaInternal};
 use collection::operations::vector_ops::*;
 use collection::operations::verification::*;
