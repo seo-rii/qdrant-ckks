@@ -382,6 +382,7 @@
 - runtime strict mode에서 private HNSW/result ORAM provider는 허용되고 server materials/backend, unsupported top-level/nested options, non-client-led search, loose fixed budget, unpinned RK id/epoch은 거부된다. unsupported option 값 자체는 validation error에 반사되지 않는다.
 - runtime과 signed manifest는 `oram.path_batch_size`가 Path ORAM leaf count를 넘거나 `fixed_budget.paths_per_round`와 다르면 duplicate-label-free `read_paths` budget을 만들 수 없으므로 fail closed 한다.
 - runtime은 현재 MVP의 bounded JSON Merkle metadata store가 감당할 수 있는 범위로 private HNSW/result ORAM `tree_height`를 20 이하로 제한해, 지원 불가능한 대형 tree가 manifest/session/restore 경계까지 내려가지 않게 한다.
+- runtime은 `path_batch_size * (tree_height + 1)`와 fixed bucket ciphertext size에서 계산한 단일 fixed ORAM read batch decoded ciphertext 총량도 제한해, 과도한 `read_paths`/`read_buckets` 응답을 만드는 private HNSW/result ORAM 정책을 거부한다.
 - runtime과 signed manifest는 `dim`, `hnsw.fixed_neighbor_slots`, `oram.block_size_bytes` 조합이 fixed-size f32 node block을 담을 수 없는 경우도 fail closed 한다.
 - manifest upload는 `hnsw`, `oram`, `fixed_budget` signed policy가 runtime instance policy와 다르면 fail closed 한다.
 - collection config와 runtime validation은 `private-hnsw-oram/v1` binding과 rule당 단일 vector name만 허용하고, 같은 vector name에 대한 다른 vector binding overlap, provider/binding mismatch, vector dim/distance와 runtime options mismatch를 거부한다.

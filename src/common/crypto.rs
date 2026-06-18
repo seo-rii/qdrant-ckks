@@ -268,6 +268,8 @@ const MAX_CLIENT_SIGNATURE_PUBLIC_KEYS: usize = 8;
 // The MVP collection stores persist Merkle nodes as bounded JSON metadata.
 // Keep runtime policy inside that storage envelope until compact Merkle storage lands.
 const PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX: u64 = 20;
+const PRIVATE_ORAM_BUCKET_CIPHERTEXT_OVERHEAD_BYTES: u64 = 4096;
+const PRIVATE_ORAM_MAX_READ_BATCH_CIPHERTEXT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES: usize = 16 * 1024;
 const MAX_OPENFHE_BRIDGE_PROGRAM_BYTES: u64 = 64 * 1024 * 1024;
 const METADATA_BLIND_INDEX_ALLOWED_OPTIONS: &[&str] = &[
@@ -4209,9 +4211,16 @@ fn validate_private_result_oram_options(
             reason: "must be less than or equal to the ORAM leaf count".to_string(),
         });
     }
+    validate_private_oram_read_batch_ciphertext_budget(
+        instance_name,
+        bucket_size,
+        block_size,
+        tree_height,
+        path_batch_size,
+    )?;
     block_size
         .checked_mul(bucket_size)
-        .and_then(|size| size.checked_add(4096))
+        .and_then(|size| size.checked_add(PRIVATE_ORAM_BUCKET_CIPHERTEXT_OVERHEAD_BYTES))
         .ok_or_else(|| CryptoSetupError::InvalidInstanceOption {
             instance: instance_name.to_string(),
             option: "oram.block_size_bytes".to_string(),
@@ -4369,10 +4378,59 @@ fn validate_private_hnsw_oram_options(
             reason: "must be less than or equal to the ORAM leaf count".to_string(),
         });
     }
+    validate_private_oram_read_batch_ciphertext_budget(
+        instance_name,
+        bucket_size,
+        block_size,
+        tree_height,
+        path_batch_size,
+    )?;
     Ok(PrivateHnswOramRuntimeShape {
         block_size_bytes: block_size,
         path_batch_size,
     })
+}
+
+fn validate_private_oram_read_batch_ciphertext_budget(
+    instance_name: &str,
+    bucket_size: u64,
+    block_size: u64,
+    tree_height: u64,
+    path_batch_size: u64,
+) -> Result<(), CryptoSetupError> {
+    let bucket_ciphertext_bytes = block_size
+        .checked_mul(bucket_size)
+        .and_then(|size| size.checked_add(PRIVATE_ORAM_BUCKET_CIPHERTEXT_OVERHEAD_BYTES))
+        .ok_or_else(|| CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.block_size_bytes".to_string(),
+            reason: "private ORAM ciphertext cap calculation overflowed".to_string(),
+        })?;
+    let path_len =
+        tree_height
+            .checked_add(1)
+            .ok_or_else(|| CryptoSetupError::InvalidInstanceOption {
+                instance: instance_name.to_string(),
+                option: "oram.tree_height".to_string(),
+                reason: "tree_height is too large".to_string(),
+            })?;
+    let read_batch_ciphertext_bytes = path_batch_size
+        .checked_mul(path_len)
+        .and_then(|bucket_count| bucket_count.checked_mul(bucket_ciphertext_bytes))
+        .ok_or_else(|| CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.path_batch_size".to_string(),
+            reason: "private ORAM read batch size calculation overflowed".to_string(),
+        })?;
+    if read_batch_ciphertext_bytes > PRIVATE_ORAM_MAX_READ_BATCH_CIPHERTEXT_BYTES {
+        return Err(CryptoSetupError::InvalidInstanceOption {
+            instance: instance_name.to_string(),
+            option: "oram.path_batch_size".to_string(),
+            reason: "private ORAM fixed read batch exceeds maximum decoded ciphertext bytes"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 fn validate_private_hnsw_fixed_budget_options(
@@ -9990,6 +10048,23 @@ mod tests {
                     && reason.contains("1..=20")),
             "unexpected error: {err:?}",
         );
+
+        let options = &mut settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options;
+        options["oram"]["tree_height"] = json!(PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX);
+        options["oram"]["path_batch_size"] = json!(1024);
+        options["fixed_budget"]["paths_per_round"] = json!(1024);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private HNSW ORAM read batch must fit the runtime response cap");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "oram.path_batch_size"
+                    && reason.contains("fixed read batch")),
+            "unexpected error: {err:?}",
+        );
     }
 
     #[test]
@@ -10706,6 +10781,22 @@ mod tests {
             .unwrap()
             .options;
         options["oram"]["tree_height"] = json!(PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX);
+        options["oram"]["path_batch_size"] = json!(1024);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM read batch must fit the runtime response cap");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "oram.path_batch_size"
+                    && reason.contains("fixed read batch")),
+            "unexpected error: {err:?}",
+        );
+
+        let options = &mut settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options;
+        options["oram"]["path_batch_size"] = json!(8);
         options["oram"]["block_size_bytes"] = json!(1234);
         let err = validate_crypto_settings(&settings)
             .expect_err("private result ORAM must use block size allowlist");

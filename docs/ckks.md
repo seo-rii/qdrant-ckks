@@ -781,6 +781,10 @@ Runtime validation currently caps private HNSW and private result ORAM
 `tree_height` at 20 because the MVP stores Merkle metadata as bounded JSON;
 larger trees require the future compact/proof-oriented Merkle store before they
 can be accepted safely.
+It also caps the decoded ciphertext bytes in one fixed ORAM read batch, computed
+from `path_batch_size * (tree_height + 1)` and the fixed bucket ciphertext size,
+so a runtime policy cannot create an oversized `read_paths` or `read_buckets`
+response.
 Initial bucket upload also rejects incomplete bucket sets, duplicated bucket
 ids, malformed bucket ciphertext, and ciphertext hash mismatches before
 encrypted bucket files are written. Bucket commitments must also match the
