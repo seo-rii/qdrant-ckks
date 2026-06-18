@@ -550,7 +550,9 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             }
 
             ConsensusOperations::RequestSnapshot | ConsensusOperations::ReportSnapshot { .. } => {
-                unreachable!()
+                Err(StorageError::service_error(
+                    "snapshot consensus operation cannot be applied as a normal Raft entry",
+                ))
             }
         };
 
@@ -1005,11 +1007,11 @@ impl<C: CollectionContainer> Storage for ConsensusManager<C> {
         log::debug!("Requesting entries from {low} to {high}");
 
         if high > self.last_index()? + 1 {
-            panic!(
+            return Err(raft_error_other(std::io::Error::other(format!(
                 "index out of bound (last: {}, high: {})",
                 self.last_index()? + 1,
                 high
-            );
+            ))));
         }
         self.wal.lock().entries(low, high, max_size)
     }
