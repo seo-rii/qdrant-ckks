@@ -1238,6 +1238,11 @@ upload-ready encrypted `PrivateHnswOramBucket` records plus a Merkle
 copies the encrypted build metadata into a signed manifest-ready
 `PrivateHnswOramManifest`, so clients can build, seal, manifest, sign, and
 upload without recomputing server-visible index metadata.
+New SDK code should derive `PrivateHnswClientKeys` from the signed HNSW
+manifest rather than the legacy domain-only helper; the manifest-bound
+derivation length-prefixes collection id, vector name, RK id, and RK epoch into
+the HKDF info context before deriving node, bucket, position-map, payload-token,
+and blind-result subkeys.
 `package_private_hnsw_oram_upload_bundle` wraps that manifest, its Ed25519
 signature, and the sealed buckets into a serde-compatible upload bundle for
 REST/gRPC SDK distribution. `validate_private_hnsw_oram_upload_bundle` and the
