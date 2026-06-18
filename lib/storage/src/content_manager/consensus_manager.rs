@@ -114,7 +114,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         storage_path: &Path,
         current_peer_metadata: PeerMetadata,
     ) -> Result<Self, StorageError> {
-        let mut wal = ConsensusOpWal::new(storage_path);
+        let mut wal = ConsensusOpWal::new(storage_path)?;
 
         // When our Raft index and last snapshot index match, the last thing we did is apply a Raft
         // snapshot. It is possible that we crashed before clearing the WAL, so we still do it now.
@@ -1237,7 +1237,7 @@ mod tests {
     #[test]
     fn correct_entry_with_offset() {
         let dir = Builder::new().prefix("raft_state_test").tempdir().unwrap();
-        let mut wal = ConsensusOpWal::new(dir.path());
+        let mut wal = ConsensusOpWal::new(dir.path()).unwrap();
         wal.append_entries(vec![Entry {
             index: 4,
             ..Default::default()
@@ -1259,7 +1259,7 @@ mod tests {
     #[test]
     fn at_least_1_entry() {
         let dir = Builder::new().prefix("raft_state_test").tempdir().unwrap();
-        let mut wal = ConsensusOpWal::new(dir.path());
+        let mut wal = ConsensusOpWal::new(dir.path()).unwrap();
         wal.append_entries(vec![
             Entry {
                 index: 4,
@@ -1425,7 +1425,7 @@ mod tests {
 
     fn empty_wal() -> (tempfile::TempDir, ConsensusOpWal) {
         let dir = Builder::new().prefix("raft_state_test").tempdir().unwrap();
-        let wal = ConsensusOpWal::new(dir.path());
+        let wal = ConsensusOpWal::new(dir.path()).unwrap();
         (dir, wal)
     }
 

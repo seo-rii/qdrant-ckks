@@ -28,22 +28,21 @@ pub struct ConsensusOpWal {
 }
 
 impl ConsensusOpWal {
-    pub fn new(storage_path: &Path) -> Self {
+    pub fn new(storage_path: &Path) -> Result<Self, StorageError> {
         let collections_meta_wal_path = storage_path.join(COLLECTIONS_META_WAL_DIR);
 
-        fs::create_dir_all(&collections_meta_wal_path)
-            .expect("Can't create consensus WAL directory");
+        fs::create_dir_all(&collections_meta_wal_path)?;
 
-        let wal = Wal::open(collections_meta_wal_path).expect("Can't open consensus WAL");
+        let wal = Wal::open(collections_meta_wal_path)?;
 
-        Self {
+        Ok(Self {
             wal,
             // If we load WAL, we don't know if it was compacted or not.
             // We can run `compact` to set this value correctly.
             // But even if we don't, the worst thing that can happen is that we will read some
             // entries that are already compacted.
             compacted_until_raft_index: 0,
-        }
+        })
     }
 
     pub fn clear(&mut self) -> Result<(), StorageError> {
@@ -504,7 +503,7 @@ mod tests {
 
         let temp_dir = tempfile::tempdir().unwrap();
 
-        let mut wal = ConsensusOpWal::new(temp_dir.path());
+        let mut wal = ConsensusOpWal::new(temp_dir.path()).unwrap();
         wal.append_entries(entries_orig).unwrap();
         wal.append_entries(entries_new.clone()).unwrap();
 
@@ -593,7 +592,7 @@ mod tests {
         ];
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let mut wal = ConsensusOpWal::new(temp_dir.path());
+        let mut wal = ConsensusOpWal::new(temp_dir.path()).unwrap();
 
         // append original entries
         wal.append_entries(entries_orig).unwrap();
@@ -611,7 +610,7 @@ mod tests {
 
         // drop wal to check persistence
         drop(wal);
-        let mut wal = ConsensusOpWal::new(temp_dir.path());
+        let mut wal = ConsensusOpWal::new(temp_dir.path()).unwrap();
 
         // append overlapping entries
         wal.append_entries(entries_new).unwrap();
@@ -630,7 +629,7 @@ mod tests {
 
         // drop wal to check persistence
         drop(wal);
-        let wal = ConsensusOpWal::new(temp_dir.path());
+        let wal = ConsensusOpWal::new(temp_dir.path()).unwrap();
         assert_eq!(wal.wal.num_segments(), 1);
         assert_eq!(wal.wal.num_entries(), 4);
         assert_eq!(wal.index_offset().unwrap().wal_to_raft_offset, 1);
@@ -678,7 +677,7 @@ mod tests {
         }];
 
         let temp_dir = tempfile::tempdir().unwrap();
-        let mut wal = ConsensusOpWal::new(temp_dir.path());
+        let mut wal = ConsensusOpWal::new(temp_dir.path()).unwrap();
 
         // append original entries
         wal.append_entries(entries_orig).unwrap();
@@ -696,7 +695,7 @@ mod tests {
 
         // drop wal to check persistence
         drop(wal);
-        let mut wal = ConsensusOpWal::new(temp_dir.path());
+        let mut wal = ConsensusOpWal::new(temp_dir.path()).unwrap();
 
         // append overlapping entries
         wal.append_entries(entries_new).unwrap();
@@ -714,7 +713,7 @@ mod tests {
 
         // drop wal to check persistence
         drop(wal);
-        let wal = ConsensusOpWal::new(temp_dir.path());
+        let wal = ConsensusOpWal::new(temp_dir.path()).unwrap();
         assert_eq!(wal.wal.num_segments(), 1);
         assert_eq!(wal.wal.num_entries(), 3);
         assert_eq!(wal.index_offset().unwrap().wal_to_raft_offset, 1);
