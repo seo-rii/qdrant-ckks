@@ -700,11 +700,19 @@ pub async fn update_batch(
         total_inference_usage.merge_opt(result.get_mut().inference_usage.take());
         results.push(result);
     }
+    let results = results
+        .into_iter()
+        .map(|response| {
+            response
+                .into_inner()
+                .result
+                .map(grpc::UpdateResult::from)
+                .ok_or_else(|| Status::internal("update operation response is missing result"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
     Ok(Response::new(UpdateBatchResponse {
-        result: results
-            .into_iter()
-            .map(|response| grpc::UpdateResult::from(response.into_inner().result.unwrap()))
-            .collect(),
+        result: results,
         time: timing.elapsed().as_secs_f64(),
         usage: Usage::new(
             request_hw_counter.to_grpc_api(),
