@@ -36,7 +36,9 @@ impl ShardReplicaSet {
             .execute_cluster_read_operation(read_operation, 1, None)
             .await?;
 
-        Ok(responses.pop().unwrap())
+        responses.pop().ok_or_else(|| {
+            CollectionError::service_error("read operation returned no successful responses")
+        })
     }
 
     pub async fn execute_and_resolve_read_operation<Res, F>(
@@ -119,7 +121,9 @@ impl ShardReplicaSet {
         if responses.is_empty() {
             Ok(Res::default())
         } else if responses.len() == 1 {
-            Ok(responses.pop().unwrap())
+            responses.pop().ok_or_else(|| {
+                CollectionError::service_error("read operation returned no successful responses")
+            })
         } else {
             Ok(Res::resolve(responses, condition))
         }
