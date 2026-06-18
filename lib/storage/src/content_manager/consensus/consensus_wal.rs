@@ -242,16 +242,21 @@ impl ConsensusOpWal {
                 // Assert that we calculated indices (and truncated WAL) correctly, and new entry
                 // was inserted at expected WAL index
 
-                let expected_new_entry_wal_index = current_index_offset
+                if let Some(expected_new_entry_wal_index) = current_index_offset
                     .map_or(Some(0), |offset| offset.try_raft_to_wal(new_entry.index))
-                    .expect("new entry can't overwrite already compacted WAL entries");
-
-                debug_assert_eq!(
-                    new_entry_wal_index, expected_new_entry_wal_index,
-                    "WAL index of inserted entry does not match its expected WAL index, \
-                     Raft index: {}, inserted at WAL index: {}, expected WAL index: {}",
-                    new_entry.index, new_entry_wal_index, expected_new_entry_wal_index,
-                );
+                {
+                    debug_assert_eq!(
+                        new_entry_wal_index, expected_new_entry_wal_index,
+                        "WAL index of inserted entry does not match its expected WAL index, \
+                         Raft index: {}, inserted at WAL index: {}, expected WAL index: {}",
+                        new_entry.index, new_entry_wal_index, expected_new_entry_wal_index,
+                    );
+                } else {
+                    log::error!(
+                        "New Raft entry {} would overwrite already compacted consensus WAL entries",
+                        new_entry.index,
+                    );
+                }
             }
 
             // Calculate WAL to Raft index offset, if we inserted first entry into empty WAL
