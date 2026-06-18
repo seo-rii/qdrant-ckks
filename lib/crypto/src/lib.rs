@@ -110,15 +110,18 @@ pub use private_hnsw_oram::{
     PrivateHnswOramCommitSignatureInput, PrivateHnswOramError, PrivateHnswOramManifest,
     PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswParams,
     PrivateHnswSignatureVerification, ResultPrivacyMode, private_hnsw_min_f32_node_block_bytes,
-    private_hnsw_oram_bucket_ciphertext_bytes, private_hnsw_oram_commit_signature_message,
-    private_hnsw_oram_manifest_signature_message, private_hnsw_oram_read_paths_signature_message,
-    try_private_hnsw_oram_commit_signature_message,
+    private_hnsw_oram_bucket_ciphertext_bytes, try_private_hnsw_oram_commit_signature_message,
     try_private_hnsw_oram_manifest_signature_message,
     try_private_hnsw_oram_read_paths_signature_message,
     validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_manifest,
     validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature,
     validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_hnsw_oram_read_paths_signature,
+};
+#[allow(deprecated)]
+pub use private_hnsw_oram::{
+    private_hnsw_oram_commit_signature_message, private_hnsw_oram_manifest_signature_message,
+    private_hnsw_oram_read_paths_signature_message,
 };
 pub use private_result_oram::{
     PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN, PRIVATE_RESULT_ORAM_BUCKET_COMMITMENT_DOMAIN,
@@ -154,11 +157,9 @@ pub use private_result_oram::{
     plan_private_result_oram_read_bucket_batches_for_fetch_tokens,
     private_result_oram_bucket_ciphertext_bytes, private_result_oram_bucket_commitment,
     private_result_oram_bucket_count, private_result_oram_bucket_ids_for_leaf,
-    private_result_oram_client_config_from_manifest, private_result_oram_commit_signature_message,
+    private_result_oram_client_config_from_manifest,
     private_result_oram_fixed_writeback_bucket_budget, private_result_oram_leaf_count,
-    private_result_oram_manifest_signature_message,
     private_result_oram_merkle_root_for_commitments,
-    private_result_oram_read_buckets_signature_message,
     refresh_private_result_oram_manifest_for_commit, seal_private_result_oram_bucket,
     seal_private_result_oram_client_state_snapshot, seal_private_result_oram_plaintext_bucket,
     sign_private_result_oram_commit, sign_private_result_oram_manifest,
@@ -175,6 +176,11 @@ pub use private_result_oram::{
     validate_private_result_oram_upload_bundle,
     validate_private_result_oram_upload_bundle_with_signature,
     verify_private_result_oram_merkle_proof, verify_private_result_oram_merkle_proof_json,
+};
+#[allow(deprecated)]
+pub use private_result_oram::{
+    private_result_oram_commit_signature_message, private_result_oram_manifest_signature_message,
+    private_result_oram_read_buckets_signature_message,
 };
 pub use vector::{
     CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50, CKKS_PUBLIC_MATERIAL_MAX_CRYPTO_CONTEXT_BYTES,

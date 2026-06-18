@@ -510,6 +510,9 @@ pub fn private_hnsw_min_f32_node_block_bytes(dim: u32, fixed_neighbor_slots: u32
         .checked_add(neighbor_bytes)
 }
 
+#[deprecated(
+    note = "use try_private_hnsw_oram_manifest_signature_message to handle canonical length errors"
+)]
 pub fn private_hnsw_oram_manifest_signature_message(manifest: &PrivateHnswOramManifest) -> Vec<u8> {
     try_private_hnsw_oram_manifest_signature_message(manifest)
         .expect("private HNSW manifest signature fields must fit canonical length prefixes")
@@ -577,6 +580,9 @@ pub fn try_private_hnsw_oram_manifest_signature_message(
     Ok(message)
 }
 
+#[deprecated(
+    note = "use try_private_hnsw_oram_read_paths_signature_message to handle canonical length errors"
+)]
 pub fn private_hnsw_oram_read_paths_signature_message(
     input: PrivateHnswOramReadPathsSignatureInput<'_>,
 ) -> Vec<u8> {
@@ -629,6 +635,9 @@ pub fn try_private_hnsw_oram_read_paths_signature_message(
     Ok(message)
 }
 
+#[deprecated(
+    note = "use try_private_hnsw_oram_commit_signature_message to handle canonical length errors"
+)]
 pub fn private_hnsw_oram_commit_signature_message(
     input: PrivateHnswOramCommitSignatureInput<'_>,
 ) -> Vec<u8> {

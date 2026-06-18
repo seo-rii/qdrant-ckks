@@ -2608,6 +2608,9 @@ pub fn sign_private_result_oram_manifest_refresh(
     Ok((refreshed, signature))
 }
 
+#[deprecated(
+    note = "use try_private_result_oram_manifest_signature_message to handle canonical length errors"
+)]
 pub fn private_result_oram_manifest_signature_message(
     manifest: &PrivateResultOramManifest,
 ) -> Vec<u8> {
@@ -2661,6 +2664,9 @@ pub fn try_private_result_oram_manifest_signature_message(
     Ok(message)
 }
 
+#[deprecated(
+    note = "use try_private_result_oram_commit_signature_message to handle canonical length errors"
+)]
 pub fn private_result_oram_commit_signature_message(
     input: PrivateResultOramCommitSignatureInput<'_>,
 ) -> Vec<u8> {
@@ -2713,6 +2719,9 @@ pub fn try_private_result_oram_commit_signature_message(
     Ok(message)
 }
 
+#[deprecated(
+    note = "use try_private_result_oram_read_buckets_signature_message to handle canonical length errors"
+)]
 pub fn private_result_oram_read_buckets_signature_message(
     input: PrivateResultOramReadBucketsSignatureInput<'_>,
 ) -> Vec<u8> {
