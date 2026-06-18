@@ -440,7 +440,12 @@ impl LocalShard {
         // be O(limit).
         while random_points.len() < limit {
             let segment_offset = rng.sample(&distribution);
-            let points = segments_reads.get_mut(segment_offset).unwrap();
+            let Some(points) = segments_reads.get_mut(segment_offset) else {
+                return Err(CollectionError::service_error(format!(
+                    "Random scroll selected segment offset {segment_offset}, but only {} segment reads are available",
+                    segments_reads.len(),
+                )));
+            };
             if let Some(point) = points.pop() {
                 random_points.insert(point);
             } else {
