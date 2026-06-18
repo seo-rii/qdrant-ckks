@@ -389,10 +389,10 @@ mod private_result_oram_rest_tests {
         PrivateResultOramCommitPlan, PrivateResultOramCommitSignatureContext,
         PrivateResultOramCommitSignatureInput, PrivateResultOramManifest,
         PrivateResultOramReadBucketsSignatureContext, private_result_oram_bucket_ciphertext_bytes,
-        private_result_oram_bucket_commitment, private_result_oram_commit_signature_message,
-        private_result_oram_merkle_root_for_commitments, sign_private_result_oram_commit,
-        sign_private_result_oram_manifest, sign_private_result_oram_read_buckets,
-        sign_private_result_oram_read_buckets_for_manifest,
+        private_result_oram_bucket_commitment, private_result_oram_merkle_root_for_commitments,
+        sign_private_result_oram_commit, sign_private_result_oram_manifest,
+        sign_private_result_oram_read_buckets, sign_private_result_oram_read_buckets_for_manifest,
+        try_private_result_oram_commit_signature_message,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use serde::de::DeserializeOwned;
@@ -604,7 +604,7 @@ mod private_result_oram_rest_tests {
             plan: &PrivateResultOramCommitPlan,
         ) -> qdrant_sec::PrivateResultOramSignature {
             let bucket_refs = plan.signature_bucket_refs();
-            let message = private_result_oram_commit_signature_message(
+            let message = try_private_result_oram_commit_signature_message(
                 PrivateResultOramCommitSignatureInput {
                     collection_id: &self.manifest.collection_id,
                     key_id: &self.manifest.key_id,
@@ -618,7 +618,8 @@ mod private_result_oram_rest_tests {
                     signature_alg: "ed25519",
                     signature_key_id: SIGNING_KEY_ID,
                 },
-            );
+            )
+            .unwrap();
             let signature = self.signing_key.sign(&message);
             qdrant_sec::PrivateResultOramSignature {
                 alg: "ed25519".to_string(),

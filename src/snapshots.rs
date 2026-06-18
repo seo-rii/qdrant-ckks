@@ -283,8 +283,9 @@ mod tests {
         PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_HNSW_ORAM_BINDING,
         PRIVATE_RESULT_ORAM_BINDING, PrivateResultOramBucket,
         PrivateResultOramBucketCommitmentContext, PrivateResultOramManifest,
-        RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, private_result_oram_bucket_commitment,
-        private_result_oram_merkle_root_for_commitments, sign_private_result_oram_manifest,
+        RESOURCE_KEY_WRAP_ALGORITHM, SecretKey, private_result_oram_bucket_ciphertext_bytes,
+        private_result_oram_bucket_commitment, private_result_oram_merkle_root_for_commitments,
+        sign_private_result_oram_manifest,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use segment::types::{Distance, HnswConfig};
@@ -491,7 +492,8 @@ mod tests {
         bucket_id: u64,
         manifest: &PrivateResultOramManifest,
     ) -> PrivateResultOramBucket {
-        let ciphertext_bytes = [bucket_id as u8; 16];
+        let ciphertext_len = private_result_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap();
+        let ciphertext_bytes = vec![bucket_id as u8; ciphertext_len];
         let ciphertext = BASE64URL_NOPAD.encode(&ciphertext_bytes);
         let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(ciphertext_bytes));
         let bucket_commitment = private_result_oram_bucket_commitment(

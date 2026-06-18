@@ -21,11 +21,11 @@ use qdrant_sec::{
     ResultPrivacyMode, SecretKey, build_private_hnsw_oram_manifest_from_encrypted_index,
     build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points,
     encode_private_hnsw_oram_leaf_label, plan_private_hnsw_oram_commit_for_manifest,
-    private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_commit_signature_message,
-    seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted_verified,
-    sign_private_hnsw_oram_commit, sign_private_hnsw_oram_manifest,
-    sign_private_hnsw_oram_manifest_refresh, sign_private_hnsw_oram_read_paths,
-    sign_private_hnsw_oram_read_paths_for_manifest,
+    private_hnsw_oram_bucket_ids_for_leaf, seal_private_hnsw_oram_plaintext_index,
+    search_private_hnsw_oram_encrypted_verified, sign_private_hnsw_oram_commit,
+    sign_private_hnsw_oram_manifest, sign_private_hnsw_oram_manifest_refresh,
+    sign_private_hnsw_oram_read_paths, sign_private_hnsw_oram_read_paths_for_manifest,
+    try_private_hnsw_oram_commit_signature_message,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::json;
@@ -425,7 +425,7 @@ impl PrivateHnswRouteWireFixture {
     ) -> PrivateHnswOramSignature {
         let bucket_refs = plan.signature_bucket_refs();
         let message =
-            private_hnsw_oram_commit_signature_message(PrivateHnswOramCommitSignatureInput {
+            try_private_hnsw_oram_commit_signature_message(PrivateHnswOramCommitSignatureInput {
                 collection_id: COLLECTION_ID,
                 vector_name: VECTOR_NAME,
                 key_id: KEY_ID,
@@ -438,7 +438,8 @@ impl PrivateHnswRouteWireFixture {
                 updated_buckets: &bucket_refs,
                 signature_alg: "ed25519",
                 signature_key_id: SIGNING_KEY_ID,
-            });
+            })
+            .unwrap();
         let signature = self.signing_key.sign(&message);
         PrivateHnswOramSignature {
             alg: "ed25519".to_string(),
