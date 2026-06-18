@@ -2456,7 +2456,11 @@ fn encrypt_vectors_for_point(
                     DEFAULT_VECTOR_NAME,
                     values,
                 )?
-                .expect("default vector was selected");
+                .ok_or_else(|| {
+                    StorageError::service_error(format!(
+                        "encrypted vector '{DEFAULT_VECTOR_NAME}' was selected but no sidecar was produced",
+                    ))
+                })?;
             let mut staged_payload = payload.clone();
             insert_encrypted_vector_sidecar(&mut staged_payload, DEFAULT_VECTOR_NAME, envelope)?;
             *payload = staged_payload;
@@ -2479,7 +2483,11 @@ fn encrypt_vectors_for_point(
                 .collect();
             let mut staged_sidecars = Vec::new();
             for vector_name in &encrypted_names {
-                let vector = vectors.get(vector_name).expect("key came from map");
+                let vector = vectors.get(vector_name).ok_or_else(|| {
+                    StorageError::service_error(format!(
+                        "encrypted vector '{vector_name}' disappeared while staging point update",
+                    ))
+                })?;
                 let VectorPersisted::Dense(values) = vector else {
                     return Err(StorageError::bad_input(format!(
                         "encrypted vector '{vector_name}' only supports dense vectors; sparse and multi-dense vector encryption is not implemented",
@@ -2492,7 +2500,11 @@ fn encrypt_vectors_for_point(
                         &vector_name,
                         &values,
                     )?
-                    .expect("vector was selected");
+                    .ok_or_else(|| {
+                        StorageError::service_error(format!(
+                            "encrypted vector '{vector_name}' was selected but no sidecar was produced",
+                        ))
+                    })?;
                 staged_sidecars.push((vector_name.clone(), envelope, verified_sidecar_key));
             }
             let mut staged_payload = payload.clone();
@@ -2529,9 +2541,11 @@ fn encrypt_vectors_for_batch(
             }
             let mut staged_payloads = payloads.clone();
             ensure_batch_payloads(&mut staged_payloads, ids.len())?;
-            let staged_payloads_ref = staged_payloads
-                .as_mut()
-                .expect("payloads were created for staged batch");
+            let staged_payloads_ref = staged_payloads.as_mut().ok_or_else(|| {
+                StorageError::service_error(
+                    "batch payload staging did not create payload slots for encrypted vectors",
+                )
+            })?;
             let mut staged_sidecars = Vec::with_capacity(ids.len());
             for (payload_index, (point_id, values)) in
                 ids.iter().zip(batch_values.iter()).enumerate()
@@ -2543,7 +2557,11 @@ fn encrypt_vectors_for_batch(
                         DEFAULT_VECTOR_NAME,
                         values,
                     )?
-                    .expect("default vector was selected");
+                    .ok_or_else(|| {
+                        StorageError::service_error(format!(
+                            "encrypted vector '{DEFAULT_VECTOR_NAME}' was selected but no sidecar was produced",
+                        ))
+                    })?;
                 staged_sidecars.push((payload_index, envelope, verified_sidecar_key));
             }
             let mut verified_sidecar_keys = Vec::with_capacity(staged_sidecars.len());
@@ -2578,7 +2596,11 @@ fn encrypt_vectors_for_batch(
             }
             let mut staged_sidecars = Vec::new();
             for vector_name in &encrypted_names {
-                let values = named.get(vector_name).expect("key came from map");
+                let values = named.get(vector_name).ok_or_else(|| {
+                    StorageError::service_error(format!(
+                        "encrypted vector '{vector_name}' disappeared while staging batch update",
+                    ))
+                })?;
                 if values.len() != ids.len() {
                     return Err(StorageError::bad_input(format!(
                         "batch vector count for '{vector_name}' must match point id count",
@@ -2597,7 +2619,11 @@ fn encrypt_vectors_for_batch(
                             &vector_name,
                             &values,
                         )?
-                        .expect("vector was selected");
+                        .ok_or_else(|| {
+                            StorageError::service_error(format!(
+                                "encrypted vector '{vector_name}' was selected but no sidecar was produced",
+                            ))
+                        })?;
                     staged_sidecars.push((
                         payload_index,
                         vector_name.clone(),
@@ -2608,9 +2634,11 @@ fn encrypt_vectors_for_batch(
             }
             let mut staged_payloads = payloads.clone();
             ensure_batch_payloads(&mut staged_payloads, ids.len())?;
-            let staged_payloads_ref = staged_payloads
-                .as_mut()
-                .expect("payloads were created for staged batch");
+            let staged_payloads_ref = staged_payloads.as_mut().ok_or_else(|| {
+                StorageError::service_error(
+                    "batch payload staging did not create payload slots for encrypted vectors",
+                )
+            })?;
             let mut verified_sidecar_keys = Vec::with_capacity(staged_sidecars.len());
             for (payload_index, vector_name, envelope, verified_sidecar_key) in staged_sidecars {
                 insert_encrypted_vector_sidecar(
@@ -2761,7 +2789,11 @@ async fn split_encrypted_vector_delete_names(
             &collection_crypto_id,
             encrypted_sidecar_vector_names.clone(),
             delete_target
-                .expect("encrypted sidecar vector names require delete target")
+                .ok_or_else(|| {
+                    StorageError::service_error(
+                        "encrypted sidecar vector delete provenance requires a delete target",
+                    )
+                })?
                 .clone(),
         )
         .map_err(|err| {
