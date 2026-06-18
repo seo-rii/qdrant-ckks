@@ -6,7 +6,7 @@ use super::Collection;
 use crate::config::ShardingMethod;
 use crate::hash_ring::HashRingRouter;
 use crate::operations::cluster_ops::ReshardingDirection;
-use crate::operations::types::CollectionResult;
+use crate::operations::types::{CollectionError, CollectionResult};
 use crate::shards::replica_set::replica_set_state::ReplicaState;
 use crate::shards::resharding::{ReshardKey, ReshardState};
 use crate::shards::transfer::ShardTransferConsensus;
@@ -69,11 +69,12 @@ impl Collection {
                     ShardingMethod::Auto => {
                         debug_assert_eq!(config.params.shard_number.get(), resharding_key.shard_id);
 
-                        config.params.shard_number = config
-                            .params
-                            .shard_number
-                            .checked_add(1)
-                            .expect("cannot have more than u32::MAX shards after resharding");
+                        config.params.shard_number =
+                            config.params.shard_number.checked_add(1).ok_or_else(|| {
+                                CollectionError::service_error(
+                                    "cannot have more than u32::MAX shards after resharding",
+                                )
+                            })?;
                         if let Err(err) = config.save(&self.path) {
                             log::error!(
                                 "Failed to update and save collection config during resharding: {err}",
@@ -159,9 +160,17 @@ impl Collection {
                             resharding_key.shard_id,
                         );
 
-                        config.params.shard_number =
-                            NonZeroU32::new(config.params.shard_number.get() - 1)
-                                .expect("cannot have zero shards after finishing resharding");
+                        config.params.shard_number = config
+                            .params
+                            .shard_number
+                            .get()
+                            .checked_sub(1)
+                            .and_then(NonZeroU32::new)
+                            .ok_or_else(|| {
+                                CollectionError::service_error(
+                                    "cannot have zero shards after finishing resharding",
+                                )
+                            })?;
 
                         if let Err(err) = config.save(&self.path) {
                             log::error!(
@@ -245,9 +254,17 @@ impl Collection {
                         resharding_key.shard_id,
                     );
 
-                    config.params.shard_number =
-                        NonZeroU32::new(config.params.shard_number.get() - 1)
-                            .expect("cannot have zero shards after aborting resharding");
+                    config.params.shard_number = config
+                        .params
+                        .shard_number
+                        .get()
+                        .checked_sub(1)
+                        .and_then(NonZeroU32::new)
+                        .ok_or_else(|| {
+                            CollectionError::service_error(
+                                "cannot have zero shards after aborting resharding",
+                            )
+                        })?;
 
                     if let Err(err) = config.save(&self.path) {
                         log::error!(

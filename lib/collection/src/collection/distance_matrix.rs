@@ -241,12 +241,17 @@ impl Collection {
         let mut queries = Vec::with_capacity(sampled_points.len());
 
         for point in sampled_points {
-            let vector = point
+            let Some(vector) = point
                 .vector
                 .as_ref()
                 .and_then(|v| v.get(&using))
                 .map(|v| v.to_owned())
-                .expect("Vector not found in the point");
+            else {
+                return Err(CollectionError::service_error(format!(
+                    "sampled point {} does not contain vector {using}",
+                    point.id,
+                )));
+            };
 
             // nearest query on the sample vector
             let query = Query::Vector(VectorQuery::Nearest(VectorInputInternal::Vector(vector)));

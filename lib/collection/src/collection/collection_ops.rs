@@ -93,9 +93,11 @@ impl Collection {
                 else {
                     continue;
                 };
-                let checkpoint = checkpoint_by_shard
-                    .get(&shard_id)
-                    .expect("checkpoint shard set was validated above");
+                let checkpoint = checkpoint_by_shard.get(&shard_id).ok_or_else(|| {
+                    CollectionError::bad_input(format!(
+                        "crypto migration completion checkpoint is missing shard {shard_id}",
+                    ))
+                })?;
                 let local_total_points = u64::try_from(local_count.count).unwrap_or(u64::MAX);
                 if checkpoint.total_points != local_total_points {
                     return Err(CollectionError::bad_input(format!(

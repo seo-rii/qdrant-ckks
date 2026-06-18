@@ -493,7 +493,10 @@ impl Collection {
                 // We can guarantee that replica_set is not None, cause we checked it before
                 // and `shards_holder` is holding the lock.
                 // This is a workaround for lifetime checker.
-                let replica_set = shards_holder_guard.get_shard(shard_id).unwrap();
+                let Some(replica_set) = shards_holder_guard.get_shard(shard_id) else {
+                    log::error!("Shard {shard_id} disappeared while waiting for shard transfer");
+                    return false;
+                };
                 let shard_transfer_registered = shards_holder_guard.shard_transfers.wait_for(
                     |shard_transfers| {
                         shard_transfers
