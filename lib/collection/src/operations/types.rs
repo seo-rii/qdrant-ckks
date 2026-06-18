@@ -1774,7 +1774,7 @@ impl From<RequestError<tonic::Status>> for CollectionError {
             RequestError::Tonic(err) => {
                 let mut msg = err.to_string();
                 for src in iter::successors(err.source(), |&src| src.source()) {
-                    write!(&mut msg, ": {src}").unwrap();
+                    let _ = write!(&mut msg, ": {src}");
                 }
                 CollectionError::service_error(msg)
             }

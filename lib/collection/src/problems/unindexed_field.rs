@@ -132,17 +132,19 @@ impl Issue for UnindexedField {
                 "field_schema": field_schema,
             })
             .as_object()
-            .unwrap()
-            .clone();
+            .cloned()
+            .unwrap_or_default();
 
             let headers = HeaderMap::from_iter([
                 (CONTENT_TYPE, HeaderValue::from_static("application/json")),
             ]);
+            let field_schema = serde_json::to_string(&field_schema)
+                .unwrap_or_else(|_| "<unserializable schema>".to_string());
 
             ImmediateSolution {
                 message: format!(
                     "Create an index on field '{}' of schema {} in collection '{}'. Check the documentation for more details: https://qdrant.tech/documentation/concepts/indexing/#payload-index",
-                    self.field_name, serde_json::to_string(&field_schema).unwrap(), self.collection_name
+                    self.field_name, field_schema, self.collection_name
                 ),
                 action: Action {
                     method: Method::PUT,
@@ -154,10 +156,13 @@ impl Issue for UnindexedField {
         }).collect_vec();
 
         match solutions.len() {
-            0 => unreachable!(
-                "Cannot create a solution without a field schema, protected by try_new()"
-            ),
-            1 => Solution::Immediate(Box::new(solutions.pop().unwrap())),
+            0 => Solution::ImmediateChoice(solutions),
+            1 => {
+                let Some(solution) = solutions.pop() else {
+                    return Solution::ImmediateChoice(Vec::new());
+                };
+                Solution::Immediate(Box::new(solution))
+            }
             _ => Solution::ImmediateChoice(solutions),
         }
     }

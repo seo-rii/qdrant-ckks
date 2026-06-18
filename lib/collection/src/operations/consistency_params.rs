@@ -99,7 +99,7 @@ impl From<ReadConsistency> for ReadConsistencyGrpc {
     fn from(consistency: ReadConsistency) -> Self {
         let value = match consistency {
             ReadConsistency::Factor(factor) => {
-                read_consistency::Value::Factor(factor.try_into().unwrap())
+                read_consistency::Value::Factor(factor.try_into().unwrap_or(u64::MAX))
             }
             ReadConsistency::Type(consistency) => read_consistency::Value::Type(consistency.into()),
         };
