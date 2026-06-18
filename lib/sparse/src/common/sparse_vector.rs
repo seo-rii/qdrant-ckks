@@ -259,12 +259,20 @@ impl TryFrom<Vec<(u32, f32)>> for SparseVector {
 }
 
 impl Blob for SparseVector {
-    fn to_bytes(&self) -> Vec<u8> {
-        bincode::serialize(&self).expect("Sparse vector serialization should not fail")
+    fn try_to_bytes(&self) -> std::result::Result<Vec<u8>, gridstore::error::GridstoreError> {
+        bincode::serialize(&self).map_err(|err| {
+            gridstore::error::GridstoreError::service_error(format!(
+                "Failed to serialize sparse vector: {err}"
+            ))
+        })
     }
 
-    fn from_bytes(data: &[u8]) -> Self {
-        bincode::deserialize(data).expect("Sparse vector deserialization should not fail")
+    fn try_from_bytes(data: &[u8]) -> std::result::Result<Self, gridstore::error::GridstoreError> {
+        bincode::deserialize(data).map_err(|err| {
+            gridstore::error::GridstoreError::validation_error(format!(
+                "Failed to deserialize sparse vector: {err}"
+            ))
+        })
     }
 }
 

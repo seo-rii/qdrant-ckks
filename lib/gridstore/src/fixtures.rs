@@ -17,12 +17,20 @@ impl Default for Payload {
 }
 
 impl Blob for Payload {
-    fn to_bytes(&self) -> Vec<u8> {
-        serde_json::to_vec(self).unwrap()
+    fn try_to_bytes(&self) -> std::result::Result<Vec<u8>, crate::error::GridstoreError> {
+        serde_json::to_vec(self).map_err(|err| {
+            crate::error::GridstoreError::service_error(format!(
+                "Failed to serialize fixture payload: {err}"
+            ))
+        })
     }
 
-    fn from_bytes(data: &[u8]) -> Self {
-        serde_json::from_slice(data).unwrap()
+    fn try_from_bytes(data: &[u8]) -> std::result::Result<Self, crate::error::GridstoreError> {
+        serde_json::from_slice(data).map_err(|err| {
+            crate::error::GridstoreError::validation_error(format!(
+                "Failed to deserialize fixture payload: {err}"
+            ))
+        })
     }
 }
 

@@ -284,7 +284,7 @@ impl<V: Blob> Gridstore<V> {
         // that should happen is that we mark more cells as used than they actually are,
         // so will never reuse such space, but data will not be corrupted.
 
-        let value_bytes = value.to_bytes();
+        let value_bytes = value.try_to_bytes()?;
         let comp_value = self.with_view(|view| view.compress(value_bytes));
         let value_size = comp_value.len();
         let value_size_u32 = u32::try_from(value_size).map_err(|err| {
@@ -326,7 +326,7 @@ impl<V: Blob> Gridstore<V> {
 
         let raw = self.with_view(|view| view.read_from_pages::<Random>(pointer))?;
         let decompressed = self.with_view(|view| view.decompress(raw))?;
-        let value = V::from_bytes(&decompressed);
+        let value = V::try_from_bytes(&decompressed)?;
 
         Ok(Some(value))
     }
