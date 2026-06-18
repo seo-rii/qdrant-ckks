@@ -199,7 +199,11 @@ impl<V: Blob> Gridstore<V> {
             .bitmask
             .read()
             .find_available_blocks(num_blocks)
-            .unwrap();
+            .ok_or_else(|| {
+                GridstoreError::service_error(format!(
+                    "Failed to allocate {num_blocks} gridstore blocks after extending bitmask"
+                ))
+            })?;
 
         Ok(available)
     }
@@ -212,7 +216,12 @@ impl<V: Blob> Gridstore<V> {
         start_page_id: PageId,
         block_offset: BlockOffset,
     ) -> Result<()> {
-        let pointer = ValuePointer::new(start_page_id, block_offset, value.len() as u32);
+        let value_len = u32::try_from(value.len()).map_err(|err| {
+            GridstoreError::service_error(format!(
+                "Gridstore value length exceeds u32::MAX bytes: {err}"
+            ))
+        })?;
+        let pointer = ValuePointer::new(start_page_id, block_offset, value_len);
         self.pages
             .write()
             .write_to_pages(pointer, value, &self.config)
@@ -278,10 +287,15 @@ impl<V: Blob> Gridstore<V> {
         let value_bytes = value.to_bytes();
         let comp_value = self.with_view(|view| view.compress(value_bytes));
         let value_size = comp_value.len();
+        let value_size_u32 = u32::try_from(value_size).map_err(|err| {
+            GridstoreError::service_error(format!(
+                "Gridstore value length exceeds u32::MAX bytes: {err}"
+            ))
+        })?;
 
         hw_counter.incr_delta(value_size);
 
-        let required_blocks = Self::blocks_for_value(value_size, self.config.block_size_bytes);
+        let required_blocks = Self::blocks_for_value(value_size, self.config.block_size_bytes)?;
         let (start_page_id, block_offset) =
             self.find_or_create_available_blocks(required_blocks)?;
 
@@ -295,7 +309,7 @@ impl<V: Blob> Gridstore<V> {
         let is_update = tracker_guard.has_pointer(point_offset)?;
         tracker_guard.set(
             point_offset,
-            ValuePointer::new(start_page_id, block_offset, value_size as u32),
+            ValuePointer::new(start_page_id, block_offset, value_size_u32),
         );
 
         Ok(is_update)
@@ -311,7 +325,7 @@ impl<V: Blob> Gridstore<V> {
         };
 
         let raw = self.with_view(|view| view.read_from_pages::<Random>(pointer))?;
-        let decompressed = self.with_view(|view| view.decompress(raw));
+        let decompressed = self.with_view(|view| view.decompress(raw))?;
         let value = V::from_bytes(&decompressed);
 
         Ok(Some(value))
@@ -419,8 +433,17 @@ impl<V> Gridstore<V> {
     }
 
     #[inline]
-    fn blocks_for_value(value_size: usize, block_size: usize) -> u32 {
-        value_size.div_ceil(block_size).try_into().unwrap()
+    fn blocks_for_value(value_size: usize, block_size: usize) -> Result<u32> {
+        if block_size == 0 {
+            return Err(GridstoreError::service_error(
+                "Gridstore block size must be greater than zero",
+            ));
+        }
+        value_size.div_ceil(block_size).try_into().map_err(|err| {
+            GridstoreError::service_error(format!(
+                "Gridstore value requires more than u32::MAX blocks: {err}"
+            ))
+        })
     }
 
     /// Create flusher that durably persists all pending changes when invoked.
@@ -491,13 +514,18 @@ impl<V> Gridstore<V> {
             for (page_id, pointer_group) in
                 &old_pointers.into_iter().chunk_by(|pointer| pointer.page_id)
             {
-                let local_ranges = pointer_group.map(|pointer| {
+                let mut local_ranges = Vec::new();
+                for pointer in pointer_group {
                     let start = pointer.block_offset;
-                    let end = pointer.block_offset
-                        + Self::blocks_for_value(pointer.length as usize, block_size_bytes);
-                    start as usize..end as usize
-                });
-                guard.mark_blocks_batch(page_id, local_ranges, false);
+                    let blocks = Self::blocks_for_value(pointer.length as usize, block_size_bytes)?;
+                    let end = pointer.block_offset.checked_add(blocks).ok_or_else(|| {
+                        GridstoreError::service_error(format!(
+                            "Gridstore block range overflows for pointer {pointer:?}"
+                        ))
+                    })?;
+                    local_ranges.push(start as usize..end as usize);
+                }
+                guard.mark_blocks_batch(page_id, local_ranges.into_iter(), false);
             }
             guard.flusher()
         };

@@ -19,8 +19,10 @@ pub(super) fn compress_lz4(value: &[u8]) -> Vec<u8> {
 }
 
 #[inline]
-pub(super) fn decompress_lz4(value: &[u8]) -> Vec<u8> {
-    lz4_flex::decompress_size_prepended(value).unwrap()
+pub(super) fn decompress_lz4(value: &[u8]) -> Result<Vec<u8>> {
+    lz4_flex::decompress_size_prepended(value).map_err(|err| {
+        GridstoreError::service_error(format!("Failed to decompress LZ4 gridstore value: {err}"))
+    })
 }
 
 /// A non-owning view into gridstore data.
@@ -78,9 +80,9 @@ impl<'a, V: Blob, S: UniversalRead<u8>> GridstoreView<'a, V, S> {
         }
     }
 
-    pub(super) fn decompress(&self, value: Vec<u8>) -> Vec<u8> {
+    pub(super) fn decompress(&self, value: Vec<u8>) -> Result<Vec<u8>> {
         match self.config.compression {
-            Compression::None => value,
+            Compression::None => Ok(value),
             Compression::LZ4 => decompress_lz4(&value),
         }
     }
@@ -98,7 +100,7 @@ impl<'a, V: Blob, S: UniversalRead<u8>> GridstoreView<'a, V, S> {
         let raw = self.read_from_pages::<P>(pointer)?;
         hw_counter.payload_io_read_counter().incr_delta(raw.len());
 
-        let decompressed = self.decompress(raw);
+        let decompressed = self.decompress(raw)?;
         let value = V::from_bytes(&decompressed);
 
         Ok(Some(value))
@@ -149,7 +151,7 @@ impl<'a, V: Blob, S: UniversalRead<u8>> GridstoreView<'a, V, S> {
 
             hw_counter.incr_delta(raw.len());
 
-            let decompressed = self.decompress(raw);
+            let decompressed = self.decompress(raw)?;
             let value = V::from_bytes(&decompressed);
             if !callback(point_offset, value)? {
                 return Ok(ControlFlow::Break(()));
