@@ -13,7 +13,6 @@ workspace = true
 
 [features]
 default = []
-test-utils = []
 
 [dependencies]
 constant_time_eq = "0.4.2"

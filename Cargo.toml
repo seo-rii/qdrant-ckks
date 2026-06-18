@@ -48,7 +48,6 @@ tempfile = { workspace = true }
 rusty-hook = "^0.11.2"
 ring = { workspace = true }
 fs-err = { workspace = true, features = ["debug", "debug_tokio", "tokio"] } # for nicer error messages
-qdrant-sec = { path = "lib/crypto", features = ["test-utils"] }
 
 
 [dependencies]

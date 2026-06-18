@@ -16047,6 +16047,31 @@ mod tests {
         )
     }
 
+    fn openfhe_backend_cache_lru_keys_for_tests() -> Vec<OpenFheBackendCacheKey> {
+        let cache = OPENFHE_BACKEND_CACHE
+            .get()
+            .expect("OpenFHE backend cache must be initialized")
+            .lock()
+            .expect("OpenFHE backend cache mutex must not be poisoned");
+        cache.lru.iter().cloned().collect()
+    }
+
+    fn openfhe_backend_cache_names_for_tests() -> Vec<String> {
+        openfhe_backend_cache_lru_keys_for_tests()
+            .into_iter()
+            .map(|key| key.backend_name)
+            .collect()
+    }
+
+    static OPENFHE_BACKEND_FACTORY_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn openfhe_backend_factory_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        OPENFHE_BACKEND_FACTORY_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("OpenFHE backend factory test mutex must not be poisoned")
+    }
+
     #[test]
     fn validate_backend_verifies_bridge_sha256_pin() {
         let dir = tempfile::Builder::new()
@@ -16303,6 +16328,7 @@ mod tests {
 
     #[test]
     fn openfhe_backend_factory_requires_bridge_sha256_pin() {
+        let _guard = openfhe_backend_factory_test_guard();
         let program = std::env::current_exe().unwrap();
         let err = openfhe_backend_from_config(
             "openfhe_local",
@@ -16328,6 +16354,8 @@ mod tests {
 
     #[test]
     fn openfhe_backend_factory_tracks_crypto_material_env_names() {
+        let _guard = openfhe_backend_factory_test_guard();
+        clear_openfhe_backend_cache_for_tests();
         let (_dir, program, sha256_b64) = test_bridge_program();
         let settings = CryptoSettings {
             zero_trust_profile: None,
@@ -16381,6 +16409,7 @@ mod tests {
 
     #[test]
     fn openfhe_backend_factory_reuses_cached_pool_for_matching_backend_policy() {
+        let _guard = openfhe_backend_factory_test_guard();
         clear_openfhe_backend_cache_for_tests();
         let (_dir, program, sha256_b64) = test_bridge_program();
         let backend_config = CryptoBackendConfig {
@@ -16394,28 +16423,46 @@ mod tests {
         };
         let settings = CryptoSettings::default();
 
-        let first = openfhe_backend_from_config("openfhe_local", &backend_config, &settings)
+        openfhe_backend_from_config("openfhe_local", &backend_config, &settings)
             .expect("matching backend policy must build");
-        let second = openfhe_backend_from_config("openfhe_local", &backend_config, &settings)
+        openfhe_backend_from_config("openfhe_local", &backend_config, &settings)
             .expect("matching backend policy must reuse cached backend");
-        assert!(
-            first.shares_worker_pool_for_tests(&second),
-            "matching backend policy should reuse the long-lived worker pool",
+        let cache_keys = openfhe_backend_cache_lru_keys_for_tests();
+        assert_eq!(
+            cache_keys.len(),
+            1,
+            "matching backend policy should keep exactly one cached worker pool",
         );
+        assert_eq!(cache_keys[0].backend_name, "openfhe_local");
+        assert_eq!(cache_keys[0].timeout_ms, Some(5_000));
 
         let mut drifted_backend_config = backend_config;
         drifted_backend_config.timeout_ms = Some(5_001);
-        let drifted =
-            openfhe_backend_from_config("openfhe_local", &drifted_backend_config, &settings)
-                .expect("drifted backend policy must still build");
+        openfhe_backend_from_config("openfhe_local", &drifted_backend_config, &settings)
+            .expect("drifted backend policy must still build");
+        let cache_keys = openfhe_backend_cache_lru_keys_for_tests();
+        assert_eq!(
+            cache_keys.len(),
+            2,
+            "backend policy drift must create a separate cached worker pool",
+        );
         assert!(
-            !first.shares_worker_pool_for_tests(&drifted),
-            "backend policy drift must not reuse the previous worker pool",
+            cache_keys
+                .iter()
+                .any(|key| key.backend_name == "openfhe_local" && key.timeout_ms == Some(5_000)),
+            "original backend policy should remain cached",
+        );
+        assert!(
+            cache_keys
+                .iter()
+                .any(|key| key.backend_name == "openfhe_local" && key.timeout_ms == Some(5_001)),
+            "drifted backend policy should be cached separately",
         );
     }
 
     #[test]
     fn openfhe_backend_factory_evicts_only_lru_pool_when_cache_is_full() {
+        let _guard = openfhe_backend_factory_test_guard();
         clear_openfhe_backend_cache_for_tests();
         let (_dir, program, sha256_b64) = test_bridge_program();
         let settings = CryptoSettings::default();
@@ -16429,19 +16476,18 @@ mod tests {
             timeout_ms: Some(timeout_ms),
         };
 
-        let first =
-            openfhe_backend_from_config("openfhe_backend_0", &backend_config(5_000), &settings)
-                .expect("first backend policy must build");
-        let second =
-            openfhe_backend_from_config("openfhe_backend_1", &backend_config(5_001), &settings)
-                .expect("second backend policy must build");
+        openfhe_backend_from_config("openfhe_backend_0", &backend_config(5_000), &settings)
+            .expect("first backend policy must build");
+        openfhe_backend_from_config("openfhe_backend_1", &backend_config(5_001), &settings)
+            .expect("second backend policy must build");
 
-        let touched_first =
-            openfhe_backend_from_config("openfhe_backend_0", &backend_config(5_000), &settings)
-                .expect("cache hit must refresh first backend recency");
-        assert!(
-            first.shares_worker_pool_for_tests(&touched_first),
-            "cache hit should reuse and refresh the first backend pool",
+        openfhe_backend_from_config("openfhe_backend_0", &backend_config(5_000), &settings)
+            .expect("cache hit must refresh first backend recency");
+        let cache_names = openfhe_backend_cache_names_for_tests();
+        assert_eq!(
+            cache_names.last().map(String::as_str),
+            Some("openfhe_backend_0"),
+            "cache hit should refresh first backend recency",
         );
 
         for index in 2..=OPENFHE_BACKEND_CACHE_MAX_ENTRIES {
@@ -16453,25 +16499,36 @@ mod tests {
             .expect("distinct backend policy must build");
         }
 
-        let retained_first =
-            openfhe_backend_from_config("openfhe_backend_0", &backend_config(5_000), &settings)
-                .expect("recently touched backend must still be cached");
+        let cache_names = openfhe_backend_cache_names_for_tests();
+        assert_eq!(cache_names.len(), OPENFHE_BACKEND_CACHE_MAX_ENTRIES);
         assert!(
-            first.shares_worker_pool_for_tests(&retained_first),
-            "LRU eviction must not clear unrelated recent pools",
+            cache_names.iter().any(|name| name == "openfhe_backend_0"),
+            "recently touched backend must still be cached",
+        );
+        assert!(
+            !cache_names.iter().any(|name| name == "openfhe_backend_1"),
+            "least-recently used backend should be the only evicted pool",
         );
 
-        let recreated_second =
-            openfhe_backend_from_config("openfhe_backend_1", &backend_config(5_001), &settings)
-                .expect("evicted backend policy must be recreated on demand");
+        openfhe_backend_from_config("openfhe_backend_0", &backend_config(5_000), &settings)
+            .expect("recently touched backend must still be reusable");
+        openfhe_backend_from_config("openfhe_backend_1", &backend_config(5_001), &settings)
+            .expect("evicted backend policy must be recreated on demand");
+        let cache_names = openfhe_backend_cache_names_for_tests();
         assert!(
-            !second.shares_worker_pool_for_tests(&recreated_second),
-            "least-recently used backend should be the only evicted pool",
+            cache_names.iter().any(|name| name == "openfhe_backend_1"),
+            "evicted backend policy should be recreated on demand",
+        );
+        assert!(
+            !cache_names.iter().any(|name| name == "openfhe_backend_2"),
+            "recreating the evicted backend should evict the next least-recent entry",
         );
     }
 
     #[test]
     fn openfhe_backend_factory_enables_landlock_sandbox_kind() {
+        let _guard = openfhe_backend_factory_test_guard();
+        clear_openfhe_backend_cache_for_tests();
         let (_dir, program, sha256_b64) = test_bridge_program();
         let backend_result = openfhe_backend_from_config(
             "openfhe_local",
