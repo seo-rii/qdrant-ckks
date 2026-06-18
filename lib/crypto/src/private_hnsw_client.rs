@@ -3493,8 +3493,14 @@ pub fn sign_private_hnsw_oram_read_paths_for_manifest(
 ) -> Result<PrivateHnswOramSignature, PrivateHnswClientError> {
     validate_private_hnsw_oram_manifest_shape(manifest)
         .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest"))?;
+    let mut seen_paths = BTreeSet::new();
     for path in paths {
         decode_private_hnsw_oram_leaf_label(path, manifest.oram.tree_height)?;
+        if !seen_paths.insert(path) {
+            return Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+                "paths",
+            ));
+        }
     }
     sign_private_hnsw_oram_read_paths(
         key_pair,
@@ -5987,6 +5993,16 @@ mod tests {
             sign_private_hnsw_oram_read_paths_for_manifest(&key_pair, &manifest, &paths[..1]),
             Err(PrivateHnswClientError::InvalidCommitSignatureContext(
                 "requested_paths",
+            ))
+        );
+        assert_eq!(
+            sign_private_hnsw_oram_read_paths_for_manifest(
+                &key_pair,
+                &manifest,
+                &[paths[0].clone(), paths[0].clone()],
+            ),
+            Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+                "paths",
             ))
         );
 

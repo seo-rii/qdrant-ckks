@@ -273,12 +273,13 @@ impl PrivateHnswRouteWireFixture {
         dummy_paths_included: bool,
     ) -> PrivateHnswOramSignature {
         if requested_paths == self.manifest.oram.path_batch_size && dummy_paths_included {
-            return sign_private_hnsw_oram_read_paths_for_manifest(
+            if let Ok(signature) = sign_private_hnsw_oram_read_paths_for_manifest(
                 &self.signing_key,
                 &self.manifest,
                 paths,
-            )
-            .unwrap();
+            ) {
+                return signature;
+            }
         }
         sign_private_hnsw_oram_read_paths(
             &self.signing_key,
