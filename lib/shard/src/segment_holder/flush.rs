@@ -27,10 +27,11 @@ impl SegmentHolder {
 
         // We can never have zero segments
         // Having zero segments could permanently corrupt the WAL by acknowledging u64::MAX
-        assert!(
-            !segments.is_empty(),
-            "must always have at least one segment",
-        );
+        if segments.is_empty() {
+            return Err(OperationError::service_error(
+                "must always have at least one segment while flushing",
+            ));
+        }
 
         // Read-lock all segments before flushing any, must prevent any writes to any segment
         // That is to prevent any copy-on-write operation on two segments from occurring in between
@@ -91,20 +92,18 @@ impl SegmentHolder {
                 .retain(|_, _, version| *version > max_applied_version);
         } else {
             let flush_dependency = self.flush_dependency.clone();
-            *background_flush_lock = Some(
-                std::thread::Builder::new()
-                    .name("background_flush".to_string())
-                    .spawn(move || {
-                        for flusher in flushers {
-                            flusher()?;
-                        }
-                        flush_dependency
-                            .lock()
-                            .retain(|_, _, version| *version > max_applied_version);
-                        Ok(())
-                    })
-                    .unwrap(),
-            );
+            let background_flush = std::thread::Builder::new()
+                .name("background_flush".to_string())
+                .spawn(move || {
+                    for flusher in flushers {
+                        flusher()?;
+                    }
+                    flush_dependency
+                        .lock()
+                        .retain(|_, _, version| *version > max_applied_version);
+                    Ok(())
+                })?;
+            *background_flush_lock = Some(background_flush);
         }
 
         Ok(self.get_max_persisted_version(segment_reads, lock_order))
