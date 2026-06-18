@@ -2605,10 +2605,10 @@ fn sanitized_crypto_instance_options(instance: &CryptoInstanceConfig) -> serde_j
         || instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER
         || instance.provider == VECTOR_CLIENT_CKKS_PROVIDER
         || instance.provider == VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-        && let Some(signature_public_keys) = options
+        && let Some(signature_public_keys_value) = options
             .as_object_mut()
             .and_then(|options| options.get_mut(SIGNATURE_PUBLIC_KEYS_OPTION))
-        && let Some(signature_public_keys) = signature_public_keys.as_object()
+        && let Some(signature_public_keys) = signature_public_keys_value.as_object()
     {
         let mut verifier_fingerprint = BTreeMap::new();
         for (key_id, public_key_b64) in signature_public_keys {
@@ -2632,11 +2632,7 @@ fn sanitized_crypto_instance_options(instance: &CryptoInstanceConfig) -> serde_j
                 }),
             );
         }
-        *options
-            .as_object_mut()
-            .expect("options object still exists")
-            .get_mut(SIGNATURE_PUBLIC_KEYS_OPTION)
-            .expect("signature_public_keys option still exists") =
+        *signature_public_keys_value =
             serde_json::Value::Object(verifier_fingerprint.into_iter().collect());
     }
     if instance.provider == VECTOR_OPENFHE_CKKS_PROVIDER
