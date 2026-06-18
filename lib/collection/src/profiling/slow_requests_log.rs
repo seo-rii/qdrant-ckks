@@ -88,7 +88,7 @@ impl Ord for LogEntry {
 
 pub struct SlowRequestsLog {
     log_priority_queue: AHashMap<&'static str, FixedLengthPriorityQueue<LogEntry>>,
-    counters: CountMinSketch64<u64>,
+    counters: Option<CountMinSketch64<u64>>,
     max_entries: usize,
 }
 
@@ -96,7 +96,8 @@ impl SlowRequestsLog {
     pub fn new(max_entries: usize) -> Self {
         SlowRequestsLog {
             log_priority_queue: Default::default(),
-            counters: CountMinSketch64::new(1024, 0.95, 0.1).unwrap(), // 95% probability, 10% tolerance
+            // 95% probability, 10% tolerance.
+            counters: CountMinSketch64::new(1024, 0.95, 0.1).ok(),
             max_entries,
         }
     }
@@ -128,7 +129,9 @@ impl SlowRequestsLog {
     }
 
     fn inc_counter(&mut self, content_hash: u64) {
-        self.counters.increment(&content_hash);
+        if let Some(counters) = &mut self.counters {
+            counters.increment(&content_hash);
+        }
     }
 
     fn content_hash(request_hash: u64, collection_name: &str) -> u64 {
@@ -162,8 +165,9 @@ impl SlowRequestsLog {
 
         if queue.is_full() {
             // Check if we can insert into the queue before hashing or serializing the request.
-            // Safety: unwrap is safe because we checked that the queue is full.
-            let fastest_logged = queue.top().unwrap();
+            let Some(fastest_logged) = queue.top() else {
+                return None;
+            };
 
             if duration <= fastest_logged.duration {
                 // Our queue is already slower than this request.
@@ -232,7 +236,11 @@ impl SlowRequestsLog {
             .take(limit)
             .cloned()
             .map(|mut entry| {
-                let approx_count = self.counters.estimate(&entry.content_hash);
+                let approx_count = self
+                    .counters
+                    .as_ref()
+                    .map(|counters| counters.estimate(&entry.content_hash))
+                    .unwrap_or(entry.approx_count as u64);
                 entry.upd_counter(approx_count as usize);
                 entry
             })
