@@ -102,6 +102,9 @@ impl<
 
     type SupportsBytes = True;
     fn score_bytes(&self, _enabled: Self::SupportsBytes, bytes: &[u8]) -> ScoreType {
-        self.score(<[TElement]>::ref_from_bytes(bytes).unwrap())
+        match <[TElement]>::ref_from_bytes(bytes) {
+            Ok(vector) => self.score(vector),
+            Err(_) => ScoreType::NEG_INFINITY,
+        }
     }
 }
