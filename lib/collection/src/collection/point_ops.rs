@@ -2890,7 +2890,11 @@ impl Collection {
         let result_len = results.len();
 
         if with_error > 0 {
-            let first_err = results.into_iter().find(|result| result.is_err()).unwrap();
+            let Some(first_err) = results.into_iter().find(|result| result.is_err()) else {
+                return Err(CollectionError::service_error(
+                    "update aggregation expected at least one shard error",
+                ));
+            };
             // inconsistent if only a subset of the requests fail - one request per shard.
             if with_error < result_len {
                 first_err.map_err(|err| {
@@ -2938,7 +2942,11 @@ impl Collection {
                 });
             }
 
-            let max_operation_id = results.into_iter().map(|r| r.operation_id).max().unwrap(); // We checked that results is not empty above
+            let max_operation_id = results
+                .into_iter()
+                .map(|r| r.operation_id)
+                .max()
+                .unwrap_or(None);
 
             Ok(UpdateResult {
                 operation_id: max_operation_id,
