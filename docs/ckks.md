@@ -745,6 +745,10 @@ Manifest upload/read, bucket upload, session open, and snapshot restore
 preflight also require the stored manifest signature `key_id` to match the
 manifest's `owner_signing_key_id` before the verifier public key is looked up,
 so non-owner manifest key ids do not reach the registry lookup boundary.
+Runtime validation rejects registering the same Ed25519 verifier public key
+under multiple key ids. This keeps `owner_signing_key_id` authorization
+unambiguous even though the HNSW v1 canonical manifest signature format binds
+the owner through the signature header and verifier selection.
 The SDK/server manifest signature validators also validate manifest shape before
 canonical manifest signature message construction. SDK signing helpers reject
 malformed manifests, path-count mismatches, malformed path labels/roots, and

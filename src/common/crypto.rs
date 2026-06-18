@@ -6490,6 +6490,7 @@ fn client_payload_signature_verifier(
     }
 
     let mut public_keys = std::collections::HashMap::new();
+    let mut seen_public_keys = HashSet::new();
     for (key_id, public_key_b64) in signature_public_keys {
         if !is_crypto_identifier(key_id) {
             return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeys {
@@ -6517,6 +6518,11 @@ fn client_payload_signature_verifier(
             )?;
         if public_key.len() != 32 {
             return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKey {
+                instance: instance_id.to_string(),
+            });
+        }
+        if !seen_public_keys.insert(public_key.clone()) {
+            return Err(PayloadWriteSetupError::InvalidClientSignaturePublicKeys {
                 instance: instance_id.to_string(),
             });
         }
@@ -10078,6 +10084,24 @@ mod tests {
                     && reason.contains("invalid encoded length")),
             "unexpected error: {err:?}",
         );
+
+        let duplicate_public_key = BASE64URL_NOPAD.encode(&[11_u8; 32]);
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options[SIGNATURE_PUBLIC_KEYS_OPTION] = json!({
+            "tenant-a/private-hnsw-signing-v1": duplicate_public_key,
+            "tenant-a/private-hnsw-signing-v2": duplicate_public_key,
+        });
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private HNSW ORAM must reject duplicate verifier key aliases");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == SIGNATURE_PUBLIC_KEYS_OPTION
+                    && reason.contains("signature_public_keys")),
+            "unexpected error: {err:?}",
+        );
     }
 
     #[test]
@@ -10682,6 +10706,24 @@ mod tests {
         options[SIGNATURE_PUBLIC_KEYS_OPTION] = json!({});
         let err = validate_crypto_settings(&settings)
             .expect_err("private result ORAM must require signature_public_keys");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == SIGNATURE_PUBLIC_KEYS_OPTION
+                    && reason.contains("signature_public_keys")),
+            "unexpected error: {err:?}",
+        );
+
+        let duplicate_public_key = BASE64URL_NOPAD.encode(&[12_u8; 32]);
+        settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options[SIGNATURE_PUBLIC_KEYS_OPTION] = json!({
+            "tenant-a/private-result-signing-v1": duplicate_public_key,
+            "tenant-a/private-result-signing-v2": duplicate_public_key,
+        });
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM must reject duplicate verifier key aliases");
         assert!(
             matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
                 if option == SIGNATURE_PUBLIC_KEYS_OPTION
