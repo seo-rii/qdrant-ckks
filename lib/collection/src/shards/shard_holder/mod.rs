@@ -901,7 +901,7 @@ impl ShardHolder {
         update_runtime: Handle,
         search_runtime: Handle,
         optimizer_resource_budget: ResourceBudget,
-    ) {
+    ) -> CollectionResult<()> {
         let shard_number = collection_config.read().await.params.shard_number.get();
 
         let (shard_ids_list, shard_id_to_key_mapping) = match self.sharding_method {
@@ -948,9 +948,7 @@ impl ShardHolder {
                     .unwrap_or(false);
 
                 // Validate that shard exists on disk
-                let shard_path = check_shard_path(collection_path, shard_id)
-                    .await
-                    .expect("Failed to check shard path");
+                let shard_path = check_shard_path(collection_path, shard_id).await?;
 
                 // Load replica set
                 let replica_set = ShardReplicaSet::load(
@@ -971,9 +969,9 @@ impl ShardHolder {
                     search_runtime,
                     optimizer_resource_budget,
                 )
-                .await;
+                .await?;
 
-                (replica_set, shard_key_for_add)
+                Ok::<_, CollectionError>((replica_set, shard_key_for_add))
             }
         });
         let mut shard_stream = stream::iter(shard_futures).buffer_unordered(
@@ -982,7 +980,9 @@ impl ShardHolder {
                 .get_concurrent_shards()
                 .get(),
         );
-        while let Some((replica_set, shard_key)) = shard_stream.next().await {
+        while let Some(load_result) = shard_stream.next().await {
+            let (replica_set, shard_key) = load_result?;
+
             // Change local shards stuck in Initializing state to Active
             let local_peer_id = replica_set.this_peer_id();
             let not_distributed = !shared_storage_config.is_distributed;
@@ -997,18 +997,18 @@ impl ShardHolder {
                 );
                 replica_set
                     .set_replica_state(local_peer_id, ReplicaState::Active)
-                    .await
-                    .expect("Failed to set local shard state");
+                    .await?;
             }
             self.add_shard(replica_set.shard_id, replica_set, shard_key)
-                .await
-                .unwrap();
+                .await?;
         }
 
         // If resharding, rebuild the hash rings because they'll be messed up
         if self.resharding_state.read().is_some() {
             self.rebuild_rings();
         }
+
+        Ok(())
     }
 
     pub fn assert_shard_exists(&self, shard_id: ShardId) -> CollectionResult<()> {

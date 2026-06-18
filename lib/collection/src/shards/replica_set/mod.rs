@@ -241,7 +241,7 @@ impl ShardReplicaSet {
     ///
     /// WARN: This method intended to be used only on the initial start of the node.
     /// It does not implement any logic to recover from a failure.
-    /// Will panic or load partial state if there is a failure.
+    /// Returns an error or loads partial state if there is a failure.
     #[allow(clippy::too_many_arguments)]
     pub async fn load(
         shard_id: ShardId,
@@ -260,9 +260,9 @@ impl ShardReplicaSet {
         update_runtime: Handle,
         search_runtime: Handle,
         optimizer_resource_budget: ResourceBudget,
-    ) -> Self {
+    ) -> CollectionResult<Self> {
         let replica_state: SaveOnDisk<ReplicaSetState> =
-            SaveOnDisk::load_or_init_default(shard_path.join(REPLICA_STATE_FILE)).unwrap();
+            SaveOnDisk::load_or_init_default(shard_path.join(REPLICA_STATE_FILE))?;
 
         if replica_state.read().this_peer_id != this_peer_id {
             replica_state
@@ -274,10 +274,11 @@ impl ShardReplicaSet {
                     }
                     rs.this_peer_id = this_peer_id;
                 })
-                .map_err(|e| {
-                    panic!("Failed to update replica state in {shard_path:?}: {e}");
-                })
-                .unwrap();
+                .map_err(|err| {
+                    CollectionError::service_error(format!(
+                        "Failed to update replica state in {shard_path:?}: {err}"
+                    ))
+                })?;
         }
 
         let remote_shards: Vec<_> = Self::init_remote_shards(
@@ -319,7 +320,9 @@ impl ShardReplicaSet {
                     Ok(shard) => Shard::Local(shard),
                     Err(err) => {
                         if !shared_storage_config.handle_collection_load_errors {
-                            panic!("Failed to load local shard {shard_path:?}: {err}")
+                            return Err(CollectionError::service_error(format!(
+                                "Failed to load local shard {shard_path:?}: {err}"
+                            )));
                         }
 
                         local_load_failure = true;
@@ -386,7 +389,7 @@ impl ShardReplicaSet {
                 .disable_peer(this_peer_id);
         }
 
-        replica_set
+        Ok(replica_set)
     }
 
     pub async fn stop_gracefully(self) {

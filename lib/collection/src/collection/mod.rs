@@ -486,7 +486,7 @@ impl Collection {
                 search_runtime.clone().unwrap_or_else(Handle::current),
                 optimizer_resource_budget.clone(),
             )
-            .await;
+            .await?;
 
         let shared_shard_holder = SharedShardHolder::new(shard_holder);
 
