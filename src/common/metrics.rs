@@ -222,7 +222,12 @@ pub struct MetricsData {
 
 impl MetricsData {
     pub fn format_metrics(&self) -> String {
-        TextEncoder::new().encode_to_string(&self.metrics).unwrap()
+        TextEncoder::new()
+            .encode_to_string(&self.metrics)
+            .unwrap_or_else(|err| {
+                log::error!("failed to encode Prometheus metrics: {err}");
+                String::new()
+            })
     }
 
     /// Creates a new `MetricsData` from telemetry data and an optional prefix for metrics names.
