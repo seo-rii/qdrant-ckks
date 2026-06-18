@@ -112,10 +112,33 @@ impl CiphertextEnvelope {
     }
 
     pub fn to_stored_value(&self) -> Value {
-        let serialized = serde_json::to_value(self).expect("ciphertext envelope must serialize");
+        let mut serialized = Map::from_iter([
+            (
+                "version".to_string(),
+                Value::Number(serde_json::Number::from(self.version)),
+            ),
+            (
+                "capability".to_string(),
+                Value::String(self.capability.as_str().to_string()),
+            ),
+            ("provider".to_string(), Value::String(self.provider.clone())),
+            (
+                "instance_fingerprint".to_string(),
+                Value::String(self.instance_fingerprint.clone()),
+            ),
+            ("key_id".to_string(), Value::String(self.key_id.clone())),
+            ("body".to_string(), Value::String(self.body.clone())),
+        ]);
+        if let Some(binding) = &self.binding {
+            serialized.insert("binding".to_string(), Value::String(binding.clone()));
+        }
+        if !self.headers.is_empty() {
+            serialized.insert("headers".to_string(), Value::Object(self.headers.clone()));
+        }
+
         Value::Object(Map::from_iter([(
             GENERIC_CIPHERTEXT_MARKER.to_string(),
-            serialized,
+            Value::Object(serialized),
         )]))
     }
 
