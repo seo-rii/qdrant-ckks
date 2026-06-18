@@ -169,11 +169,10 @@ impl MmapInvertedIndex {
     }
 
     pub(super) fn iter_vocab(&self) -> impl Iterator<Item = (&str, &TokenId)> + '_ {
-        // unwrap safety: we know that each token points to a token id.
         self.storage
             .vocab
             .iter()
-            .map(|(k, v)| (k, v.first().unwrap()))
+            .filter_map(|(k, v)| v.first().map(|token_id| (k, token_id)))
     }
 
     /// Returns whether the point id is valid and active.
@@ -282,10 +281,7 @@ impl MmapInvertedIndex {
             tokens.tokens().iter().all(|query_token| {
                 postings
                     .get(*query_token)
-                    // unwrap safety: all tokens exist in the vocabulary, otherwise there'd be no query tokens
-                    .unwrap()
-                    .visitor()
-                    .contains(point_id)
+                    .is_some_and(|posting| posting.visitor().contains(point_id))
             })
         }
 
@@ -314,8 +310,9 @@ impl MmapInvertedIndex {
         ) -> bool {
             // Check that at least one token is in document
             tokens.tokens().iter().any(|token_id| {
-                let posting_list = postings.get(*token_id).unwrap();
-                posting_list.visitor().contains(point_id)
+                postings
+                    .get(*token_id)
+                    .is_some_and(|posting| posting.visitor().contains(point_id))
             })
         }
 

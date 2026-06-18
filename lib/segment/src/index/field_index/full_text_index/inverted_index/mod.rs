@@ -251,19 +251,25 @@ pub trait InvertedIndex {
             .iter()
             .map(|&vocab_idx| self.get_posting_len(vocab_idx, hw_counter))
             .collect();
-        if posting_lengths.is_none() || points_count == 0 {
+        let Some(postings) = posting_lengths else {
             // There are unseen tokens -> no matches
             return CardinalityEstimation::exact(0)
                 .with_primary_clause(PrimaryCondition::Condition(Box::new(condition.clone())));
+        };
+        if points_count == 0 {
+            return CardinalityEstimation::exact(0)
+                .with_primary_clause(PrimaryCondition::Condition(Box::new(condition.clone())));
         }
-        let postings = posting_lengths.unwrap();
         if postings.is_empty() {
             // Empty request -> no matches
             return CardinalityEstimation::exact(0)
                 .with_primary_clause(PrimaryCondition::Condition(Box::new(condition.clone())));
         }
         // Smallest posting is the largest possible cardinality
-        let smallest_posting = postings.iter().min().copied().unwrap();
+        let Some(smallest_posting) = postings.iter().min().copied() else {
+            return CardinalityEstimation::exact(0)
+                .with_primary_clause(PrimaryCondition::Condition(Box::new(condition.clone())));
+        };
 
         if postings.len() == 1 {
             return CardinalityEstimation::exact(smallest_posting)
@@ -304,7 +310,10 @@ pub trait InvertedIndex {
         }
 
         // At least one posting is the largest possible cardinality
-        let largest_posting = posting_lengths.iter().max().copied().unwrap();
+        let Some(largest_posting) = posting_lengths.iter().max().copied() else {
+            return CardinalityEstimation::exact(0)
+                .with_primary_clause(PrimaryCondition::Condition(Box::new(condition.clone())));
+        };
 
         if posting_lengths.len() == 1 {
             return CardinalityEstimation::exact(largest_posting)

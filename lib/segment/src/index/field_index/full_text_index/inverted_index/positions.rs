@@ -37,16 +37,14 @@ impl UnsizedValue for Positions {
     }
 
     fn write_to(&self, dst: &mut [u8]) {
-        self.0
-            .as_slice()
-            .write_to(dst)
-            .expect("write_len should provide correct length");
+        let _ = self.0.as_slice().write_to(dst);
     }
 
     fn from_bytes(data: &[u8]) -> Self {
-        let positions =
-            <[u32]>::ref_from_bytes(data).expect("write_len should provide correct length");
-        Positions(positions.to_vec())
+        match <[u32]>::ref_from_bytes(data) {
+            Ok(positions) => Positions(positions.to_vec()),
+            Err(_) => Positions::default(),
+        }
     }
 }
 

@@ -214,9 +214,9 @@ impl InvertedIndex for MutableInvertedIndex {
         self.points_count -= 1;
 
         for removed_token in removed_token_set.tokens() {
-            // unwrap safety: posting list exists and contains the point idx
-            let posting = self.postings.get_mut(*removed_token as usize).unwrap();
-            posting.remove(point_id);
+            if let Some(posting) = self.postings.get_mut(*removed_token as usize) {
+                posting.remove(point_id);
+            }
         }
 
         true
