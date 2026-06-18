@@ -94,14 +94,28 @@ impl Health for HealthService {
 
 #[cfg(not(unix))]
 async fn wait_stop_signal(for_what: &str) {
-    signal::ctrl_c().await.unwrap();
-    log::debug!("Stopping {for_what} on SIGINT");
+    match signal::ctrl_c().await {
+        Ok(()) => log::debug!("Stopping {for_what} on SIGINT"),
+        Err(err) => log::error!("Failed to listen for SIGINT while running {for_what}: {err}"),
+    }
 }
 
 #[cfg(unix)]
 async fn wait_stop_signal(for_what: &str) {
-    let mut term = signal::unix::signal(signal::unix::SignalKind::terminate()).unwrap();
-    let mut inrt = signal::unix::signal(signal::unix::SignalKind::interrupt()).unwrap();
+    let mut term = match signal::unix::signal(signal::unix::SignalKind::terminate()) {
+        Ok(term) => term,
+        Err(err) => {
+            log::error!("Failed to listen for SIGTERM while running {for_what}: {err}");
+            return;
+        }
+    };
+    let mut inrt = match signal::unix::signal(signal::unix::SignalKind::interrupt()) {
+        Ok(inrt) => inrt,
+        Err(err) => {
+            log::error!("Failed to listen for SIGINT while running {for_what}: {err}");
+            return;
+        }
+    };
 
     tokio::select! {
         _ = term.recv() => log::debug!("Stopping {for_what} on SIGTERM"),
@@ -117,8 +131,13 @@ pub fn init(
     runtime: Handle,
 ) -> io::Result<()> {
     runtime.block_on(async {
-        let socket =
-            SocketAddr::from((settings.service.host.parse::<IpAddr>().unwrap(), grpc_port));
+        let host = settings.service.host.parse::<IpAddr>().map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("failed to parse gRPC host address: {err}"),
+            )
+        })?;
+        let socket = SocketAddr::from((host, grpc_port));
 
         let qdrant_service = QdrantService::default();
         let health_service = HealthService::default();
@@ -144,7 +163,7 @@ pub fn init(
             .with_service_name("qdrant.Qdrant")
             .with_service_name("grpc.health.v1.Health")
             .build()
-            .unwrap();
+            .map_err(|err| io::Error::other(format!("failed to build gRPC reflection: {err}")))?;
 
         log::info!("Qdrant gRPC listening on {grpc_port}");
 
@@ -277,96 +296,103 @@ pub fn init_internal(
 
     let http_client = HttpClient::from_settings(&settings)?;
 
-    runtime
-        .block_on(async {
-            let socket = SocketAddr::from((host.parse::<IpAddr>().unwrap(), internal_grpc_port));
-            let qdrant_service = QdrantService::default();
-            let points_internal_service =
-                PointsInternalService::new(toc.clone(), settings.service.clone());
-            let qdrant_internal_service = QdrantInternalService::new(
-                telemetry_collector,
-                settings.clone(),
-                consensus_state.clone(),
-            );
-            let collections_internal_service = CollectionsInternalService::new(toc.clone());
-            let shard_snapshots_service =
-                ShardSnapshotsService::new(toc.clone(), http_client, settings);
-            let raft_service =
-                RaftService::new(to_consensus, consensus_state, tls_config.is_some());
+    runtime.block_on(async {
+        let host = host.parse::<IpAddr>().map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("failed to parse internal gRPC host address: {err}"),
+            )
+        })?;
+        let socket = SocketAddr::from((host, internal_grpc_port));
+        let qdrant_service = QdrantService::default();
+        let points_internal_service =
+            PointsInternalService::new(toc.clone(), settings.service.clone());
+        let qdrant_internal_service = QdrantInternalService::new(
+            telemetry_collector,
+            settings.clone(),
+            consensus_state.clone(),
+        );
+        let collections_internal_service = CollectionsInternalService::new(toc.clone());
+        let shard_snapshots_service =
+            ShardSnapshotsService::new(toc.clone(), http_client, settings);
+        let raft_service = RaftService::new(to_consensus, consensus_state, tls_config.is_some());
 
-            log::debug!("Qdrant internal gRPC listening on {internal_grpc_port}");
+        log::debug!("Qdrant internal gRPC listening on {internal_grpc_port}");
 
-            let mut server = Server::builder()
-                // Internally use a high limit for pending accept streams.
-                // We can have a huge number of reset/dropped HTTP2 streams in our internal
-                // communication when there are a lot of clients dropping connections. This
-                // internally causes an GOAWAY/ENHANCE_YOUR_CALM error breaking cluster consensus.
-                // We prefer to keep more pending reset streams even though this may be expensive,
-                // versus an internal error that is very hard to handle.
-                // More info: <https://github.com/qdrant/qdrant/issues/1907>
-                .http2_max_pending_accept_reset_streams(Some(1024));
+        let mut server = Server::builder()
+            // Internally use a high limit for pending accept streams.
+            // We can have a huge number of reset/dropped HTTP2 streams in our internal
+            // communication when there are a lot of clients dropping connections. This
+            // internally causes an GOAWAY/ENHANCE_YOUR_CALM error breaking cluster consensus.
+            // We prefer to keep more pending reset streams even though this may be expensive,
+            // versus an internal error that is very hard to handle.
+            // More info: <https://github.com/qdrant/qdrant/issues/1907>
+            .http2_max_pending_accept_reset_streams(Some(1024));
 
-            if let Some(config) = tls_config {
-                log::info!("TLS enabled for internal gRPC API (TTL not supported)");
+        if let Some(config) = tls_config {
+            log::info!("TLS enabled for internal gRPC API (TTL not supported)");
 
-                server = server.tls_config(config)?;
-            } else {
-                log::info!("TLS disabled for internal gRPC API");
-            };
+            server = server
+                .tls_config(config)
+                .map_err(helpers::tonic_error_to_io_error)?;
+        } else {
+            log::info!("TLS disabled for internal gRPC API");
+        };
 
-            // The stack of middleware that our service will be wrapped in
-            let middleware_layer = tower::ServiceBuilder::new()
-                .layer(logging::LoggingMiddlewareLayer::new())
-                .layer(tonic_telemetry::TonicTelemetryLayer::new(
-                    tonic_telemetry_collector,
-                ))
-                .into_inner();
+        // The stack of middleware that our service will be wrapped in
+        let middleware_layer = tower::ServiceBuilder::new()
+            .layer(logging::LoggingMiddlewareLayer::new())
+            .layer(tonic_telemetry::TonicTelemetryLayer::new(
+                tonic_telemetry_collector,
+            ))
+            .into_inner();
 
-            server
-                .layer(middleware_layer)
-                .add_service(
-                    QdrantServer::new(qdrant_service)
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip)
-                        .max_decoding_message_size(usize::MAX),
-                )
-                .add_service(
-                    QdrantInternalServer::new(qdrant_internal_service)
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip)
-                        .max_decoding_message_size(usize::MAX),
-                )
-                .add_service(
-                    CollectionsInternalServer::new(collections_internal_service)
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip)
-                        .max_decoding_message_size(usize::MAX),
-                )
-                .add_service(
-                    PointsInternalServer::new(points_internal_service)
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip)
-                        .max_decoding_message_size(usize::MAX),
-                )
-                .add_service(
-                    ShardSnapshotsServer::new(ShardSnapshotsTelemetryWrapper::new(
-                        shard_snapshots_service,
-                    ))
+        server
+            .layer(middleware_layer)
+            .add_service(
+                QdrantServer::new(qdrant_service)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
                     .max_decoding_message_size(usize::MAX),
-                )
-                .add_service(
-                    RaftServer::new(raft_service)
-                        .send_compressed(CompressionEncoding::Gzip)
-                        .accept_compressed(CompressionEncoding::Gzip)
-                        .max_decoding_message_size(usize::MAX),
-                )
-                .serve_with_shutdown(socket, async {
-                    wait_stop_signal("internal gRPC").await;
-                })
-                .await
-        })
-        .unwrap();
+            )
+            .add_service(
+                QdrantInternalServer::new(qdrant_internal_service)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(usize::MAX),
+            )
+            .add_service(
+                CollectionsInternalServer::new(collections_internal_service)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(usize::MAX),
+            )
+            .add_service(
+                PointsInternalServer::new(points_internal_service)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(usize::MAX),
+            )
+            .add_service(
+                ShardSnapshotsServer::new(ShardSnapshotsTelemetryWrapper::new(
+                    shard_snapshots_service,
+                ))
+                .send_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Gzip)
+                .max_decoding_message_size(usize::MAX),
+            )
+            .add_service(
+                RaftServer::new(raft_service)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+                    .max_decoding_message_size(usize::MAX),
+            )
+            .serve_with_shutdown(socket, async {
+                wait_stop_signal("internal gRPC").await;
+            })
+            .await
+            .map_err(helpers::tonic_error_to_io_error)?;
+        Ok::<(), io::Error>(())
+    })?;
     Ok(())
 }
