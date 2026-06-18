@@ -2124,11 +2124,23 @@ fn select_private_hnsw_layer_neighbors(
     distance: DistanceKind,
     neighbor_count: usize,
 ) -> Result<Vec<[u8; 32]>, PrivateHnswClientError> {
+    if points.is_empty() || source_index >= points.len() {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("points"));
+    }
+    if points.len() != levels.len() {
+        return Err(PrivateHnswClientError::InvalidBuildConfig("levels"));
+    }
     if neighbor_count == 0 {
         return Ok(Vec::new());
     }
-    let source = &points[source_index];
-    let mut candidates = Vec::with_capacity(points.len().saturating_sub(1));
+    let source = points
+        .get(source_index)
+        .ok_or(PrivateHnswClientError::InvalidBuildConfig("points"))?;
+    let candidate_capacity = points
+        .len()
+        .checked_sub(1)
+        .ok_or(PrivateHnswClientError::InvalidBuildConfig("points"))?;
+    let mut candidates = Vec::with_capacity(candidate_capacity);
     for (candidate_index, candidate) in points.iter().enumerate() {
         if candidate_index == source_index || levels[candidate_index] < level {
             continue;
@@ -7345,6 +7357,43 @@ mod tests {
                 &[point],
                 &[64],
                 &[0],
+            ),
+            Err(PrivateHnswClientError::InvalidBuildConfig("levels"))
+        );
+    }
+
+    #[test]
+    fn layer_neighbor_selection_rejects_malformed_shape_without_panic() {
+        let point = PrivateHnswBuildPoint {
+            node_id: [1; 32],
+            point_token: [2; 32],
+            vector: vec![0.0, 1.0],
+            payload_fetch_token: None,
+        };
+
+        assert_eq!(
+            select_private_hnsw_layer_neighbors(&[], &[], 0, 0, DistanceKind::Euclid, 1),
+            Err(PrivateHnswClientError::InvalidBuildConfig("points"))
+        );
+        assert_eq!(
+            select_private_hnsw_layer_neighbors(
+                std::slice::from_ref(&point),
+                &[0],
+                1,
+                0,
+                DistanceKind::Euclid,
+                1,
+            ),
+            Err(PrivateHnswClientError::InvalidBuildConfig("points"))
+        );
+        assert_eq!(
+            select_private_hnsw_layer_neighbors(
+                std::slice::from_ref(&point),
+                &[],
+                0,
+                0,
+                DistanceKind::Euclid,
+                1,
             ),
             Err(PrivateHnswClientError::InvalidBuildConfig("levels"))
         );
