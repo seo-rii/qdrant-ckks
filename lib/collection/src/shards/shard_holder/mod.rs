@@ -292,7 +292,7 @@ impl ShardHolder {
         Ok(())
     }
 
-    fn rebuild_rings(&mut self) {
+    fn rebuild_rings(&mut self) -> CollectionResult<()> {
         let mut rings = match self.sharding_method {
             // With auto sharding, we have a single hash ring
             ShardingMethod::Auto => HashMap::from([(None, HashRingRouter::single())]),
@@ -321,9 +321,12 @@ impl ShardHolder {
         // Restore resharding hash ring if resharding is active and haven't reached
         // `WriteHashRingCommitted` stage yet
         if let Some(state) = self.resharding_state.read().deref() {
-            let ring = rings
-                .get_mut(&state.shard_key)
-                .expect("must have hash ring for current resharding shard key");
+            let Some(ring) = rings.get_mut(&state.shard_key) else {
+                return Err(CollectionError::service_error(format!(
+                    "Resharding state references missing shard key {:?}",
+                    state.shard_key,
+                )));
+            };
 
             ring.start_resharding(state.shard_id, state.direction);
 
@@ -333,6 +336,7 @@ impl ShardHolder {
         }
 
         self.rings = rings;
+        Ok(())
     }
 
     pub async fn apply_shards_state(
@@ -358,7 +362,7 @@ impl ShardHolder {
             }
         }
 
-        self.rebuild_rings();
+        self.rebuild_rings()?;
 
         Ok(())
     }
@@ -1005,7 +1009,7 @@ impl ShardHolder {
 
         // If resharding, rebuild the hash rings because they'll be messed up
         if self.resharding_state.read().is_some() {
-            self.rebuild_rings();
+            self.rebuild_rings()?;
         }
 
         Ok(())
