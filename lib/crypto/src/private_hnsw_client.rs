@@ -16,8 +16,9 @@ use crate::private_hnsw_oram::{
     PrivateHnswOramBucket, PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput,
     PrivateHnswOramManifest, PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature,
     PrivateHnswParams, ResultPrivacyMode, private_hnsw_oram_bucket_ciphertext_bytes,
-    private_hnsw_oram_commit_signature_message, private_hnsw_oram_manifest_signature_message,
-    private_hnsw_oram_read_paths_signature_message, validate_private_hnsw_oram_manifest,
+    try_private_hnsw_oram_commit_signature_message,
+    try_private_hnsw_oram_manifest_signature_message,
+    try_private_hnsw_oram_read_paths_signature_message, validate_private_hnsw_oram_manifest,
     validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_manifest_signature_shape,
 };
 use crate::private_result_oram::{
@@ -3446,7 +3447,8 @@ pub fn sign_private_hnsw_oram_commit(
         signature_alg: "ed25519",
         signature_key_id: context.signing_key_id,
     };
-    let message = private_hnsw_oram_commit_signature_message(input);
+    let message = try_private_hnsw_oram_commit_signature_message(input)
+        .map_err(|_| PrivateHnswClientError::InvalidCommitSignatureContext("signature_message"))?;
     let signature = key_pair.sign(&message);
     Ok(PrivateHnswOramSignature {
         alg: "ed25519".to_string(),
@@ -3501,7 +3503,8 @@ pub fn sign_private_hnsw_oram_read_paths(
         signature_alg: "ed25519",
         signature_key_id: context.signing_key_id,
     };
-    let message = private_hnsw_oram_read_paths_signature_message(input);
+    let message = try_private_hnsw_oram_read_paths_signature_message(input)
+        .map_err(|_| PrivateHnswClientError::InvalidCommitSignatureContext("signature_message"))?;
     let signature = key_pair.sign(&message);
     Ok(PrivateHnswOramSignature {
         alg: "ed25519".to_string(),
@@ -3553,7 +3556,9 @@ pub fn sign_private_hnsw_oram_manifest(
     })?;
     validate_private_hnsw_oram_manifest_shape(manifest)
         .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest"))?;
-    let message = private_hnsw_oram_manifest_signature_message(manifest);
+    let message = try_private_hnsw_oram_manifest_signature_message(manifest).map_err(|_| {
+        PrivateHnswClientError::InvalidManifestSignatureContext("signature_message")
+    })?;
     let signature = key_pair.sign(&message);
     Ok(PrivateHnswOramSignature {
         alg: "ed25519".to_string(),
