@@ -112,8 +112,14 @@ impl<T: bytemuck::Pod + 'static> UniversalRead<T> for IoUringFile {
             rt.enqueue_single(entry)?;
             rt.submit_and_wait(1)?;
 
-            let (_, resp) = rt.completed().next().expect("read operation completed")?;
-            let items = resp.expect_read();
+            let Some(result) = rt.completed().next() else {
+                return Err(UniversalIoError::from(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "io_uring read completed without a completion entry",
+                )));
+            };
+            let (_, resp) = result?;
+            let items = resp.expect_read()?;
             Ok(Cow::from(items))
         })?
     }
@@ -140,7 +146,7 @@ impl<T: bytemuck::Pod + 'static> UniversalRead<T> for IoUringFile {
 
                 for result in rt.completed() {
                     let (id, resp) = result?;
-                    let items = resp.expect_read();
+                    let items = resp.expect_read()?;
                     callback(id as _, &items)?;
                 }
             }
@@ -182,12 +188,14 @@ impl<T: bytemuck::Pod + 'static> UniversalRead<T> for IoUringFile {
                 for result in rt.completed() {
                     let (id, resp) = result?;
 
-                    let file_idx = file_indices
-                        .get(id as usize)
-                        .copied()
-                        .expect("file index is tracked");
+                    let file_idx = file_indices.get(id as usize).copied().ok_or_else(|| {
+                        UniversalIoError::from(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "io_uring completed unknown file index",
+                        ))
+                    })?;
 
-                    let items = resp.expect_read();
+                    let items = resp.expect_read()?;
                     callback(id as _, file_idx, &items)?;
                 }
             }
@@ -198,9 +206,21 @@ impl<T: bytemuck::Pod + 'static> UniversalRead<T> for IoUringFile {
 
     fn len(&self) -> Result<u64> {
         let byte_len = self.file.metadata()?.len();
+        let item_size = size_of::<T>() as u64;
+        if item_size == 0 {
+            return Err(UniversalIoError::from(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "io_uring does not support zero-sized items",
+            )));
+        }
+        if byte_len % item_size != 0 {
+            return Err(UniversalIoError::from(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "io_uring file length is not aligned to item size",
+            )));
+        }
 
-        let items_len = byte_len / size_of::<T>() as u64;
-        debug_assert_eq!(byte_len % size_of::<T>() as u64, 0);
+        let items_len = byte_len / item_size;
 
         Ok(items_len)
     }
@@ -228,8 +248,14 @@ impl<T: bytemuck::Pod + 'static> UniversalWrite<T> for IoUringFile {
             rt.enqueue_single(entry)?;
             rt.submit_and_wait(1)?;
 
-            let (_, resp) = rt.completed().next().expect("write operation completed")?;
-            resp.expect_write();
+            let Some(result) = rt.completed().next() else {
+                return Err(UniversalIoError::from(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "io_uring write completed without a completion entry",
+                )));
+            };
+            let (_, resp) = result?;
+            resp.expect_write()?;
             Ok(())
         })?
     }
@@ -255,7 +281,7 @@ impl<T: bytemuck::Pod + 'static> UniversalWrite<T> for IoUringFile {
 
                 for result in rt.completed() {
                     let (_, resp) = result?;
-                    resp.expect_write();
+                    resp.expect_write()?;
                 }
             }
 
@@ -291,7 +317,7 @@ impl<T: bytemuck::Pod + 'static> UniversalWrite<T> for IoUringFile {
 
                 for result in rt.completed() {
                     let (_, resp) = result?;
-                    resp.expect_write();
+                    resp.expect_write()?;
                 }
             }
 
@@ -367,7 +393,9 @@ impl<'uring, 'data, T> IoUringRuntime<'uring, 'data, T> {
         }
 
         while let Some(entry) = entries(&mut self.state)? {
-            unsafe { sqe.push(&entry).expect("SQE is not full") };
+            unsafe {
+                sqe.push(&entry).map_err(io::Error::other)?;
+            }
 
             if self.in_progress + sqe.len() >= IO_URING_QUEUE_LENGTH as _ {
                 break;
@@ -415,8 +443,10 @@ impl<'uring, 'data, T> Drop for IoUringRuntime<'uring, 'data, T> {
             // TODO: Cancel operations with `io_uring::Submitter::register_sync_cancel`?
 
             // TODO: Implement `wait` (without submit) based on `io_uring::Submitter::enter`?
-            self.submit_and_wait(self.in_progress)
-                .expect("operations submitted");
+            if let Err(err) = self.submit_and_wait(self.in_progress) {
+                log::debug!("failed to submit pending io_uring operations during drop: {err}");
+                break;
+            }
 
             for result in self.completed() {
                 match result {
@@ -468,11 +498,21 @@ impl<'data, T> IoUringState<'data, T> {
                     allow_short_read,
                 },
             )?
-            .expect_read();
+            .expect_read()?;
 
         let bytes_ptr = items.as_mut_ptr().cast();
-        let byte_length = length * size_of::<T>() as u64;
-        let byte_length = u32::try_from(byte_length).expect("read buffer length fit within u32");
+        let byte_length = length.checked_mul(size_of::<T>() as u64).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "read buffer length overflows u64",
+            )
+        })?;
+        let byte_length = u32::try_from(byte_length).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "read buffer length does not fit within u32",
+            )
+        })?;
         let entry = opcode::Read::new(fd, bytes_ptr, byte_length)
             .offset(byte_offset)
             .build()
@@ -491,10 +531,17 @@ impl<'data, T> IoUringState<'data, T> {
     where
         T: bytemuck::Pod,
     {
-        let items = self.init(id, IoUringRequest::Write(items))?.expect_write();
+        let items = self
+            .init(id, IoUringRequest::Write(items))?
+            .expect_write()?;
 
         let bytes: &[u8] = bytemuck::cast_slice(items);
-        let byte_length = u32::try_from(bytes.len()).expect("write buffer length fit within u32");
+        let byte_length = u32::try_from(bytes.len()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "write buffer length does not fit within u32",
+            )
+        })?;
         let entry = opcode::Write::new(fd, bytes.as_ptr(), byte_length)
             .offset(byte_offset)
             .build()
@@ -521,6 +568,13 @@ impl<'data, T> IoUringState<'data, T> {
             .requests
             .remove(&id)
             .ok_or_else(|| io::Error::other("request {id} does not exist"))?;
+        let item_size = mem::size_of::<T>();
+        if item_size == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "io_uring does not support zero-sized items",
+            ));
+        }
 
         let resp = match req {
             IoUringRequest::Read {
@@ -528,22 +582,38 @@ impl<'data, T> IoUringState<'data, T> {
                 allow_short_read,
             } => {
                 if allow_short_read {
-                    let actual_items = byte_length as usize / mem::size_of::<T>();
-                    debug_assert!(
-                        actual_items <= items.len(),
-                        "read returned more bytes than requested"
-                    );
+                    if byte_length as usize % item_size != 0 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "io_uring read returned a partial item",
+                        ));
+                    }
+                    let actual_items = byte_length as usize / item_size;
+                    if actual_items > items.len() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "io_uring read returned more bytes than requested",
+                        ));
+                    }
                     // Truncate to the actual number of items read (short read at EOF).
                     items.truncate(actual_items);
-                } else {
-                    assert_eq!(mem::size_of_val(items.as_slice()), byte_length as usize);
+                } else if mem::size_of_val(items.as_slice()) != byte_length as usize {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "io_uring read returned unexpected byte length",
+                    ));
                 }
                 let items: Vec<T> = unsafe { assume_init_vec(items) };
                 IoUringResponse::Read(items)
             }
 
             IoUringRequest::Write(items) => {
-                assert_eq!(mem::size_of_val(items), byte_length as usize);
+                if mem::size_of_val(items) != byte_length as usize {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "io_uring write returned unexpected byte length",
+                    ));
+                }
                 IoUringResponse::Write
             }
         };
@@ -578,19 +648,23 @@ enum IoUringRequest<'data, T> {
 }
 
 impl<'data, T> IoUringRequest<'data, T> {
-    pub fn expect_read(&mut self) -> &mut Vec<MaybeUninit<T>> {
-        #[expect(clippy::match_wildcard_for_single_variants)]
+    pub fn expect_read(&mut self) -> io::Result<&mut Vec<MaybeUninit<T>>> {
         match self {
-            IoUringRequest::Read { buffer, .. } => buffer,
-            _ => panic!(),
+            IoUringRequest::Read { buffer, .. } => Ok(buffer),
+            IoUringRequest::Write(_) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "io_uring request is not a read",
+            )),
         }
     }
 
-    pub fn expect_write(&self) -> &'data [T] {
-        #[expect(clippy::match_wildcard_for_single_variants)]
+    pub fn expect_write(&self) -> io::Result<&'data [T]> {
         match self {
-            IoUringRequest::Write(buffer) => buffer,
-            _ => panic!(),
+            IoUringRequest::Write(buffer) => Ok(buffer),
+            IoUringRequest::Read { .. } => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "io_uring request is not a write",
+            )),
         }
     }
 }
@@ -602,19 +676,23 @@ enum IoUringResponse<T> {
 }
 
 impl<T> IoUringResponse<T> {
-    pub fn expect_read(self) -> Vec<T> {
-        #[expect(clippy::match_wildcard_for_single_variants)]
+    pub fn expect_read(self) -> io::Result<Vec<T>> {
         match self {
-            Self::Read(buffer) => buffer,
-            _ => panic!(),
+            Self::Read(buffer) => Ok(buffer),
+            Self::Write => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "io_uring response is not a read",
+            )),
         }
     }
 
-    pub fn expect_write(self) {
-        #[expect(clippy::match_wildcard_for_single_variants)]
+    pub fn expect_write(self) -> io::Result<()> {
         match self {
-            Self::Write => (),
-            _ => panic!(),
+            Self::Write => Ok(()),
+            Self::Read(_) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "io_uring response is not a write",
+            )),
         }
     }
 }
