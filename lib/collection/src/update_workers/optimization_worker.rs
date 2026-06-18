@@ -119,7 +119,8 @@ impl UpdateWorkers {
             );
             if let Err(err) = result {
                 log::error!("Failed to ensure there are appendable segments with capacity: {err}");
-                panic!("Failed to ensure there are appendable segments with capacity: {err}");
+                let _ = optimization_finished_sender.send(());
+                continue;
             }
 
             // If not forcing, wait on next signal if we have too many handles
