@@ -1779,8 +1779,7 @@ impl Collection {
                             "encrypted vector sidecar entry '{vector_name}' is malformed",
                         )));
                     };
-                    if marker_object.contains_key(ENCRYPTED_CKKS_VECTOR_MARKER) {
-                        let marker = marker_object.get(ENCRYPTED_CKKS_VECTOR_MARKER).unwrap();
+                    if let Some(marker) = marker_object.get(ENCRYPTED_CKKS_VECTOR_MARKER) {
                         let encrypted_vector: EncryptedCkksVector =
                             serde_json::from_value(marker.clone()).map_err(|err| {
                                 CollectionError::bad_input(format!(
@@ -3008,9 +3007,10 @@ impl Collection {
     ) -> CollectionResult<ScrollResult> {
         let default_request = ScrollRequestInternal::default();
 
-        let mut limit = request
-            .limit
-            .unwrap_or_else(|| default_request.limit.unwrap());
+        let default_limit = default_request.limit.ok_or_else(|| {
+            CollectionError::service_error("scroll default request is missing a limit")
+        })?;
+        let mut limit = request.limit.unwrap_or(default_limit);
 
         self.ensure_crypto_migration_allows_regular_operation("reads")
             .await?;
@@ -3119,7 +3119,12 @@ impl Collection {
             None
         } else {
             // remove extra point, it would be a first point of the next page
-            Some(points.pop().unwrap().id)
+            let Some(point) = points.pop() else {
+                return Err(CollectionError::service_error(
+                    "scroll next page offset requested but result set is empty",
+                ));
+            };
+            Some(point.id)
         };
         Ok(ScrollResult {
             points,
