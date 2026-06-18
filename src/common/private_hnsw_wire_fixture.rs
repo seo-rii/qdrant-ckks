@@ -25,6 +25,7 @@ use qdrant_sec::{
     seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted_verified,
     sign_private_hnsw_oram_commit, sign_private_hnsw_oram_manifest,
     sign_private_hnsw_oram_manifest_refresh, sign_private_hnsw_oram_read_paths,
+    sign_private_hnsw_oram_read_paths_for_manifest,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::json;
@@ -266,6 +267,14 @@ impl PrivateHnswRouteWireFixture {
         requested_paths: u32,
         dummy_paths_included: bool,
     ) -> PrivateHnswOramSignature {
+        if requested_paths == self.manifest.oram.path_batch_size && dummy_paths_included {
+            return sign_private_hnsw_oram_read_paths_for_manifest(
+                &self.signing_key,
+                &self.manifest,
+                paths,
+            )
+            .unwrap();
+        }
         sign_private_hnsw_oram_read_paths(
             &self.signing_key,
             PrivateHnswCommitSignatureContext {
