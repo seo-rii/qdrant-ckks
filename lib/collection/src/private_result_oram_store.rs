@@ -881,12 +881,11 @@ fn merkle_siblings_for_bucket(
             "private result ORAM Merkle proof bucket index is out of range",
         ));
     }
-    let mut siblings = Vec::with_capacity(levels.len().saturating_sub(1));
-    for (level_index, level) in levels
-        .iter()
-        .enumerate()
-        .take(levels.len().saturating_sub(1))
-    {
+    let sibling_level_count = levels.len().checked_sub(1).ok_or_else(|| {
+        CollectionError::bad_request("private result ORAM Merkle proof levels are invalid")
+    })?;
+    let mut siblings = Vec::with_capacity(sibling_level_count);
+    for (level_index, level) in levels.iter().enumerate().take(sibling_level_count) {
         let sibling_index = if index % 2 == 0 { index + 1 } else { index - 1 };
         let position = if index % 2 == 0 {
             PrivateResultOramMerkleSiblingPosition::Right
