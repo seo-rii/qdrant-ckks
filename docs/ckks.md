@@ -610,6 +610,10 @@ buckets must live under private non-symlink directories. Directory creation
 checks symlink/type before chmod so symlink targets are not hardened by mistake,
 and Unix group/world access on bucket directories or files is rejected fail
 closed.
+Bucket-file read bounds account for base64url expansion of the configured
+decoded ciphertext limit plus bounded JSON metadata overhead, so the largest
+allowlisted ORAM bucket shapes remain readable without weakening oversized-file
+rejection.
 Runtime and signed-manifest validation keep fixed path budgets executable:
 `oram.path_batch_size` must fit within the Path ORAM leaf count, and
 `fixed_budget.paths_per_round` must equal `oram.path_batch_size`. This prevents

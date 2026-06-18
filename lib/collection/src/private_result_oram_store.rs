@@ -36,6 +36,7 @@ const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
 const MAX_EPOCH_BYTES: u64 = 16 * 1024;
 const MAX_MERKLE_BYTES: u64 = 256 * 1024 * 1024;
+const BUCKET_JSON_OVERHEAD_BYTES: usize = 32 * 1024;
 
 #[derive(Clone)]
 pub struct PrivateResultOramStore {
@@ -300,7 +301,7 @@ impl PrivateResultOramStore {
         max_ciphertext_bytes: usize,
     ) -> CollectionResult<PrivateResultOramBucket> {
         validate_private_dir(&self.buckets_dir())?;
-        let max_bucket_file_bytes = max_ciphertext_bytes as u64 + 32 * 1024;
+        let max_bucket_file_bytes = max_bucket_file_bytes(max_ciphertext_bytes)?;
         let bucket: PrivateResultOramBucket =
             read_json_private_file(&self.bucket_path(bucket_id), max_bucket_file_bytes)?;
         if bucket.bucket_id != bucket_id {
@@ -1080,6 +1081,17 @@ fn base64url_nopad_encoded_len(byte_len: usize) -> CollectionResult<usize> {
         .ok_or_else(|| {
             CollectionError::bad_request("private result ORAM bucket ciphertext size overflows")
         })
+}
+
+fn max_bucket_file_bytes(max_ciphertext_bytes: usize) -> CollectionResult<u64> {
+    let encoded_len = base64url_nopad_encoded_len(max_ciphertext_bytes)?;
+    let file_len = encoded_len
+        .checked_add(BUCKET_JSON_OVERHEAD_BYTES)
+        .ok_or_else(|| {
+            CollectionError::bad_request("private result ORAM bucket file size overflows")
+        })?;
+    u64::try_from(file_len)
+        .map_err(|_| CollectionError::bad_request("private result ORAM bucket file size overflows"))
 }
 
 fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> CollectionError {
@@ -1992,6 +2004,28 @@ mod tests {
             .unwrap();
         store.write_bucket(&bucket, 42, 16, 128).unwrap();
         assert_eq!(store.read_bucket(3, 42, 16, 128).unwrap(), bucket);
+
+        let large_max_ciphertext_bytes = 2 * 65_536 + 4_096;
+        let large_ciphertext = vec![7; large_max_ciphertext_bytes];
+        let large_ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest(&large_ciphertext).as_ref());
+        let large_bucket = PrivateResultOramBucket {
+            version: 1,
+            bucket_id: 6,
+            index_epoch: 42,
+            ciphertext: BASE64URL_NOPAD.encode(&large_ciphertext),
+            ciphertext_sha256: large_ciphertext_sha256.clone(),
+            bucket_commitment: fixture_bucket_commitment(6, 42, &large_ciphertext_sha256),
+        };
+        store
+            .write_bucket(&large_bucket, 42, 16, large_max_ciphertext_bytes)
+            .unwrap();
+        assert_eq!(
+            store
+                .read_bucket(6, 42, 16, large_max_ciphertext_bytes)
+                .unwrap(),
+            large_bucket
+        );
 
         let mut bad_hash = bucket.clone();
         bad_hash.ciphertext_sha256 = root_hash(1);

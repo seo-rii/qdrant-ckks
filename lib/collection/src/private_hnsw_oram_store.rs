@@ -32,6 +32,7 @@ const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
 const MAX_EPOCH_BYTES: u64 = 16 * 1024;
 const MAX_MERKLE_BYTES: u64 = 256 * 1024 * 1024;
+const BUCKET_JSON_OVERHEAD_BYTES: usize = 32 * 1024;
 pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 
 #[derive(Clone)]
@@ -371,7 +372,7 @@ impl PrivateHnswOramStore {
         max_ciphertext_bytes: usize,
     ) -> CollectionResult<PrivateHnswOramBucket> {
         validate_private_dir(&self.buckets_dir())?;
-        let max_bucket_file_bytes = max_ciphertext_bytes as u64 + 32 * 1024;
+        let max_bucket_file_bytes = max_bucket_file_bytes(max_ciphertext_bytes)?;
         let bucket: PrivateHnswOramBucket =
             read_json_private_file(&self.bucket_path(bucket_id), max_bucket_file_bytes)?;
         if bucket.bucket_id != bucket_id {
@@ -1400,6 +1401,17 @@ fn max_base64url_nopad_encoded_len(byte_len: usize) -> CollectionResult<usize> {
         })
 }
 
+fn max_bucket_file_bytes(max_ciphertext_bytes: usize) -> CollectionResult<u64> {
+    let encoded_len = max_base64url_nopad_encoded_len(max_ciphertext_bytes)?;
+    let file_len = encoded_len
+        .checked_add(BUCKET_JSON_OVERHEAD_BYTES)
+        .ok_or_else(|| {
+            CollectionError::bad_request("private HNSW ORAM bucket file size overflows")
+        })?;
+    u64::try_from(file_len)
+        .map_err(|_| CollectionError::bad_request("private HNSW ORAM bucket file size overflows"))
+}
+
 fn validate_epoch_state(epoch: &PrivateHnswOramEpochState) -> CollectionResult<()> {
     decode_base64url_32(&epoch.root_hash, "root_hash")?;
     Ok(())
@@ -2376,6 +2388,18 @@ mod tests {
             .unwrap();
         store.write_bucket(&bucket, 42, 16, 64).unwrap();
         assert_eq!(store.read_bucket(3, 42, 16, 64).unwrap(), bucket);
+
+        let large_max_ciphertext_bytes = 2 * 65_536 + 4_096;
+        let large_bucket = fixture_bucket(6, 42, &vec![7; large_max_ciphertext_bytes]);
+        store
+            .write_bucket(&large_bucket, 42, 16, large_max_ciphertext_bytes)
+            .unwrap();
+        assert_eq!(
+            store
+                .read_bucket(6, 42, 16, large_max_ciphertext_bytes)
+                .unwrap(),
+            large_bucket
+        );
 
         let mut bad_hash = bucket.clone();
         bad_hash.ciphertext_sha256 = root_hash(1);
