@@ -2698,13 +2698,13 @@ pub fn private_result_oram_bucket_commitment(
         .map_err(|_| PrivateResultOramError::InvalidBucketField("ciphertext_sha256"))?;
 
     let mut message = Vec::new();
-    push_domain(
+    push_bucket_context_domain(
         &mut message,
         PRIVATE_RESULT_ORAM_BUCKET_COMMITMENT_DOMAIN.as_bytes(),
-    );
-    push_str(&mut message, context.collection_id);
-    push_str(&mut message, context.key_id);
-    push_str(&mut message, context.rk_id);
+    )?;
+    push_bucket_context_str(&mut message, context.collection_id)?;
+    push_bucket_context_str(&mut message, context.key_id)?;
+    push_bucket_context_str(&mut message, context.rk_id)?;
     push_u64(&mut message, context.rk_epoch);
     push_u64(&mut message, context.bucket_id);
     push_u64(&mut message, context.index_epoch);
@@ -2717,13 +2717,13 @@ fn private_result_oram_bucket_aead(
 ) -> Result<Vec<u8>, PrivateResultOramError> {
     validate_private_result_bucket_context(context)?;
     let mut aad = Vec::new();
-    push_domain(
+    push_bucket_context_domain(
         &mut aad,
         PRIVATE_RESULT_ORAM_BUCKET_AEAD_CONTEXT_DOMAIN.as_bytes(),
-    );
-    push_str(&mut aad, context.collection_id);
-    push_str(&mut aad, context.key_id);
-    push_str(&mut aad, context.rk_id);
+    )?;
+    push_bucket_context_str(&mut aad, context.collection_id)?;
+    push_bucket_context_str(&mut aad, context.key_id)?;
+    push_bucket_context_str(&mut aad, context.rk_id)?;
     push_u64(&mut aad, context.rk_epoch);
     push_u64(&mut aad, context.bucket_id);
     push_u64(&mut aad, context.index_epoch);
@@ -2736,13 +2736,13 @@ fn private_result_oram_client_state_aead(
     validate_private_result_client_state_context(context)?;
     let root_hash = decode_base64url_32(context.root_hash, "root_hash")?;
     let mut aad = Vec::new();
-    push_domain(
+    push_client_state_context_domain(
         &mut aad,
         PRIVATE_RESULT_ORAM_CLIENT_STATE_AEAD_CONTEXT_DOMAIN.as_bytes(),
-    );
-    push_str(&mut aad, context.collection_id);
-    push_str(&mut aad, context.key_id);
-    push_str(&mut aad, context.rk_id);
+    )?;
+    push_client_state_context_str(&mut aad, context.collection_id)?;
+    push_client_state_context_str(&mut aad, context.key_id)?;
+    push_client_state_context_str(&mut aad, context.rk_id)?;
     push_u64(&mut aad, context.rk_epoch);
     push_u64(&mut aad, context.index_epoch);
     aad.extend_from_slice(&root_hash);
@@ -3265,6 +3265,58 @@ fn push_domain(message: &mut Vec<u8>, domain: &[u8]) {
 fn push_str(message: &mut Vec<u8>, value: &str) {
     message.extend_from_slice(&(value.len() as u64).to_be_bytes());
     message.extend_from_slice(value.as_bytes());
+}
+
+fn push_bucket_context_domain(
+    message: &mut Vec<u8>,
+    domain: &[u8],
+) -> Result<(), PrivateResultOramError> {
+    let len: u32 = domain
+        .len()
+        .try_into()
+        .map_err(|_| PrivateResultOramError::InvalidBucketContext("context_length"))?;
+    message.extend_from_slice(&len.to_be_bytes());
+    message.extend_from_slice(domain);
+    Ok(())
+}
+
+fn push_bucket_context_str(
+    message: &mut Vec<u8>,
+    value: &str,
+) -> Result<(), PrivateResultOramError> {
+    let len: u64 = value
+        .len()
+        .try_into()
+        .map_err(|_| PrivateResultOramError::InvalidBucketContext("context_length"))?;
+    message.extend_from_slice(&len.to_be_bytes());
+    message.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn push_client_state_context_domain(
+    message: &mut Vec<u8>,
+    domain: &[u8],
+) -> Result<(), PrivateResultOramError> {
+    let len: u32 = domain
+        .len()
+        .try_into()
+        .map_err(|_| PrivateResultOramError::InvalidClientStateContext("context_length"))?;
+    message.extend_from_slice(&len.to_be_bytes());
+    message.extend_from_slice(domain);
+    Ok(())
+}
+
+fn push_client_state_context_str(
+    message: &mut Vec<u8>,
+    value: &str,
+) -> Result<(), PrivateResultOramError> {
+    let len: u64 = value
+        .len()
+        .try_into()
+        .map_err(|_| PrivateResultOramError::InvalidClientStateContext("context_length"))?;
+    message.extend_from_slice(&len.to_be_bytes());
+    message.extend_from_slice(value.as_bytes());
+    Ok(())
 }
 
 fn push_u16(message: &mut Vec<u8>, value: u16) {
