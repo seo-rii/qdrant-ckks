@@ -82,17 +82,23 @@ impl Bitmask {
 
         // create bitmask mmap
         let path = Self::bitmask_path(dir);
-        create_and_ensure_length(&path, length).unwrap();
+        create_and_ensure_length(&path, length)?;
         let mmap = open_write_mmap(&path, AdviceSetting::from(DEFAULT_ADVICE), false)?;
         let mmap_bitslice = MmapBitSlice::try_from(mmap, 0)?;
 
-        assert_eq!(mmap_bitslice.len(), length * 8, "Bitmask length mismatch");
+        if mmap_bitslice.len() != length * 8 {
+            return Err(GridstoreError::service_error(format!(
+                "Bitmask length mismatch: expected {} bits, got {} bits",
+                length * 8,
+                mmap_bitslice.len()
+            )));
+        }
 
         // create regions gaps mmap
         let num_regions = mmap_bitslice.len() / config.region_size_blocks;
         let region_gaps = vec![RegionGaps::all_free(config.region_size_blocks as u16); num_regions];
 
-        let mmap_region_gaps = BitmaskGaps::create(dir, region_gaps.into_iter(), config.clone());
+        let mmap_region_gaps = BitmaskGaps::create(dir, region_gaps.into_iter(), config.clone())?;
 
         Ok(Self {
             config,
@@ -181,12 +187,12 @@ impl Bitmask {
         let extra_length = Self::length_for_page(&self.config);
 
         // flush outstanding changes
-        self.bitslice.flusher()().unwrap();
+        self.bitslice.flusher()()?;
 
         // reopen the file with a larger size
         let previous_bitslice_len = self.bitslice.len();
         let new_length = (previous_bitslice_len / u8::BITS as usize) + extra_length;
-        create_and_ensure_length(&self.path, new_length).unwrap();
+        create_and_ensure_length(&self.path, new_length)?;
         let mmap = open_write_mmap(&self.path, AdviceSetting::from(DEFAULT_ADVICE), false)?;
 
         self.bitslice = MmapBitSlice::try_from(mmap, 0)?;
@@ -270,15 +276,29 @@ impl Bitmask {
     where
         F: FnOnce(u32) -> (PageId, BlockOffset),
     {
+        if num_blocks == 0 {
+            return Some(translate_local_index(0));
+        }
+
         // Get raw memory region
-        let (head, raw_region, tail) = bitslice
-            .domain()
-            .region()
-            .expect("Regions cover more than one usize");
+        let Some((head, raw_region, tail)) = bitslice.domain().region() else {
+            return Self::find_available_blocks_in_slice_slow(
+                bitslice,
+                num_blocks,
+                translate_local_index,
+            );
+        };
 
         // We expect the regions to not use partial usizes
         debug_assert!(head.is_none());
         debug_assert!(tail.is_none());
+        if head.is_some() || tail.is_some() {
+            return Self::find_available_blocks_in_slice_slow(
+                bitslice,
+                num_blocks,
+                translate_local_index,
+            );
+        }
 
         let mut current_size: u32 = 0;
         let mut current_start: u32 = 0;
@@ -361,6 +381,37 @@ impl Bitmask {
         None
     }
 
+    fn find_available_blocks_in_slice_slow<F>(
+        bitslice: &BitSlice,
+        num_blocks: u32,
+        translate_local_index: F,
+    ) -> Option<(PageId, BlockOffset)>
+    where
+        F: FnOnce(u32) -> (PageId, BlockOffset),
+    {
+        if num_blocks == 0 {
+            return Some(translate_local_index(0));
+        }
+
+        let mut current_size = 0u32;
+        let mut current_start = 0u32;
+        for (idx, bit) in bitslice.iter().enumerate() {
+            if !*bit {
+                if current_size == 0 {
+                    current_start = u32::try_from(idx).ok()?;
+                }
+                current_size = current_size.saturating_add(1);
+                if current_size >= num_blocks {
+                    return Some(translate_local_index(current_start));
+                }
+            } else {
+                current_size = 0;
+            }
+        }
+
+        None
+    }
+
     pub(crate) fn mark_blocks(
         &mut self,
         page_id: PageId,
@@ -421,14 +472,16 @@ impl Bitmask {
     pub fn calculate_gaps(region: &BitSlice, region_size_blocks: usize) -> RegionGaps {
         debug_assert_eq!(region.len(), region_size_blocks, "Unexpected region size");
         // Get raw memory region
-        let (head, raw_region, tail) = region
-            .domain()
-            .region()
-            .expect("Region covers more than one usize");
+        let Some((head, raw_region, tail)) = region.domain().region() else {
+            return Self::calculate_gaps_slow(region, region_size_blocks);
+        };
 
         // We expect the region to not use partial usizes
         debug_assert!(head.is_none());
         debug_assert!(tail.is_none());
+        if head.is_some() || tail.is_some() {
+            return Self::calculate_gaps_slow(region, region_size_blocks);
+        }
 
         // Iterate over the integers that compose the bitslice. So that we can perform bitwise operations.
         let mut max = 0;
@@ -516,6 +569,47 @@ impl Bitmask {
                 .map(|chunk| chunk.leading_zeros())
                 .sum::<u32>();
         }
+
+        #[cfg(debug_assertions)]
+        {
+            RegionGaps::new(
+                leading as u16,
+                trailing as u16,
+                max as u16,
+                region_size_blocks as u16,
+            )
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            RegionGaps::new(leading as u16, trailing as u16, max as u16)
+        }
+    }
+
+    fn calculate_gaps_slow(region: &BitSlice, region_size_blocks: usize) -> RegionGaps {
+        let scanned_len = region.len().min(region_size_blocks);
+        let mut max = 0u32;
+        let mut current = 0u32;
+        for bit in region.iter().take(scanned_len) {
+            if !*bit {
+                current += 1;
+                max = max.max(current);
+            } else {
+                current = 0;
+            }
+        }
+
+        let leading = region
+            .iter()
+            .take(scanned_len)
+            .take_while(|bit| !**bit)
+            .count() as u32;
+        let trailing = region
+            .iter()
+            .take(scanned_len)
+            .rev()
+            .take_while(|bit| !**bit)
+            .count() as u32;
 
         #[cfg(debug_assertions)]
         {
