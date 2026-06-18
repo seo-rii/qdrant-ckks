@@ -4346,7 +4346,14 @@ mod tests {
 
     fn test_keys() -> PrivateHnswClientKeys {
         let resource_key = SecretKey::from_bytes([7; 32]);
-        PrivateHnswClientKeys::derive_from_resource_key(&resource_key).unwrap()
+        PrivateHnswClientKeys::derive_from_resource_key_with_context(
+            &resource_key,
+            "collection-uuid-1",
+            "text",
+            "tenant-a/vector-private-rk",
+            7,
+        )
+        .unwrap()
     }
 
     fn bucket_context(bucket_id: u64) -> PrivateHnswBucketAeadContext<'static> {

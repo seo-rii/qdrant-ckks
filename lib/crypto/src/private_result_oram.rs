@@ -3574,8 +3574,13 @@ mod tests {
     }
 
     fn result_test_keys() -> PrivateResultOramClientKeys {
-        PrivateResultOramClientKeys::derive_from_resource_key(&SecretKey::from_bytes([7; 32]))
-            .unwrap()
+        PrivateResultOramClientKeys::derive_from_resource_key_with_context(
+            &SecretKey::from_bytes([7; 32]),
+            "collection-uuid-1",
+            "tenant-a/payload-private-rk",
+            7,
+        )
+        .unwrap()
     }
 
     fn result_bucket_context(bucket_id: u64) -> PrivateResultOramBucketAeadContext<'static> {
