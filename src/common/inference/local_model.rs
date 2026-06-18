@@ -20,9 +20,6 @@ impl LocalModelName {
 }
 
 /// Run inference with only local models.
-///
-/// # Panics
-/// Panics if one inference input did not target a local model.
 pub fn infer_local(
     inference_inputs: Vec<InferenceInput>,
     inference_type: InferenceType,
@@ -38,9 +35,9 @@ pub fn infer_local(
         } = input;
 
         let Some(model_name) = LocalModelName::from_str(&model) else {
-            unreachable!(
-                "Non local model has been passed to infer_local(). This can happen if a newly added model wasn't added to infer_local()"
-            )
+            return Err(StorageError::bad_input(format!(
+                "Only local inference models are supported by infer_local, got {model}",
+            )));
         };
 
         // Validate it is text
