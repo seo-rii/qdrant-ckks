@@ -20,7 +20,7 @@ use fs_err as fs;
 use itertools::Itertools;
 use parking_lot::lock_api::RwLockWriteGuard;
 use parking_lot::{Mutex, RwLockUpgradableReadGuard};
-use segment::common::operation_error::{OperationResult, check_process_stopped};
+use segment::common::operation_error::{OperationError, OperationResult, check_process_stopped};
 use segment::common::operation_time_statistics::{
     OperationDurationsAggregator, ScopeDurationMeasurer,
 };
@@ -179,12 +179,12 @@ fn build_new_segment<F: ?Sized + OptimizationStrategy>(
     let segments: Vec<_> = input_segments
         .iter()
         .map(|i| match i {
-            LockedSegment::Original(o) => o.clone(),
-            LockedSegment::Proxy(_) => {
-                panic!("Trying to optimize a segment that is already being optimized!")
-            }
+            LockedSegment::Original(o) => Ok(o.clone()),
+            LockedSegment::Proxy(_) => Err(OperationError::service_error(
+                "trying to optimize a segment that is already being optimized",
+            )),
         })
-        .collect();
+        .collect::<OperationResult<_>>()?;
 
     let mut defragmentation_keys = HashSet::new();
     for segment in &segments {
@@ -331,9 +331,7 @@ fn build_new_segment<F: ?Sized + OptimizationStrategy>(
     }
 
     for (point_id, versions) in deleted_points_snapshot {
-        optimized_segment
-            .delete_point(versions.operation_version, point_id, hw_counter)
-            .unwrap();
+        optimized_segment.delete_point(versions.operation_version, point_id, hw_counter)?;
     }
 
     Ok(optimized_segment)
@@ -454,9 +452,7 @@ fn finish_optimization(
         .filter(|&(point_id, _)| !already_remove_points.contains_key(point_id));
 
     for (&point_id, &versions) in points_diff {
-        optimized_segment
-            .delete_point(versions.operation_version, point_id, hw_counter)
-            .unwrap();
+        optimized_segment.delete_point(versions.operation_version, point_id, hw_counter)?;
     }
 
     // Replace proxy segments with new optimized segment
@@ -684,7 +680,11 @@ pub fn execute_optimization<F: ?Sized + OptimizationStrategy>(
             let segment_path = &segment.read().segment_path;
             SegmentVersion::save(segment_path)?;
         }
-        Some(LockedSegment::Proxy(_)) => unreachable!(),
+        Some(LockedSegment::Proxy(_)) => {
+            return Err(OperationError::service_error(
+                "temporary copy-on-write segment unexpectedly proxied",
+            ));
+        }
         None => {}
     }
 

@@ -46,7 +46,12 @@ impl SnapshotManifest {
             let segment_id = segment_path
                 .file_name()
                 .and_then(|segment_id| segment_id.to_str())
-                .expect("segment path ends with a valid segment id");
+                .ok_or_else(|| {
+                    OperationError::validation_error(format!(
+                        "invalid shard snapshot: segment path {} does not end with a valid UTF-8 segment id",
+                        segment_path.display(),
+                    ))
+                })?;
 
             let added = snapshot_segments.insert(segment_id.to_string());
             debug_assert!(added);

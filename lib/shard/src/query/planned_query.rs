@@ -187,12 +187,17 @@ impl PlannedQuery {
             Some(ScoringQuery::OrderBy(_)) => None,
             Some(ScoringQuery::Formula(_)) => None,
             Some(ScoringQuery::Sample(_)) => None,
-            Some(ScoringQuery::Mmr(_)) => Some(RescoreStages::collection_level(RescoreParams {
-                rescore: query.clone().unwrap(),
-                limit,
-                score_threshold: score_threshold.map(OrderedFloat),
-                params,
-            })),
+            Some(ScoringQuery::Mmr(_)) => {
+                let rescore = query.clone().ok_or_else(|| {
+                    OperationError::service_error("missing MMR query for rescore planning")
+                })?;
+                Some(RescoreStages::collection_level(RescoreParams {
+                    rescore,
+                    limit,
+                    score_threshold: score_threshold.map(OrderedFloat),
+                    params,
+                }))
+            }
         };
 
         // Everything must come from a single source.

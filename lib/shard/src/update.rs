@@ -420,11 +420,19 @@ pub fn delete_points(
 fn deferred_points_to_exclude_by_filter(
     segments: &SegmentHolder,
     per_segment_points: &AHashMap<SegmentId, Vec<PointIdType>>,
-) -> AHashSet<PointIdType> {
+) -> OperationResult<AHashSet<PointIdType>> {
     // Find the maximum version for each point across segments where the filter matched.
     let mut max_versions: AHashMap<PointIdType, Option<SeqNumberType>> = Default::default();
     for (segment_id, point_ids) in per_segment_points {
-        let segment = segments.get(*segment_id).unwrap().get().read();
+        let segment = segments
+            .get(*segment_id)
+            .ok_or_else(|| {
+                OperationError::service_error(format!(
+                    "segment {segment_id} disappeared while excluding deferred points by filter",
+                ))
+            })?
+            .get()
+            .read();
         for point_id in point_ids {
             let version = segment.point_version(*point_id);
             let entry = max_versions.entry(*point_id).or_insert(None);
@@ -451,7 +459,7 @@ fn deferred_points_to_exclude_by_filter(
         }
     }
 
-    to_exclude
+    Ok(to_exclude)
 }
 
 /// Deletes points from all segments matching the given filter
@@ -487,7 +495,7 @@ pub fn delete_points_by_filter(
     // If the latest version of a point is deferred and does not match the filter,
     // we need to skip deletion for all copies and let deduplication during optimization delete old points.
     if has_deferred {
-        let points_to_keep = deferred_points_to_exclude_by_filter(segments, &points_to_delete);
+        let points_to_keep = deferred_points_to_exclude_by_filter(segments, &points_to_delete)?;
 
         // Expand per-segment lists to include all segments that have each matched point,
         // so that ALL copies get deleted (not just the segment where the filter matched).
@@ -595,7 +603,11 @@ pub fn sync_points(
             let mut updated = 0;
 
             for (id, stored_record) in stored_records {
-                let point = id_to_point.get(&id).unwrap();
+                let point = id_to_point.get(&id).ok_or_else(|| {
+                    OperationError::service_error(format!(
+                        "synced point {id} missing from input point map",
+                    ))
+                })?;
                 if !point.is_equal_to(&stored_record) {
                     points_to_update.push(*point);
                     updated += 1;
@@ -609,10 +621,15 @@ pub fn sync_points(
     // 4. Select new points
     let num_updated = points_to_update.len();
     let mut num_new = 0;
-    sync_points.difference(&stored_point_ids).for_each(|id| {
+    for id in sync_points.difference(&stored_point_ids) {
+        let point = id_to_point.get(id).ok_or_else(|| {
+            OperationError::service_error(format!(
+                "new sync point {id} missing from input point map"
+            ))
+        })?;
         num_new += 1;
-        points_to_update.push(*id_to_point.get(id).unwrap());
-    });
+        points_to_update.push(*point);
+    }
 
     // 5. Upsert points which differ from the stored ones
     let num_replaced = upsert_points(segments, op_num, points_to_update, hw_counter)?;
@@ -1045,7 +1062,7 @@ fn points_by_filter(
     // Deferred points corner case: exclude points where the newest version is deferred
     // and wasn’t matched by the filter (only an old stale copy matched).
     if has_deferred {
-        let to_exclude = deferred_points_to_exclude_by_filter(segments, &per_segment_points);
+        let to_exclude = deferred_points_to_exclude_by_filter(segments, &per_segment_points)?;
         if !to_exclude.is_empty() {
             affected_points.retain(|id| !to_exclude.contains(id));
         }

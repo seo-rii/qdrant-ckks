@@ -80,14 +80,14 @@ impl TryFrom<RecordInternal> for PointStructPersisted {
             order_value: _,
         } = record;
 
-        if vector.is_none() {
+        let Some(vector) = vector else {
             return Err("Vector is empty".to_string());
-        }
+        };
 
         Ok(Self {
             id,
             payload,
-            vector: VectorStructPersisted::from(vector.unwrap()),
+            vector: VectorStructPersisted::from(vector),
         })
     }
 }
