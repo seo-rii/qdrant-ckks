@@ -368,7 +368,7 @@ impl PrivateHnswRouteWireFixture {
                         "kind": "path_oram",
                         "bucket_size": 4,
                         "block_size_bytes": 8192,
-                        "tree_height": 24,
+                        "tree_height": 20,
                         "path_batch_size": self.manifest.fixed_budget.fixed_result_k
                     },
                     "integrity": {

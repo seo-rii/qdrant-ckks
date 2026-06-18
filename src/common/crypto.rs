@@ -265,6 +265,9 @@ const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const DIRECT_MATERIAL_RAW_MAX_BYTES: usize = 128;
 const MAX_CLIENT_SIGNATURE_PUBLIC_KEYS: usize = 8;
+// The MVP collection stores persist Merkle nodes as bounded JSON metadata.
+// Keep runtime policy inside that storage envelope until compact Merkle storage lands.
+const PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX: u64 = 20;
 const MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES: usize = 16 * 1024;
 const MAX_OPENFHE_BRIDGE_PROGRAM_BYTES: u64 = 64 * 1024 * 1024;
 const METADATA_BLIND_INDEX_ALLOWED_OPTIONS: &[&str] = &[
@@ -4176,7 +4179,7 @@ fn validate_private_result_oram_options(
         PRIVATE_RESULT_ORAM_OPTION,
         "tree_height",
         1,
-        62,
+        PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX,
     )?;
     let path_batch_size = private_hnsw_object_u64(
         instance_name,
@@ -4336,7 +4339,7 @@ fn validate_private_hnsw_oram_options(
         PRIVATE_HNSW_ORAM_OPTION,
         "tree_height",
         1,
-        62,
+        PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX,
     )?;
     let path_batch_size = private_hnsw_object_u64(
         instance_name,
@@ -9393,7 +9396,7 @@ mod tests {
                 "kind": "path_oram",
                 "bucket_size": 4,
                 "block_size_bytes": 8192,
-                "tree_height": 24,
+                "tree_height": PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX,
                 "path_batch_size": 8
             },
             "fixed_budget": {
@@ -9424,7 +9427,7 @@ mod tests {
                 "kind": "path_oram",
                 "bucket_size": 4,
                 "block_size_bytes": 8192,
-                "tree_height": 24,
+                "tree_height": PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX,
                 "path_batch_size": 8
             },
             "integrity": {
@@ -9976,15 +9979,15 @@ mod tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options;
-        options["oram"]["tree_height"] = json!(63);
+        options["oram"]["tree_height"] = json!(PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX + 1);
         options["oram"]["path_batch_size"] = json!(1);
         options["fixed_budget"]["paths_per_round"] = json!(1);
         let err = validate_crypto_settings(&settings)
-            .expect_err("tree_height must fit Path ORAM bucket/leaf arithmetic");
+            .expect_err("tree_height must fit the current Merkle metadata storage envelope");
         assert!(
             matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
                 if option == "oram.tree_height"
-                    && reason.contains("1..=62")),
+                    && reason.contains("1..=20")),
             "unexpected error: {err:?}",
         );
     }
@@ -10688,6 +10691,21 @@ mod tests {
             .unwrap()
             .options;
         options["oram"]["path_batch_size"] = json!(1);
+        options["oram"]["tree_height"] = json!(PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX + 1);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM tree_height must fit the Merkle metadata cap");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "oram.tree_height" && reason.contains("1..=20")),
+            "unexpected error: {err:?}",
+        );
+
+        let options = &mut settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options;
+        options["oram"]["tree_height"] = json!(PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX);
         options["oram"]["block_size_bytes"] = json!(1234);
         let err = validate_crypto_settings(&settings)
             .expect_err("private result ORAM must use block size allowlist");

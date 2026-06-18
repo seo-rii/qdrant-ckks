@@ -777,6 +777,10 @@ collection-local `private_hnsw_oram` filesystem paths.
 Path ORAM manifests must also bind `bucket_count` to the canonical full binary
 tree size implied by `tree_height`, so malformed layouts are rejected before a
 session can reach `read_paths`.
+Runtime validation currently caps private HNSW and private result ORAM
+`tree_height` at 20 because the MVP stores Merkle metadata as bounded JSON;
+larger trees require the future compact/proof-oriented Merkle store before they
+can be accepted safely.
 Initial bucket upload also rejects incomplete bucket sets, duplicated bucket
 ids, malformed bucket ciphertext, and ciphertext hash mismatches before
 encrypted bucket files are written. Bucket commitments must also match the
