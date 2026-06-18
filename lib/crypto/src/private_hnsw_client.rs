@@ -3559,6 +3559,11 @@ pub fn encode_private_hnsw_node_block(
         .len()
         .try_into()
         .map_err(|_| PrivateHnswClientError::VectorTooLarge)?;
+    let neighbor_count: u32 = block
+        .neighbors
+        .len()
+        .try_into()
+        .map_err(|_| PrivateHnswClientError::FixedNeighborSlotsTooLarge)?;
     let fixed_neighbor_slots_u32: u32 = fixed_neighbor_slots
         .try_into()
         .map_err(|_| PrivateHnswClientError::FixedNeighborSlotsTooLarge)?;
@@ -3582,7 +3587,7 @@ pub fn encode_private_hnsw_node_block(
             encoded.extend_from_slice(&[0; 32]);
         }
     }
-    push_u32(&mut encoded, block.neighbors.len() as u32);
+    push_u32(&mut encoded, neighbor_count);
     push_u32(&mut encoded, fixed_neighbor_slots_u32);
     push_u32(&mut encoded, vector_len);
     encoded.extend_from_slice(&block.vector);
