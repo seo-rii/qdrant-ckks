@@ -392,6 +392,7 @@ mod private_result_oram_rest_tests {
         private_result_oram_bucket_commitment, private_result_oram_commit_signature_message,
         private_result_oram_merkle_root_for_commitments, sign_private_result_oram_commit,
         sign_private_result_oram_manifest, sign_private_result_oram_read_buckets,
+        sign_private_result_oram_read_buckets_for_manifest,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use serde::de::DeserializeOwned;
@@ -627,6 +628,13 @@ mod private_result_oram_rest_tests {
         }
 
         fn read_signature(&self, bucket_ids: &[u64]) -> qdrant_sec::PrivateResultOramSignature {
+            if let Ok(signature) = sign_private_result_oram_read_buckets_for_manifest(
+                &self.signing_key,
+                &self.manifest,
+                bucket_ids,
+            ) {
+                return signature;
+            }
             sign_private_result_oram_read_buckets(
                 &self.signing_key,
                 PrivateResultOramReadBucketsSignatureContext {
