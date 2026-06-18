@@ -246,10 +246,13 @@ impl PrivateResultOramSessionRegistry {
             collection_id,
             now_unix,
         )?;
-        *self
+        let count = self
             .active_snapshot_by_collection
             .entry(collection_id.to_string())
-            .or_insert(0) += 1;
+            .or_insert(0);
+        *count = count.checked_add(1).ok_or_else(|| {
+            StorageError::service_error("private result ORAM snapshot reference count overflowed")
+        })?;
         Ok(())
     }
 
@@ -257,18 +260,22 @@ impl PrivateResultOramSessionRegistry {
         let Some(count) = self.active_snapshot_by_collection.get_mut(collection_id) else {
             return;
         };
-        *count = count.saturating_sub(1);
-        if *count == 0 {
+        if *count <= 1 {
             self.active_snapshot_by_collection.remove(collection_id);
+        } else {
+            *count -= 1;
         }
     }
 
     fn begin_upload(&mut self, collection_id: &str, now_unix: u64) -> StorageResult<()> {
         ensure_private_result_oram_write_window_in_registry(self, collection_id, now_unix)?;
-        *self
+        let count = self
             .active_upload_by_collection
             .entry(collection_id.to_string())
-            .or_insert(0) += 1;
+            .or_insert(0);
+        *count = count.checked_add(1).ok_or_else(|| {
+            StorageError::service_error("private result ORAM upload reference count overflowed")
+        })?;
         Ok(())
     }
 
@@ -276,9 +283,10 @@ impl PrivateResultOramSessionRegistry {
         let Some(count) = self.active_upload_by_collection.get_mut(collection_id) else {
             return;
         };
-        *count = count.saturating_sub(1);
-        if *count == 0 {
+        if *count <= 1 {
             self.active_upload_by_collection.remove(collection_id);
+        } else {
+            *count -= 1;
         }
     }
 
@@ -2334,6 +2342,42 @@ mod private_result_oram_tests {
             .begin_upload("collection-private-result-test", now)
             .unwrap();
         registry.release_upload("collection-private-result-test");
+    }
+
+    #[test]
+    fn session_registry_reference_counts_fail_closed_and_cleanup_zero() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .active_snapshot_by_collection
+            .insert("collection-private-result-test".to_string(), usize::MAX);
+        let err = registry
+            .begin_collection_snapshot("collection-private-result-test", now)
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("snapshot reference count overflowed")
+        );
+
+        registry
+            .active_snapshot_by_collection
+            .insert("collection-private-result-test".to_string(), 0);
+        registry.release_collection_snapshot("collection-private-result-test");
+        assert!(
+            !registry
+                .active_snapshot_by_collection
+                .contains_key("collection-private-result-test")
+        );
+
+        registry
+            .active_upload_by_collection
+            .insert("collection-private-result-test".to_string(), 0);
+        registry.release_upload("collection-private-result-test");
+        assert!(
+            !registry
+                .active_upload_by_collection
+                .contains_key("collection-private-result-test")
+        );
     }
 
     #[test]
