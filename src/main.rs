@@ -144,7 +144,7 @@ fn main() -> anyhow::Result<()> {
     // explicitly to use the same provider as before.
     rustls::crypto::ring::default_provider()
         .install_default()
-        .expect("Failed to install default CryptoProvider");
+        .map_err(|_| anyhow::anyhow!("Failed to install default CryptoProvider"))?;
 
     let args = Args::parse();
 
@@ -190,8 +190,10 @@ fn main() -> anyhow::Result<()> {
     // If audit logging is enabled, but failed to initialize,
     // we should stop the service, as it may cause unlogged access to the data.
     // The guard must be held alive until shutdown to flush remaining audit events.
-    let _audit_guard = common::audit::init_audit_logger(settings.audit.as_ref())
-        .expect("Audit logger must be initialized if audit logging is enabled");
+    let _audit_guard =
+        common::audit::init_audit_logger(settings.audit.as_ref()).map_err(|err| {
+            anyhow::anyhow!("Audit logger must be initialized if audit logging is enabled: {err}")
+        })?;
 
     #[cfg(feature = "gpu")]
     if let Some(settings_gpu) = &settings.gpu {
@@ -332,7 +334,7 @@ fn main() -> anyhow::Result<()> {
     // Create and own search runtime out of the scope of async context to ensure correct
     // destruction of it
     let search_runtime = create_search_runtime(settings.storage.performance.max_search_threads)
-        .expect("Can't search create runtime.");
+        .map_err(|err| anyhow::anyhow!("Can't create search runtime: {err}"))?;
 
     let update_runtime = create_update_runtime(
         settings
@@ -340,10 +342,10 @@ fn main() -> anyhow::Result<()> {
             .performance
             .max_optimization_runtime_threads,
     )
-    .expect("Can't optimizer create runtime.");
+    .map_err(|err| anyhow::anyhow!("Can't create optimizer runtime: {err}"))?;
 
-    let general_runtime =
-        create_general_purpose_runtime().expect("Can't optimizer general purpose runtime.");
+    let general_runtime = create_general_purpose_runtime()
+        .map_err(|err| anyhow::anyhow!("Can't create general purpose runtime: {err}"))?;
     let runtime_handle = general_runtime.handle().clone();
 
     // Use global CPU budget for optimizations based on settings
@@ -426,13 +428,15 @@ fn main() -> anyhow::Result<()> {
         let consensus_state: ConsensusStateRef = ConsensusManager::new(
             persistent_consensus_state,
             toc_arc.clone(),
-            propose_operation_sender.unwrap(),
+            propose_operation_sender.ok_or_else(|| {
+                anyhow::anyhow!("Distributed deployment requires a consensus proposal sender")
+            })?,
             storage_path,
             collection::operations::types::PeerMetadata::current_with_crypto_runtime_capability_fingerprint(
                 Some(crate::common::crypto::crypto_runtime_capability_fingerprint(&settings)),
             ),
         )
-        .expect("initialize consensus manager")
+        .map_err(|err| anyhow::anyhow!("initialize consensus manager: {err}"))?
         .into();
         let is_new_deployment = consensus_state.is_new_deployment();
 
@@ -479,7 +483,7 @@ fn main() -> anyhow::Result<()> {
             runtime_handle.clone(),
             args.reinit,
         )
-        .expect("Can't initialize consensus");
+        .map_err(|err| anyhow::anyhow!("Can't initialize consensus: {err}"))?;
 
         handles.push(handle);
 
@@ -597,7 +601,7 @@ fn main() -> anyhow::Result<()> {
                     ),
                 )
             })
-            .unwrap();
+            .map_err(|err| anyhow::anyhow!("Can't spawn REST thread: {err}"))?;
         handles.push(handle);
     }
 
@@ -620,7 +624,7 @@ fn main() -> anyhow::Result<()> {
                     ),
                 )
             })
-            .unwrap();
+            .map_err(|err| anyhow::anyhow!("Can't spawn metrics thread: {err}"))?;
         handles.push(handle);
     }
 
@@ -644,7 +648,7 @@ fn main() -> anyhow::Result<()> {
                     ),
                 )
             })
-            .unwrap();
+            .map_err(|err| anyhow::anyhow!("Can't spawn gRPC thread: {err}"))?;
         handles.push(handle);
     } else {
         log::info!("gRPC endpoint disabled");
@@ -670,31 +674,31 @@ fn main() -> anyhow::Result<()> {
 
                     let mut error = format!("{} deadlocks detected\n", deadlocks.len());
                     for (i, threads) in deadlocks.iter().enumerate() {
-                        writeln!(error, "Deadlock #{i}").expect("fail to writeln!");
+                        let _ = writeln!(error, "Deadlock #{i}");
                         for t in threads {
-                            writeln!(
+                            let _ = writeln!(
                                 error,
                                 "Thread Id {:#?}\n{:#?}",
                                 t.thread_id(),
                                 t.backtrace(),
-                            )
-                            .expect("fail to writeln!");
+                            );
                         }
                     }
                     log::error!("{error}");
                 }
             })
-            .unwrap();
+            .map_err(|err| anyhow::anyhow!("Can't spawn deadlock checker thread: {err}"))?;
     }
 
     touch_started_file_indicator();
 
     for handle in handles {
-        log::debug!(
-            "Waiting for thread {} to finish",
-            handle.thread().name().unwrap()
-        );
-        handle.join().expect("thread is not panicking")?;
+        let thread_name = handle.thread().name().unwrap_or("<unnamed>").to_string();
+        log::debug!("Waiting for thread {thread_name} to finish");
+        match handle.join() {
+            Ok(result) => result?,
+            Err(_) => return Err(anyhow::anyhow!("Thread {thread_name} panicked")),
+        }
     }
     drop(toc_arc);
     drop(settings);
