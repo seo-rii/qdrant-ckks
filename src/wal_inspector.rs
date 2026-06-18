@@ -36,23 +36,52 @@ fn main() {
 
 fn print_consensus_wal(wal_path: &Path, raw: bool) {
     // must live within a folder named `collections_meta_wal`
-    let wal = ConsensusOpWal::new(wal_path);
+    let wal = match ConsensusOpWal::new(wal_path) {
+        Ok(wal) => wal,
+        Err(err) => {
+            eprintln!("Unable to open consensus WAL in directory {wal_path:?}: {err}.");
+            return;
+        }
+    };
     println!("==========================");
-    let first_index = wal.first_entry().unwrap();
+    let first_index = match wal.first_entry() {
+        Ok(first_index) => first_index,
+        Err(err) => {
+            eprintln!("Unable to read first consensus WAL entry: {err}");
+            return;
+        }
+    };
     println!("First entry: {first_index:?}");
-    let last_index = wal.last_entry().unwrap();
+    let last_index = match wal.last_entry() {
+        Ok(last_index) => last_index,
+        Err(err) => {
+            eprintln!("Unable to read last consensus WAL entry: {err}");
+            return;
+        }
+    };
     println!("Last entry: {last_index:?}");
+    let index_offset = match wal.index_offset() {
+        Ok(index_offset) => index_offset,
+        Err(err) => {
+            eprintln!("Unable to read consensus WAL index offset: {err:?}");
+            return;
+        }
+    };
     println!(
         "Offset of first entry: {:?}",
-        wal.index_offset().unwrap().wal_to_raft_offset
+        index_offset.wal_to_raft_offset
     );
-    let entries = wal
-        .entries(
-            first_index.map(|f| f.index).unwrap_or(1),
-            last_index.map(|f| f.index).unwrap_or(0) + 1,
-            None,
-        )
-        .unwrap();
+    let entries = match wal.entries(
+        first_index.map(|f| f.index).unwrap_or(1),
+        last_index.map(|f| f.index).unwrap_or(0) + 1,
+        None,
+    ) {
+        Ok(entries) => entries,
+        Err(err) => {
+            eprintln!("Unable to read consensus WAL entries: {err:?}");
+            return;
+        }
+    };
     for entry in entries {
         println!("==========================");
         let data = consensus_entry_data_for_display(&entry, raw);
