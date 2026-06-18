@@ -344,7 +344,11 @@ where
         let points = self.items.entry(id).or_default();
 
         for point in points.iter_mut() {
-            if (self.compare)(item, point.item.unwrap()) {
+            let Some(existing_item) = point.item else {
+                continue;
+            };
+
+            if (self.compare)(item, existing_item) {
                 point.count += 1;
                 point.coordinates.push((row, index));
                 return;
