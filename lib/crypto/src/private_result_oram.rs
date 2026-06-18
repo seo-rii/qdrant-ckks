@@ -2237,7 +2237,7 @@ pub fn validate_private_result_oram_manifest_signature(
         verification,
     )?;
     let signature_bytes = decode_base64url_64(&signature.sig)?;
-    let message = private_result_oram_manifest_signature_message(manifest);
+    let message = try_private_result_oram_manifest_signature_message(manifest)?;
     UnparsedPublicKey::new(&ED25519, verification.public_key)
         .verify(&message, &signature_bytes)
         .map_err(|_| PrivateResultOramError::InvalidManifestSignature)
@@ -2307,7 +2307,7 @@ pub fn sign_private_result_oram_manifest(
 ) -> Result<PrivateResultOramSignature, PrivateResultOramError> {
     validate_private_result_oram_manifest_shape(manifest)?;
     validate_resource_id(&manifest.owner_signing_key_id)?;
-    let message = private_result_oram_manifest_signature_message(manifest);
+    let message = try_private_result_oram_manifest_signature_message(manifest)?;
     let signature = key_pair.sign(&message);
     Ok(PrivateResultOramSignature {
         alg: PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM.to_string(),
@@ -2611,30 +2611,54 @@ pub fn sign_private_result_oram_manifest_refresh(
 pub fn private_result_oram_manifest_signature_message(
     manifest: &PrivateResultOramManifest,
 ) -> Vec<u8> {
+    try_private_result_oram_manifest_signature_message(manifest)
+        .expect("private result ORAM manifest signature fields must fit canonical length prefixes")
+}
+
+pub fn try_private_result_oram_manifest_signature_message(
+    manifest: &PrivateResultOramManifest,
+) -> Result<Vec<u8>, PrivateResultOramError> {
     let mut message = Vec::new();
-    push_domain(
+    try_push_domain(
         &mut message,
         PRIVATE_RESULT_ORAM_MANIFEST_SIGNATURE_DOMAIN.as_bytes(),
-    );
+        || PrivateResultOramError::InvalidManifestField("signature_message"),
+    )?;
     push_u16(&mut message, manifest.version);
-    push_str(&mut message, &manifest.provider);
-    push_str(&mut message, &manifest.binding);
-    push_str(&mut message, &manifest.collection_id);
-    push_str(&mut message, &manifest.key_id);
-    push_str(&mut message, &manifest.rk_id);
+    try_push_str(&mut message, &manifest.provider, || {
+        PrivateResultOramError::InvalidManifestField("signature_message")
+    })?;
+    try_push_str(&mut message, &manifest.binding, || {
+        PrivateResultOramError::InvalidManifestField("signature_message")
+    })?;
+    try_push_str(&mut message, &manifest.collection_id, || {
+        PrivateResultOramError::InvalidManifestField("signature_message")
+    })?;
+    try_push_str(&mut message, &manifest.key_id, || {
+        PrivateResultOramError::InvalidManifestField("signature_message")
+    })?;
+    try_push_str(&mut message, &manifest.rk_id, || {
+        PrivateResultOramError::InvalidManifestField("signature_message")
+    })?;
     push_u64(&mut message, manifest.rk_epoch);
-    push_str(&mut message, manifest.oram.kind.as_str());
+    try_push_str(&mut message, manifest.oram.kind.as_str(), || {
+        PrivateResultOramError::InvalidManifestField("signature_message")
+    })?;
     push_u32(&mut message, manifest.oram.bucket_size);
     push_u32(&mut message, manifest.oram.block_size_bytes);
     push_u32(&mut message, manifest.oram.tree_height);
     push_u32(&mut message, manifest.oram.path_batch_size);
     push_u64(&mut message, manifest.index_epoch);
-    push_str(&mut message, &manifest.root_hash);
+    try_push_str(&mut message, &manifest.root_hash, || {
+        PrivateResultOramError::InvalidManifestField("signature_message")
+    })?;
     push_u64(&mut message, manifest.bucket_count);
     push_u64(&mut message, manifest.logical_result_count);
     push_u64(&mut message, manifest.dummy_result_count);
-    push_str(&mut message, &manifest.owner_signing_key_id);
-    message
+    try_push_str(&mut message, &manifest.owner_signing_key_id, || {
+        PrivateResultOramError::InvalidManifestField("signature_message")
+    })?;
+    Ok(message)
 }
 
 pub fn private_result_oram_commit_signature_message(
@@ -2648,27 +2672,44 @@ pub fn try_private_result_oram_commit_signature_message(
     input: PrivateResultOramCommitSignatureInput<'_>,
 ) -> Result<Vec<u8>, PrivateResultOramError> {
     let mut message = Vec::new();
-    push_domain(
+    try_push_domain(
         &mut message,
         PRIVATE_RESULT_ORAM_COMMIT_SIGNATURE_DOMAIN.as_bytes(),
-    );
-    push_str(&mut message, input.collection_id);
-    push_str(&mut message, input.key_id);
-    push_str(&mut message, input.rk_id);
+        || PrivateResultOramError::InvalidCommitSignature,
+    )?;
+    try_push_str(&mut message, input.collection_id, || {
+        PrivateResultOramError::InvalidCommitSignature
+    })?;
+    try_push_str(&mut message, input.key_id, || {
+        PrivateResultOramError::InvalidCommitSignature
+    })?;
+    try_push_str(&mut message, input.rk_id, || {
+        PrivateResultOramError::InvalidCommitSignature
+    })?;
     push_u64(&mut message, input.rk_epoch);
     push_u64(&mut message, input.old_epoch);
     push_u64(&mut message, input.new_epoch);
-    push_str(&mut message, input.old_root_hash);
-    push_str(&mut message, input.new_root_hash);
+    try_push_str(&mut message, input.old_root_hash, || {
+        PrivateResultOramError::InvalidCommitSignature
+    })?;
+    try_push_str(&mut message, input.new_root_hash, || {
+        PrivateResultOramError::InvalidCommitSignature
+    })?;
     let updated_bucket_count = u32::try_from(input.updated_buckets.len())
         .map_err(|_| PrivateResultOramError::InvalidCommitSignature)?;
     push_u32(&mut message, updated_bucket_count);
     for bucket in input.updated_buckets {
         push_u64(&mut message, bucket.bucket_id);
-        push_str(&mut message, bucket.ciphertext_sha256);
+        try_push_str(&mut message, bucket.ciphertext_sha256, || {
+            PrivateResultOramError::InvalidCommitSignature
+        })?;
     }
-    push_str(&mut message, input.signature_alg);
-    push_str(&mut message, input.signature_key_id);
+    try_push_str(&mut message, input.signature_alg, || {
+        PrivateResultOramError::InvalidCommitSignature
+    })?;
+    try_push_str(&mut message, input.signature_key_id, || {
+        PrivateResultOramError::InvalidCommitSignature
+    })?;
     Ok(message)
 }
 
@@ -2683,16 +2724,25 @@ pub fn try_private_result_oram_read_buckets_signature_message(
     input: PrivateResultOramReadBucketsSignatureInput<'_>,
 ) -> Result<Vec<u8>, PrivateResultOramError> {
     let mut message = Vec::new();
-    push_domain(
+    try_push_domain(
         &mut message,
         PRIVATE_RESULT_ORAM_READ_BUCKETS_SIGNATURE_DOMAIN.as_bytes(),
-    );
-    push_str(&mut message, input.collection_id);
-    push_str(&mut message, input.key_id);
-    push_str(&mut message, input.rk_id);
+        || PrivateResultOramError::InvalidReadBucketsSignature,
+    )?;
+    try_push_str(&mut message, input.collection_id, || {
+        PrivateResultOramError::InvalidReadBucketsSignature
+    })?;
+    try_push_str(&mut message, input.key_id, || {
+        PrivateResultOramError::InvalidReadBucketsSignature
+    })?;
+    try_push_str(&mut message, input.rk_id, || {
+        PrivateResultOramError::InvalidReadBucketsSignature
+    })?;
     push_u64(&mut message, input.rk_epoch);
     push_u64(&mut message, input.index_epoch);
-    push_str(&mut message, input.root_hash);
+    try_push_str(&mut message, input.root_hash, || {
+        PrivateResultOramError::InvalidReadBucketsSignature
+    })?;
     push_u64(&mut message, input.bucket_count);
     let bucket_id_count = u32::try_from(input.bucket_ids.len())
         .map_err(|_| PrivateResultOramError::InvalidReadBucketsSignature)?;
@@ -2700,8 +2750,12 @@ pub fn try_private_result_oram_read_buckets_signature_message(
     for bucket_id in input.bucket_ids {
         push_u64(&mut message, *bucket_id);
     }
-    push_str(&mut message, input.signature_alg);
-    push_str(&mut message, input.signature_key_id);
+    try_push_str(&mut message, input.signature_alg, || {
+        PrivateResultOramError::InvalidReadBucketsSignature
+    })?;
+    try_push_str(&mut message, input.signature_key_id, || {
+        PrivateResultOramError::InvalidReadBucketsSignature
+    })?;
     Ok(message)
 }
 
@@ -3275,16 +3329,6 @@ fn validate_private_result_oram_client_state_ciphertext_encoded_len(
     Ok(decoded_len)
 }
 
-fn push_domain(message: &mut Vec<u8>, domain: &[u8]) {
-    message.extend_from_slice(&(domain.len() as u32).to_be_bytes());
-    message.extend_from_slice(domain);
-}
-
-fn push_str(message: &mut Vec<u8>, value: &str) {
-    message.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    message.extend_from_slice(value.as_bytes());
-}
-
 fn push_bucket_context_domain(
     message: &mut Vec<u8>,
     domain: &[u8],
@@ -3332,6 +3376,28 @@ fn push_client_state_context_str(
         .len()
         .try_into()
         .map_err(|_| PrivateResultOramError::InvalidClientStateContext("context_length"))?;
+    message.extend_from_slice(&len.to_be_bytes());
+    message.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn try_push_domain(
+    message: &mut Vec<u8>,
+    value: &[u8],
+    error: impl FnOnce() -> PrivateResultOramError,
+) -> Result<(), PrivateResultOramError> {
+    let len: u32 = value.len().try_into().map_err(|_| error())?;
+    message.extend_from_slice(&len.to_be_bytes());
+    message.extend_from_slice(value);
+    Ok(())
+}
+
+fn try_push_str(
+    message: &mut Vec<u8>,
+    value: &str,
+    error: impl FnOnce() -> PrivateResultOramError,
+) -> Result<(), PrivateResultOramError> {
+    let len: u64 = value.len().try_into().map_err(|_| error())?;
     message.extend_from_slice(&len.to_be_bytes());
     message.extend_from_slice(value.as_bytes());
     Ok(())

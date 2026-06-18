@@ -165,6 +165,7 @@ pub use private_result_oram::{
     sign_private_result_oram_manifest_refresh, sign_private_result_oram_read_buckets,
     sign_private_result_oram_read_buckets_for_manifest,
     try_private_result_oram_commit_signature_message,
+    try_private_result_oram_manifest_signature_message,
     try_private_result_oram_read_buckets_signature_message,
     validate_private_result_oram_bucket_shape, validate_private_result_oram_client_config,
     validate_private_result_oram_commit_signature, validate_private_result_oram_manifest,
