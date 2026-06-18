@@ -43,9 +43,8 @@ pub async fn handle_existing_collections(
 ) -> Result<(), StorageError> {
     let full_access = Access::full("Migration from single to cluster");
     let full_auth = Auth::new_internal(full_access.clone());
-    let multipass = full_auth
-        .check_global_access(AccessRequirements::new().manage(), "migration")
-        .expect("Full access should have manage rights");
+    let multipass =
+        full_auth.check_global_access(AccessRequirements::new().manage(), "migration")?;
 
     consensus_state.is_leader_established.await_ready();
     for collection_name in collections {
@@ -96,8 +95,7 @@ pub async fn handle_existing_collections(
                 uuid,
                 metadata,
             },
-        )
-        .expect("Failed to create collection operation");
+        )?;
         if encrypted_collection {
             collection_create_operation.preserve_explicit_uuid_for_internal_migration();
         }
@@ -134,7 +132,11 @@ pub async fn handle_existing_collections(
                     let mut placement = Vec::new();
 
                     for shard_id in shard_ids {
-                        let shard_info = shards.get(shard_id).unwrap();
+                        let shard_info = shards.get(shard_id).ok_or_else(|| {
+                            StorageError::service_error(format!(
+                                "collection {collection_name} shard key {shard_key} references missing shard {shard_id}",
+                            ))
+                        })?;
                         placement.push(shard_info.replicas.keys().copied().collect());
                     }
 
