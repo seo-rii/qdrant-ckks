@@ -1350,9 +1350,11 @@ async fn ckks_vector_search_points_with_scoring(
                     query_point_id,
                     query_encrypted,
                 },
-                _ => unreachable!(
-                    "non-nearest or unsupported CKKS HNSW sidecar search was rejected before segment search"
-                ),
+                _ => {
+                    return Err(StorageError::service_error(
+                        "CKKS HNSW segment search received a non-nearest scoring request",
+                    ));
+                }
             };
             let hnsw_top = ckks_scored_fill_candidate_limit(offset, limit, candidate_scan_limit);
             let mut segment_scored_by_id = HashMap::<_, ScoredPoint>::new();
@@ -2008,9 +2010,11 @@ async fn ckks_vector_search_points_with_scoring(
                 query_point_id,
                 query_encrypted,
             },
-            _ => unreachable!(
-                "non-nearest or unsupported CKKS HNSW sidecar search was rejected before scrolling"
-            ),
+            _ => {
+                return Err(StorageError::service_error(
+                    "CKKS HNSW scroll search received a non-nearest scoring request",
+                ));
+            }
         };
         let hnsw_top = ckks_scored_fill_candidate_limit(offset, limit, candidate_scan_limit);
         let hnsw_points = ckks_sidecar_hnsw_search_points(
