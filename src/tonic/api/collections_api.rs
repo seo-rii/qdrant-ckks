@@ -117,7 +117,9 @@ impl Collections for CollectionsService {
             create_operation,
         ) = meta_operation
         else {
-            unreachable!("grpc create collection must convert to create meta op");
+            return Err(Status::internal(
+                "grpc create collection converted to unexpected collection meta operation",
+            ));
         };
         validate_create_collection_crypto_runtime(
             &self.settings,
