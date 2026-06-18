@@ -565,7 +565,12 @@ impl ShardReplicaSet {
                     update_only_existing,
                 );
 
-                let (_peer_id, err) = failures.into_iter().next().unwrap();
+                let Some((_peer_id, err)) = failures.into_iter().next() else {
+                    return Err(CollectionError::service_error(format!(
+                        "Not enough replicas of shard {} applied operation, but no replica failure was recorded",
+                        self.shard_id,
+                    )));
+                };
                 return Err(err);
             }
         }
