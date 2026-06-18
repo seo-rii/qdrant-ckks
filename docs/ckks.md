@@ -761,7 +761,10 @@ The SDK/server manifest signature validators also validate manifest shape before
 canonical manifest signature message construction. SDK signing helpers reject
 malformed manifests, path-count mismatches, malformed path labels/roots, and
 malformed commit hashes, non-advancing commit epochs, and empty commits before
-constructing canonical signature messages.
+constructing canonical signature messages. Server verification and SDK signing
+use the checked `try_private_hnsw_oram_*_signature_message` builders, so
+oversized canonical domain, string, path-count, or bucket-count fields fail
+closed instead of truncating length prefixes.
 The `read_paths` and `commit` client signatures use the same key-id shape check
 before verifier lookup; invalid key ids are rejected without echoing the
 submitted value. For active sessions, the request key id must match the session
@@ -1020,8 +1023,11 @@ closed. Normal Qdrant search APIs remain client-led-session-only for private
 HNSW vectors.
 The crypto crate defines the payload/result ORAM manifest shape through
 `PrivateResultOramManifest`, `PrivateResultOramBucket`, and
-`private_result_oram_manifest_signature_message`. It can validate manifest
-shape, including canonical Path ORAM tree_height/bucket_count consistency,
+`private_result_oram_manifest_signature_message`. Production signing and
+verification use the checked `try_private_result_oram_*_signature_message`
+builders so canonical field-length or bucket-count overflow fails closed before
+Ed25519 verification/signing. It can validate manifest shape, including
+canonical Path ORAM tree_height/bucket_count consistency,
 logical plus dummy count against ORAM bucket capacity, Ed25519 signatures,
 collection/key/epoch context, and root hash pinning;
 `private_result_oram_commit_signature_message` defines the signed bucket
