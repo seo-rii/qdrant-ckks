@@ -403,49 +403,39 @@ impl Collection {
         optimizers_overwrite: Option<OptimizersConfigDiff>,
     ) -> CollectionResult<Self> {
         let start_time = std::time::Instant::now();
-        let stored_version = CollectionVersion::load(path)
-            .expect("Can't read collection version")
-            .expect("Collection version is not found");
+        let stored_version = CollectionVersion::load(path)?.ok_or_else(|| {
+            CollectionError::service_error(format!(
+                "Collection version is not found at {}",
+                path.display()
+            ))
+        })?;
 
         let app_version = CollectionVersion::current();
 
         if stored_version > app_version {
-            panic!("Collection version is greater than application version");
+            return Err(CollectionError::service_error(format!(
+                "Collection version {stored_version} is greater than application version {app_version}",
+            )));
         }
 
         if stored_version != app_version {
             if Self::can_upgrade_storage(&stored_version, &app_version) {
                 log::info!("Migrating collection {stored_version} -> {app_version}");
-                CollectionVersion::save(path)
-                    .unwrap_or_else(|err| panic!("Can't save collection version {err}"));
+                CollectionVersion::save(path)?;
             } else {
                 log::error!("Cannot upgrade version {stored_version} to {app_version}.");
-                panic!(
+                return Err(CollectionError::service_error(format!(
                     "Cannot upgrade version {stored_version} to {app_version}. Try to use older version of Qdrant first.",
-                );
+                )));
             }
         }
 
-        let collection_config = CollectionConfigInternal::load(path).unwrap_or_else(|err| {
-            panic!(
-                "Can't read collection config due to {}\nat {}",
-                err,
-                path.to_str().unwrap(),
-            )
-        });
+        let collection_config = CollectionConfigInternal::load(path)?;
         collection_config.validate_and_warn();
-        collection_config
-            .validate_startup_crypto_state()
-            .unwrap_or_else(|err| {
-                panic!(
-                    "Collection at {} has unsupported crypto migration startup state: {err}",
-                    path.display(),
-                )
-            });
+        collection_config.validate_startup_crypto_state()?;
 
         let sharding_method = collection_config.params.sharding_method.unwrap_or_default();
-        let mut shard_holder =
-            ShardHolder::new(path, sharding_method).expect("Can not create shard holder");
+        let mut shard_holder = ShardHolder::new(path, sharding_method)?;
 
         let mut effective_optimizers_config = collection_config.optimizer_config.clone();
 
@@ -465,10 +455,10 @@ impl Collection {
             });
         let shared_collection_config = Arc::new(RwLock::new(collection_config.clone()));
 
-        let payload_index_schema = Arc::new(
-            Self::load_payload_index_schema(path, &collection_config.params)
-                .expect("Can't load or initialize payload index schema"),
-        );
+        let payload_index_schema = Arc::new(Self::load_payload_index_schema(
+            path,
+            &collection_config.params,
+        )?);
 
         shard_holder
             .load_shards(
@@ -491,9 +481,7 @@ impl Collection {
         let shared_shard_holder = SharedShardHolder::new(shard_holder);
 
         let collection_stats_cache = CollectionSizeStatsCache::new_with_values(
-            Self::estimate_collection_size_stats(&shared_shard_holder)
-                .await
-                .expect("Failed to load collection size stats"),
+            Self::estimate_collection_size_stats(&shared_shard_holder).await?,
         );
 
         let collection = Self {
