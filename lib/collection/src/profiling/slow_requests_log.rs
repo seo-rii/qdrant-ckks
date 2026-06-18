@@ -151,6 +151,10 @@ impl SlowRequestsLog {
         request: &dyn Loggable,
         cpu_usage_ratio: Option<f32>,
     ) -> Option<LogEntry> {
+        if self.max_entries == 0 {
+            return None;
+        }
+
         let queue = self
             .log_priority_queue
             .entry(request.request_name())
@@ -330,6 +334,17 @@ mod tests {
         assert!(evicted.is_none());
         let entries = log.get_log_entries(10, None);
         assert_eq!(entries.len(), 3);
+    }
+
+    #[test]
+    fn zero_capacity_slow_request_log_is_noop() {
+        let mut log = SlowRequestsLog::new(0);
+        let request = DummyLoggable;
+
+        let evicted = log.log_request("col", Duration::from_secs(1), Utc::now(), &request, None);
+
+        assert!(evicted.is_none());
+        assert!(log.get_log_entries(10, None).is_empty());
     }
 
     #[test]
