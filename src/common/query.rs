@@ -7186,8 +7186,11 @@ pub async fn do_query_batch_points(
                     Some(Query::Vector(VectorQuery::RecommendAverageVector(recommend)))
                         if reco_query_single_positive_point_id(recommend).is_some() =>
                     {
-                        let point_id = reco_query_single_positive_point_id(recommend)
-                            .expect("checked by match guard");
+                        let Some(point_id) = reco_query_single_positive_point_id(recommend) else {
+                            return Err(StorageError::service_error(
+                                "encrypted recommend query point-id guard did not hold",
+                            ));
+                        };
                         let query_encrypted = ckks_vector_sidecar_for_point_id(
                             &collection,
                             &request.using,
