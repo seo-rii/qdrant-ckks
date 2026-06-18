@@ -2259,7 +2259,10 @@ fn bucket_ids_for_path_batch(
         .ok()
         .and_then(|height| height.checked_add(1))
         .ok_or_else(|| StorageError::bad_request("private HNSW ORAM tree_height is too large"))?;
-    let mut bucket_ids = Vec::with_capacity(paths.len().saturating_mul(path_len));
+    let bucket_id_capacity = paths.len().checked_mul(path_len).ok_or_else(|| {
+        StorageError::bad_request("private HNSW ORAM read_paths batch is too large")
+    })?;
+    let mut bucket_ids = Vec::with_capacity(bucket_id_capacity);
     for path in paths {
         let leaf = decode_private_hnsw_oram_leaf_label(path, tree_height).map_err(|_| {
             StorageError::bad_request(
