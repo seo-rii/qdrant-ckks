@@ -2873,7 +2873,9 @@ pub fn verify_private_result_oram_merkle_proof(
         let mut node_hash = decode_merkle_proof_hash(&leaf.leaf_hash)?;
         let mut index = leaf.bucket_id;
         for (expected_level, sibling) in leaf.siblings.iter().enumerate() {
-            if sibling.level != expected_level as u32 {
+            let expected_level = u32::try_from(expected_level)
+                .map_err(|_| PrivateResultOramError::InvalidMerkleProof)?;
+            if sibling.level != expected_level {
                 return Err(PrivateResultOramError::InvalidMerkleProof);
             }
             let sibling_hash = decode_merkle_proof_hash(&sibling.hash)?;
