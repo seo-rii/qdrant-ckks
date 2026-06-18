@@ -177,7 +177,7 @@ impl LocalShard {
             &WalOptions {
                 segment_capacity: wal_segment_capacity,
                 segment_queue_len: 0,
-                retain_closed: NonZeroUsize::new(1).unwrap(),
+                retain_closed: NonZeroUsize::MIN,
             },
             wal_last_index,
         )
