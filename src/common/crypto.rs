@@ -1628,6 +1628,9 @@ fn generic_vector_write_plan(
                     "private HNSW ORAM supports exactly one vector per rule in v1",
                 ));
             }
+            for vector_name in names {
+                validate_private_hnsw_oram_collection_vector_name(vector_name)?;
+            }
             validate_private_hnsw_oram_instance(
                 &rule.instance,
                 instance,
@@ -6601,6 +6604,23 @@ fn is_crypto_identifier(value: &str) -> bool {
         })
 }
 
+fn validate_private_hnsw_oram_collection_vector_name(
+    vector_name: &str,
+) -> Result<(), StorageError> {
+    if vector_name.is_empty()
+        || vector_name.len() > 128
+        || matches!(vector_name, "." | "..")
+        || !vector_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
+    {
+        return Err(StorageError::bad_input(
+            "private HNSW ORAM vector name must be a safe store path component",
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn ckks_client_query_signature_message(
     collection_id: &str,
     vector_name: &str,
@@ -6853,6 +6873,9 @@ fn validate_generic_collection_crypto_runtime(
                 return Err(StorageError::bad_input(
                     "private HNSW ORAM supports exactly one vector per rule in v1",
                 ));
+            }
+            for vector_name in names {
+                validate_private_hnsw_oram_collection_vector_name(vector_name)?;
             }
             validate_private_hnsw_oram_instance(
                 &rule.instance,
@@ -21195,6 +21218,72 @@ mod tests {
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params)
             .expect("private HNSW ORAM vector provider should pass collection runtime validation");
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_rejects_private_hnsw_oram_unsafe_vector_name() {
+        let unsafe_vector_name = "embedding:private-secret";
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "docs_private_hnsw_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_hnsw_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            vectors: collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
+                unsafe_vector_name.to_string(),
+                VectorParamsBuilder::new(2, Distance::Cosine).build(),
+            )])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_private_hnsw".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec![unsafe_vector_name.to_string()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect_err("private HNSW ORAM vector name must be safe for the bucket store path");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("safe store path component")
+                    && !description.contains(unsafe_vector_name)),
+            "unexpected error: {err:?}",
+        );
+
+        let err = match vector_write_plan_for_collection_with_crypto_id(
+            &settings, "docs", "docs", &params,
+        ) {
+            Ok(_) => panic!("private HNSW ORAM write plan must reject unsafe vector names"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("safe store path component")
+                    && !description.contains(unsafe_vector_name)),
+            "unexpected error: {err:?}",
+        );
     }
 
     #[test]

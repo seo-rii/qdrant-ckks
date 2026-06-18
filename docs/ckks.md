@@ -592,9 +592,9 @@ and `private-hnsw-oram/v1` to be paired exactly, reject multi-vector v1 rules,
 and reject overlap with `vector/client-ckks@v1` or `vector/openfhe-ckks@v1`
 bindings for the same vector name.
 Private HNSW ORAM vector names must also be safe collection-local store path
-components, so manifest and signed request validation reject names such as `.`,
-`..`, names containing `/` or `:`, and names longer than 128 bytes before any
-bucket-store path is constructed.
+components, so collection config, manifest, and signed request validation reject
+names such as `.`, `..`, names containing `/` or `:`, and names longer than 128
+bytes before any bucket-store path is constructed.
 The same private-session guidance is returned even when runtime crypto settings
 are absent, so private HNSW ORAM vectors do not fall through to CKKS/OpenFHE
 runtime fallback messages on ordinary vector upsert/update, inference-derived
