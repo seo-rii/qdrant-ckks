@@ -990,11 +990,12 @@ token-fetch helper now rebuilds the expected bucket path sequence from the
 client position map before opening server batches, consumes only matching
 planned encrypted bucket batches, overlays local writebacks between batched Path
 ORAM accesses, returns payload blocks, and reseals unique writeback buckets for
-the result ORAM commit planner. Because a fixed HNSW result fetch may span more
-than one result ORAM `read_buckets` batch, the server commit guard accepts an
-owner-signed writeback set up to the manifest `bucket_count` while still
-rejecting empty commits, duplicate bucket ids, malformed bucket hashes, stale
-epoch/root, and invalid signatures before storage changes. The HNSW SDK
+the result ORAM commit planner. The server commit guard caps each owner-signed
+writeback set to `oram.path_batch_size * (oram.tree_height + 1)` buckets, so
+commit volume cannot expand to the full manifest `bucket_count`; it still
+rejects empty commits, duplicate bucket ids, malformed bucket hashes, stale
+epoch/root, and invalid signatures before storage changes. Multi-batch result
+fetches therefore use repeated fixed-size read/commit windows. The HNSW SDK
 finalizer maps only real HNSW hits back to fetched payload blocks and validates
 fetch-token order, point-token binding, and deleted-payload rejection before
 exposing payload bytes to the caller. A canonical plaintext client-state

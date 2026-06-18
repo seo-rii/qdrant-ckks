@@ -1397,8 +1397,15 @@ fn ensure_private_result_oram_read_proof_matches_buckets(
 }
 
 fn max_updated_bucket_count(session: &PrivateResultOramSession) -> StorageResult<usize> {
-    usize::try_from(session.bucket_count)
-        .map_err(|_| StorageError::bad_request("private result ORAM bucket count overflows"))
+    let levels = usize::try_from(session.manifest.oram.tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or_else(|| StorageError::bad_request("private result ORAM tree height overflows"))?;
+    let paths = usize::try_from(session.manifest.oram.path_batch_size)
+        .map_err(|_| StorageError::bad_request("private result ORAM path batch size overflows"))?;
+    levels
+        .checked_mul(paths)
+        .ok_or_else(|| StorageError::bad_request("private result ORAM writeback size overflows"))
 }
 
 fn current_unix_secs() -> StorageResult<u64> {
@@ -2185,6 +2192,19 @@ mod private_result_oram_tests {
         let rendered = out_of_range.to_string();
         assert!(rendered.contains("out of range"));
         assert!(!rendered.contains("7"), "{rendered}");
+    }
+
+    #[test]
+    fn commit_writeback_budget_is_capped_to_fixed_path_batch() {
+        let mut session = fixture_session("session-1", 20);
+        session.manifest.oram.path_batch_size = 1;
+
+        let max_updated_buckets = max_updated_bucket_count(&session).unwrap();
+        assert_eq!(max_updated_buckets, 3);
+        assert!(
+            max_updated_buckets < usize::try_from(session.bucket_count).unwrap(),
+            "writeback budget must not expand to the full ORAM bucket count",
+        );
     }
 
     #[test]
