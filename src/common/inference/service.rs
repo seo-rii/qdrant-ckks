@@ -228,12 +228,12 @@ impl InferenceService {
             .infer_remote(remote_inference_inputs, inference_type, inference_params)
             .await?;
 
-        Ok(Self::merge_local_and_remote_result(
+        Self::merge_local_and_remote_result(
             local_model_results,
             local_inference_positions,
             remote_result,
             remote_inference_positions,
-        ))
+        )
     }
 
     async fn infer_remote(
@@ -325,10 +325,17 @@ impl InferenceService {
         local_pos: Vec<usize>,
         remote_res: InferenceResponse,
         remote_pos: Vec<usize>,
-    ) -> InferenceResponse {
+    ) -> Result<InferenceResponse, StorageError> {
+        if local_results.len() != local_pos.len() || remote_res.embeddings.len() != remote_pos.len()
+        {
+            return Err(StorageError::service_error(
+                "InferenceService internal error: inference result count mismatch",
+            ));
+        }
+
         // Skip merging with local results if we only have inference results from remote.
         if local_results.is_empty() {
-            return remote_res;
+            return Ok(remote_res);
         }
 
         // Merge remote results and local results together in the exact same order they have been passed.
@@ -338,14 +345,16 @@ impl InferenceService {
             remote_res.embeddings,
             remote_pos,
         )
-        .expect(
-            "Expected local results and remote items being contiguous. This is an internal bug!",
-        );
+        .ok_or_else(|| {
+            StorageError::service_error(
+                "InferenceService internal error: inference result positions are not contiguous",
+            )
+        })?;
 
-        InferenceResponse {
+        Ok(InferenceResponse {
             embeddings: merged,
             usage: remote_res.usage, // Only account for usage of remote.
-        }
+        })
     }
 
     fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
@@ -569,6 +578,45 @@ mod test {
 
         // We were missing an item and therefore expect `None`.
         assert_eq!(merged, None);
+    }
+
+    #[test]
+    fn inference_merge_rejects_result_count_mismatch() {
+        let err = InferenceService::merge_local_and_remote_result(
+            vec![VectorPersisted::Dense(vec![1.0])],
+            vec![0],
+            InferenceResponse {
+                embeddings: Vec::new(),
+                usage: None,
+            },
+            vec![1],
+        )
+        .expect_err("remote result count mismatch must fail closed");
+
+        assert!(
+            err.to_string().contains("inference result count mismatch"),
+            "{err}",
+        );
+    }
+
+    #[test]
+    fn inference_merge_rejects_non_contiguous_positions() {
+        let err = InferenceService::merge_local_and_remote_result(
+            vec![VectorPersisted::Dense(vec![1.0])],
+            vec![0],
+            InferenceResponse {
+                embeddings: vec![VectorPersisted::Dense(vec![2.0])],
+                usage: None,
+            },
+            vec![2],
+        )
+        .expect_err("non-contiguous result positions must fail closed");
+
+        assert!(
+            err.to_string()
+                .contains("inference result positions are not contiguous"),
+            "{err}",
+        );
     }
 
     #[test]
