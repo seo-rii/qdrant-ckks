@@ -1822,17 +1822,15 @@ impl TryFrom<api::grpc::qdrant::ShardKeySelector> for ShardSelectorInternal {
             .filter_map(convert_shard_key_from_grpc)
             .collect();
 
-        if shard_keys.len() == 1 {
-            let key = shard_keys.into_iter().next().unwrap();
-
+        if let [key] = shard_keys.as_slice() {
             match fallback.and_then(convert_shard_key_from_grpc) {
                 Some(fallback) => Ok(ShardSelectorInternal::ShardKeyWithFallback(
                     ShardKeyWithFallback {
-                        target: key,
+                        target: key.clone(),
                         fallback,
                     },
                 )),
-                None => Ok(ShardSelectorInternal::ShardKey(key)),
+                None => Ok(ShardSelectorInternal::ShardKey(key.clone())),
             }
         } else {
             if fallback.is_some() {
