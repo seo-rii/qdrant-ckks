@@ -320,6 +320,11 @@ client envelope and produce a runtime-verified proof keyed by collection id,
 point id, field path, key id, `rk_id`, `rk_epoch`, nonce, ciphertext digest, and
 signature digest. The collection write guard recomputes that identity from the
 stored marker and accepts the write only when it matches the runtime proof.
+Peer replay uses a stricter boundary: target peers do not accept client payload
+envelopes on the basis of origin-peer verification alone. Until peer operations
+carry verifier policy plus a consensus-backed client nonce ledger, any
+`$qdrant_client_aead` marker in a peer replay/update path fails closed instead
+of skipping Ed25519 verification on the receiving peer.
 
 Exact-match search over client-side ciphertext uses a separate client-generated
 blind-index token field. Qdrant stores and indexes the opaque token, not the
