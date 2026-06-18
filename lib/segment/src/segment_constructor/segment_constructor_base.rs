@@ -606,7 +606,11 @@ fn create_segment(
     let mut vector_data = HashMap::new();
     for (vector_name, vector_config) in &config.vector_data {
         let vector_storage_path = get_vector_storage_path(segment_path, vector_name);
-        let vector_storage = vector_storages.remove(vector_name).unwrap();
+        let vector_storage = vector_storages.remove(vector_name).ok_or_else(|| {
+            OperationError::service_error(format!(
+                "missing dense vector storage for configured vector {vector_name}",
+            ))
+        })?;
 
         let vector_index_path = get_vector_index_path(segment_path, vector_name);
         // Warn when number of points between ID tracker and storage differs
@@ -671,7 +675,11 @@ fn create_segment(
     for (vector_name, sparse_vector_config) in &config.sparse_vector_data {
         let vector_storage_path = get_vector_storage_path(segment_path, vector_name);
         let vector_index_path = get_vector_index_path(segment_path, vector_name);
-        let vector_storage = vector_storages.remove(vector_name).unwrap();
+        let vector_storage = vector_storages.remove(vector_name).ok_or_else(|| {
+            OperationError::service_error(format!(
+                "missing sparse vector storage for configured vector {vector_name}",
+            ))
+        })?;
 
         // Warn when number of points between ID tracker and storage differs
         let point_count = id_tracker.borrow().total_point_count();
@@ -1175,7 +1183,15 @@ fn migrate_all_rocksdb_dense_vector_storages(
         }
 
         let vector_storage_path = get_vector_storage_path(path, vector_name);
-        let vector_config = segment_state.config.vector_data.get(vector_name).unwrap();
+        let vector_config = segment_state
+            .config
+            .vector_data
+            .get(vector_name)
+            .ok_or_else(|| {
+                OperationError::service_error(format!(
+                    "missing dense vector config for RocksDB migration of vector {vector_name}",
+                ))
+            })?;
         let multivector_config = vector_config.multivector_config;
 
         // Actively migrate away from RocksDB
@@ -1201,7 +1217,11 @@ fn migrate_all_rocksdb_dense_vector_storages(
             .config
             .vector_data
             .get_mut(vector_name)
-            .unwrap()
+            .ok_or_else(|| {
+                OperationError::service_error(format!(
+                    "missing mutable dense vector config for RocksDB migration of vector {vector_name}",
+                ))
+            })?
             .storage_type = VectorStorageType::InRamChunkedMmap;
         Segment::save_state(segment_state, path)?;
 
@@ -1438,7 +1458,11 @@ fn migrate_all_rocksdb_sparse_vector_storages(
             .config
             .sparse_vector_data
             .get_mut(vector_name)
-            .unwrap()
+            .ok_or_else(|| {
+                OperationError::service_error(format!(
+                    "missing sparse vector config for RocksDB migration of vector {vector_name}",
+                ))
+            })?
             .storage_type = SparseVectorStorageType::Mmap;
         Segment::save_state(segment_state, path)?;
 

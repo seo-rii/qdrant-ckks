@@ -329,7 +329,10 @@ impl SegmentBuilder {
             points_to_insert.sort_unstable_by_key(|i| i.ordering);
         }
 
-        let src_segment_max_version = segments.iter().map(|i| i.version()).max().unwrap();
+        let src_segment_max_version =
+            segments.iter().map(|i| i.version()).max().ok_or_else(|| {
+                OperationError::service_error("cannot update segment builder from no segments")
+            })?;
         self.version = cmp::max(self.version, src_segment_max_version);
 
         let vector_storages: Vec<_> = segments.iter().map(|i| &i.vector_data).collect();
@@ -405,7 +408,11 @@ impl SegmentBuilder {
                     let existing_external_version = self
                         .id_tracker
                         .internal_version(existing_internal_id)
-                        .unwrap();
+                        .ok_or_else(|| {
+                            OperationError::service_error(format!(
+                                "missing external version for existing internal id {existing_internal_id}",
+                            ))
+                        })?;
 
                     let remove_id = if existing_external_version < point_data.version {
                         // Other version is the newest, remove the existing one and replace
@@ -620,9 +627,18 @@ impl SegmentBuilder {
 
             progress_vector_index.start();
             for (vector_name, vector_config) in &segment_config.vector_data {
-                let vector_storage = vector_storages_arc.remove(vector_name).unwrap();
+                let vector_storage = vector_storages_arc.remove(vector_name).ok_or_else(|| {
+                    OperationError::service_error(format!(
+                        "missing dense vector storage for built vector {vector_name}",
+                    ))
+                })?;
                 let quantized_vectors =
                     Arc::new(AtomicRefCell::new(quantized_vectors.remove(vector_name)));
+                let old_indices = old_indices.remove(vector_name).ok_or_else(|| {
+                    OperationError::service_error(format!(
+                        "missing old dense vector indices for built vector {vector_name}",
+                    ))
+                })?;
 
                 let index = build_vector_index(
                     vector_config,
@@ -635,7 +651,7 @@ impl SegmentBuilder {
                     },
                     VectorIndexBuildArgs {
                         permit: permit.clone(),
-                        old_indices: &old_indices.remove(vector_name).unwrap(),
+                        old_indices: &old_indices,
                         gpu_device: gpu_device.as_ref(),
                         stopped,
                         rng,
@@ -665,7 +681,12 @@ impl SegmentBuilder {
             for (vector_name, sparse_vector_config) in &segment_config.sparse_vector_data {
                 let vector_index_path = get_vector_index_path(temp_dir.path(), vector_name);
 
-                let vector_storage_arc = vector_storages_arc.remove(vector_name).unwrap();
+                let vector_storage_arc =
+                    vector_storages_arc.remove(vector_name).ok_or_else(|| {
+                        OperationError::service_error(format!(
+                            "missing sparse vector storage for built vector {vector_name}",
+                        ))
+                    })?;
 
                 let index = create_sparse_vector_index(SparseVectorIndexOpenArgs {
                     config: sparse_vector_config.index,
