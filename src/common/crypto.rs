@@ -4770,6 +4770,10 @@ fn validate_material(
         });
     }
 
+    let material_source_mismatch = || CryptoSetupError::MaterialSourceMismatch {
+        material: material_name.to_string(),
+    };
+
     match material.source.as_deref() {
         None => Err(CryptoSetupError::MissingMaterialSource {
             material: material_name.to_string(),
@@ -4782,10 +4786,18 @@ fn validate_material(
                 && material.fd.is_none()
                 && material.value_b64.is_none() =>
         {
+            let path = material
+                .path
+                .as_deref()
+                .ok_or_else(material_source_mismatch)?;
+            let env = material
+                .env
+                .as_deref()
+                .ok_or_else(material_source_mismatch)?;
             validate_material_aws_kms_source(
                 material_name,
-                material.path.as_deref().unwrap(),
-                material.env.as_deref().unwrap(),
+                path,
+                env,
                 material.expected_host.as_deref(),
             )?;
             Ok(())
@@ -4796,7 +4808,10 @@ fn validate_material(
                 && material.fd.is_none()
                 && material.value_b64.is_none() =>
         {
-            let env = material.env.as_deref().unwrap();
+            let env = material
+                .env
+                .as_deref()
+                .ok_or_else(material_source_mismatch)?;
             if !is_material_env_name(env) {
                 return Err(CryptoSetupError::InvalidMaterialFileSource {
                     material: material_name.to_string(),
@@ -4812,7 +4827,11 @@ fn validate_material(
                 && material.fd.is_none()
                 && material.value_b64.is_none() =>
         {
-            validate_material_file_source(material_name, material.path.as_deref().unwrap())?;
+            let path = material
+                .path
+                .as_deref()
+                .ok_or_else(material_source_mismatch)?;
+            validate_material_file_source(material_name, path)?;
             Ok(())
         }
         Some("unix_socket")
@@ -4821,7 +4840,11 @@ fn validate_material(
                 && material.fd.is_none()
                 && material.value_b64.is_none() =>
         {
-            validate_material_unix_socket_source(material_name, material.path.as_deref().unwrap())?;
+            let path = material
+                .path
+                .as_deref()
+                .ok_or_else(material_source_mismatch)?;
+            validate_material_unix_socket_source(material_name, path)?;
             Ok(())
         }
         Some("vault_kv2")
@@ -4831,11 +4854,23 @@ fn validate_material(
                 && material.fd.is_none()
                 && material.value_b64.is_none() =>
         {
+            let path = material
+                .path
+                .as_deref()
+                .ok_or_else(material_source_mismatch)?;
+            let env = material
+                .env
+                .as_deref()
+                .ok_or_else(material_source_mismatch)?;
+            let vault_field = material
+                .vault_field
+                .as_deref()
+                .ok_or_else(material_source_mismatch)?;
             validate_material_vault_kv2_source(
                 material_name,
-                material.path.as_deref().unwrap(),
-                material.env.as_deref().unwrap(),
-                material.vault_field.as_deref(),
+                path,
+                env,
+                Some(vault_field),
                 material.expected_host.as_deref(),
             )?;
             Ok(())
@@ -4848,10 +4883,18 @@ fn validate_material(
                 && material.fd.is_none()
                 && material.value_b64.is_none() =>
         {
+            let path = material
+                .path
+                .as_deref()
+                .ok_or_else(material_source_mismatch)?;
+            let env = material
+                .env
+                .as_deref()
+                .ok_or_else(material_source_mismatch)?;
             validate_material_vault_transit_source(
                 material_name,
-                material.path.as_deref().unwrap(),
-                material.env.as_deref().unwrap(),
+                path,
+                env,
                 material.expected_host.as_deref(),
             )?;
             Ok(())
@@ -4862,7 +4905,8 @@ fn validate_material(
                 && material.path.is_none()
                 && material.value_b64.is_none() =>
         {
-            validate_material_fd_source(material_name, material.fd.unwrap())?;
+            let fd = material.fd.ok_or_else(material_source_mismatch)?;
+            validate_material_fd_source(material_name, fd)?;
             Ok(())
         }
         Some("inline")
@@ -4872,8 +4916,11 @@ fn validate_material(
                 && material.path.is_none() =>
         {
             if allow_inline_key_material {
-                let decoded = BASE64URL_NOPAD
-                    .decode(material.value_b64.as_deref().unwrap().trim().as_bytes());
+                let value_b64 = material
+                    .value_b64
+                    .as_deref()
+                    .ok_or_else(material_source_mismatch)?;
+                let decoded = BASE64URL_NOPAD.decode(value_b64.trim().as_bytes());
                 let decoded = decoded.map_err(|_| CryptoSetupError::InvalidMaterialFileSource {
                     material: material_name.to_string(),
                     path: "inline".to_string(),
