@@ -166,7 +166,9 @@ fn read_buf_and_advance(input: &mut &[u8]) -> Buf {
     let mut buf = 0;
     if input.len() >= size_of::<Buf>() {
         // This line translates to a single unaligned pointer read.
-        buf = Buf::from_le_bytes(input[0..size_of::<Buf>()].try_into().unwrap());
+        let mut bytes = [0; size_of::<Buf>()];
+        bytes.copy_from_slice(&input[..size_of::<Buf>()]);
+        buf = Buf::from_le_bytes(bytes);
         // This line translates to a single pointer advance.
         *input = &input[size_of::<Buf>()..];
     } else {

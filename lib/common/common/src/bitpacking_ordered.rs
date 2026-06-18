@@ -73,7 +73,10 @@ pub fn compress(values: &[u64]) -> (Vec<u8>, Parameters) {
 
 /// Compress the data with given parameters.
 fn compress_with_parameters(values: &[u64], parameters: Parameters) -> Vec<u8> {
-    let expected_size = parameters.total_chunks_size_bytes().unwrap() + TAIL_SIZE;
+    let expected_size = parameters
+        .total_chunks_size_bytes()
+        .and_then(|size| size.checked_add(TAIL_SIZE))
+        .unwrap_or(TAIL_SIZE);
     let mut compressed = Vec::with_capacity(expected_size);
 
     for chunk in values.chunks(1 << parameters.chunk_len_log2) {
@@ -147,7 +150,9 @@ impl<'a> Reader<'a> {
             delta_mask: make_bitmask(parameters.delta_bits),
             chunk_len_log2: parameters.chunk_len_log2,
             chunk_len_mask: make_bitmask(parameters.chunk_len_log2),
-            chunk_size_bytes: parameters.chunk_size_bytes().unwrap(),
+            chunk_size_bytes: parameters
+                .chunk_size_bytes()
+                .ok_or_else(|| DecompressionError("invalid parameters".to_string()))?,
             compressed,
             len: parameters.length.get() as usize,
         };
@@ -156,19 +161,31 @@ impl<'a> Reader<'a> {
         // The assertions below ensure that the `compressed` slice holds enough
         // bytes for any index reachable by `get()`.
         if let Some(max_index) = result.len.checked_sub(1) {
-            let chunk_offset = (max_index >> result.chunk_len_log2) * result.chunk_size_bytes;
+            let chunk_offset = (max_index >> result.chunk_len_log2)
+                .checked_mul(result.chunk_size_bytes)
+                .ok_or_else(|| DecompressionError("invalid parameters".to_string()))?;
             // *base*
-            assert!(chunk_offset + size_of::<u64>() <= result.compressed.len());
+            if chunk_offset
+                .checked_add(size_of::<u64>())
+                .is_none_or(|end| end > result.compressed.len())
+            {
+                return Err(DecompressionError("invalid parameters".to_string()));
+            }
 
             let max_value_index = result.chunk_len_mask;
             if max_value_index > 0 {
-                let delta_offset_bits =
-                    result.base_bits as usize + (max_value_index - 1) * result.delta_bits as usize;
+                let delta_offset_bits = (max_value_index - 1)
+                    .checked_mul(result.delta_bits as usize)
+                    .and_then(|delta_bits| delta_bits.checked_add(result.base_bits as usize))
+                    .ok_or_else(|| DecompressionError("invalid parameters".to_string()))?;
                 // *delta*
-                assert!(
-                    chunk_offset + delta_offset_bits / u8::BITS as usize + size_of::<u64>()
-                        <= result.compressed.len()
-                );
+                if chunk_offset
+                    .checked_add(delta_offset_bits / u8::BITS as usize)
+                    .and_then(|offset| offset.checked_add(size_of::<u64>()))
+                    .is_none_or(|end| end > result.compressed.len())
+                {
+                    return Err(DecompressionError("invalid parameters".to_string()));
+                }
             }
         }
 
@@ -266,8 +283,14 @@ impl Parameters {
     /// Find the best compression parameters for the given values.
     fn find_best(values: &[u64]) -> Self {
         Self::try_all(values)
-            .min_by_key(|parameters| parameters.total_chunks_size_bytes())
-            .unwrap()
+            .filter(|parameters| parameters.total_chunks_size_bytes().is_some())
+            .min_by_key(|parameters| parameters.total_chunks_size_bytes().unwrap_or(usize::MAX))
+            .unwrap_or_else(|| Parameters {
+                length: U64::new(values.len() as u64),
+                base_bits: packed_bits(values.last().copied().unwrap_or(0)).max(1),
+                delta_bits: *DELTA_BITS_RANGE.start(),
+                chunk_len_log2: 0,
+            })
     }
 
     /// Generate all possible compression parameters for the given values.
@@ -277,7 +300,9 @@ impl Parameters {
             .map(move |chunk_len_log2| {
                 let mut delta_bits = *DELTA_BITS_RANGE.start();
                 for chunk in values.chunks(1 << chunk_len_log2) {
-                    delta_bits = delta_bits.max(packed_bits(chunk.last().unwrap() - chunk[0]));
+                    if let Some(&last) = chunk.last() {
+                        delta_bits = delta_bits.max(packed_bits(last - chunk[0]));
+                    }
                 }
                 Parameters {
                     length: U64::new(values.len() as u64),

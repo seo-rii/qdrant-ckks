@@ -38,7 +38,7 @@ pub fn compress_sequence(data: &[u64]) -> Vec<u8> {
         return output;
     }
 
-    let max_value = *data.iter().max().unwrap();
+    let max_value = data.iter().copied().max().unwrap_or(0);
     let bits_per_value = packed_bits(max_value).max(MIN_BITS_PER_VALUE);
 
     let mut writer = BitWriter::new(&mut output);

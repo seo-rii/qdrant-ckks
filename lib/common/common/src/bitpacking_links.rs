@@ -41,8 +41,8 @@ pub fn pack_links(
 
     if sorted_count != 0 {
         // 1. Header.
-        let bits_per_sorted =
-            packed_bits(*raw_links[..sorted_count].iter().max().unwrap()).max(MIN_BITS_PER_VALUE);
+        let max_sorted = raw_links[..sorted_count].iter().copied().max().unwrap_or(0);
+        let bits_per_sorted = packed_bits(max_sorted).max(MIN_BITS_PER_VALUE);
         w.write(u32::from(bits_per_sorted - MIN_BITS_PER_VALUE), HEADER_BITS);
 
         // 2. First `sorted_count` values, sorted and delta-encoded.
