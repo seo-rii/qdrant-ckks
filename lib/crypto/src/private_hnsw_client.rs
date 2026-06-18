@@ -1540,6 +1540,25 @@ pub fn private_hnsw_oram_bucket_count(tree_height: u32) -> Result<u64, PrivateHn
         .ok_or(PrivateHnswClientError::InvalidTreeHeight)
 }
 
+pub fn private_hnsw_oram_fixed_writeback_bucket_budget(
+    oram: &OramParams,
+) -> Result<usize, PrivateHnswClientError> {
+    let path_len = usize::try_from(oram.tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or(PrivateHnswClientError::InvalidTreeHeight)?;
+    let path_batch_size = usize::try_from(oram.path_batch_size)
+        .map_err(|_| PrivateHnswClientError::InvalidOramClientConfig("path_batch_size"))?;
+    if path_batch_size == 0 {
+        return Err(PrivateHnswClientError::InvalidOramClientConfig(
+            "path_batch_size",
+        ));
+    }
+    path_len.checked_mul(path_batch_size).ok_or(
+        PrivateHnswClientError::InvalidCommitSignatureContext("updated_buckets"),
+    )
+}
+
 pub fn encode_private_hnsw_oram_leaf_label(
     leaf: u64,
     tree_height: u32,
@@ -3323,6 +3342,12 @@ pub fn plan_private_hnsw_oram_commit_for_manifest(
     }
     if updated_buckets.is_empty() {
         return Err(PrivateHnswClientError::EmptyCommit);
+    }
+    let max_updated_buckets = private_hnsw_oram_fixed_writeback_bucket_budget(&manifest.oram)?;
+    if updated_buckets.len() > max_updated_buckets {
+        return Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+            "updated_buckets",
+        ));
     }
     if private_hnsw_oram_merkle_root_for_commitments(current_leaf_commitments)?
         != manifest.root_hash
@@ -5650,6 +5675,52 @@ mod tests {
             ),
             Err(PrivateHnswClientError::BucketCountMismatch)
         );
+    }
+
+    #[test]
+    fn commit_plan_for_manifest_rejects_oversized_fixed_writeback() {
+        let leaf_commitments = (0..7).map(commitment).collect::<Vec<_>>();
+        let old_root = private_hnsw_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let mut manifest = PrivateHnswOramManifest {
+            root_hash: old_root,
+            bucket_count: leaf_commitments.len() as u64,
+            ..fixture_manifest()
+        };
+        manifest.oram.bucket_size = 2;
+        manifest.oram.block_size_bytes = 4096;
+        manifest.oram.tree_height = 2;
+        manifest.oram.path_batch_size = 1;
+        let fixed_writeback_budget =
+            private_hnsw_oram_fixed_writeback_bucket_budget(&manifest.oram).unwrap();
+        assert_eq!(fixed_writeback_budget, 3);
+
+        let updated_buckets = (0..=fixed_writeback_budget)
+            .map(|bucket_id| {
+                fixture_context_commit_bucket(bucket_id as u64, 43, bucket_id as u8, &manifest)
+            })
+            .collect::<Vec<_>>();
+        assert!(updated_buckets.len() <= leaf_commitments.len());
+
+        assert_eq!(
+            plan_private_hnsw_oram_commit_for_manifest(
+                &manifest,
+                43,
+                &leaf_commitments,
+                &updated_buckets,
+            ),
+            Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+                "updated_buckets",
+            ))
+        );
+
+        let plan = plan_private_hnsw_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &leaf_commitments,
+            &updated_buckets[..fixed_writeback_budget],
+        )
+        .unwrap();
+        assert_eq!(plan.updated_buckets.len(), fixed_writeback_budget);
     }
 
     #[test]

@@ -23,8 +23,9 @@ use qdrant_sec::{
     PrivateHnswSignatureVerification, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
     decode_private_hnsw_oram_leaf_label, private_hnsw_bucket_commitment,
     private_hnsw_oram_bucket_ciphertext_bytes, private_hnsw_oram_bucket_count,
-    private_hnsw_oram_bucket_ids_for_leaf, validate_private_hnsw_oram_commit_signature,
-    validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_manifest_signature_shape,
+    private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_fixed_writeback_bucket_budget,
+    validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_manifest,
+    validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_hnsw_oram_read_paths_signature,
 };
 use segment::types::Distance;
@@ -2105,15 +2106,8 @@ fn validate_private_hnsw_commit_bucket_ciphertexts_fixed_size(
 }
 
 fn max_updated_bucket_count(session: &PrivateHnswSession) -> StorageResult<usize> {
-    let levels = usize::try_from(session.tree_height)
-        .ok()
-        .and_then(|height| height.checked_add(1))
-        .ok_or_else(|| StorageError::bad_request("private HNSW ORAM tree height overflows"))?;
-    let paths = usize::try_from(session.path_batch_size)
-        .map_err(|_| StorageError::bad_request("private HNSW ORAM path batch size overflows"))?;
-    levels
-        .checked_mul(paths)
-        .ok_or_else(|| StorageError::bad_request("private HNSW ORAM writeback size overflows"))
+    private_hnsw_oram_fixed_writeback_bucket_budget(&session.manifest.oram)
+        .map_err(|_| StorageError::bad_request("private HNSW ORAM writeback size overflows"))
 }
 
 fn validate_initial_private_hnsw_upload_bundle(

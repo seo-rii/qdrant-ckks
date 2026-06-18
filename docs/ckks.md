@@ -1244,7 +1244,8 @@ Before submitting an ORAM writeback, clients can call
 `plan_private_hnsw_oram_commit_for_manifest` to bind commit planning to the
 current signed manifest, updated bucket ciphertext hashes,
 collection/vector/key lineage, and proposed bucket epoch before producing
-signature bucket refs. After the writeback commit succeeds, clients can call
+signature bucket refs. The planner enforces the same fixed writeback budget as
+the server commit guard. After the writeback commit succeeds, clients can call
 `refresh_private_hnsw_oram_manifest_for_commit` to derive the next signed
 manifest body from the commit plan, or
 `sign_private_hnsw_oram_manifest_refresh` to derive and sign it in one step;
