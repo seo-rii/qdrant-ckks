@@ -5689,10 +5689,12 @@ fn validate_wrapped_resource_key_material(
             algorithm: algorithm.to_string(),
         });
     }
-    let wrapped_key = material
-        .wrapped_key_b64
-        .as_deref()
-        .expect("wrapped_key_b64 is present");
+    let wrapped_key = material.wrapped_key_b64.as_deref().ok_or_else(|| {
+        CryptoSetupError::InvalidWrappedMaterial {
+            material: material_name.to_string(),
+            reason: "missing wrapped_key_b64".to_string(),
+        }
+    })?;
     validate_wrapped_resource_key_b64(wrapped_key, algorithm).map_err(|reason| {
         CryptoSetupError::InvalidWrappedMaterial {
             material: material_name.to_string(),
