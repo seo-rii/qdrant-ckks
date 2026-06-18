@@ -212,6 +212,9 @@ impl PrivateHnswClientKeys {
     /// New private HNSW indexes should use `derive_from_resource_key_for_manifest`
     /// or `derive_from_resource_key_with_context` so the derived client keys are
     /// bound to the collection/vector/resource-key epoch boundary.
+    #[deprecated(
+        note = "use derive_from_resource_key_for_manifest or derive_from_resource_key_with_context"
+    )]
     pub fn derive_from_resource_key(resource_key: &SecretKey) -> Result<Self, EncryptionError> {
         Ok(Self {
             node_aead: resource_key.derive_subkey(PRIVATE_HNSW_NODE_AEAD_DOMAIN)?,
@@ -4972,6 +4975,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn client_key_derivation_is_domain_separated_and_deterministic() {
         let resource_key = SecretKey::from_bytes([7; 32]);
         let first = PrivateHnswClientKeys::derive_from_resource_key(&resource_key).unwrap();
@@ -5008,6 +5012,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn client_key_derivation_binds_manifest_context() {
         let resource_key = SecretKey::from_bytes([7; 32]);
         let manifest = fixture_manifest();

@@ -1013,7 +1013,7 @@ client-side backup validation, and an encrypted snapshot helper seals that backu
 under a client-derived state key with collection/key/epoch/root AAD plus
 ciphertext hash checks. New SDK code should derive
 `PrivateResultOramClientKeys` from the signed result manifest rather than the
-legacy domain-only helper; the manifest-bound derivation length-prefixes
+deprecated legacy domain-only helper; the manifest-bound derivation length-prefixes
 collection id, RK id, and RK epoch into the HKDF info context before deriving
 bucket and client-state subkeys. Server-side HNSW manifest upload, bucket upload,
 session open, and snapshot restore preflight now accept
@@ -1239,7 +1239,7 @@ copies the encrypted build metadata into a signed manifest-ready
 `PrivateHnswOramManifest`, so clients can build, seal, manifest, sign, and
 upload without recomputing server-visible index metadata.
 New SDK code should derive `PrivateHnswClientKeys` from the signed HNSW
-manifest rather than the legacy domain-only helper; the manifest-bound
+manifest rather than the deprecated legacy domain-only helper; the manifest-bound
 derivation length-prefixes collection id, vector name, RK id, and RK epoch into
 the HKDF info context before deriving node, bucket, position-map, payload-token,
 and blind-result subkeys.
@@ -1363,7 +1363,7 @@ encrypted backup DTO does not serialize plaintext position-map entries, leaf
 labels, stash blocks, point tokens, or payload fetch tokens outside the AEAD
 ciphertext.
 New SDK code should derive `PrivateHnswClientKeys` from the signed manifest
-rather than the legacy domain-only helper. The manifest-bound derivation
+rather than the deprecated legacy domain-only helper. The manifest-bound derivation
 length-prefixes collection id, vector name, RK id, and RK epoch into the HKDF
 info context before deriving node, bucket, position-map, payload-token, and
 blind-result subkeys, so accidental RK reuse across private HNSW indexes does

@@ -550,6 +550,9 @@ impl PrivateResultOramClientKeys {
     ///
     /// New private result ORAM indexes should derive from the manifest so the
     /// client keys are bound to collection/resource-key epoch context.
+    #[deprecated(
+        note = "use derive_from_resource_key_for_manifest or derive_from_resource_key_with_context"
+    )]
     pub fn derive_from_resource_key(resource_key: &SecretKey) -> Result<Self, EncryptionError> {
         Ok(Self {
             bucket_aead: resource_key.derive_subkey(PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN)?,
@@ -3882,6 +3885,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn result_oram_client_key_derivation_is_domain_separated() {
         let resource_key = SecretKey::from_bytes([7; 32]);
         let keys = PrivateResultOramClientKeys::derive_from_resource_key(&resource_key).unwrap();
@@ -3912,6 +3916,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn result_oram_client_key_derivation_binds_manifest_context() {
         let resource_key = SecretKey::from_bytes([7; 32]);
         let manifest = fixture_manifest();
