@@ -1776,7 +1776,9 @@ pub fn private_hnsw_level_from_node_id(
     let mut level = 0u8;
     for byte in digest {
         let trailing_zeros = byte.trailing_zeros() as u8;
-        level = level.saturating_add(trailing_zeros);
+        level = level
+            .checked_add(trailing_zeros)
+            .ok_or(PrivateHnswClientError::InvalidBuildConfig("max_level"))?;
         if level >= max_level {
             return Ok(max_level);
         }
