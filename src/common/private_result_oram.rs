@@ -16,8 +16,9 @@ use qdrant_sec::{
     PrivateResultOramManifestValidationContext, PrivateResultOramMerkleProof,
     PrivateResultOramReadBucketsSignatureInput, PrivateResultOramSignature,
     PrivateResultOramSignatureVerification, PrivateResultOramUploadBundle,
-    private_result_oram_bucket_ciphertext_bytes, validate_private_result_oram_commit_signature,
-    validate_private_result_oram_manifest, validate_private_result_oram_manifest_signature_shape,
+    private_result_oram_bucket_ciphertext_bytes, private_result_oram_fixed_writeback_bucket_budget,
+    validate_private_result_oram_commit_signature, validate_private_result_oram_manifest,
+    validate_private_result_oram_manifest_signature_shape,
     validate_private_result_oram_read_buckets_signature,
     validate_private_result_oram_upload_bundle,
 };
@@ -1397,15 +1398,8 @@ fn ensure_private_result_oram_read_proof_matches_buckets(
 }
 
 fn max_updated_bucket_count(session: &PrivateResultOramSession) -> StorageResult<usize> {
-    let levels = usize::try_from(session.manifest.oram.tree_height)
-        .ok()
-        .and_then(|height| height.checked_add(1))
-        .ok_or_else(|| StorageError::bad_request("private result ORAM tree height overflows"))?;
-    let paths = usize::try_from(session.manifest.oram.path_batch_size)
-        .map_err(|_| StorageError::bad_request("private result ORAM path batch size overflows"))?;
-    levels
-        .checked_mul(paths)
-        .ok_or_else(|| StorageError::bad_request("private result ORAM writeback size overflows"))
+    private_result_oram_fixed_writeback_bucket_budget(&session.manifest.oram)
+        .map_err(|_| StorageError::bad_request("private result ORAM writeback size overflows"))
 }
 
 fn current_unix_secs() -> StorageResult<u64> {

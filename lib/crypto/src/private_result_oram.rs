@@ -1292,6 +1292,27 @@ pub fn private_result_oram_bucket_count(tree_height: u32) -> Result<u64, Private
         .ok_or(PrivateResultOramError::InvalidFetchPlanField("tree_height"))
 }
 
+pub fn private_result_oram_fixed_writeback_bucket_budget(
+    oram: &OramParams,
+) -> Result<usize, PrivateResultOramError> {
+    let path_len = usize::try_from(oram.tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or(PrivateResultOramError::InvalidFetchPlanField("tree_height"))?;
+    let path_batch_size = usize::try_from(oram.path_batch_size)
+        .map_err(|_| PrivateResultOramError::InvalidFetchPlanField("path_batch_size"))?;
+    if path_batch_size == 0 {
+        return Err(PrivateResultOramError::InvalidFetchPlanField(
+            "path_batch_size",
+        ));
+    }
+    path_len
+        .checked_mul(path_batch_size)
+        .ok_or(PrivateResultOramError::InvalidFetchPlanField(
+            "updated_buckets",
+        ))
+}
+
 pub fn private_result_oram_bucket_ids_for_leaf(
     leaf: u64,
     tree_height: u32,
@@ -2900,6 +2921,12 @@ pub fn plan_private_result_oram_commit_for_manifest(
     if updated_buckets.is_empty() {
         return Err(PrivateResultOramError::EmptyCommit);
     }
+    let max_updated_buckets = private_result_oram_fixed_writeback_bucket_budget(&manifest.oram)?;
+    if updated_buckets.len() > max_updated_buckets {
+        return Err(PrivateResultOramError::InvalidFetchPlanField(
+            "updated_buckets",
+        ));
+    }
     if private_result_oram_merkle_root_for_commitments(current_leaf_commitments)?
         != manifest.root_hash
     {
@@ -4488,7 +4515,7 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_verified_token_fetch_supports_multi_batch_writeback() {
+    fn encrypted_verified_token_fetch_rejects_multi_batch_single_commit_writeback() {
         let keys = result_test_keys();
         let base_context = result_bucket_base_context();
         let config = result_client_config();
@@ -4634,21 +4661,32 @@ mod tests {
 
         assert_eq!(result.accesses.len(), 4);
         let single_batch_writeback_budget =
-            usize::try_from(manifest.oram.path_batch_size * (manifest.oram.tree_height + 1))
-                .unwrap();
+            private_result_oram_fixed_writeback_bucket_budget(&manifest.oram).unwrap();
         assert!(result.updated_buckets.len() > single_batch_writeback_budget);
         assert!(result.updated_buckets.len() <= usize::try_from(bucket_count).unwrap());
 
-        let commit_plan = plan_private_result_oram_commit_for_manifest(
+        let err = plan_private_result_oram_commit_for_manifest(
             &manifest,
             43,
             &commitments,
             &result.updated_buckets,
         )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            PrivateResultOramError::InvalidFetchPlanField("updated_buckets")
+        );
+
+        let fixed_window_commit_plan = plan_private_result_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &commitments,
+            &result.updated_buckets[..single_batch_writeback_budget],
+        )
         .unwrap();
         assert_eq!(
-            commit_plan.updated_buckets.len(),
-            result.updated_buckets.len()
+            fixed_window_commit_plan.updated_buckets.len(),
+            single_batch_writeback_budget,
         );
     }
 

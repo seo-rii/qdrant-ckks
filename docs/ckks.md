@@ -1032,7 +1032,8 @@ old-root consistency, bucket epoch/range uniqueness, the next root, and commit
 signature bucket refs. `plan_private_result_oram_commit_for_manifest` uses the
 signed manifest epoch/root/bucket_count as the old commit context and rejects
 updated bucket commitments that are not bound to the bucket ciphertext hash
-plus collection/key lineage and the proposed bucket epoch.
+plus collection/key lineage and the proposed bucket epoch. It also enforces the
+same fixed writeback budget as the server commit guard.
 `sign_private_result_oram_manifest` and
 `sign_private_result_oram_commit` provide the matching SDK-side Ed25519 signing
 helpers. `PrivateResultOramUploadBundle` and
