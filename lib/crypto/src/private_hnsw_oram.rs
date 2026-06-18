@@ -460,7 +460,7 @@ pub fn validate_private_hnsw_oram_commit_signature(
         decode_base64url_32(bucket.ciphertext_sha256, "ciphertext_sha256")?;
     }
     let signature_bytes = decode_base64url_64(signature)?;
-    let message = private_hnsw_oram_commit_signature_message(input);
+    let message = try_private_hnsw_oram_commit_signature_message(input)?;
     UnparsedPublicKey::new(&ED25519, verification.public_key)
         .verify(&message, &signature_bytes)
         .map_err(|_| PrivateHnswOramError::InvalidCommitSignature)
@@ -495,7 +495,7 @@ pub fn validate_private_hnsw_oram_read_paths_signature(
         decode_base64url_8(path).map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)?;
     }
     let signature_bytes = decode_base64url_64(signature)?;
-    let message = private_hnsw_oram_read_paths_signature_message(input);
+    let message = try_private_hnsw_oram_read_paths_signature_message(input)?;
     UnparsedPublicKey::new(&ED25519, verification.public_key)
         .verify(&message, &signature_bytes)
         .map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)
@@ -552,6 +552,13 @@ pub fn private_hnsw_oram_manifest_signature_message(manifest: &PrivateHnswOramMa
 pub fn private_hnsw_oram_read_paths_signature_message(
     input: PrivateHnswOramReadPathsSignatureInput<'_>,
 ) -> Vec<u8> {
+    try_private_hnsw_oram_read_paths_signature_message(input)
+        .expect("private HNSW read_paths signature input length must fit u32")
+}
+
+pub fn try_private_hnsw_oram_read_paths_signature_message(
+    input: PrivateHnswOramReadPathsSignatureInput<'_>,
+) -> Result<Vec<u8>, PrivateHnswOramError> {
     let mut message = Vec::new();
     push_domain(
         &mut message,
@@ -564,7 +571,9 @@ pub fn private_hnsw_oram_read_paths_signature_message(
     push_u64(&mut message, input.rk_epoch);
     push_u64(&mut message, input.index_epoch);
     push_str(&mut message, input.root_hash);
-    push_u32(&mut message, input.paths.len() as u32);
+    let path_count = u32::try_from(input.paths.len())
+        .map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)?;
+    push_u32(&mut message, path_count);
     for path in input.paths {
         push_str(&mut message, path);
     }
@@ -572,12 +581,19 @@ pub fn private_hnsw_oram_read_paths_signature_message(
     push_bool(&mut message, input.dummy_paths_included);
     push_str(&mut message, input.signature_alg);
     push_str(&mut message, input.signature_key_id);
-    message
+    Ok(message)
 }
 
 pub fn private_hnsw_oram_commit_signature_message(
     input: PrivateHnswOramCommitSignatureInput<'_>,
 ) -> Vec<u8> {
+    try_private_hnsw_oram_commit_signature_message(input)
+        .expect("private HNSW commit signature input length must fit u32")
+}
+
+pub fn try_private_hnsw_oram_commit_signature_message(
+    input: PrivateHnswOramCommitSignatureInput<'_>,
+) -> Result<Vec<u8>, PrivateHnswOramError> {
     let mut message = Vec::new();
     push_domain(
         &mut message,
@@ -592,14 +608,16 @@ pub fn private_hnsw_oram_commit_signature_message(
     push_u64(&mut message, input.new_epoch);
     push_str(&mut message, input.old_root_hash);
     push_str(&mut message, input.new_root_hash);
-    push_u32(&mut message, input.updated_buckets.len() as u32);
+    let updated_bucket_count = u32::try_from(input.updated_buckets.len())
+        .map_err(|_| PrivateHnswOramError::InvalidCommitSignature)?;
+    push_u32(&mut message, updated_bucket_count);
     for bucket in input.updated_buckets {
         push_u64(&mut message, bucket.bucket_id);
         push_str(&mut message, bucket.ciphertext_sha256);
     }
     push_str(&mut message, input.signature_alg);
     push_str(&mut message, input.signature_key_id);
-    message
+    Ok(message)
 }
 
 fn validate_manifest_shape(manifest: &PrivateHnswOramManifest) -> Result<(), PrivateHnswOramError> {
