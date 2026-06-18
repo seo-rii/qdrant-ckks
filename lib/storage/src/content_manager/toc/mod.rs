@@ -526,12 +526,12 @@ impl TableOfContent {
         collection_defaults: Option<&CollectionConfigDefaults>,
         number_of_peers: usize,
     ) -> ShardDistributionProposal {
-        let non_zero_number_of_peers =
-            NonZeroU32::new(number_of_peers as u32).expect("NUmber of peers must be at least 1");
+        let number_of_peers = u32::try_from(number_of_peers).unwrap_or(u32::MAX);
+        let non_zero_number_of_peers = NonZeroU32::new(number_of_peers).unwrap_or(NonZeroU32::MIN);
 
         let suggested_shard_number = collection_defaults
-            .map(|cd| cd.get_shard_number(number_of_peers as u32))
-            .map(|x| NonZeroU32::new(x).expect("Shard number must be at least 1"))
+            .map(|cd| cd.get_shard_number(number_of_peers))
+            .map(|x| NonZeroU32::new(x).unwrap_or_else(default_shard_number))
             .unwrap_or_else(|| default_shard_number().saturating_mul(non_zero_number_of_peers));
 
         let shard_number = op
