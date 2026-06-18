@@ -216,7 +216,10 @@ impl ShardHolder {
             }
 
             let mut key_mapping = key_mapping.clone();
-            key_mapping.get_mut(shard_key).unwrap().remove(&shard_id);
+            let Some(shard_ids) = key_mapping.get_mut(shard_key) else {
+                return None;
+            };
+            shard_ids.remove(&shard_id);
             Some(key_mapping)
         })?;
         self.shard_id_to_key_mapping.remove(&shard_id);
