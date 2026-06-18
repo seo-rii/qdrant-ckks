@@ -2522,8 +2522,9 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
             "backends": backends,
         },
     });
-    let canonical = serde_json::to_vec(&view)
-        .expect("serializing sanitized crypto runtime capability fingerprint cannot fail");
+    let canonical = serde_json::to_vec(&view).unwrap_or_else(|_| {
+        b"qdrant-sec/crypto-runtime-capability-fingerprint-serialization-error/v1".to_vec()
+    });
     let digest = Sha256::digest(&canonical);
     BASE64URL_NOPAD.encode(&digest)
 }
