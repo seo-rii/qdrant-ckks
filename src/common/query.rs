@@ -233,7 +233,9 @@ fn record_ckks_client_query_nonce(
     let key = format!(
         "{collection_id}\x1f{vector_name}\x1f{key_id}\x1f{rk_id}\x1f{rk_epoch}\x1f{query_nonce}"
     );
-    let mut cache = CKKS_CLIENT_QUERY_NONCE_REPLAY_CACHE.lock().unwrap();
+    let mut cache = CKKS_CLIENT_QUERY_NONCE_REPLAY_CACHE.lock().map_err(|_| {
+        StorageError::service_error("CKKS client query nonce replay cache mutex was poisoned")
+    })?;
     if cache.record(
         key,
         Instant::now(),
