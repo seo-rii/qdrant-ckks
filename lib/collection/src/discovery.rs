@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use futures::Future;
-use itertools::Itertools;
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, NamedQuery};
 use segment::types::{Condition, Filter, HasIdCondition, ScoredPoint};
 use segment::vector_storage::query::{ContextPair, ContextQuery, DiscoverQuery};
@@ -69,13 +68,20 @@ fn discover_into_core_search(
             )
             .map(|v| v.to_owned());
 
-            ContextPair {
-                // SAFETY: we know there are two elements in the iterator
-                positive: vector_pair.next().unwrap(),
-                negative: vector_pair.next().unwrap(),
-            }
+            let positive = vector_pair.next().ok_or_else(|| {
+                CollectionError::bad_input(
+                    "Discover context pair positive vector is missing".to_string(),
+                )
+            })?;
+            let negative = vector_pair.next().ok_or_else(|| {
+                CollectionError::bad_input(
+                    "Discover context pair negative vector is missing".to_string(),
+                )
+            })?;
+
+            Ok(ContextPair { positive, negative })
         })
-        .collect_vec();
+        .collect::<CollectionResult<Vec<_>>>()?;
 
     let query: QueryEnum = match (target, context_pairs) {
         // Target with/without pairs => Discover
@@ -277,4 +283,52 @@ where
     let results = futures::future::try_join_all(res).await?;
     let flatten_results: Vec<Vec<_>> = results.into_iter().flatten().collect();
     Ok(flatten_results)
+}
+
+#[cfg(test)]
+mod tests {
+    use segment::types::PointIdType;
+    use shard::retrieve::record_internal::RecordInternal;
+
+    use super::*;
+    use crate::operations::types::{ContextExamplePair, RecommendExample};
+
+    #[test]
+    fn discover_context_pair_rejects_missing_vectors_without_panic() {
+        let positive_id: PointIdType = 1.into();
+        let negative_id: PointIdType = 2.into();
+        let mut referenced_vectors = ReferencedVectors::default();
+        referenced_vectors.extend(
+            None,
+            [
+                (positive_id, RecordInternal::new_empty(positive_id)),
+                (negative_id, RecordInternal::new_empty(negative_id)),
+            ],
+        );
+
+        let request = DiscoverRequestInternal {
+            target: None,
+            context: Some(vec![ContextExamplePair {
+                positive: RecommendExample::PointId(positive_id),
+                negative: RecommendExample::PointId(negative_id),
+            }]),
+            filter: None,
+            params: None,
+            limit: 1,
+            offset: None,
+            with_payload: None,
+            with_vector: None,
+            using: None,
+            lookup_from: None,
+        };
+
+        let err = discover_into_core_search("docs", request, &referenced_vectors)
+            .expect_err("missing context vectors must fail closed");
+
+        assert!(
+            err.to_string()
+                .contains("Discover context pair positive vector is missing"),
+            "{err}",
+        );
+    }
 }
