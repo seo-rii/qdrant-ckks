@@ -725,10 +725,11 @@ fn validate_payload_crypto_migration_run_request_for_config(
         )));
     }
     if migration_state == CryptoMigrationState::Rotating {
-        let retired_rk_id = request
-            .retired_rk_id
-            .as_ref()
-            .expect("retired_rk_id was validated above");
+        let Some(retired_rk_id) = request.retired_rk_id.as_ref() else {
+            return Err(CollectionError::bad_input(
+                "payload crypto rotation run requires retired_rk_id for completion",
+            ));
+        };
         if !retired_material_refs.contains(retired_rk_id) {
             return Err(CollectionError::bad_input(format!(
                 "payload crypto migration retired_rk_id {retired_rk_id} is not configured as a runtime retired material",
