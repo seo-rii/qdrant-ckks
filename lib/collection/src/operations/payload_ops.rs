@@ -24,17 +24,24 @@ impl SplitByShard for PayloadOps {
 
 impl SplitByShard for DeletePayloadOp {
     fn split_by_shard(self, ring: &HashRingRouter) -> OperationToShard<Self> {
-        match (&self.points, &self.filter) {
-            (Some(_), _) => {
-                split_iter_by_shard(self.points.unwrap(), |id| *id, ring).map(|points| {
-                    DeletePayloadOp {
-                        points: Some(points),
-                        keys: self.keys.clone(),
-                        filter: self.filter.clone(),
-                    }
+        let DeletePayloadOp {
+            points,
+            keys,
+            filter,
+        } = self;
+        match (points, filter) {
+            (Some(points), filter) => {
+                split_iter_by_shard(points, |id| *id, ring).map(|points| DeletePayloadOp {
+                    points: Some(points),
+                    keys: keys.clone(),
+                    filter: filter.clone(),
                 })
             }
-            (None, Some(_)) => OperationToShard::to_all(self),
+            (None, Some(filter)) => OperationToShard::to_all(DeletePayloadOp {
+                points: None,
+                keys,
+                filter: Some(filter),
+            }),
             (None, None) => OperationToShard::to_none(),
         }
     }
@@ -42,18 +49,27 @@ impl SplitByShard for DeletePayloadOp {
 
 impl SplitByShard for SetPayloadOp {
     fn split_by_shard(self, ring: &HashRingRouter) -> OperationToShard<Self> {
-        match (&self.points, &self.filter) {
-            (Some(_), _) => {
-                split_iter_by_shard(self.points.unwrap(), |id| *id, ring).map(|points| {
-                    SetPayloadOp {
-                        points: Some(points),
-                        payload: self.payload.clone(),
-                        filter: self.filter.clone(),
-                        key: self.key.clone(),
-                    }
+        let SetPayloadOp {
+            points,
+            payload,
+            filter,
+            key,
+        } = self;
+        match (points, filter) {
+            (Some(points), filter) => {
+                split_iter_by_shard(points, |id| *id, ring).map(|points| SetPayloadOp {
+                    points: Some(points),
+                    payload: payload.clone(),
+                    filter: filter.clone(),
+                    key: key.clone(),
                 })
             }
-            (None, Some(_)) => OperationToShard::to_all(self),
+            (None, Some(filter)) => OperationToShard::to_all(SetPayloadOp {
+                points: None,
+                payload,
+                filter: Some(filter),
+                key,
+            }),
             (None, None) => OperationToShard::to_none(),
         }
     }
