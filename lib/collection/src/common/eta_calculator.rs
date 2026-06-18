@@ -40,9 +40,15 @@ impl EtaCalculator {
         //
         // NOTE: When `len() == 1`, calling `get_signed(-2)` would return the same value as
         // `get_signed(-1)`, but this is not what we want. Thus, we explicitly check for length.
-        // Unwraps are safe because the length is checked.
-        if self.0.len() >= 2 && now - self.0.get_signed(-2).unwrap().0 < Self::DURATION {
-            *self.0.back_mut().unwrap() = (now, current_progress);
+        if self.0.len() >= 2
+            && self
+                .0
+                .get_signed(-2)
+                .is_some_and(|older| now - older.0 < Self::DURATION)
+        {
+            if let Some(recent) = self.0.back_mut() {
+                *recent = (now, current_progress);
+            }
         } else {
             self.0.enqueue((now, current_progress));
         }

@@ -235,7 +235,11 @@ impl<'coll_name> ReferencedPoints<'coll_name> {
             let vector_names: Vec<_> = self
                 .vector_names_per_collection
                 .remove(&collection_name)
-                .unwrap()
+                .ok_or_else(|| {
+                    CollectionError::service_error(format!(
+                        "missing vector-name set for referenced collection {collection_name:?}",
+                    ))
+                })?
                 .into_iter()
                 .collect();
             match collection_name {
@@ -401,7 +405,12 @@ where
     let batch_reference_vectors: Vec<_> = try_join_all(fetch_requests).await?;
 
     if batch_reference_vectors.len() == 1 {
-        return Ok(batch_reference_vectors.into_iter().next().unwrap());
+        let Some(reference_vectors) = batch_reference_vectors.into_iter().next() else {
+            return Err(CollectionError::service_error(
+                "single reference-vector fetch returned no result",
+            ));
+        };
+        return Ok(reference_vectors);
     }
 
     let mut all_vectors_records_map: ReferencedVectors = Default::default();

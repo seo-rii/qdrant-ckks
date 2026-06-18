@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 use validator::Validate;
 
-use crate::operations::types::CollectionResult;
+use crate::operations::types::{CollectionError, CollectionResult};
 
 /// Defines source of truth for snapshot recovery:
 ///
@@ -134,17 +134,22 @@ impl From<SnapshotDescription> for api::grpc::qdrant::SnapshotDescription {
 }
 
 pub async fn get_snapshot_description(path: &Path) -> CollectionResult<SnapshotDescription> {
-    let name = path.file_name().unwrap().to_str().unwrap();
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            CollectionError::service_error(format!(
+                "snapshot path {} does not end with a valid UTF-8 file name",
+                path.display(),
+            ))
+        })?;
     let file_meta = tokio_fs::metadata(&path).await?;
     let creation_time = file_meta.created().ok().and_then(|created_time| {
         created_time
             .duration_since(SystemTime::UNIX_EPOCH)
             .ok()
-            .map(|duration| {
-                DateTime::from_timestamp(duration.as_secs() as i64, 0)
-                    .map(|dt| dt.naive_utc())
-                    .unwrap()
-            })
+            .and_then(|duration| DateTime::from_timestamp(duration.as_secs() as i64, 0))
+            .map(|dt| dt.naive_utc())
     });
 
     let checksum = read_checksum_for_snapshot(path).await;

@@ -165,7 +165,7 @@ impl TransferTasksPool {
         let mut comment = String::new();
         if let Some(stage) = progress.current_stage() {
             let elapsed = progress.stage_elapsed_secs().unwrap_or(0.0);
-            write!(comment, "{} ({:.2}s)", stage.as_str(), elapsed).unwrap();
+            let _ = write!(comment, "{} ({:.2}s)", stage.as_str(), elapsed);
         }
 
         // Append records progress only when points are actually tracked
@@ -173,14 +173,13 @@ impl TransferTasksPool {
             if !comment.is_empty() {
                 comment.push_str(" | ");
             }
-            write!(
+            let _ = write!(
                 comment,
                 "Transferring records ({}/{})",
                 progress.points_transferred, total
-            )
-            .unwrap();
+            );
             if let Some(eta) = progress.eta.estimate(total) {
-                write!(comment, ", ETA: {:.2}s", eta.as_secs_f64()).unwrap();
+                let _ = write!(comment, ", ETA: {:.2}s", eta.as_secs_f64());
             }
         }
 
@@ -189,13 +188,12 @@ impl TransferTasksPool {
             if !comment.is_empty() {
                 comment.push_str(" | ");
             }
-            write!(
+            let _ = write!(
                 comment,
                 "read: {:.2}s, send: {:.2}s",
                 progress.batch_read_duration.as_secs_f64(),
                 progress.batch_send_duration.as_secs_f64(),
-            )
-            .unwrap();
+            );
         }
 
         Some(TransferTaskStatus { result, comment })

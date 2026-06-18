@@ -307,7 +307,11 @@ async fn clean_task(
         };
 
         // Update offset for next batch
-        offset = (ids.len() > CLEAN_BATCH_SIZE).then(|| ids.pop().unwrap());
+        offset = if ids.len() > CLEAN_BATCH_SIZE {
+            ids.pop()
+        } else {
+            None
+        };
         deleted_points += ids.len();
         let last_batch = offset.is_none();
 

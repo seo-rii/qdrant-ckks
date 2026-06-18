@@ -66,7 +66,7 @@ impl From<&WalConfig> for WalOptions {
         WalOptions {
             segment_capacity: wal_capacity_mb * 1024 * 1024,
             segment_queue_len: *wal_segments_ahead,
-            retain_closed: NonZeroUsize::new(*wal_retain_closed).unwrap(),
+            retain_closed: NonZeroUsize::new(*wal_retain_closed).unwrap_or(NonZeroUsize::MIN),
         }
     }
 }
