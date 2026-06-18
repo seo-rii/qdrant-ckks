@@ -411,8 +411,15 @@ impl ShardHolder {
         let shard_ops: Vec<_> = match operation_to_shard {
             OperationToShard::ByShard(by_shard) => by_shard
                 .into_iter()
-                .map(|(shard_id, operation)| (self.shards.get(&shard_id).unwrap(), operation))
-                .collect(),
+                .map(|(shard_id, operation)| {
+                    let shard = self.shards.get(&shard_id).ok_or_else(|| {
+                        CollectionError::service_error(format!(
+                            "Shard {shard_id} is referenced by hash ring but is missing",
+                        ))
+                    })?;
+                    Ok((shard, operation))
+                })
+                .collect::<CollectionResult<Vec<_>>>()?,
             OperationToShard::ToAll(operation) => {
                 if let Some(shard_key) = shard_keys_selection {
                     let shard_ids = self
@@ -423,8 +430,15 @@ impl ShardHolder {
                         .unwrap_or_default();
                     shard_ids
                         .into_iter()
-                        .map(|shard_id| (self.shards.get(&shard_id).unwrap(), operation.clone()))
-                        .collect()
+                        .map(|shard_id| {
+                            let shard = self.shards.get(&shard_id).ok_or_else(|| {
+                                CollectionError::service_error(format!(
+                                    "Shard {shard_id} is referenced by shard key mapping but is missing",
+                                ))
+                            })?;
+                            Ok((shard, operation.clone()))
+                        })
+                        .collect::<CollectionResult<Vec<_>>>()?
                 } else {
                     self.all_shards()
                         .map(|shard| (shard, operation.clone()))
