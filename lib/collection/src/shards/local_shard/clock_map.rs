@@ -471,6 +471,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub enum Error {
     Io(#[from] std::io::Error),
     SerdeJson(#[from] serde_json::Error),
+    Other(String),
 }
 
 impl From<common::fs::FileOperationError> for Error {
@@ -478,7 +479,8 @@ impl From<common::fs::FileOperationError> for Error {
         match err {
             common::fs::FileOperationError::Io(err) => err.into(),
             common::fs::FileOperationError::SerdeJson(err) => err.into(),
-            _ => unreachable!(),
+            common::fs::FileOperationError::Bincode(err) => Error::Other(err.to_string()),
+            common::fs::FileOperationError::Generic(err) => Error::Other(err),
         }
     }
 }
@@ -488,6 +490,7 @@ impl From<Error> for CollectionError {
         match err {
             Error::Io(err) => err.into(),
             Error::SerdeJson(err) => err.into(),
+            Error::Other(err) => CollectionError::service_error(err),
         }
     }
 }
