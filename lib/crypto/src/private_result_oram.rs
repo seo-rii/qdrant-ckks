@@ -2385,6 +2385,37 @@ pub fn sign_private_result_oram_read_buckets(
     })
 }
 
+pub fn sign_private_result_oram_read_buckets_for_manifest(
+    key_pair: &Ed25519KeyPair,
+    manifest: &PrivateResultOramManifest,
+    bucket_ids: &[u64],
+) -> Result<PrivateResultOramSignature, PrivateResultOramError> {
+    validate_private_result_oram_manifest_shape(manifest)?;
+    let expected_bucket_ids = u64::from(manifest.oram.tree_height)
+        .checked_add(1)
+        .and_then(|path_len| path_len.checked_mul(u64::from(manifest.oram.path_batch_size)))
+        .ok_or(PrivateResultOramError::InvalidReadBucketsSignature)?;
+    let actual_bucket_ids = u64::try_from(bucket_ids.len())
+        .map_err(|_| PrivateResultOramError::InvalidReadBucketsSignature)?;
+    if actual_bucket_ids != expected_bucket_ids {
+        return Err(PrivateResultOramError::InvalidReadBucketsSignature);
+    }
+    sign_private_result_oram_read_buckets(
+        key_pair,
+        PrivateResultOramReadBucketsSignatureContext {
+            collection_id: &manifest.collection_id,
+            key_id: &manifest.key_id,
+            rk_id: &manifest.rk_id,
+            rk_epoch: manifest.rk_epoch,
+            signing_key_id: &manifest.owner_signing_key_id,
+        },
+        manifest.index_epoch,
+        &manifest.root_hash,
+        manifest.bucket_count,
+        bucket_ids,
+    )
+}
+
 pub fn package_private_result_oram_upload_bundle(
     key_pair: &Ed25519KeyPair,
     manifest: PrivateResultOramManifest,
@@ -6635,6 +6666,53 @@ mod tests {
                 tampered_bucket_count,
                 &signature.sig,
                 verification,
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+    }
+
+    #[test]
+    fn read_buckets_manifest_signer_enforces_fixed_batch_context() {
+        let key_pair = deterministic_key_pair();
+        let mut manifest = fixture_manifest();
+        manifest.oram.tree_height = 2;
+        manifest.oram.path_batch_size = 2;
+        manifest.bucket_count = 7;
+        manifest.logical_result_count = 8;
+        manifest.dummy_result_count = 4;
+        let bucket_ids = [0, 1, 3, 0, 2, 5];
+
+        let signature =
+            sign_private_result_oram_read_buckets_for_manifest(&key_pair, &manifest, &bucket_ids)
+                .unwrap();
+        let input = PrivateResultOramReadBucketsSignatureInput {
+            collection_id: &manifest.collection_id,
+            key_id: &manifest.key_id,
+            rk_id: &manifest.rk_id,
+            rk_epoch: manifest.rk_epoch,
+            index_epoch: manifest.index_epoch,
+            root_hash: &manifest.root_hash,
+            bucket_count: manifest.bucket_count,
+            bucket_ids: &bucket_ids,
+            signature_alg: &signature.alg,
+            signature_key_id: &signature.key_id,
+        };
+        validate_private_result_oram_read_buckets_signature(
+            input,
+            &signature.sig,
+            PrivateResultOramSignatureVerification {
+                expected_key_id: &manifest.owner_signing_key_id,
+                public_key: key_pair.public_key().as_ref(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(signature.key_id, manifest.owner_signing_key_id);
+        assert_eq!(
+            sign_private_result_oram_read_buckets_for_manifest(
+                &key_pair,
+                &manifest,
+                &bucket_ids[..3],
             ),
             Err(PrivateResultOramError::InvalidReadBucketsSignature)
         );

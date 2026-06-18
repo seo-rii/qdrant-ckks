@@ -972,10 +972,14 @@ exposes canonical `read_buckets`
 message/sign/verify helpers that bind collection/key lineage, index epoch,
 root hash, bucket count, and the exact padded bucket-id sequence; REST and gRPC
 `read_buckets` handlers now require that signature before encrypted buckets are
-read or detailed path-shape errors are returned. The planner also rejects missing
-token positions, duplicate fetch tokens, duplicate token-position entries, and
-out-of-range leaves before a server request is built. The crypto crate also has
-a client-only private result ORAM payload block/plaintext bucket codec for
+read or detailed path-shape errors are returned.
+`sign_private_result_oram_read_buckets_for_manifest` derives that read signature
+context from the signed manifest and enforces the fixed
+`oram.path_batch_size * (oram.tree_height + 1)` bucket-id volume before signing.
+The planner also rejects missing token positions, duplicate fetch tokens,
+duplicate token-position entries, and out-of-range leaves before a server
+request is built. The crypto crate also has a client-only private result ORAM
+payload block/plaintext bucket codec for
 fixed-size bucket contents:
 payload bytes, payload fetch token, point token, generation, and deletion state
 are encoded inside the client-encrypted bucket body and are never server
@@ -1036,7 +1040,8 @@ plus collection/key lineage and the proposed bucket epoch. It also enforces the
 same fixed writeback budget as the server commit guard.
 `sign_private_result_oram_manifest` and
 `sign_private_result_oram_commit` provide the matching SDK-side Ed25519 signing
-helpers. `PrivateResultOramUploadBundle` and
+helpers, while `sign_private_result_oram_read_buckets_for_manifest` signs
+manifest-bound fixed-size `read_buckets` requests. `PrivateResultOramUploadBundle` and
 `package_private_result_oram_upload_bundle` package a signed manifest with a
 complete ordered bucket set whose commitments match the manifest root.
 `validate_private_result_oram_upload_bundle` and the bundle's
