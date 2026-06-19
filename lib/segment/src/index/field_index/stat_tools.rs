@@ -22,8 +22,11 @@ pub fn estimate_multi_value_selection_cardinality(
     total_values: usize,
     selected_values_count: usize,
 ) -> f64 {
+    if total_points == 0 || selected_values_count == 0 || total_values < total_points {
+        return 0.0;
+    }
+
     // Value >= 1.0
-    assert!(total_values >= total_points);
     let values_per_point = total_values as f64 / total_points as f64;
     // Probability to select each unique value
     let prob_select = 1. - prob_not_select(total_values, values_per_point, selected_values_count);
@@ -144,6 +147,8 @@ mod tests {
         let count = estimate_multi_value_selection_cardinality(1, 1, 0);
         assert!(!count.is_nan());
         eprintln!("count = {count:#?}");
+        assert_eq!(estimate_multi_value_selection_cardinality(0, 0, 0), 0.0);
+        assert_eq!(estimate_multi_value_selection_cardinality(1, 0, 1), 0.0);
     }
 
     #[test]
