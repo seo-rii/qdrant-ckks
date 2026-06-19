@@ -2136,6 +2136,29 @@ mod tests {
     }
 
     #[test]
+    fn private_result_oram_restore_preflight_rejects_context_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-bad-context")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(Uuid::from_u128(8).to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("collection_id mismatch"));
+        assert!(!rendered.contains(&manifest.collection_id), "{rendered}");
+        assert!(!rendered.contains(&uuid.to_string()), "{rendered}");
+    }
+
+    #[test]
     fn private_result_oram_restore_preflight_rejects_signature_key_mismatch() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-restore-bad-signature-key")
@@ -2199,6 +2222,10 @@ mod tests {
 
         assert!(rendered.contains("manifest rk_id mismatch"));
         assert!(!rendered.contains(&manifest.rk_id), "{rendered}");
+        assert!(
+            !rendered.contains("tenant-a/result-private-rk"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -2224,6 +2251,7 @@ mod tests {
 
         assert!(rendered.contains("manifest rk_epoch mismatch"));
         assert!(!rendered.contains("8"), "{rendered}");
+        assert!(!rendered.contains("7"), "{rendered}");
     }
 
     #[test]
