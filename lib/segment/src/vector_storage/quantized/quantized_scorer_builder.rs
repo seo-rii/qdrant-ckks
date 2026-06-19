@@ -183,7 +183,7 @@ impl<'a> QuantizedScorerBuilder<'a> {
                     quantized_storage,
                     quantization_config,
                     hardware_counter,
-                );
+                )?;
                 raw_scorer_from_query_scorer(query_scorer)
             }
             QueryVector::RecommendSumScores(reco_query) => {
@@ -193,7 +193,7 @@ impl<'a> QuantizedScorerBuilder<'a> {
                     quantized_storage,
                     quantization_config,
                     hardware_counter,
-                );
+                )?;
                 raw_scorer_from_query_scorer(query_scorer)
             }
             QueryVector::Discover(discover_query) => {
@@ -203,7 +203,7 @@ impl<'a> QuantizedScorerBuilder<'a> {
                     quantized_storage,
                     quantization_config,
                     hardware_counter,
-                );
+                )?;
                 raw_scorer_from_query_scorer(query_scorer)
             }
             QueryVector::Context(context_query) => {
@@ -213,7 +213,7 @@ impl<'a> QuantizedScorerBuilder<'a> {
                     quantized_storage,
                     quantization_config,
                     hardware_counter,
-                );
+                )?;
                 raw_scorer_from_query_scorer(query_scorer)
             }
             QueryVector::FeedbackNaive(feedback_query) => {
@@ -224,7 +224,7 @@ impl<'a> QuantizedScorerBuilder<'a> {
                     quantized_storage,
                     quantization_config,
                     hardware_counter,
-                );
+                )?;
                 raw_scorer_from_query_scorer(query_scorer)
             }
         }
@@ -266,7 +266,7 @@ impl<'a> QuantizedScorerBuilder<'a> {
                         quantized_multivector_storage,
                         quantization_config,
                         hardware_counter,
-                    );
+                    )?;
                 raw_scorer_from_query_scorer(query_scorer)
             }
             QueryVector::RecommendSumScores(reco_query) => {
@@ -278,7 +278,7 @@ impl<'a> QuantizedScorerBuilder<'a> {
                         quantized_multivector_storage,
                         quantization_config,
                         hardware_counter,
-                    );
+                    )?;
                 raw_scorer_from_query_scorer(query_scorer)
             }
             QueryVector::Discover(discover_query) => {
@@ -290,7 +290,7 @@ impl<'a> QuantizedScorerBuilder<'a> {
                         quantized_multivector_storage,
                         quantization_config,
                         hardware_counter,
-                    );
+                    )?;
                 raw_scorer_from_query_scorer(query_scorer)
             }
             QueryVector::Context(context_query) => {
@@ -302,7 +302,7 @@ impl<'a> QuantizedScorerBuilder<'a> {
                         quantized_multivector_storage,
                         quantization_config,
                         hardware_counter,
-                    );
+                    )?;
                 raw_scorer_from_query_scorer(query_scorer)
             }
             QueryVector::FeedbackNaive(feedback_query) => {
@@ -314,7 +314,7 @@ impl<'a> QuantizedScorerBuilder<'a> {
                         quantized_multivector_storage,
                         quantization_config,
                         hardware_counter,
-                    );
+                    )?;
                 raw_scorer_from_query_scorer(query_scorer)
             }
         }

@@ -4,6 +4,7 @@ use common::counter::hardware_counter::HardwareCounterCell;
 use common::typelevel::False;
 use common::types::{PointOffsetType, ScoreType};
 
+use crate::common::operation_error::OperationResult;
 use crate::data_types::named_vectors::CowMultiVector;
 use crate::data_types::primitive::PrimitiveVectorElement;
 use crate::data_types::vectors::{MultiDenseVectorInternal, TypedMultiDenseVector};
@@ -42,7 +43,7 @@ where
         quantized_multivector_storage: &'a TEncodedVectors,
         quantization_config: &QuantizationConfig,
         mut hardware_counter: HardwareCounterCell,
-    ) -> Self
+    ) -> OperationResult<Self>
     where
         TOriginalQuery: Query<TypedMultiDenseVector<TElement>>
             + TransformInto<TQuery, TypedMultiDenseVector<TElement>, TEncodedVectors::EncodedQuery>
@@ -50,43 +51,38 @@ where
         TInputQuery: Query<MultiDenseVectorInternal>
             + TransformInto<TOriginalQuery, MultiDenseVectorInternal, TypedMultiDenseVector<TElement>>,
     {
-        let original_query: TOriginalQuery = raw_query
-            .transform(|vector| {
-                let mut preprocessed = Vec::new();
-                for slice in vector.multi_vectors() {
-                    preprocessed.extend_from_slice(&TMetric::preprocess(slice.to_vec()));
-                }
-                let preprocessed = MultiDenseVectorInternal::new(preprocessed, vector.dim);
-                let converted =
-                    TElement::from_float_multivector(CowMultiVector::Owned(preprocessed))
-                        .to_owned();
-                Ok(converted)
-            })
-            .unwrap();
+        let original_query: TOriginalQuery = raw_query.transform(|vector| {
+            let mut preprocessed = Vec::new();
+            for slice in vector.multi_vectors() {
+                preprocessed.extend_from_slice(&TMetric::preprocess(slice.to_vec()));
+            }
+            let preprocessed = MultiDenseVectorInternal::new(preprocessed, vector.dim);
+            let converted =
+                TElement::from_float_multivector(CowMultiVector::Owned(preprocessed)).to_owned();
+            Ok(converted)
+        })?;
 
-        let query: TQuery = original_query
-            .transform(|original_vector| {
-                let original_vector_prequantized = TElement::quantization_preprocess(
-                    quantization_config,
-                    TMetric::distance(),
-                    &original_vector.flattened_vectors,
-                );
-                Ok(quantized_multivector_storage.encode_query(&original_vector_prequantized))
-            })
-            .unwrap();
+        let query: TQuery = original_query.transform(|original_vector| {
+            let original_vector_prequantized = TElement::quantization_preprocess(
+                quantization_config,
+                TMetric::distance(),
+                &original_vector.flattened_vectors,
+            );
+            Ok(quantized_multivector_storage.encode_query(&original_vector_prequantized))
+        })?;
 
         hardware_counter.set_cpu_multiplier(size_of::<TElement>());
 
         hardware_counter
             .set_vector_io_read_multiplier(usize::from(quantized_multivector_storage.is_on_disk()));
 
-        Self {
+        Ok(Self {
             query,
             quantized_multivector_storage,
             metric: PhantomData,
             element: PhantomData,
             hardware_counter,
-        }
+        })
     }
 }
 

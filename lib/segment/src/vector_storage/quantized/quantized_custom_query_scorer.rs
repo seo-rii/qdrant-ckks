@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::{PointOffsetType, ScoreType};
 
+use crate::common::operation_error::OperationResult;
 use crate::data_types::primitive::PrimitiveVectorElement;
 use crate::data_types::vectors::{DenseVector, TypedDenseVector};
 use crate::spaces::metric::Metric;
@@ -38,7 +39,7 @@ where
         quantized_storage: &'a TEncodedVectors,
         quantization_config: &QuantizationConfig,
         mut hardware_counter: HardwareCounterCell,
-    ) -> Self
+    ) -> OperationResult<Self>
     where
         TOriginalQuery: Query<TypedDenseVector<TElement>>
             + TransformInto<TQuery, TypedDenseVector<TElement>, TEncodedVectors::EncodedQuery>
@@ -46,37 +47,33 @@ where
         TInputQuery: Query<DenseVector>
             + TransformInto<TOriginalQuery, DenseVector, TypedDenseVector<TElement>>,
     {
-        let original_query: TOriginalQuery = raw_query
-            .transform(|raw_vector| {
-                let preprocessed_vector = TMetric::preprocess(raw_vector);
-                let original_vector = TypedDenseVector::from(TElement::slice_from_float_cow(
-                    Cow::Owned(preprocessed_vector),
-                ));
-                Ok(original_vector)
-            })
-            .unwrap();
-        let query: TQuery = original_query
-            .transform(|original_vector| {
-                let original_vector_prequantized = TElement::quantization_preprocess(
-                    quantization_config,
-                    TMetric::distance(),
-                    &original_vector,
-                );
-                Ok(quantized_storage.encode_query(&original_vector_prequantized))
-            })
-            .unwrap();
+        let original_query: TOriginalQuery = raw_query.transform(|raw_vector| {
+            let preprocessed_vector = TMetric::preprocess(raw_vector);
+            let original_vector = TypedDenseVector::from(TElement::slice_from_float_cow(
+                Cow::Owned(preprocessed_vector),
+            ));
+            Ok(original_vector)
+        })?;
+        let query: TQuery = original_query.transform(|original_vector| {
+            let original_vector_prequantized = TElement::quantization_preprocess(
+                quantization_config,
+                TMetric::distance(),
+                &original_vector,
+            );
+            Ok(quantized_storage.encode_query(&original_vector_prequantized))
+        })?;
 
         hardware_counter.set_cpu_multiplier(size_of::<TElement>());
 
         hardware_counter.set_vector_io_read_multiplier(usize::from(quantized_storage.is_on_disk()));
 
-        Self {
+        Ok(Self {
             query,
             quantized_storage,
             metric: PhantomData,
             element: PhantomData,
             hardware_counter,
-        }
+        })
     }
 }
 
