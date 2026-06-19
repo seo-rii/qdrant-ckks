@@ -7,6 +7,7 @@ use common::typelevel::True;
 use common::types::{PointOffsetType, ScoreType};
 use zerocopy::FromBytes;
 
+use crate::common::operation_error::OperationResult;
 use crate::data_types::primitive::PrimitiveVectorElement;
 use crate::data_types::vectors::{DenseVector, TypedDenseVector};
 use crate::spaces::metric::Metric;
@@ -41,21 +42,19 @@ impl<
         query: TInputQuery,
         vector_storage: &'a TVectorStorage,
         mut hardware_counter: HardwareCounterCell,
-    ) -> Self
+    ) -> OperationResult<Self>
     where
         TInputQuery: Query<DenseVector>
             + TransformInto<TStoredQuery, DenseVector, TypedDenseVector<TElement>>,
     {
         let mut dim = 0;
-        let query = query
-            .transform(|vector| {
-                dim = vector.len();
-                let preprocessed_vector = TMetric::preprocess(vector);
-                Ok(TypedDenseVector::from(TElement::slice_from_float_cow(
-                    Cow::from(preprocessed_vector),
-                )))
-            })
-            .unwrap();
+        let query = query.transform(|vector| {
+            dim = vector.len();
+            let preprocessed_vector = TMetric::preprocess(vector);
+            Ok(TypedDenseVector::from(TElement::slice_from_float_cow(
+                Cow::from(preprocessed_vector),
+            )))
+        })?;
 
         hardware_counter.set_cpu_multiplier(dim * size_of::<TElement>());
         if vector_storage.is_on_disk() {
@@ -64,13 +63,13 @@ impl<
             hardware_counter.set_vector_io_read_multiplier(0);
         }
 
-        Self {
+        Ok(Self {
             query,
             vector_storage,
             metric: PhantomData,
             _element: PhantomData,
             hardware_counter,
-        }
+        })
     }
 }
 

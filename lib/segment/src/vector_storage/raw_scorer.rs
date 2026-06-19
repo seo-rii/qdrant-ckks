@@ -261,7 +261,7 @@ fn new_scorer_with_metric<
                 RecoBestScoreQuery::from(reco_query),
                 vector_storage,
                 hardware_counter_cell,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::RecommendSumScores(reco_query) => {
@@ -270,7 +270,7 @@ fn new_scorer_with_metric<
                 RecoSumScoresQuery::from(reco_query),
                 vector_storage,
                 hardware_counter_cell,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::Discover(discover_query) => {
@@ -279,7 +279,7 @@ fn new_scorer_with_metric<
                 discover_query,
                 vector_storage,
                 hardware_counter_cell,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::Context(context_query) => {
@@ -288,7 +288,7 @@ fn new_scorer_with_metric<
                 context_query,
                 vector_storage,
                 hardware_counter_cell,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::FeedbackNaive(feedback_query) => {
@@ -298,7 +298,7 @@ fn new_scorer_with_metric<
                 feedback_query.into_query(),
                 vector_storage,
                 hardware_counter_cell,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
     }
@@ -374,7 +374,7 @@ fn new_multi_scorer_with_metric<
                 RecoBestScoreQuery::from(reco_query),
                 vector_storage,
                 hardware_counter,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::RecommendSumScores(reco_query) => {
@@ -383,7 +383,7 @@ fn new_multi_scorer_with_metric<
                 RecoSumScoresQuery::from(reco_query),
                 vector_storage,
                 hardware_counter,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::Discover(discover_query) => {
@@ -393,7 +393,7 @@ fn new_multi_scorer_with_metric<
                 discover_query,
                 vector_storage,
                 hardware_counter,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::Context(context_query) => {
@@ -403,7 +403,7 @@ fn new_multi_scorer_with_metric<
                 context_query,
                 vector_storage,
                 hardware_counter,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::FeedbackNaive(feedback_query) => {
@@ -413,7 +413,7 @@ fn new_multi_scorer_with_metric<
                 feedback_query.into_query(),
                 vector_storage,
                 hardware_counter,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
     }

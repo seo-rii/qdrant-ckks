@@ -176,7 +176,7 @@ where
                     RecoBestScoreQuery::from(reco_query),
                     storage,
                     hardware_counter,
-                );
+                )?;
                 Ok(async_raw_scorer_from_query_scorer(query_scorer, storage))
             }
             QueryVector::RecommendSumScores(reco_query) => {
@@ -185,7 +185,7 @@ where
                     RecoSumScoresQuery::from(reco_query),
                     storage,
                     hardware_counter,
-                );
+                )?;
                 Ok(async_raw_scorer_from_query_scorer(query_scorer, storage))
             }
             QueryVector::Discover(discover_query) => {
@@ -194,7 +194,7 @@ where
                     discover_query,
                     storage,
                     hardware_counter,
-                );
+                )?;
                 Ok(async_raw_scorer_from_query_scorer(query_scorer, storage))
             }
             QueryVector::Context(context_query) => {
@@ -203,7 +203,7 @@ where
                     context_query,
                     storage,
                     hardware_counter,
-                );
+                )?;
                 Ok(async_raw_scorer_from_query_scorer(query_scorer, storage))
             }
             QueryVector::FeedbackNaive(feedback_query) => {
@@ -213,7 +213,7 @@ where
                     feedback_query.into_query(),
                     storage,
                     hardware_counter,
-                );
+                )?;
                 Ok(async_raw_scorer_from_query_scorer(query_scorer, storage))
             }
         }

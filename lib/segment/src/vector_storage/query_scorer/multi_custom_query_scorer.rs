@@ -7,6 +7,7 @@ use common::typelevel::False;
 use common::types::{PointOffsetType, ScoreType};
 
 use super::score_multi;
+use crate::common::operation_error::OperationResult;
 use crate::data_types::named_vectors::CowMultiVector;
 use crate::data_types::primitive::PrimitiveVectorElement;
 use crate::data_types::vectors::{
@@ -44,26 +45,23 @@ impl<
         query: TInputQuery,
         vector_storage: &'a TVectorStorage,
         mut hardware_counter: HardwareCounterCell,
-    ) -> Self
+    ) -> OperationResult<Self>
     where
         TInputQuery: Query<MultiDenseVectorInternal>
             + TransformInto<TQuery, MultiDenseVectorInternal, TypedMultiDenseVector<TElement>>,
     {
         let mut dim = 0;
-        let query = query
-            .transform(|vector| {
-                dim = vector.dim;
-                let mut preprocessed = DenseVector::new();
-                for slice in vector.multi_vectors() {
-                    preprocessed.extend_from_slice(&TMetric::preprocess(slice.to_vec()));
-                }
-                let preprocessed = MultiDenseVectorInternal::new(preprocessed, vector.dim);
-                let converted =
-                    TElement::from_float_multivector(CowMultiVector::Owned(preprocessed))
-                        .to_owned();
-                Ok(converted)
-            })
-            .unwrap();
+        let query = query.transform(|vector| {
+            dim = vector.dim;
+            let mut preprocessed = DenseVector::new();
+            for slice in vector.multi_vectors() {
+                preprocessed.extend_from_slice(&TMetric::preprocess(slice.to_vec()));
+            }
+            let preprocessed = MultiDenseVectorInternal::new(preprocessed, vector.dim);
+            let converted =
+                TElement::from_float_multivector(CowMultiVector::Owned(preprocessed)).to_owned();
+            Ok(converted)
+        })?;
 
         hardware_counter.set_cpu_multiplier(dim * size_of::<TElement>());
         if vector_storage.is_on_disk() {
@@ -72,13 +70,13 @@ impl<
             hardware_counter.set_vector_io_read_multiplier(0);
         }
 
-        Self {
+        Ok(Self {
             query,
             vector_storage,
             metric: PhantomData,
             element: PhantomData,
             hardware_counter,
-        }
+        })
     }
 }
 
