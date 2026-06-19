@@ -248,7 +248,7 @@ impl MutableFullTextIndex {
         match &mut self.storage {
             #[cfg(feature = "rocksdb")]
             Storage::RocksDb(db_wrapper) => {
-                let db_idx = FullTextIndex::store_key(idx);
+                let db_idx = FullTextIndex::store_key(idx)?;
                 db_wrapper.put(db_idx, db_document)?;
             }
             Storage::Gridstore(store) => {
@@ -276,7 +276,7 @@ impl MutableFullTextIndex {
             #[cfg(feature = "rocksdb")]
             Storage::RocksDb(db_wrapper) => {
                 if self.inverted_index.remove(id) {
-                    let db_doc_id = FullTextIndex::store_key(id);
+                    let db_doc_id = FullTextIndex::store_key(id)?;
                     db_wrapper.remove(db_doc_id)?;
                 }
             }
@@ -297,7 +297,7 @@ impl MutableFullTextIndex {
         match &self.storage {
             #[cfg(feature = "rocksdb")]
             Storage::RocksDb(db) => {
-                let db_idx = FullTextIndex::store_key(idx);
+                let db_idx = FullTextIndex::store_key(idx).unwrap();
                 db.get_pinned(&db_idx, |bytes| {
                     FullTextIndex::deserialize_document(bytes).unwrap()
                 })

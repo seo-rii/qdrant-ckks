@@ -90,7 +90,7 @@ impl ImmutableFullTextIndex {
             match self.storage {
                 #[cfg(feature = "rocksdb")]
                 Storage::RocksDb(ref db_wrapper) => {
-                    let db_doc_id = FullTextIndex::store_key(id);
+                    let db_doc_id = FullTextIndex::store_key(id)?;
                     db_wrapper.remove(db_doc_id)?;
                 }
                 Storage::Mmap(ref mut index) => {

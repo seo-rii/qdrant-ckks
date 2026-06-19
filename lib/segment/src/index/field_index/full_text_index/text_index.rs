@@ -232,8 +232,10 @@ impl FullTextIndex {
     }
 
     #[cfg(feature = "rocksdb")]
-    pub(super) fn store_key(id: PointOffsetType) -> Vec<u8> {
-        bincode::serialize(&id).unwrap()
+    pub(super) fn store_key(id: PointOffsetType) -> OperationResult<Vec<u8>> {
+        bincode::serialize(&id).map_err(|e| {
+            OperationError::service_error(format!("Failed to serialize full text index key: {e}"))
+        })
     }
 
     #[cfg(feature = "rocksdb")]
