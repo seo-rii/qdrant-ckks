@@ -113,7 +113,7 @@ impl<T: PrimitiveVectorElement> MultiVectorStorage<T> for AppendableMmapMultiDen
         self.offsets
             .get::<P>(key as VectorOffsetType)
             .and_then(|mmap_offset| {
-                let mmap_offset = mmap_offset.first().expect("mmap_offset must not be empty");
+                let mmap_offset = mmap_offset.first()?;
                 self.vectors.get_many::<P>(
                     mmap_offset.offset as VectorOffsetType,
                     mmap_offset.count as usize,
@@ -136,15 +136,17 @@ impl<T: PrimitiveVectorElement> MultiVectorStorage<T> for AppendableMmapMultiDen
             let mmap_offset = self
                 .offsets
                 .get::<Sequential>(key as VectorOffsetType)
-                .unwrap()
-                .first()
-                .copied()
-                .unwrap();
-            (0..mmap_offset.count).map(move |i| {
-                self.vectors
-                    .get::<Sequential>((mmap_offset.offset + i) as VectorOffsetType)
-                    .unwrap()
-            })
+                .and_then(|offsets| offsets.first().copied());
+            let Some(mmap_offset) = mmap_offset else {
+                return Vec::new().into_iter();
+            };
+            (0..mmap_offset.count)
+                .filter_map(move |i| {
+                    self.vectors
+                        .get::<Sequential>((mmap_offset.offset + i) as VectorOffsetType)
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
         })
     }
 

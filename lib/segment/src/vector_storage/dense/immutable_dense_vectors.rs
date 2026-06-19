@@ -198,7 +198,12 @@ impl<T: PrimitiveVectorElement, S: UniversalRead<T>> ImmutableDenseVectors<T, S>
         });
 
         self.storage.read_batch::<P>(ranges, |idx, vector| {
-            let point = points.get(idx).copied().expect("point ID tracked");
+            let point = points.get(idx).copied().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("Vector batch read returned out-of-range index {idx}"),
+                )
+            })?;
             callback(idx, point, vector);
             Ok(())
         })?;
