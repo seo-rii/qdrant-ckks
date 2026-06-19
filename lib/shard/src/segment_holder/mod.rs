@@ -415,11 +415,10 @@ impl SegmentHolder {
         let mut to_delete: AHashMap<SegmentId, Vec<PointIdType>> = AHashMap::new();
 
         for (point_id, occurrences) in all_occurrences {
-            let latest_version = occurrences
-                .iter()
-                .map(|(_, version, _)| *version)
-                .max()
-                .unwrap();
+            let Some(latest_version) = occurrences.iter().map(|(_, version, _)| *version).max()
+            else {
+                continue;
+            };
 
             let latest_has_non_deferred = occurrences
                 .iter()
@@ -544,7 +543,11 @@ impl SegmentHolder {
         // Apply point operations to selected segments
         let mut applied_points = 0;
         for (segment_id, points) in to_update {
-            let segment = self.get(segment_id).unwrap();
+            let Some(segment) = self.get(segment_id) else {
+                return Err(OperationError::service_error(format!(
+                    "Segment {segment_id} selected for point update is missing",
+                )));
+            };
             let segment_arc = segment.get();
             let mut write_segment = segment_arc.write();
 
@@ -563,7 +566,11 @@ impl SegmentHolder {
         hw_counter: &HardwareCounterCell,
     ) -> OperationResult<()> {
         for (segment_id, points) in to_delete {
-            let segment = self.get(segment_id).unwrap();
+            let Some(segment) = self.get(segment_id) else {
+                return Err(OperationError::service_error(format!(
+                    "Segment {segment_id} selected for point deletion is missing",
+                )));
+            };
             let segment_arc = segment.get();
             let mut write_segment = segment_arc.write();
 
@@ -643,7 +650,11 @@ impl SegmentHolder {
         }
 
         let mut rng = rand::rng();
-        let (segment_id, segment_lock) = entries.choose(&mut rng).unwrap();
+        let Some((segment_id, segment_lock)) = entries.choose(&mut rng) else {
+            return Err(OperationError::service_error(
+                "No requested appendable segments are available for write",
+            ));
+        };
         let mut segment_write = segment_lock.write();
         apply(*segment_id, &mut segment_write)
     }
@@ -864,8 +875,18 @@ impl SegmentHolder {
                 // Seems like segment is already removed, ignore
                 return Ok(false);
             }
-            assert_eq!(segments.len(), 1, "expected exactly one segment");
-            segments.pop().unwrap()
+            if segments.len() != 1 {
+                return Err(OperationError::service_error(format!(
+                    "Expected exactly one segment with ID {segment_id}, found {}",
+                    segments.len(),
+                )));
+            }
+            let Some(segment) = segments.pop() else {
+                return Err(OperationError::service_error(format!(
+                    "Segment {segment_id} disappeared during removal",
+                )));
+            };
+            segment
         };
 
         // Append a temp segment to collection if it is not empty or there is no other appendable segment
@@ -906,10 +927,13 @@ impl SegmentHolder {
 
         points_to_remove
             .into_iter()
-            .map(|(segment_id, points)| {
-                let locked_segment = self.get(segment_id).unwrap().clone();
+            .filter_map(|(segment_id, points)| {
+                let Some(locked_segment) = self.get(segment_id).cloned() else {
+                    log::warn!("Skipping deduplication task for missing segment {segment_id}");
+                    return None;
+                };
 
-                move || {
+                Some(move || {
                     let mut removed_points = 0;
                     let segment_arc = locked_segment.get();
                     let mut write_segment = segment_arc.write();
@@ -926,7 +950,7 @@ impl SegmentHolder {
                     log::trace!("Deleted {removed_points} points from segment {segment_id} to deduplicate: {points:?}");
 
                     OperationResult::Ok(removed_points)
-                }
+                })
             })
             .collect::<Vec<_>>()
     }
