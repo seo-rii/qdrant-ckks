@@ -26,8 +26,10 @@ pub fn serialize_graph_links<W: Write + Seek>(
     hnsw_m: HnswM,
     writer: &mut W,
 ) -> OperationResult<()> {
-    let bits_per_unsorted =
-        packed_bits(u32::try_from(edges.len().saturating_sub(1)).unwrap()).max(MIN_BITS_PER_VALUE);
+    let max_point_id = u32::try_from(edges.len().saturating_sub(1)).map_err(|_| {
+        OperationError::service_error("Graph links exceed the maximum supported point count")
+    })?;
+    let bits_per_unsorted = packed_bits(max_point_id).max(MIN_BITS_PER_VALUE);
 
     let vectors_layout = match format_param {
         GraphLinksFormatParam::Plain => None,
@@ -56,7 +58,12 @@ pub fn serialize_graph_links<W: Write + Seek>(
     let levels_count = back_index.first().map_or(0, |&id| edges[id as usize].len());
     let mut point_count_by_level = vec![0; levels_count];
     for point in &edges {
-        point_count_by_level[point.len() - 1] += 1;
+        let Some(max_level) = point.len().checked_sub(1) else {
+            return Err(OperationError::service_error(
+                "Graph links contain a point without levels",
+            ));
+        };
+        point_count_by_level[max_level] += 1;
     }
 
     // 1. Write header (placeholder, will be rewritten later)
@@ -122,8 +129,11 @@ pub fn serialize_graph_links<W: Write + Seek>(
                     offset += links_buf.len();
                 }
                 GraphLinksFormatParam::CompressedWithVectors(vectors) => {
-                    // Unwrap safety: `vectors_layout` is `Some` for `CompressedWithVectors`.
-                    let vectors_layout = vectors_layout.as_ref().unwrap();
+                    let vectors_layout = vectors_layout.as_ref().ok_or_else(|| {
+                        OperationError::service_error(
+                            "Compressed graph links with vectors require vector layout",
+                        )
+                    })?;
 
                     // 1. Base vector (`B` in the doc, only on level 0).
                     if level == 0 {
@@ -202,7 +212,11 @@ pub fn serialize_graph_links<W: Write + Seek>(
                 levels_count: levels_count as u64,
                 total_neighbors_count: offset as u64,
                 total_offset_count: offsets.len() as u64,
-                offsets_padding_bytes: offsets_padding.unwrap() as u64,
+                offsets_padding_bytes: offsets_padding.ok_or_else(|| {
+                    OperationError::service_error(
+                        "Plain graph links are missing offsets padding metadata",
+                    )
+                })? as u64,
                 zero_padding: [0; 24],
             };
             writer.write_all(header.as_bytes())?;
@@ -212,7 +226,11 @@ pub fn serialize_graph_links<W: Write + Seek>(
                 version: LittleU64::from(HEADER_VERSION_COMPRESSED),
                 point_count: LittleU64::new(edges.len() as u64),
                 total_neighbors_bytes: LittleU64::new(offset as u64),
-                offsets_parameters: offsets_parameters.unwrap(),
+                offsets_parameters: offsets_parameters.ok_or_else(|| {
+                    OperationError::service_error(
+                        "Compressed graph links are missing offsets parameters",
+                    )
+                })?,
                 levels_count: LittleU64::new(levels_count as u64),
                 m: LittleU64::new(hnsw_m.m as u64),
                 m0: LittleU64::new(hnsw_m.m0 as u64),
@@ -221,17 +239,25 @@ pub fn serialize_graph_links<W: Write + Seek>(
             writer.write_all(header.as_bytes())?;
         }
         GraphLinksFormatParam::CompressedWithVectors(_) => {
-            let vectors_layout = vectors_layout.as_ref().unwrap();
+            let vectors_layout = vectors_layout.as_ref().ok_or_else(|| {
+                OperationError::service_error(
+                    "Compressed graph links with vectors require vector layout",
+                )
+            })?;
             let header = HeaderCompressedWithVectors {
                 version: LittleU64::from(HEADER_VERSION_COMPRESSED_WITH_VECTORS),
                 point_count: LittleU64::new(edges.len() as u64),
                 total_neighbors_bytes: LittleU64::new(offset as u64),
-                offsets_parameters: offsets_parameters.unwrap(),
+                offsets_parameters: offsets_parameters.ok_or_else(|| {
+                    OperationError::service_error(
+                        "Compressed graph links with vectors are missing offsets parameters",
+                    )
+                })?,
                 levels_count: LittleU64::new(levels_count as u64),
                 m: LittleU64::new(hnsw_m.m as u64),
                 m0: LittleU64::new(hnsw_m.m0 as u64),
-                base_vector_layout: pack_layout(&vectors_layout.base),
-                link_vector_layout: pack_layout(&vectors_layout.link),
+                base_vector_layout: pack_layout(&vectors_layout.base)?,
+                link_vector_layout: pack_layout(&vectors_layout.link)?,
                 zero_padding: [0; 3],
             };
             writer.write_all(header.as_bytes())?;
@@ -241,9 +267,12 @@ pub fn serialize_graph_links<W: Write + Seek>(
     Ok(())
 }
 
-fn pack_layout(layout: &Layout) -> PackedVectorLayout {
-    PackedVectorLayout {
+fn pack_layout(layout: &Layout) -> OperationResult<PackedVectorLayout> {
+    let alignment = u8::try_from(layout.align()).map_err(|_| {
+        OperationError::service_error("Graph link vector alignment exceeds serialized limit")
+    })?;
+    Ok(PackedVectorLayout {
         size: LittleU64::new(layout.size() as u64),
-        alignment: u8::try_from(layout.align()).expect("Alignment must fit in u8"),
-    }
+        alignment,
+    })
 }
