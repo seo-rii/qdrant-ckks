@@ -331,6 +331,7 @@ mod tests {
             "position_map=private-position-map-sentinel",
             "positionMap=private-position-map-camel-sentinel",
             "position_maps=[private-position-map-plural-sentinel]",
+            "positionMaps=[private-position-map-camel-plural-sentinel]",
             "oram_position_map=private-position-map-sentinel",
             "oramPositionMap=private-position-map-camel-sentinel",
             "tokenPositionMap=private-token-position-map-sentinel",
