@@ -284,23 +284,15 @@ fn private_result_oram_payload_operation_kind(
 ) -> Option<&'static str> {
     match operation {
         CollectionUpdateOperations::PointOperation(point_operation) => match point_operation {
-            PointOperations::UpsertPoints(insert_operation)
+            PointOperations::UpsertPoints(_)
             | PointOperations::UpsertPointsConditional(
                 shard::operations::point_ops::ConditionalInsertOperationInternal {
-                    points_op: insert_operation,
+                    points_op: _,
                     condition: _,
                     update_mode: _,
                 },
-            ) => private_result_oram_insert_touches_payload(insert_operation, protected_path)
-                .then_some("upsert points"),
-            PointOperations::SyncPoints(sync_operation) => sync_operation
-                .points
-                .iter()
-                .filter_map(|point| point.payload.as_ref())
-                .any(|payload| {
-                    private_result_oram_payload_touches_path(payload, None, protected_path)
-                })
-                .then_some("sync points"),
+            ) => Some("upsert points"),
+            PointOperations::SyncPoints(_) => Some("sync points"),
             PointOperations::DeletePoints { .. } => Some("delete points"),
             PointOperations::DeletePointsByFilter(_) => Some("delete points by filter"),
         },
@@ -313,11 +305,12 @@ fn private_result_oram_payload_operation_kind(
             .then_some("set payload")
         }
         CollectionUpdateOperations::PayloadOperation(PayloadOps::OverwritePayload(operation)) => {
-            private_result_oram_payload_touches_path(
-                &operation.payload,
-                operation.key.as_ref(),
-                protected_path,
-            )
+            (operation.key.is_none()
+                || private_result_oram_payload_touches_path(
+                    &operation.payload,
+                    operation.key.as_ref(),
+                    protected_path,
+                ))
             .then_some("overwrite payload")
         }
         CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(operation)) => {
@@ -391,25 +384,6 @@ fn private_result_oram_with_payload_touches_path(
             .exclude
             .iter()
             .any(|field| field.check_exclude_pattern(protected_path)),
-    }
-}
-
-fn private_result_oram_insert_touches_payload(
-    insert_operation: &PointInsertOperationsInternal,
-    protected_path: &JsonPath,
-) -> bool {
-    match insert_operation {
-        PointInsertOperationsInternal::PointsBatch(batch) => {
-            batch.payloads.as_ref().is_some_and(|payloads| {
-                payloads.iter().filter_map(Option::as_ref).any(|payload| {
-                    private_result_oram_payload_touches_path(payload, None, protected_path)
-                })
-            })
-        }
-        PointInsertOperationsInternal::PointsList(points) => points
-            .iter()
-            .filter_map(|point| point.payload.as_ref())
-            .any(|payload| private_result_oram_payload_touches_path(payload, None, protected_path)),
     }
 }
 
@@ -4489,15 +4463,47 @@ mod tests {
             .unwrap()
             .clone(),
         );
+        let public_payload = Payload(
+            serde_json::json!({
+                "document": {
+                    "title": "public",
+                }
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
         let point = PointStructPersisted {
             id: 1.into(),
             vector: VectorStructPersisted::Single(vec![0.0]),
             payload: Some(payload.clone()),
         };
+        let public_point = PointStructPersisted {
+            id: 2.into(),
+            vector: VectorStructPersisted::Single(vec![0.0]),
+            payload: Some(public_payload.clone()),
+        };
+        reject_private_result_oram_payload_point_operation(
+            &CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+                payload: public_payload.clone(),
+                points: Some(vec![1.into()]),
+                filter: None,
+                key: None,
+            })),
+            &encryption,
+            false,
+        )
+        .expect("public set payload merge should not touch private result ORAM payload path");
         let operations = vec![
             (
                 CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
                     PointInsertOperationsInternal::PointsList(vec![point.clone()]),
+                )),
+                "upsert points",
+            ),
+            (
+                CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                    PointInsertOperationsInternal::PointsList(vec![public_point.clone()]),
                 )),
                 "upsert points",
             ),
@@ -4507,6 +4513,16 @@ mod tests {
                         from_id: None,
                         to_id: None,
                         points: vec![point],
+                    },
+                )),
+                "sync points",
+            ),
+            (
+                CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(
+                    shard::operations::point_ops::PointSyncOperation {
+                        from_id: None,
+                        to_id: None,
+                        points: vec![public_point],
                     },
                 )),
                 "sync points",
@@ -4538,6 +4554,17 @@ mod tests {
                 CollectionUpdateOperations::PayloadOperation(PayloadOps::OverwritePayload(
                     SetPayloadOp {
                         payload: payload.clone(),
+                        points: Some(vec![1.into()]),
+                        filter: None,
+                        key: None,
+                    },
+                )),
+                "overwrite payload",
+            ),
+            (
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::OverwritePayload(
+                    SetPayloadOp {
+                        payload: public_payload,
                         points: Some(vec![1.into()]),
                         filter: None,
                         key: None,
