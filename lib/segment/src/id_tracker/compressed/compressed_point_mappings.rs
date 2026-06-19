@@ -127,10 +127,9 @@ impl CompressedPointMappings {
                     None
                 } else {
                     let point_offset = i as PointOffsetType;
-                    Some((
-                        self.internal_to_external.get(point_offset).unwrap(),
-                        point_offset,
-                    ))
+                    self.internal_to_external
+                        .get(point_offset)
+                        .map(|external_id| (external_id, point_offset))
                 }
             });
 
