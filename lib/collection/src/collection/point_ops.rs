@@ -396,6 +396,13 @@ fn private_result_oram_payload_touches_path(
         return key.compatible(protected_path);
     }
 
+    if payload.0.keys().any(|key| {
+        key.parse::<JsonPath>()
+            .is_ok_and(|payload_path| payload_path.compatible(protected_path))
+    }) {
+        return true;
+    }
+
     !protected_path.value_get(&payload.0).is_empty()
 }
 
@@ -4465,6 +4472,14 @@ mod tests {
         );
         let public_payload = Payload(
             serde_json::json!({
+                "summary": "public",
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let public_document_payload = Payload(
+            serde_json::json!({
                 "document": {
                     "title": "public",
                 }
@@ -4543,6 +4558,17 @@ mod tests {
                 CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(
                     SetPayloadOp {
                         payload: payload.clone(),
+                        points: Some(vec![1.into()]),
+                        filter: None,
+                        key: None,
+                    },
+                )),
+                "set payload",
+            ),
+            (
+                CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(
+                    SetPayloadOp {
+                        payload: public_document_payload,
                         points: Some(vec![1.into()]),
                         filter: None,
                         key: None,
