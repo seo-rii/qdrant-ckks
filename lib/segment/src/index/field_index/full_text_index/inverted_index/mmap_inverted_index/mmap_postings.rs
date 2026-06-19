@@ -126,9 +126,13 @@ impl<V: MmapPostingValue> MmapPostings<V> {
         )
         .ok()?;
 
-        let (id_data, bytes) = bytes.split_at(header.ids_data_bytes_count as usize);
+        let id_data_bytes_count = header.ids_data_bytes_count as usize;
+        let id_data = bytes.get(..id_data_bytes_count)?;
+        let bytes = bytes.get(id_data_bytes_count..)?;
 
-        let (var_size_data, bytes) = bytes.split_at(header.var_size_data_bytes_count as usize);
+        let var_size_data_bytes_count = header.var_size_data_bytes_count as usize;
+        let var_size_data = bytes.get(..var_size_data_bytes_count)?;
+        let bytes = bytes.get(var_size_data_bytes_count..)?;
 
         // skip padding
         let bytes = bytes.get(header.alignment_bytes_count as usize..)?;
@@ -310,5 +314,36 @@ mod tests {
         let err = MmapPostings::create(path, &[posting]).unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn get_returns_none_for_truncated_posting_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("postings.bin");
+        let mut file = File::create(&path).unwrap();
+
+        let header = PostingsHeader {
+            posting_count: 1,
+            _reserved: [0; 32],
+        };
+        file.write_all(header.as_bytes()).unwrap();
+
+        let posting_header = PostingListHeader {
+            offset: (size_of::<PostingsHeader>() + size_of::<PostingListHeader>()) as u64,
+            chunks_count: 0,
+            ids_data_bytes_count: 1,
+            var_size_data_bytes_count: 0,
+            alignment_bytes_count: 0,
+            remainder_count: 0,
+            _reserved: [0; 2],
+        };
+        file.write_all(posting_header.as_bytes()).unwrap();
+        file.write_all(42_u32.as_bytes()).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let postings = MmapPostings::<()>::open(path, false).unwrap();
+
+        assert!(postings.get(0).is_none());
     }
 }
