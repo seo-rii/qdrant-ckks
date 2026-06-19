@@ -120,7 +120,10 @@ impl<'a> GraphLayersHealer<'a> {
         // At this moment `pending` is initialized with at least one deleted point,
         // now we need to find borders of all "deleted" points sub-graphs
         while let Some(candidate) = pending.pop() {
-            if nearest.is_full() && candidate.score < nearest.top().unwrap().score {
+            if nearest
+                .top()
+                .is_some_and(|top| nearest.is_full() && candidate.score < top.score)
+            {
                 // Stop the search branch early, if it is not promising
                 continue;
             }
