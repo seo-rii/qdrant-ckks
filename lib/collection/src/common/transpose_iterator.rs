@@ -17,7 +17,7 @@
 ///
 /// # Panics
 ///
-/// May panic if the input is not a rectangle.
+/// May panic if the input rows have inconsistent lengths.
 pub fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
     transposed_iter(v).collect()
 }
@@ -37,9 +37,8 @@ pub fn transpose<T>(v: Vec<Vec<T>>) -> Vec<Vec<T>> {
 ///```
 /// # Panics
 ///
-/// May panic if the input is not a rectangle.
+/// May panic if the input rows have inconsistent lengths.
 pub fn transposed_iter<T>(rectangle: Vec<Vec<T>>) -> impl Iterator<Item = Vec<T>> {
-    assert!(!rectangle.is_empty());
     let len = rectangle.first().map(Vec::len).unwrap_or(0);
     let mut iters: Vec<_> = rectangle.into_iter().map(|n| n.into_iter()).collect();
     (0..len).map(move |_| {
@@ -62,5 +61,12 @@ mod tests {
         for (i, column) in res.iter().enumerate() {
             assert_eq!(column, &expected[i]);
         }
+    }
+
+    #[test]
+    fn test_transpose_empty_input() {
+        let res: Vec<Vec<i32>> = transpose(Vec::new());
+
+        assert!(res.is_empty());
     }
 }
