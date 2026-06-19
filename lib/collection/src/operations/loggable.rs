@@ -267,12 +267,18 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "read_path_labels"
                         | "read_paths"
                         | "read_bucket"
+                        | "read_bucket_id"
+                        | "read_bucket_ids"
+                        | "read_bucket_id_sequence"
+                        | "read_bucket_id_sequences"
                         | "read_buckets"
                         | "paths"
                         | "access_path"
                         | "access_paths"
                         | "bucket_commitment"
                         | "bucket_commitments"
+                        | "leaf_commitment"
+                        | "leaf_commitments"
                         | "merkle_proof"
                         | "merkle_proofs"
                         | "proof"
@@ -285,6 +291,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "sibling_hashes"
                         | "bucket_id"
                         | "bucket_ids"
+                        | "bucket_id_sequence"
+                        | "bucket_id_sequences"
                         | "updated_bucket"
                         | "updated_buckets"
                         | "accessed_leaf_label"
@@ -416,11 +424,17 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "readpath"
                         | "readpaths"
                         | "readbucket"
+                        | "readbucketid"
+                        | "readbucketids"
+                        | "readbucketidsequence"
+                        | "readbucketidsequences"
                         | "readbuckets"
                         | "accesspath"
                         | "accesspaths"
                         | "bucketcommitment"
                         | "bucketcommitments"
+                        | "leafcommitment"
+                        | "leafcommitments"
                         | "merkleproof"
                         | "merkleproofs"
                         | "proof"
@@ -433,6 +447,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "siblinghashes"
                         | "bucketid"
                         | "bucketids"
+                        | "bucketidsequence"
+                        | "bucketidsequences"
                         | "updatedbucket"
                         | "updatedbuckets"
                         | "accessedleaflabel"
@@ -532,7 +548,7 @@ mod tests {
     };
     use serde::Serialize;
     use serde::ser::Serializer;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use shard::count::CountRequestInternal;
     use shard::operations::point_ops::{
         PointInsertOperationsInternal, PointOperations, PointStructPersisted, VectorStructPersisted,
@@ -566,6 +582,22 @@ mod tests {
             );
             serializer.serialize_str(self.secret)
         }
+    }
+
+    fn insert_test_json_field(
+        value: &mut Value,
+        object_path: &[&str],
+        key: &str,
+        field_value: Value,
+    ) {
+        let mut cursor = value;
+        for path in object_path {
+            cursor = cursor.get_mut(*path).unwrap();
+        }
+        cursor
+            .as_object_mut()
+            .unwrap()
+            .insert(key.to_string(), field_value);
     }
 
     #[test]
@@ -1064,6 +1096,72 @@ mod tests {
                 }
             }
         });
+        for (key, field_value) in [
+            (
+                "read_bucket_ids",
+                json!(["qdrant-sec-private-oram-read-bucket-id-log-sentinel"]),
+            ),
+            (
+                "readBucketIds",
+                json!(["qdrant-sec-private-oram-camel-read-bucket-id-log-sentinel"]),
+            ),
+            (
+                "bucket_id_sequence",
+                json!(["qdrant-sec-private-oram-bucket-id-sequence-log-sentinel"]),
+            ),
+            (
+                "bucketIdSequence",
+                json!(["qdrant-sec-private-oram-camel-bucket-id-sequence-log-sentinel"]),
+            ),
+            (
+                "leaf_commitments",
+                json!(["qdrant-sec-private-oram-leaf-commitment-log-sentinel"]),
+            ),
+            (
+                "leafCommitments",
+                json!(["qdrant-sec-private-oram-camel-leaf-commitment-log-sentinel"]),
+            ),
+        ] {
+            insert_test_json_field(
+                &mut private_hnsw_oram_access,
+                &["private_hnsw"],
+                key,
+                field_value,
+            );
+        }
+        for (key, field_value) in [
+            (
+                "read_bucket_ids",
+                json!(["qdrant-sec-private-result-read-bucket-id-log-sentinel"]),
+            ),
+            (
+                "readBucketIds",
+                json!(["qdrant-sec-private-result-camel-read-bucket-id-log-sentinel"]),
+            ),
+            (
+                "read_bucket_id_sequence",
+                json!(["qdrant-sec-private-result-read-bucket-id-sequence-log-sentinel"]),
+            ),
+            (
+                "readBucketIdSequence",
+                json!(["qdrant-sec-private-result-camel-read-bucket-id-sequence-log-sentinel"]),
+            ),
+            (
+                "leaf_commitment",
+                json!("qdrant-sec-private-result-leaf-commitment-log-sentinel"),
+            ),
+            (
+                "leafCommitment",
+                json!("qdrant-sec-private-result-camel-leaf-commitment-log-sentinel"),
+            ),
+        ] {
+            insert_test_json_field(
+                &mut private_result_oram,
+                &["private_result_oram"],
+                key,
+                field_value,
+            );
+        }
 
         redact_sensitive_log_fields(&mut private_hnsw_oram_access);
         redact_sensitive_log_fields(&mut private_hnsw_graph);
@@ -1088,10 +1186,16 @@ mod tests {
             "qdrant-sec-private-oram-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-single-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-read-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-camel-read-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-bucket-id-sequence-log-sentinel",
+            "qdrant-sec-private-oram-camel-bucket-id-sequence-log-sentinel",
             "qdrant-sec-private-oram-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-bucket-commitments-log-sentinel",
             "qdrant-sec-private-oram-camel-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-camel-single-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-oram-leaf-commitment-log-sentinel",
+            "qdrant-sec-private-oram-camel-leaf-commitment-log-sentinel",
             "qdrant-sec-private-oram-nested-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-nested-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-updated-single-bucket-id-log-sentinel",
@@ -1164,8 +1268,14 @@ mod tests {
             "qdrant-sec-private-result-new-root-hash-log-sentinel",
             "qdrant-sec-private-result-bucket-id-log-sentinel",
             "qdrant-sec-private-result-camel-bucket-id-log-sentinel",
+            "qdrant-sec-private-result-read-bucket-id-log-sentinel",
+            "qdrant-sec-private-result-camel-read-bucket-id-log-sentinel",
+            "qdrant-sec-private-result-read-bucket-id-sequence-log-sentinel",
+            "qdrant-sec-private-result-camel-read-bucket-id-sequence-log-sentinel",
             "qdrant-sec-private-result-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-camel-bucket-commitment-log-sentinel",
+            "qdrant-sec-private-result-leaf-commitment-log-sentinel",
+            "qdrant-sec-private-result-camel-leaf-commitment-log-sentinel",
             "qdrant-sec-private-result-read-signature-log-sentinel",
             "qdrant-sec-private-result-camel-read-signature-log-sentinel",
             "qdrant-sec-private-result-commit-signature-log-sentinel",
@@ -1200,9 +1310,13 @@ mod tests {
             "read_paths": ["qdrant-sec-private-hnsw-read-path-log-sentinel"],
             "readPaths": ["qdrant-sec-private-hnsw-camel-read-path-log-sentinel"],
             "read_bucket": "qdrant-sec-private-result-read-bucket-log-sentinel",
+            "read_bucket_ids": ["qdrant-sec-private-result-read-bucket-id-alias-log-sentinel"],
             "read_buckets": ["qdrant-sec-private-result-read-buckets-log-sentinel"],
             "readBucket": "qdrant-sec-private-result-camel-read-bucket-log-sentinel",
+            "readBucketIds": ["qdrant-sec-private-result-camel-read-bucket-id-alias-log-sentinel"],
             "readBuckets": ["qdrant-sec-private-result-camel-read-buckets-log-sentinel"],
+            "leaf_commitments": ["qdrant-sec-private-result-leaf-commitments-alias-log-sentinel"],
+            "leafCommitments": ["qdrant-sec-private-result-camel-leaf-commitments-alias-log-sentinel"],
         });
         redact_sensitive_log_fields(&mut read_paths_aliases);
         let read_paths_serialized = serde_json::to_string(&read_paths_aliases).unwrap();
@@ -1223,6 +1337,22 @@ mod tests {
         assert!(
             !read_paths_serialized
                 .contains("qdrant-sec-private-result-camel-read-buckets-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized
+                .contains("qdrant-sec-private-result-read-bucket-id-alias-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized
+                .contains("qdrant-sec-private-result-camel-read-bucket-id-alias-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized
+                .contains("qdrant-sec-private-result-leaf-commitments-alias-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized
+                .contains("qdrant-sec-private-result-camel-leaf-commitments-alias-log-sentinel")
         );
 
         let mut first = json!({
