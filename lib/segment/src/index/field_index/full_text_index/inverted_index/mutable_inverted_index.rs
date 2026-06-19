@@ -7,7 +7,7 @@ use itertools::Either;
 use super::posting_list::PostingList;
 use super::postings_iterator::{intersect_postings_iterator, merge_postings_iterator};
 use super::{Document, InvertedIndex, ParsedQuery, TokenId, TokenSet};
-use crate::common::operation_error::OperationResult;
+use crate::common::operation_error::{OperationError, OperationResult};
 
 #[cfg_attr(test, derive(Clone))]
 pub struct MutableInvertedIndex {
@@ -110,11 +110,10 @@ impl MutableInvertedIndex {
         let iter = self
             .filter_has_all(phrase.to_token_set())
             .filter(move |id| {
-                let doc = point_to_doc[*id as usize]
-                    .as_ref()
-                    .expect("if it passed the intersection filter, it must exist");
-
-                doc.has_phrase(&phrase)
+                point_to_doc
+                    .get(*id as usize)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|doc| doc.has_phrase(&phrase))
             });
 
         Box::new(iter)
@@ -158,10 +157,12 @@ impl InvertedIndex for MutableInvertedIndex {
             }
 
             hw_cell_wb.incr_delta(size_of_val(&point_id));
-            self.postings
-                .get_mut(token_idx_usize)
-                .expect("posting must exist")
-                .insert(point_id);
+            let Some(posting) = self.postings.get_mut(token_idx_usize) else {
+                return Err(OperationError::service_error(format!(
+                    "Posting list {token_idx_usize} is missing after resize"
+                )));
+            };
+            posting.insert(point_id);
         }
         self.point_to_tokens[point_id as usize] = Some(tokens);
 

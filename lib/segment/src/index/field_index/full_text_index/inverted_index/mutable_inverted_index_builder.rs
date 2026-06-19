@@ -68,11 +68,9 @@ impl MutableInvertedIndexBuilder {
                             .postings
                             .resize_with(*token_idx as usize + 1, Default::default);
                     }
-                    self.index
-                        .postings
-                        .get_mut(*token_idx as usize)
-                        .expect("posting must exist")
-                        .insert(idx as PointOffsetType);
+                    if let Some(posting) = self.index.postings.get_mut(*token_idx as usize) {
+                        posting.insert(idx as PointOffsetType);
+                    }
                 }
             }
         }
