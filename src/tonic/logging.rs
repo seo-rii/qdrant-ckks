@@ -224,6 +224,8 @@ mod tests {
              request_signature=request-signature-sentinel \
              readSignature=read-signature-camel-sentinel \
              commitSignature=commit-signature-camel-sentinel \
+             fetch_token=short-fetch-token-sentinel \
+             fetchTokens=short-fetch-token-camel-sentinel \
              payload_fetch_token=fetch-token-sentinel \
              payloadFetchTokens=fetch-token-camel-sentinel \
              resultIds=result-id-camel-sentinel \
@@ -288,6 +290,8 @@ mod tests {
         assert!(!rendered.contains("request-signature-sentinel"));
         assert!(!rendered.contains("read-signature-camel-sentinel"));
         assert!(!rendered.contains("commit-signature-camel-sentinel"));
+        assert!(!rendered.contains("short-fetch-token-sentinel"));
+        assert!(!rendered.contains("short-fetch-token-camel-sentinel"));
         assert!(!rendered.contains("fetch-token-sentinel"));
         assert!(!rendered.contains("fetch-token-camel-sentinel"));
         assert!(!rendered.contains("result-id-camel-sentinel"));
