@@ -134,7 +134,12 @@ impl<T: PrimitiveVectorElement> VolatileMultiDenseVectorStorage<T> {
         let multi_vector: TypedMultiDenseVectorRef<VectorElementType> = vector.try_into()?;
         let multi_vector = T::from_float_multivector(CowMultiVector::Borrowed(multi_vector));
         let multi_vector = multi_vector.as_vec_ref();
-        assert_eq!(multi_vector.dim, self.dim);
+        if multi_vector.dim != self.dim {
+            return Err(OperationError::service_error(format!(
+                "Multi-dense vector dimension mismatch: expected {}, got {}",
+                self.dim, multi_vector.dim
+            )));
+        }
         let multivector_size_in_bytes = std::mem::size_of_val(multi_vector.flattened_vectors);
         if multivector_size_in_bytes >= CHUNK_SIZE {
             return Err(OperationError::service_error(format!(
@@ -192,23 +197,24 @@ impl<T: PrimitiveVectorElement> MultiVectorStorage<T> for VolatileMultiDenseVect
         key: PointOffsetType,
     ) -> Option<CowMultiVector<'_, T>> {
         // No sequential optimizations available for in memory storage.
-        self.vectors_metadata.get(key as usize).map(|metadata| {
-            let flattened_vectors = self
-                .vectors
-                .get_many(metadata.start, metadata.inner_vectors_count)
-                .unwrap_or_else(|| panic!("Vectors does not contain data for {metadata:?}"));
-            CowMultiVector::Borrowed(TypedMultiDenseVectorRef {
-                flattened_vectors,
-                dim: self.dim,
+        self.vectors_metadata
+            .get(key as usize)
+            .and_then(|metadata| {
+                let flattened_vectors = self
+                    .vectors
+                    .get_many(metadata.start, metadata.inner_vectors_count)?;
+                Some(CowMultiVector::Borrowed(TypedMultiDenseVectorRef {
+                    flattened_vectors,
+                    dim: self.dim,
+                }))
             })
-        })
     }
 
     fn iterate_inner_vectors(&self) -> impl Iterator<Item = Cow<'_, [T]>> + Clone + Send {
         (0..self.total_vector_count()).flat_map(|key| {
             let metadata = &self.vectors_metadata[key];
             (0..metadata.inner_vectors_count)
-                .map(|i| Cow::Borrowed(self.vectors.get(metadata.start + i)))
+                .filter_map(|i| self.vectors.get_opt(metadata.start + i).map(Cow::Borrowed))
         })
     }
 
