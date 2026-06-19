@@ -9,7 +9,7 @@ use super::vectors::{
     DenseVector, MultiDenseVectorInternal, TypedMultiDenseVector, TypedMultiDenseVectorRef,
     VectorElementType, VectorElementTypeByte, VectorElementTypeHalf, VectorInternal, VectorRef,
 };
-use crate::common::operation_error::OperationError;
+use crate::common::operation_error::{OperationError, OperationResult};
 use crate::types::{VectorDataConfig, VectorName, VectorNameBuf, VectorStorageDatatype};
 
 type CowKey<'a> = Cow<'a, VectorName>;
@@ -318,12 +318,12 @@ impl<'a> NamedVectors<'a> {
 
     pub fn preprocess<'b>(
         &mut self,
-        get_vector_data: impl Fn(&VectorName) -> &'b VectorDataConfig,
-    ) {
+        get_vector_data: impl Fn(&VectorName) -> OperationResult<&'b VectorDataConfig>,
+    ) -> OperationResult<()> {
         for (name, vector) in self.map.iter_mut() {
             match vector {
                 CowVector::Dense(v) => {
-                    let config = get_vector_data(name.as_ref());
+                    let config = get_vector_data(name.as_ref())?;
                     let preprocessed_vector = Self::preprocess_dense_vector(v.to_vec(), config);
                     *vector = CowVector::Dense(Cow::Owned(preprocessed_vector))
                 }
@@ -342,7 +342,7 @@ impl<'a> NamedVectors<'a> {
                     // `multi_vector` is empty invalid and `tmp_multi_vector` owns the real data
                     std::mem::swap(&mut tmp_multi_vector, multi_vector);
                     let mut owned_multi_vector = tmp_multi_vector.to_owned();
-                    let config = get_vector_data(name.as_ref());
+                    let config = get_vector_data(name.as_ref())?;
                     for dense_vector in owned_multi_vector.multi_vectors_mut() {
                         let preprocessed_vector =
                             Self::preprocess_dense_vector(dense_vector.to_vec(), config);
@@ -353,6 +353,7 @@ impl<'a> NamedVectors<'a> {
                 }
             }
         }
+        Ok(())
     }
 
     fn preprocess_dense_vector(
