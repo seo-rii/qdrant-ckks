@@ -136,8 +136,12 @@ impl SimpleIdTracker {
         })
     }
 
-    fn store_key(external_id: &PointIdType) -> Vec<u8> {
-        bincode::serialize(&StoredPointId::from(external_id)).unwrap()
+    fn store_key(external_id: &PointIdType) -> OperationResult<Vec<u8>> {
+        bincode::serialize(&StoredPointId::from(external_id)).map_err(|err| {
+            OperationError::service_error(format!(
+                "Failed to serialize simple id tracker key: {err}"
+            ))
+        })
     }
 
     fn restore_key(data: &[u8]) -> OperationResult<PointIdType> {
@@ -156,9 +160,9 @@ impl SimpleIdTracker {
 
     fn delete_key(&self, external_id: &PointIdType) -> OperationResult<()> {
         self.mapping_db_wrapper
-            .remove(Self::store_key(external_id))?;
+            .remove(Self::store_key(external_id)?)?;
         self.versions_db_wrapper
-            .remove(Self::store_key(external_id))?;
+            .remove(Self::store_key(external_id)?)?;
         Ok(())
     }
 
@@ -168,8 +172,12 @@ impl SimpleIdTracker {
         internal_id: PointOffsetType,
     ) -> OperationResult<()> {
         self.mapping_db_wrapper.put(
-            Self::store_key(external_id),
-            bincode::serialize(&internal_id).unwrap(),
+            Self::store_key(external_id)?,
+            bincode::serialize(&internal_id).map_err(|err| {
+                OperationError::service_error(format!(
+                    "Failed to serialize simple id tracker internal id: {err}"
+                ))
+            })?,
         )
     }
 
@@ -217,8 +225,12 @@ impl IdTracker for SimpleIdTracker {
             }
             self.internal_to_version[internal_id as usize] = version;
             self.versions_db_wrapper.put(
-                Self::store_key(&external_id),
-                bincode::serialize(&version).unwrap(),
+                Self::store_key(&external_id)?,
+                bincode::serialize(&version).map_err(|err| {
+                    OperationError::service_error(format!(
+                        "Failed to serialize simple id tracker version: {err}"
+                    ))
+                })?,
             )?;
         }
         Ok(())
