@@ -331,7 +331,15 @@ impl<TInvertedIndex: InvertedIndex> SparseVectorIndex<TInvertedIndex> {
                             vector_query_context.deferred_internal_id(),
                         )?;
                         *prefiltered_points = Some(filtered_points);
-                        prefiltered_points.as_ref().unwrap().iter().copied()
+                        prefiltered_points
+                            .as_ref()
+                            .ok_or_else(|| {
+                                OperationError::service_error(
+                                    "prefiltered points missing after sparse filter query",
+                                )
+                            })?
+                            .iter()
+                            .copied()
                     }
                 };
                 searcher.peek_top_iter(&mut filtered_points, &is_stopped)?
@@ -340,7 +348,9 @@ impl<TInvertedIndex: InvertedIndex> SparseVectorIndex<TInvertedIndex> {
                 searcher.peek_top_all(&is_stopped, vector_query_context.deferred_internal_id())?
             }
         };
-        let res = results.pop().expect("single element results");
+        let res = results.pop().ok_or_else(|| {
+            OperationError::service_error("expected single sparse filtered search result")
+        })?;
         Ok(res)
     }
 
@@ -378,7 +388,14 @@ impl<TInvertedIndex: InvertedIndex> SparseVectorIndex<TInvertedIndex> {
                     vector_query_context.deferred_internal_id(),
                 )?;
                 *prefiltered_points = Some(filtered_points);
-                prefiltered_points.as_ref().unwrap().iter()
+                prefiltered_points
+                    .as_ref()
+                    .ok_or_else(|| {
+                        OperationError::service_error(
+                            "prefiltered points missing after sparse filter query",
+                        )
+                    })?
+                    .iter()
             }
         }
         .copied()
