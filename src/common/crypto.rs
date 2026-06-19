@@ -9941,16 +9941,12 @@ mod tests {
             .instances
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
-            .options["fixed_budget"]["enabled"] = json!(true);
-        with_server_material
-            .instances
-            .get_mut("docs_private_hnsw_v1")
-            .unwrap()
             .materials
             .insert(
                 PAYLOAD_SYM_KEY_ROLE.to_string(),
-                "tenant-a/server-rk".to_string(),
+                "tenant-a/private-hnsw-server-rk-sentinel".to_string(),
             );
+        let material_sentinel = "tenant-a/private-hnsw-server-rk-sentinel";
         let err = validate_crypto_settings(&with_server_material)
             .expect_err("private HNSW ORAM must not accept server materials outside strict mode");
         assert!(
@@ -9958,6 +9954,7 @@ mod tests {
                 if reason.contains("must not configure server materials or backend")),
             "unexpected error: {err:?}",
         );
+        assert!(!format!("{err:?}").contains(material_sentinel));
 
         let mut with_backend_ref = settings.clone();
         with_backend_ref.zero_trust_profile = None;
@@ -9966,11 +9963,12 @@ mod tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["fixed_budget"]["enabled"] = json!(true);
+        let backend_sentinel = "openfhe_private_hnsw_backend_sentinel";
         with_backend_ref
             .instances
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
-            .backend_ref = Some("openfhe_local".to_string());
+            .backend_ref = Some(backend_sentinel.to_string());
         let err = validate_crypto_settings(&with_backend_ref)
             .expect_err("private HNSW ORAM must not accept backend_ref outside strict mode");
         assert!(
@@ -9978,6 +9976,7 @@ mod tests {
                 if reason.contains("must not configure server materials or backend")),
             "unexpected error: {err:?}",
         );
+        assert!(!format!("{err:?}").contains(backend_sentinel));
     }
 
     #[test]
