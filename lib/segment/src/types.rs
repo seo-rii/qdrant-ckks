@@ -1941,9 +1941,11 @@ impl From<GeoPoint> for geo::Point {
     }
 }
 
-impl From<RawGeoPoint> for GeoPoint {
-    fn from((lon, lat): RawGeoPoint) -> Self {
-        GeoPoint::new(lon, lat).expect("invalid GeoPoint coordinates")
+impl TryFrom<RawGeoPoint> for GeoPoint {
+    type Error = GeoPointValidationError;
+
+    fn try_from((lon, lat): RawGeoPoint) -> Result<Self, Self::Error> {
+        GeoPoint::new(lon, lat)
     }
 }
 
@@ -4991,6 +4993,9 @@ mod tests {
 
     #[test]
     fn test_geo_validation() {
+        assert!(GeoPoint::try_from((13.410146, 52.519289)).is_ok());
+        assert!(GeoPoint::try_from((1113.410146, 52.519289)).is_err());
+
         let query1 = r#"
         {
             "must": [

@@ -174,7 +174,13 @@ impl MutableGeoMapIndex {
         store
             .iter::<_, OperationError>(
                 |idx, values: Vec<RawGeoPoint>| {
-                    let geo_points = values.into_iter().map(GeoPoint::from).collect::<Vec<_>>();
+                    let geo_points = values
+                        .into_iter()
+                        .map(GeoPoint::try_from)
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|err| {
+                            OperationError::service_error(format!("Malformed geo points: {err}"))
+                        })?;
                     let geo_hashes = geo_points
                         .iter()
                         .map(|geo_point| {
