@@ -392,6 +392,35 @@ mod ckks_tests {
     }
 
     #[test]
+    fn private_result_oram_payload_guard_message_uses_session_api() {
+        let private_rule = EncryptionRuleRef {
+            id: "body_private_result".to_string(),
+            selector: EncryptionSelector::PayloadPaths {
+                paths: vec!["document.body".to_string()],
+            },
+            instance: "docs_private_result_oram".to_string(),
+            binding: Some("private-result-oram/v1".to_string()),
+        };
+        let payload_rule = EncryptionRuleRef {
+            id: "body_payload".to_string(),
+            selector: EncryptionSelector::PayloadPaths {
+                paths: vec!["body".to_string()],
+            },
+            instance: "docs_payload_v1".to_string(),
+            binding: Some("payload-field/v1".to_string()),
+        };
+
+        assert!(encryption_rule_uses_private_result_oram(&private_rule));
+        assert!(!encryption_rule_uses_private_result_oram(&payload_rule));
+
+        let message = private_result_oram_api_required_message("document.body");
+        assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(message.contains("/private-result-oram/session"));
+        assert!(message.contains("compatible SDK fetch APIs"));
+        assert!(!message.contains("document.body"));
+    }
+
+    #[test]
     fn encryption_config_rejects_sparse_only_encrypted_vector_selector() {
         let params = CollectionParams {
             sparse_vectors: Some(BTreeMap::from([(
