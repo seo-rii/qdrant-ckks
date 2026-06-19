@@ -527,7 +527,11 @@ impl StructPayloadIndex {
         hw_counter: &HardwareCounterCell,
     ) -> OperationResult<CardinalityEstimation> {
         Ok(match condition {
-            Condition::Filter(_) => panic!("Unexpected branching"),
+            Condition::Filter(_) => {
+                return Err(OperationError::service_error(
+                    "unexpected nested filter condition during cardinality estimation",
+                ));
+            }
             Condition::Nested(nested) => {
                 // propagate complete nested path in case of multiple nested layers
                 let full_path = JsonPath::extend_or_new(nested_path, &nested.array_key());
@@ -1291,5 +1295,27 @@ mod tests {
 
         let schema = payload_config.indices.get(&key).unwrap();
         check_index_types(&schema.types);
+    }
+
+    #[test]
+    fn condition_cardinality_rejects_filter_condition() {
+        let dir = Builder::new().prefix("payload_dir").tempdir().unwrap();
+        let segment = build_simple_segment(dir.path(), 2, Distance::Dot).unwrap();
+        let condition = Condition::Filter(Filter::default());
+        let result = segment.payload_index.borrow().condition_cardinality(
+            &condition,
+            None,
+            &HardwareCounterCell::new(),
+        );
+
+        let err = match result {
+            Ok(_) => panic!("expected filter condition cardinality to be rejected"),
+            Err(err) => err,
+        };
+        assert!(matches!(
+            err,
+            OperationError::ServiceError { description, .. }
+                if description.contains("unexpected nested filter condition")
+        ));
     }
 }
