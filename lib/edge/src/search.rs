@@ -1,7 +1,7 @@
 use std::cmp;
 
 use common::counter::hardware_accumulator::HwMeasurementAcc;
-use segment::common::operation_error::OperationResult;
+use segment::common::operation_error::{OperationError, OperationResult};
 use segment::data_types::modifier::Modifier;
 use segment::data_types::vectors::QueryVector;
 use segment::types::{DEFAULT_FULL_SCAN_THRESHOLD, ScoredPoint, WithPayload};
@@ -82,9 +82,9 @@ impl EdgeShard {
 
             debug_assert_eq!(batched_points.len(), 1);
 
-            let [points] = batched_points
-                .try_into()
-                .expect("single batched search result");
+            let [points] = batched_points.try_into().map_err(|_| {
+                OperationError::service_error("expected single batched search result")
+            })?;
 
             points_by_segment.push(points);
         }
@@ -96,17 +96,16 @@ impl EdgeShard {
             aggregator.update_batch_results(0, points);
         }
 
-        let [mut points] = aggregator
-            .into_topk()
-            .try_into()
-            .expect("single batched search result");
+        let [mut points] = aggregator.into_topk().try_into().map_err(|_| {
+            OperationError::service_error("expected single aggregated search result")
+        })?;
 
         let distance = self
             .config
             .read()
             .vectors
             .get(&vector_name)
-            .expect("vector config exist")
+            .ok_or_else(|| OperationError::validation_error("vector config does not exist"))?
             .distance;
 
         match &query_vector {

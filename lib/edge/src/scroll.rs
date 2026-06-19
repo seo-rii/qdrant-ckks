@@ -48,8 +48,7 @@ impl EdgeShard {
                     HwMeasurementAcc::disposable_edge(),
                 )?;
                 let next_offset = if records.len() > limit {
-                    let last_record = records.pop().unwrap();
-                    Some(last_record.id)
+                    records.pop().map(|last_record| last_record.id)
                 } else {
                     None
                 };
