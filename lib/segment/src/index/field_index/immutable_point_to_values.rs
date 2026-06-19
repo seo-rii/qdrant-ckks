@@ -44,6 +44,13 @@ pub struct ImmutablePointToValues<N: Default> {
 }
 
 impl<N: Default> ImmutablePointToValues<N> {
+    fn value_range(start: u32, count: u32) -> Option<std::ops::Range<usize>> {
+        let start = start as usize;
+        let count = count as usize;
+        let end = start.checked_add(count)?;
+        Some(start..end)
+    }
+
     pub fn new(src: Vec<Vec<N>>) -> Self {
         let mut point_entries = Vec::with_capacity(src.len());
 
@@ -97,7 +104,9 @@ impl<N: Default> ImmutablePointToValues<N> {
         match entry {
             PointValueEntry::Single(v) => check_fn(v),
             PointValueEntry::Slice { start, count } => {
-                let range = *start as usize..(*start + *count) as usize;
+                let Some(range) = Self::value_range(*start, *count) else {
+                    return false;
+                };
                 if let Some(values) = self.values_container.get(range) {
                     values.iter().any(check_fn)
                 } else {
@@ -112,8 +121,8 @@ impl<N: Default> ImmutablePointToValues<N> {
         match entry {
             PointValueEntry::Single(v) => Some(std::slice::from_ref(v).iter()),
             PointValueEntry::Slice { start, count } => {
-                let range = *start as usize..(*start + *count) as usize;
-                Some(self.values_container[range].iter())
+                let range = Self::value_range(*start, *count)?;
+                Some(self.values_container.get(range)?.iter())
             }
         }
     }
@@ -137,14 +146,21 @@ impl<N: Default> ImmutablePointToValues<N> {
         match removed_entry {
             PointValueEntry::Single(v) => vec![v],
             PointValueEntry::Slice { start, count } => {
-                let mut result = Vec::with_capacity(count as usize);
-                for i in start..(start + count) {
-                    // Deleted values still occupy RAM in the container, but optimizers
-                    // will rebuild the index to actually reclaim memory.
-                    let value = std::mem::take(&mut self.values_container[i as usize]);
-                    result.push(value);
+                let Some(range) = Self::value_range(start, count) else {
+                    return Default::default();
+                };
+                if let Some(values) = self.values_container.get_mut(range) {
+                    values
+                        .iter_mut()
+                        .map(|value| {
+                            // Deleted values still occupy RAM in the container, but optimizers
+                            // will rebuild the index to actually reclaim memory.
+                            std::mem::take(value)
+                        })
+                        .collect()
+                } else {
+                    Default::default()
                 }
-                result
             }
         }
     }
@@ -337,6 +353,22 @@ mod tests {
     fn test_get_values_out_of_bounds() {
         let ptv = ImmutablePointToValues::<i32>::new(vec![vec![1]]);
         assert!(ptv.get_values(10).is_none());
+    }
+
+    #[test]
+    fn test_invalid_slice_metadata_does_not_panic() {
+        let mut ptv = ImmutablePointToValues {
+            point_entries: vec![PointValueEntry::Slice {
+                start: u32::MAX,
+                count: 1,
+            }],
+            values_container: vec![1],
+        };
+
+        assert!(!ptv.check_values_any(0, |_| true));
+        assert!(ptv.get_values(0).is_none());
+        assert!(ptv.remove_point(0).is_empty());
+        assert_eq!(ptv.get_values_count(0), Some(0));
     }
 
     #[test]
