@@ -9179,6 +9179,82 @@ mod tests {
                 },
                 None,
                 ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("Point")
+            ));
+
+            let err = do_recommend_points(
+                &toc,
+                "plain_docs",
+                RecommendRequestInternal {
+                    positive: vec![RecommendExample::PointId(0.into())],
+                    negative: Vec::new(),
+                    strategy: Some(RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    using: Some(UsingVector::Name("plain".to_string())),
+                    lookup_from: Some(api::rest::LookupLocation {
+                        collection: COLLECTION_NAME.to_string(),
+                        vector: Some(VECTOR_NAME.to_string()),
+                        shard_key: None,
+                    }),
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("Point")
+            ));
+
+            let err = do_discover_points(
+                &toc,
+                "plain_docs",
+                DiscoverRequestInternal {
+                    target: Some(RecommendExample::PointId(0.into())),
+                    context: None,
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    using: Some(UsingVector::Name("plain".to_string())),
+                    lookup_from: Some(api::rest::LookupLocation {
+                        collection: COLLECTION_NAME.to_string(),
+                        vector: Some(VECTOR_NAME.to_string()),
+                        shard_key: None,
+                    }),
+                },
+                None,
+                ShardSelectorInternal::All,
                 auth,
                 None,
                 HwMeasurementAcc::disposable(),
