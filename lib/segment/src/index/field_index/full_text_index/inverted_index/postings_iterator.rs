@@ -11,17 +11,21 @@ use crate::index::field_index::full_text_index::inverted_index::{Document, Token
 pub fn intersect_postings_iterator<'a>(
     mut postings: Vec<&'a PostingList>,
 ) -> impl Iterator<Item = PointOffsetType> + 'a {
-    let smallest_posting_idx = postings
+    let Some(smallest_posting_idx) = postings
         .iter()
         .enumerate()
         .min_by_key(|(_idx, posting)| posting.len())
         .map(|(idx, _posting)| idx)
-        .unwrap();
+    else {
+        return Either::Left(std::iter::empty());
+    };
     let smallest_posting = postings.remove(smallest_posting_idx);
 
-    smallest_posting
-        .iter()
-        .filter(move |doc_id| postings.iter().all(|posting| posting.contains(*doc_id)))
+    Either::Right(
+        smallest_posting
+            .iter()
+            .filter(move |doc_id| postings.iter().all(|posting| posting.contains(*doc_id))),
+    )
 }
 
 pub fn merge_postings_iterator<'a>(
@@ -38,12 +42,14 @@ pub fn intersect_compressed_postings_iterator<'a, V: PostingValue + 'a>(
     mut postings: Vec<PostingListView<'a, V>>,
     is_active: impl Fn(PointOffsetType) -> bool + 'a,
 ) -> impl Iterator<Item = PointOffsetType> + 'a {
-    let smallest_posting_idx = postings
+    let Some(smallest_posting_idx) = postings
         .iter()
         .enumerate()
         .min_by_key(|(_idx, posting)| posting.len())
         .map(|(idx, _posting)| idx)
-        .unwrap();
+    else {
+        return Either::Left(std::iter::empty());
+    };
     let smallest_posting = postings.remove(smallest_posting_idx);
     let smallest_posting_iterator = smallest_posting.into_iter();
 
@@ -52,22 +58,24 @@ pub fn intersect_compressed_postings_iterator<'a, V: PostingValue + 'a>(
         .map(PostingListView::into_iter)
         .collect::<Vec<_>>();
 
-    smallest_posting_iterator
-        .map(|elem| elem.id)
-        .filter(move |id| {
-            is_active(*id)
-                && posting_iterators.iter_mut().all(|posting_iterator| {
-                    // Custom "contains" check, which leverages the fact that smallest posting is sorted,
-                    // so the next id that must be in all postings is strictly greater than the previous one.
-                    //
-                    // This means that the other iterators can remember the last id they returned to avoid extra work
-                    posting_iterator
-                        // potential optimization: Make posting iterator of just ids, without values (a.k.a. positions).
-                        //                         We are discarding them here, thus unnecessarily reading them from the tails of the posting lists.
-                        .advance_until_greater_or_equal(*id)
-                        .is_some_and(|elem| elem.id == *id)
-                })
-        })
+    Either::Right(
+        smallest_posting_iterator
+            .map(|elem| elem.id)
+            .filter(move |id| {
+                is_active(*id)
+                    && posting_iterators.iter_mut().all(|posting_iterator| {
+                        // Custom "contains" check, which leverages the fact that smallest posting is sorted,
+                        // so the next id that must be in all postings is strictly greater than the previous one.
+                        //
+                        // This means that the other iterators can remember the last id they returned to avoid extra work
+                        posting_iterator
+                            // potential optimization: Make posting iterator of just ids, without values (a.k.a. positions).
+                            //                         We are discarding them here, thus unnecessarily reading them from the tails of the posting lists.
+                            .advance_until_greater_or_equal(*id)
+                            .is_some_and(|elem| elem.id == *id)
+                    })
+            }),
+    )
 }
 
 pub fn merge_compressed_postings_iterator<'a, V: PostingValue + 'a>(
@@ -107,12 +115,14 @@ pub fn intersect_compressed_postings_phrase_iterator<'a>(
         return Either::Left(std::iter::empty());
     };
 
-    let smallest_posting_idx = postings
+    let Some(smallest_posting_idx) = postings
         .iter()
         .enumerate()
         .min_by_key(|(_idx, (_token_id, posting))| posting.len())
         .map(|(idx, _posting)| idx)
-        .unwrap();
+    else {
+        return Either::Left(std::iter::empty());
+    };
     let (smallest_posting_token, smallest_posting) = postings.remove(smallest_posting_idx);
     let smallest_posting_iterator = smallest_posting.into_iter();
 
