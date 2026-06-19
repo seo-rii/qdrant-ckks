@@ -178,7 +178,10 @@ impl<S: UniversalWrite<u64>> StoredBitSlice<S> {
         for (element_start, run_updates) in &runs {
             let run_updates: Vec<_> = run_updates.collect();
 
-            let last_element = Self::element_idx(run_updates.last().unwrap().0);
+            let Some((last_bit_idx, _)) = run_updates.last() else {
+                continue;
+            };
+            let last_element = Self::element_idx(*last_bit_idx);
             let num_elements = last_element - element_start + 1;
             if element_start + num_elements > self.element_len {
                 return Err(UniversalIoError::OutOfBounds {
