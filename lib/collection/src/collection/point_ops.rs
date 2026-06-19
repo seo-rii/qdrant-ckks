@@ -4425,6 +4425,62 @@ mod tests {
     }
 
     #[test]
+    fn private_result_oram_filter_overlap_detects_parent_child_and_nested_paths() {
+        let protected_path = "document.body".parse::<JsonPath>().unwrap();
+        let private_filters = [
+            (
+                Filter::new_must(Condition::Field(FieldCondition::new_match(
+                    "document".parse().unwrap(),
+                    "secret".to_string().into(),
+                ))),
+                "document",
+            ),
+            (
+                Filter::new_must(Condition::Field(FieldCondition::new_match(
+                    "document.body".parse().unwrap(),
+                    "secret".to_string().into(),
+                ))),
+                "document.body",
+            ),
+            (
+                Filter::new_must(Condition::Field(FieldCondition::new_match(
+                    "document.body.lang".parse().unwrap(),
+                    "secret".to_string().into(),
+                ))),
+                "document.body.lang",
+            ),
+            (
+                Filter::new_must(Condition::IsEmpty(IsEmptyCondition::from(
+                    "document.body.lang".parse::<JsonPath>().unwrap(),
+                ))),
+                "document.body.lang",
+            ),
+            (
+                Filter::new_must(Condition::new_nested(
+                    "document".parse().unwrap(),
+                    Filter::new_must(Condition::Field(FieldCondition::new_match(
+                        "title".parse().unwrap(),
+                        "public".to_string().into(),
+                    ))),
+                )),
+                "document",
+            ),
+        ];
+
+        for (filter, expected_path) in private_filters {
+            let touched = filter_touches_encrypted_payload(&filter, &protected_path)
+                .expect("private result ORAM filter path should fail closed");
+            assert_eq!(touched.to_string(), expected_path);
+        }
+
+        let public_filter = Filter::new_must(Condition::Field(FieldCondition::new_match(
+            "document.title".parse().unwrap(),
+            "public".to_string().into(),
+        )));
+        assert!(filter_touches_encrypted_payload(&public_filter, &protected_path).is_none());
+    }
+
+    #[test]
     fn private_hnsw_read_only_point_operations_require_session_api() {
         let encryption = private_hnsw_encryption("embedding");
         let operations = [
