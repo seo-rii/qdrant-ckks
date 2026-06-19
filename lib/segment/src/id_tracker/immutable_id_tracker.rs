@@ -350,7 +350,12 @@ impl ImmutableIdTracker {
 
         // Explicitly fsync file contents to ensure durability
         writer.flush()?;
-        let file = writer.into_inner().unwrap();
+        let file = writer.into_inner().map_err(|err| {
+            OperationError::service_error(format!(
+                "Failed to finish immutable id tracker mapping writer: {}",
+                err.error(),
+            ))
+        })?;
         file.sync_all()?;
 
         deleted_wrapper.flusher()()?;
