@@ -225,8 +225,11 @@ impl ImmutableGeoMapIndex {
 
             let removed_geo_hashes: Vec<_> = removed_geo_points
                 .into_iter()
-                .map(|geo_point| encode_max_precision(geo_point.lon.0, geo_point.lat.0).unwrap())
-                .collect();
+                .map(|geo_point| {
+                    encode_max_precision(geo_point.lon.0, geo_point.lat.0)
+                        .map_err(OperationError::from)
+                })
+                .collect::<OperationResult<_>>()?;
             for &removed_geo_hash in &removed_geo_hashes {
                 index.decrement_hash_value_counts(removed_geo_hash);
             }
@@ -362,7 +365,7 @@ impl ImmutableGeoMapIndex {
 
         for removed_geo_point in removed_geo_points {
             let removed_geo_hash: GeoHash =
-                encode_max_precision(removed_geo_point.lon.0, removed_geo_point.lat.0).unwrap();
+                encode_max_precision(removed_geo_point.lon.0, removed_geo_point.lat.0)?;
             removed_geo_hashes.push(removed_geo_hash);
 
             match self.storage {
