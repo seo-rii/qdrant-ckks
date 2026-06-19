@@ -39,7 +39,7 @@ pub fn recover_snapshots(
     this_peer_id: PeerId,
     is_distributed: bool,
     settings: &Settings,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let collection_dir_path = storage_dir.join(COLLECTIONS_DIR);
     let mut recovered_collections: Vec<String> = vec![];
 
@@ -47,18 +47,20 @@ pub fn recover_snapshots(
         let mut split = snapshot_params.split(':');
         let path = split
             .next()
-            .unwrap_or_else(|| panic!("Snapshot path is missing: {snapshot_params}"));
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| format!("Snapshot path is missing: {snapshot_params}"))?;
 
         let snapshot_data = SnapshotData::new_packed_persistent(path);
 
         let collection_name = split
             .next()
-            .unwrap_or_else(|| panic!("Collection name is missing: {snapshot_params}"));
-        recovered_collections.push(collection_name.to_string());
-        assert!(
-            split.next().is_none(),
-            "Too many parts in snapshot mapping: {snapshot_params}"
-        );
+            .filter(|collection_name| !collection_name.is_empty())
+            .ok_or_else(|| format!("Collection name is missing: {snapshot_params}"))?;
+        if split.next().is_some() {
+            return Err(format!(
+                "Too many parts in snapshot mapping: {snapshot_params}"
+            ));
+        }
         info!("Recovering snapshot {collection_name} from {path}");
         // check if collection already exists
         // if it does, we need to check if we want to overwrite it
@@ -67,9 +69,9 @@ pub fn recover_snapshots(
         info!("Collection path: {}", collection_path.display());
         if collection_path.exists() {
             if !force {
-                panic!(
+                return Err(format!(
                     "Collection {collection_name} already exists. Use --force-snapshot to overwrite it."
-                );
+                ));
             }
             info!("Overwriting collection {collection_name}");
         }
@@ -81,7 +83,9 @@ pub fn recover_snapshots(
             this_peer_id,
             is_distributed,
         ) {
-            panic!("Failed to recover snapshot {collection_name}: {err}");
+            return Err(format!(
+                "Failed to recover snapshot {collection_name}: {err}"
+            ));
         }
         if let Err(err) = validate_restored_collection_crypto_runtime(
             settings,
@@ -90,18 +94,25 @@ pub fn recover_snapshots(
         ) {
             let _ = safe_delete_in_tmp(&collection_temp_path, &storage_dir.join(".deleted"))
                 .and_then(|to_delete| to_delete.close());
-            panic!("{err}");
+            return Err(err);
         }
         // Remove collection_path directory if exists
         if collection_path.exists()
             && let Err(err) = safe_delete_in_tmp(&collection_path, &storage_dir.join(".deleted"))
                 .and_then(|to_delete| to_delete.close())
         {
-            panic!("Failed to remove collection {collection_name}: {err}");
+            return Err(format!(
+                "Failed to remove collection {collection_name}: {err}",
+            ));
         }
-        fs::rename(&collection_temp_path, &collection_path).unwrap();
+        fs::rename(&collection_temp_path, &collection_path).map_err(|err| {
+            format!(
+                "Failed to move recovered snapshot for collection {collection_name} into place: {err}",
+            )
+        })?;
+        recovered_collections.push(collection_name.to_string());
     }
-    recovered_collections
+    Ok(recovered_collections)
 }
 
 pub fn recover_full_snapshot(
@@ -112,31 +123,53 @@ pub fn recover_full_snapshot(
     this_peer_id: PeerId,
     is_distributed: bool,
     settings: &Settings,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
     let snapshot_temp_path = temp_dir
         .map(PathBuf::from)
         .unwrap_or_else(|| storage_dir.join("snapshots_recovery_tmp"));
-    fs::create_dir_all(&snapshot_temp_path).unwrap();
+    fs::create_dir_all(&snapshot_temp_path).map_err(|err| {
+        format!(
+            "Failed to create full snapshot recovery temp directory {}: {err}",
+            snapshot_temp_path.display(),
+        )
+    })?;
 
     // Un-tar snapshot into temporary directory
-    tar_unpack_file(Path::new(snapshot_path), &snapshot_temp_path).unwrap();
+    tar_unpack_file(Path::new(snapshot_path), &snapshot_temp_path)
+        .map_err(|err| format!("Failed to unpack full snapshot {snapshot_path}: {err}"))?;
 
     // Read configuration file with snapshot-to-collection mapping
     let config_path = snapshot_temp_path.join("config.json");
-    let config_file = BufReader::new(File::open(config_path).unwrap());
-    let config_json: SnapshotConfig = serde_json::from_reader(config_file).unwrap();
+    let config_file = BufReader::new(File::open(&config_path).map_err(|err| {
+        format!(
+            "Failed to open full snapshot config {}: {err}",
+            config_path.display(),
+        )
+    })?);
+    let config_json: SnapshotConfig = serde_json::from_reader(config_file).map_err(|err| {
+        format!(
+            "Failed to parse full snapshot config {}: {err}",
+            config_path.display(),
+        )
+    })?;
 
     // Create mapping from the configuration file
     let mapping: Vec<String> = config_json
         .collections_mapping
         .iter()
         .map(|(collection_name, snapshot_file)| {
-            format!(
-                "{}:{collection_name}",
-                snapshot_temp_path.join(snapshot_file).to_str().unwrap(),
-            )
+            let snapshot_file_path = snapshot_temp_path.join(snapshot_file);
+            snapshot_file_path
+                .to_str()
+                .map(|snapshot_file_path| format!("{snapshot_file_path}:{collection_name}"))
+                .ok_or_else(|| {
+                    format!(
+                        "Full snapshot collection path is not valid UTF-8: {}",
+                        snapshot_file_path.display(),
+                    )
+                })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     // Launch regular recovery of snapshots
     let recovered_collection = recover_snapshots(
@@ -147,21 +180,34 @@ pub fn recover_full_snapshot(
         this_peer_id,
         is_distributed,
         settings,
-    );
+    )?;
 
     let alias_path = storage_dir.join(ALIASES_PATH);
-    let mut alias_persistence =
-        AliasPersistence::open(&alias_path).expect("Can't open database by the provided config");
+    let mut alias_persistence = AliasPersistence::open(&alias_path).map_err(|err| {
+        format!(
+            "Failed to open aliases database {}: {err}",
+            alias_path.display(),
+        )
+    })?;
     for (alias, collection_name) in config_json.collections_aliases {
         if alias_persistence.get(&alias).is_some() && !force {
-            panic!("Alias {alias} already exists. Use --force-snapshot to overwrite it.");
+            return Err(format!(
+                "Alias {alias} already exists. Use --force-snapshot to overwrite it.",
+            ));
         }
-        alias_persistence.insert(alias, collection_name).unwrap();
+        alias_persistence
+            .insert(alias.clone(), collection_name)
+            .map_err(|err| format!("Failed to recover alias {alias}: {err}"))?;
     }
 
     // Remove temporary directory
-    fs::remove_dir_all(&snapshot_temp_path).unwrap();
-    recovered_collection
+    fs::remove_dir_all(&snapshot_temp_path).map_err(|err| {
+        format!(
+            "Failed to remove full snapshot recovery temp directory {}: {err}",
+            snapshot_temp_path.display(),
+        )
+    })?;
+    Ok(recovered_collection)
 }
 
 fn validate_restored_collection_crypto_runtime(

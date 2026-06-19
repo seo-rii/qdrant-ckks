@@ -316,6 +316,7 @@ fn main() -> anyhow::Result<()> {
             is_distributed_deployment,
             &settings,
         )
+        .map_err(|err| anyhow::anyhow!("{err}"))?
     } else if let Some(snapshots) = args.snapshot {
         // recover from snapshots
         recover_snapshots(
@@ -327,6 +328,7 @@ fn main() -> anyhow::Result<()> {
             is_distributed_deployment,
             &settings,
         )
+        .map_err(|err| anyhow::anyhow!("{err}"))?
     } else {
         vec![]
     };
