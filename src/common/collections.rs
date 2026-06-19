@@ -1768,6 +1768,14 @@ mod tests {
                 err.to_string().contains("encrypted ORAM bucket transfer"),
                 "unexpected error for {operation:?}: {err}",
             );
+            assert_no_private_oram_config_leak(
+                &err.to_string(),
+                &[
+                    "tenant-a/vector-private-rk",
+                    "docs_text_private_hnsw",
+                    PRIVATE_HNSW_ORAM_BINDING,
+                ],
+            );
         }
     }
 
@@ -1785,16 +1793,37 @@ mod tests {
                 err.to_string().contains("encrypted ORAM bucket transfer"),
                 "unexpected error for {operation:?}: {err}",
             );
+            assert_no_private_oram_config_leak(
+                &err.to_string(),
+                &[
+                    "tenant-a/result-private-rk",
+                    "body_private_result_oram",
+                    PRIVATE_RESULT_ORAM_BINDING,
+                ],
+            );
         }
     }
 
     #[test]
     fn private_oram_resharding_guard_blocks_progress_until_bucket_migration_supported() {
-        for (label, config) in [
-            ("private HNSW ORAM", private_hnsw_collection_config()),
+        for (label, config, sentinels) in [
+            (
+                "private HNSW ORAM",
+                private_hnsw_collection_config(),
+                [
+                    "tenant-a/vector-private-rk",
+                    "docs_text_private_hnsw",
+                    PRIVATE_HNSW_ORAM_BINDING,
+                ],
+            ),
             (
                 "private result ORAM",
                 private_result_oram_collection_config(),
+                [
+                    "tenant-a/result-private-rk",
+                    "body_private_result_oram",
+                    PRIVATE_RESULT_ORAM_BINDING,
+                ],
             ),
         ] {
             for operation in private_oram_resharding_progress_operations() {
@@ -1809,7 +1838,17 @@ mod tests {
                             .contains("consensus-backed epoch/root ownership"),
                     "unexpected {label} resharding error for {operation:?}: {err}",
                 );
+                assert_no_private_oram_config_leak(&err.to_string(), &sentinels);
             }
+        }
+    }
+
+    fn assert_no_private_oram_config_leak(rendered: &str, sentinels: &[&str]) {
+        for sentinel in sentinels {
+            assert!(
+                !rendered.contains(sentinel),
+                "private ORAM cluster guard must not expose config sentinel `{sentinel}`: {rendered}",
+            );
         }
     }
 
