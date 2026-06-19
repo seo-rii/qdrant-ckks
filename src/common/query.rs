@@ -12444,7 +12444,7 @@ mod tests {
     }
 
     #[test]
-    fn private_result_oram_raw_payload_read_rejects_empty_exclude_selector() {
+    fn private_result_oram_raw_payload_read_selector_matrix_matches_collection_guard() {
         let encryption = CollectionEncryptionConfig {
             version: 1,
             key_id: Some("tenant-a:result-private-rk".to_string()),
@@ -12461,17 +12461,73 @@ mod tests {
             }],
         };
         let protected_path = "document.body".parse::<JsonPath>().unwrap();
-        let with_payload = WithPayloadInterface::Selector(PayloadSelector::Exclude(
-            segment::types::PayloadSelectorExclude::new(Vec::new()),
-        ));
 
-        let violation =
-            private_result_oram_raw_payload_read_violation(&with_payload, &encryption).unwrap();
+        let raw_read_cases = [
+            WithPayloadInterface::Bool(true),
+            WithPayloadInterface::Fields(vec!["document".parse().unwrap()]),
+            WithPayloadInterface::Fields(vec!["document.body".parse().unwrap()]),
+            WithPayloadInterface::Fields(vec!["document.body.lang".parse().unwrap()]),
+            WithPayloadInterface::Selector(PayloadSelector::Include(
+                segment::types::PayloadSelectorInclude::new(vec!["document".parse().unwrap()]),
+            )),
+            WithPayloadInterface::Selector(PayloadSelector::Include(
+                segment::types::PayloadSelectorInclude::new(vec![
+                    "document.body.lang".parse().unwrap(),
+                ]),
+            )),
+            WithPayloadInterface::Selector(PayloadSelector::Exclude(
+                segment::types::PayloadSelectorExclude::new(vec![
+                    "document.title".parse().unwrap(),
+                ]),
+            )),
+            WithPayloadInterface::Selector(PayloadSelector::Exclude(
+                segment::types::PayloadSelectorExclude::new(vec![
+                    "document.body.lang".parse().unwrap(),
+                ]),
+            )),
+            WithPayloadInterface::Selector(PayloadSelector::Exclude(
+                segment::types::PayloadSelectorExclude::new(Vec::new()),
+            )),
+            WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                encrypted_payload: EncryptedPayloadReadMode::Raw,
+            }),
+        ];
 
-        assert_eq!(violation, Some("document.body"));
-        assert!(private_result_oram_with_payload_touches_path(
-            &with_payload,
-            &protected_path
-        ));
+        for with_payload in raw_read_cases {
+            let violation =
+                private_result_oram_raw_payload_read_violation(&with_payload, &encryption).unwrap();
+
+            assert_eq!(violation, Some("document.body"));
+            assert!(private_result_oram_with_payload_touches_path(
+                &with_payload,
+                &protected_path
+            ));
+        }
+
+        let allowed_cases = [
+            WithPayloadInterface::Bool(false),
+            WithPayloadInterface::Fields(vec!["document.title".parse().unwrap()]),
+            WithPayloadInterface::Selector(PayloadSelector::Include(
+                segment::types::PayloadSelectorInclude::new(vec![
+                    "document.title".parse().unwrap(),
+                ]),
+            )),
+            WithPayloadInterface::Selector(PayloadSelector::Exclude(
+                segment::types::PayloadSelectorExclude::new(vec!["document".parse().unwrap()]),
+            )),
+            WithPayloadInterface::Selector(PayloadSelector::Exclude(
+                segment::types::PayloadSelectorExclude::new(vec!["document.body".parse().unwrap()]),
+            )),
+            WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                encrypted_payload: EncryptedPayloadReadMode::Redacted,
+            }),
+        ];
+
+        for with_payload in allowed_cases {
+            let violation =
+                private_result_oram_raw_payload_read_violation(&with_payload, &encryption).unwrap();
+
+            assert_eq!(violation, None);
+        }
     }
 }

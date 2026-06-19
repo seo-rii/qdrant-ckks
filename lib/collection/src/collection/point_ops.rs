@@ -4677,11 +4677,18 @@ mod tests {
             WithPayloadInterface::Bool(true),
             WithPayloadInterface::Fields(vec!["document".parse().unwrap()]),
             WithPayloadInterface::Fields(vec!["document.body".parse().unwrap()]),
+            WithPayloadInterface::Fields(vec!["document.body.lang".parse().unwrap()]),
             WithPayloadInterface::Selector(PayloadSelector::Include(PayloadSelectorInclude::new(
                 vec!["document".parse().unwrap()],
             ))),
+            WithPayloadInterface::Selector(PayloadSelector::Include(PayloadSelectorInclude::new(
+                vec!["document.body.lang".parse().unwrap()],
+            ))),
             WithPayloadInterface::Selector(PayloadSelector::Exclude(PayloadSelectorExclude::new(
                 vec!["document.title".parse().unwrap()],
+            ))),
+            WithPayloadInterface::Selector(PayloadSelector::Exclude(PayloadSelectorExclude::new(
+                vec!["document.body.lang".parse().unwrap()],
             ))),
             WithPayloadInterface::Selector(PayloadSelector::Exclude(PayloadSelectorExclude::new(
                 Vec::new(),
