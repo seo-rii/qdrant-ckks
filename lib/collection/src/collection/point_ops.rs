@@ -3882,6 +3882,23 @@ fn redact_encrypted_payload_values(payload: &mut Payload, redaction_plan: &Paylo
         if let Some(value) = payload.0.get_mut(&encrypted_path.first_key) {
             redact_encrypted_json_value_at_path(value, &encrypted_path.rest, kind);
         }
+
+        let literal_path_keys = payload
+            .0
+            .keys()
+            .filter(|key| key.as_str() != encrypted_path.first_key)
+            .filter(|key| {
+                key.parse::<JsonPath>()
+                    .is_ok_and(|payload_path| payload_path.compatible(encrypted_path))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for key in literal_path_keys {
+            if let Some(value) = payload.0.get_mut(&key) {
+                redact_encrypted_json_value_at_path(value, &[], kind);
+            }
+        }
     }
 
     if redaction_plan.redact_vector_sidecar
@@ -5048,6 +5065,66 @@ mod tests {
                 .unwrap()
                 .is_none(),
             "raw private result ORAM reads are blocked before redaction planning",
+        );
+    }
+
+    #[test]
+    fn private_result_oram_redacted_reads_redact_literal_json_path_payload_keys() {
+        let encryption = private_result_oram_encryption("document.body");
+        let redaction_plan = payload_redaction_plan_for_encryption(true, &encryption)
+            .expect("private result ORAM redaction plan should build")
+            .expect("private result ORAM redacted reads need a redaction plan");
+
+        let mut points = [ScoredPoint {
+            id: 1.into(),
+            version: 0,
+            score: 0.0,
+            payload: Some(Payload(
+                serde_json::json!({
+                    "document.body": "literal private result payload bytes sentinel",
+                    "document.body.lang": "literal private result child sentinel",
+                    "document.title": "literal public title",
+                    "document": {
+                        "title": "nested public title",
+                    },
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
+            )),
+            vector: None,
+            shard_key: None,
+            order_value: None,
+        }];
+
+        apply_encrypted_payload_read_mode_to_scored_points(
+            &mut points,
+            EncryptedPayloadReadMode::Redacted,
+            Some(&redaction_plan),
+        );
+
+        let payload = points[0].payload.as_ref().unwrap();
+        assert_eq!(
+            payload.0.get("document.body").unwrap(),
+            &encrypted_payload_redaction_value(),
+        );
+        assert_eq!(
+            payload.0.get("document.body.lang").unwrap(),
+            &encrypted_payload_redaction_value(),
+        );
+        assert_eq!(
+            payload.0.get("document.title").unwrap().as_str(),
+            Some("literal public title"),
+        );
+        assert_eq!(
+            payload
+                .0
+                .get("document")
+                .unwrap()
+                .get("title")
+                .unwrap()
+                .as_str(),
+            Some("nested public title"),
         );
     }
 
