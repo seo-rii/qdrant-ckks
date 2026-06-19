@@ -540,7 +540,7 @@ impl HNSWIndex {
                 global_graph_connectivity
                     .iter()
                     .copied()
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .max_by(|a, b| a.total_cmp(b))
             } else {
                 // Main graph is too small to estimate connectivity,
                 // we can't shortcut sub-graph building
