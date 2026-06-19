@@ -6901,6 +6901,60 @@ mod tests {
     }
 
     #[test]
+    fn private_result_fetch_debug_redacts_tokens_and_payload_bytes() {
+        let payload = vec![101, 102, 103];
+        let result = PrivateHnswSearchResult {
+            hits: vec![PrivateHnswSearchHit {
+                node_id: [41; 32],
+                point_token: [42; 32],
+                payload_fetch_token: Some([43; 32]),
+                distance: 0.25,
+            }],
+            accessed_leaf_labels: vec![],
+            completed_steps: 1,
+        };
+        let plan = plan_private_hnsw_private_result_fetch_tokens(
+            ResultPrivacyMode::PrivatePayloadOramRequired,
+            &result,
+            1,
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+        let token_fetch = PrivateResultOramTokenFetchResult {
+            accesses: vec![result_token_access([43; 32], [42; 32], payload.clone())],
+            updated_buckets: Vec::new(),
+        };
+        let payloads =
+            finalize_private_hnsw_private_result_fetch(&result, &plan, &token_fetch).unwrap();
+
+        let debug_values = [
+            format!("{:?}", result.hits[0]),
+            format!("{result:?}"),
+            format!("{plan:?}"),
+            format!("{:?}", token_fetch.accesses[0]),
+            format!("{token_fetch:?}"),
+            format!("{:?}", payloads.results[0]),
+            format!("{payloads:?}"),
+        ];
+        let secret_values = [
+            BASE64URL_NOPAD.encode(&[41; 32]),
+            BASE64URL_NOPAD.encode(&[42; 32]),
+            BASE64URL_NOPAD.encode(&[43; 32]),
+            format!("{:?}", [41u8; 32]),
+            format!("{:?}", [42u8; 32]),
+            format!("{:?}", [43u8; 32]),
+            format!("{payload:?}"),
+        ];
+
+        for debug in debug_values {
+            for secret in &secret_values {
+                assert!(!debug.contains(secret), "{debug}");
+            }
+        }
+    }
+
+    #[test]
     fn private_result_fetch_finalizer_rejects_mismatched_or_deleted_payloads() {
         let result = PrivateHnswSearchResult {
             hits: vec![PrivateHnswSearchHit {
