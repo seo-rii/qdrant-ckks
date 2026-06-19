@@ -4613,6 +4613,9 @@ mod tests {
             WithPayloadInterface::Selector(PayloadSelector::Exclude(PayloadSelectorExclude::new(
                 vec!["document.title".parse().unwrap()],
             ))),
+            WithPayloadInterface::Selector(PayloadSelector::Exclude(PayloadSelectorExclude::new(
+                Vec::new(),
+            ))),
             WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
                 encrypted_payload: EncryptedPayloadReadMode::Raw,
             }),

@@ -12442,4 +12442,36 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn private_result_oram_raw_payload_read_rejects_empty_exclude_selector() {
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:result-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "private_result_payload".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec!["document.body".to_string()],
+                },
+                instance: "docs_private_result_oram_v1".to_string(),
+                binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
+            }],
+        };
+        let protected_path = "document.body".parse::<JsonPath>().unwrap();
+        let with_payload = WithPayloadInterface::Selector(PayloadSelector::Exclude(
+            segment::types::PayloadSelectorExclude::new(Vec::new()),
+        ));
+
+        let violation =
+            private_result_oram_raw_payload_read_violation(&with_payload, &encryption).unwrap();
+
+        assert_eq!(violation, Some("document.body"));
+        assert!(private_result_oram_with_payload_touches_path(
+            &with_payload,
+            &protected_path
+        ));
+    }
 }
