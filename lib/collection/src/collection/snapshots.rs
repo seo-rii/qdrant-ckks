@@ -3119,6 +3119,7 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("vector_name mismatch"));
         assert!(!rendered.contains("title"), "{rendered}");
+        assert!(!rendered.contains("text"), "{rendered}");
 
         let temp_dir = tempfile::Builder::new()
             .prefix("private-hnsw-restore-bad-dim")
@@ -3136,6 +3137,7 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("dim mismatch"));
         assert!(!rendered.contains("768"), "{rendered}");
+        assert!(!rendered.contains("1536"), "{rendered}");
 
         let temp_dir = tempfile::Builder::new()
             .prefix("private-hnsw-restore-bad-distance")
@@ -3153,6 +3155,8 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("distance mismatch"));
         assert!(!rendered.contains("Dot"), "{rendered}");
+        assert!(!rendered.contains("Cosine"), "{rendered}");
+        assert!(!rendered.contains("cosine"), "{rendered}");
         assert!(!rendered.contains("text"), "{rendered}");
     }
 
