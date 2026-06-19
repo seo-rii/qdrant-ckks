@@ -798,8 +798,11 @@ impl PayloadFieldIndex for GeoMapIndex {
         }
 
         if let Some(geo_polygon) = &condition.geo_polygon {
-            let (exterior_hashes, interior_hashes) =
-                polygon_hashes_estimation(geo_polygon, GEO_QUERY_MAX_REGION);
+            let Ok((exterior_hashes, interior_hashes)) =
+                polygon_hashes_estimation(geo_polygon, GEO_QUERY_MAX_REGION)
+            else {
+                return Ok(None);
+            };
             // The polygon cardinality estimation should consider its exterior and interiors.
             // Therefore, we compute exterior estimation first and then subtract all interior estimation.
             let mut exterior_estimation = self.match_cardinality(&exterior_hashes, hw_counter)?;

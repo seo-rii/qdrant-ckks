@@ -303,7 +303,11 @@ impl GeohashBoundingBox {
     /// * None - if there are more regions than a limit
     /// * Some(list of geo-hashes covering the region
     ///
-    fn geohash_regions(&self, precision: usize, max_regions: usize) -> Option<Vec<GeoHash>> {
+    fn geohash_regions(
+        &self,
+        precision: usize,
+        max_regions: usize,
+    ) -> OperationResult<Option<Vec<GeoHash>>> {
         let mut seen: Vec<GeoHash> = Vec::new();
 
         let mut from_row: GeoHash = self.north_west.truncate(precision);
@@ -317,28 +321,26 @@ impl GeohashBoundingBox {
                 seen.push(current);
 
                 if seen.len() > max_regions {
-                    return None;
+                    return Ok(None);
                 }
 
                 if current == to_row {
                     break;
                 }
-                current = sphere_neighbor(current, Direction::E).unwrap();
+                current = sphere_neighbor(current, Direction::E).map_err(OperationError::from)?;
             }
             if from_row == to_column {
                 break;
             }
 
-            from_row = sphere_neighbor(from_row, Direction::S).unwrap();
-            to_row = sphere_neighbor(to_row, Direction::S).unwrap();
+            from_row = sphere_neighbor(from_row, Direction::S).map_err(OperationError::from)?;
+            to_row = sphere_neighbor(to_row, Direction::S).map_err(OperationError::from)?;
         }
 
-        Some(seen)
+        Ok(Some(seen))
     }
-}
 
-impl From<GeoBoundingBox> for GeohashBoundingBox {
-    fn from(bounding_box: GeoBoundingBox) -> Self {
+    fn try_from_bounding_box(bounding_box: GeoBoundingBox) -> OperationResult<Self> {
         let GeoPoint {
             lat: OrderedFloat(max_lat),
             lon: OrderedFloat(min_lon),
@@ -348,18 +350,17 @@ impl From<GeoBoundingBox> for GeohashBoundingBox {
             lon: OrderedFloat(max_lon),
         } = bounding_box.bottom_right;
 
-        // Unwrap is acceptable, as data should be validated before
-        let north_west = encode_max_precision(min_lon, max_lat).unwrap();
-        let south_west = encode_max_precision(min_lon, min_lat).unwrap();
-        let south_east = encode_max_precision(max_lon, min_lat).unwrap();
-        let north_east = encode_max_precision(max_lon, max_lat).unwrap();
+        let north_west = encode_max_precision(min_lon, max_lat).map_err(OperationError::from)?;
+        let south_west = encode_max_precision(min_lon, min_lat).map_err(OperationError::from)?;
+        let south_east = encode_max_precision(max_lon, min_lat).map_err(OperationError::from)?;
+        let north_east = encode_max_precision(max_lon, max_lat).map_err(OperationError::from)?;
 
-        Self {
+        Ok(Self {
             north_west,
             south_west,
             south_east,
             north_east,
-        }
+        })
     }
 }
 
@@ -369,7 +370,9 @@ fn check_circle_intersection(geohash: &str, circle: &GeoRadius) -> bool {
     if precision == 0 {
         return true;
     }
-    let rect = decode_bbox(geohash).unwrap();
+    let Ok(rect) = decode_bbox(geohash) else {
+        return false;
+    };
     let c0 = rect.min();
     let c1 = rect.max();
 
@@ -389,20 +392,25 @@ fn check_polygon_intersection(geohash: &str, polygon: &Polygon) -> bool {
     if precision == 0 {
         return true;
     }
-    let rect = decode_bbox(geohash).unwrap();
+    let Ok(rect) = decode_bbox(geohash) else {
+        return false;
+    };
 
     rect.intersects(polygon)
 }
 
 fn create_hashes(
-    mapping_fn: impl Fn(usize) -> Option<Vec<GeoHash>>,
+    mapping_fn: impl Fn(usize) -> OperationResult<Option<Vec<GeoHash>>>,
 ) -> OperationResult<Vec<GeoHash>> {
-    (0..=GEOHASH_MAX_LENGTH)
-        .map(mapping_fn)
-        .take_while(|hashes| hashes.is_some())
-        .last()
-        .ok_or_else(|| OperationError::service_error("no hash coverage for any precision"))?
-        .ok_or_else(|| OperationError::service_error("geo-hash coverage is empty"))
+    let mut last_hashes = None;
+    for precision in 0..=GEOHASH_MAX_LENGTH {
+        match mapping_fn(precision)? {
+            Some(hashes) => last_hashes = Some(hashes),
+            None => break,
+        }
+    }
+
+    last_hashes.ok_or_else(|| OperationError::service_error("no hash coverage for any precision"))
 }
 
 /// Return as-high-as-possible with maximum of `max_regions`
@@ -417,24 +425,24 @@ pub fn circle_hashes(circle: &GeoRadius, max_regions: usize) -> OperationResult<
     let geo_bounding_box = minimum_bounding_rectangle_for_circle(circle);
     if geo_bounding_box.top_left.lat.is_nan()
         || geo_bounding_box.top_left.lon.is_nan()
-        || geo_bounding_box.bottom_right.lat.is_nan()
+        || geo_bounding_box.bottom_right.lon.is_nan()
         || geo_bounding_box.bottom_right.lat.is_nan()
     {
         return Err(OperationError::service_error("Invalid circle"));
     }
-    let full_geohash_bounding_box: GeohashBoundingBox = geo_bounding_box.into();
+    let full_geohash_bounding_box = GeohashBoundingBox::try_from_bounding_box(geo_bounding_box)?;
 
     let mapping_fn = |precision| {
-        full_geohash_bounding_box
-            .geohash_regions(precision, max_regions)
-            .map(|hashes| {
-                hashes
-                    .into_iter()
-                    .filter(|hash| {
-                        check_circle_intersection(EcoString::from(*hash).as_str(), circle)
-                    })
-                    .collect_vec()
-            })
+        let Some(hashes) = full_geohash_bounding_box.geohash_regions(precision, max_regions)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            hashes
+                .into_iter()
+                .filter(|hash| check_circle_intersection(EcoString::from(*hash).as_str(), circle))
+                .collect_vec(),
+        ))
     };
     create_hashes(mapping_fn)
 }
@@ -450,7 +458,7 @@ pub fn rectangle_hashes(
             "max_regions cannot be equal to zero",
         ));
     }
-    let full_geohash_bounding_box: GeohashBoundingBox = (*rectangle).into();
+    let full_geohash_bounding_box = GeohashBoundingBox::try_from_bounding_box(*rectangle)?;
 
     let mapping_fn = |precision| full_geohash_bounding_box.geohash_regions(precision, max_regions);
     create_hashes(mapping_fn)
@@ -460,20 +468,22 @@ pub fn rectangle_hashes(
 /// number of geo-hash guaranteed to contain a boundary defined by closed LineString.
 fn boundary_hashes(boundary: &LineString, max_regions: usize) -> OperationResult<Vec<GeoHash>> {
     let geo_bounding_box = minimum_bounding_rectangle_for_boundary(boundary);
-    let full_geohash_bounding_box: GeohashBoundingBox = geo_bounding_box.into();
+    let full_geohash_bounding_box = GeohashBoundingBox::try_from_bounding_box(geo_bounding_box)?;
     let polygon = Polygon::new(boundary.clone(), vec![]);
 
     let mapping_fn = |precision| {
-        full_geohash_bounding_box
-            .geohash_regions(precision, max_regions)
-            .map(|hashes| {
-                hashes
-                    .into_iter()
-                    .filter(|hash| {
-                        check_polygon_intersection(EcoString::from(*hash).as_str(), &polygon)
-                    })
-                    .collect_vec()
-            })
+        let Some(hashes) = full_geohash_bounding_box.geohash_regions(precision, max_regions)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            hashes
+                .into_iter()
+                .filter(|hash| {
+                    check_polygon_intersection(EcoString::from(*hash).as_str(), &polygon)
+                })
+                .collect_vec(),
+        ))
     };
     create_hashes(mapping_fn)
 }
@@ -487,17 +497,21 @@ fn boundary_hashes(boundary: &LineString, max_regions: usize) -> OperationResult
 pub fn polygon_hashes_estimation(
     polygon: &GeoPolygon,
     max_regions: usize,
-) -> (Vec<GeoHash>, Vec<Vec<GeoHash>>) {
-    assert_ne!(max_regions, 0, "max_regions cannot be equal to zero");
+) -> OperationResult<(Vec<GeoHash>, Vec<Vec<GeoHash>>)> {
+    if max_regions == 0 {
+        return Err(OperationError::service_error(
+            "max_regions cannot be equal to zero",
+        ));
+    }
     let polygon_wrapper = polygon.convert().polygon;
     let exterior_hashes = boundary_hashes(&polygon_wrapper.exterior().clone(), max_regions);
     let interiors_hashes = polygon_wrapper
         .interiors()
         .iter()
-        .map(|interior| boundary_hashes(interior, max_regions).unwrap())
-        .collect_vec();
+        .map(|interior| boundary_hashes(interior, max_regions))
+        .collect::<OperationResult<Vec<_>>>()?;
 
-    (exterior_hashes.unwrap(), interiors_hashes)
+    Ok((exterior_hashes?, interiors_hashes))
 }
 
 /// Return as-high-as-possible with maximum of `max_regions`
@@ -510,22 +524,21 @@ pub fn polygon_hashes(polygon: &GeoPolygon, max_regions: usize) -> OperationResu
     }
     let polygon_wrapper = polygon.convert().polygon;
     let geo_bounding_box = minimum_bounding_rectangle_for_boundary(polygon_wrapper.exterior());
-    let full_geohash_bounding_box: GeohashBoundingBox = geo_bounding_box.into();
+    let full_geohash_bounding_box = GeohashBoundingBox::try_from_bounding_box(geo_bounding_box)?;
 
     let mapping_fn = |precision| {
-        full_geohash_bounding_box
-            .geohash_regions(precision, max_regions)
-            .map(|hashes| {
-                hashes
-                    .into_iter()
-                    .filter(|hash| {
-                        check_polygon_intersection(
-                            EcoString::from(*hash).as_str(),
-                            &polygon_wrapper,
-                        )
-                    })
-                    .collect_vec()
-            })
+        let Some(hashes) = full_geohash_bounding_box.geohash_regions(precision, max_regions)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            hashes
+                .into_iter()
+                .filter(|hash| {
+                    check_polygon_intersection(EcoString::from(*hash).as_str(), &polygon_wrapper)
+                })
+                .collect_vec(),
+        ))
     };
     create_hashes(mapping_fn)
 }
@@ -730,7 +743,7 @@ mod tests {
         };
 
         let bounding_box = minimum_bounding_rectangle_for_circle(&near_nyc_circle);
-        let rectangle: GeohashBoundingBox = bounding_box.into();
+        let rectangle = GeohashBoundingBox::try_from_bounding_box(bounding_box).unwrap();
         assert_eq!(rectangle.north_west, GeoHash::new(b"dr5ruj4477kd").unwrap());
         assert_eq!(rectangle.south_west, GeoHash::new(b"dr5ru46ne2ux").unwrap());
         assert_eq!(rectangle.south_east, GeoHash::new(b"dr5ru6ryw0cp").unwrap());
@@ -745,7 +758,7 @@ mod tests {
             south_east: GeoHash::new(b"t").unwrap(),
             north_east: GeoHash::new(b"v").unwrap(),
         };
-        let mut geo_area = rect.geohash_regions(1, 100).unwrap();
+        let mut geo_area = rect.geohash_regions(1, 100).unwrap().unwrap();
         let mut expected = vec![
             GeoHash::new(b"u").unwrap(),
             GeoHash::new(b"s").unwrap(),
@@ -759,6 +772,35 @@ mod tests {
     }
 
     #[test]
+    fn rectangle_hashes_rejects_invalid_coordinates() {
+        let rectangle = GeoBoundingBox {
+            top_left: GeoPoint {
+                lon: OrderedFloat(f64::NAN),
+                lat: OrderedFloat(40.0),
+            },
+            bottom_right: GeoPoint {
+                lon: OrderedFloat(-73.0),
+                lat: OrderedFloat(39.0),
+            },
+        };
+
+        assert!(rectangle_hashes(&rectangle, GEOHASH_MAX_LENGTH).is_err());
+    }
+
+    #[test]
+    fn polygon_estimation_rejects_zero_region_budget() {
+        let polygon = build_polygon(vec![
+            (-74.0, 40.0),
+            (-73.0, 40.0),
+            (-73.0, 39.0),
+            (-74.0, 39.0),
+            (-74.0, 40.0),
+        ]);
+
+        assert!(polygon_hashes_estimation(&polygon, 0).is_err());
+    }
+
+    #[test]
     fn nyc_rectangle_geo_area_high_precision() {
         let rect = GeohashBoundingBox {
             north_west: GeoHash::new(b"dr5ruj4477kd").unwrap(),
@@ -768,7 +810,7 @@ mod tests {
         };
 
         // calling `rect.geohash_regions()` is too expensive
-        assert!(rect.geohash_regions(12, 100).is_none());
+        assert!(rect.geohash_regions(12, 100).unwrap().is_none());
     }
 
     #[test]
@@ -780,7 +822,7 @@ mod tests {
             north_east: GeoHash::new(b"dr5rump").unwrap(),
         };
 
-        let geo_area = rect.geohash_regions(7, 1000).unwrap();
+        let geo_area = rect.geohash_regions(7, 1000).unwrap().unwrap();
         assert_eq!(14 * 12, geo_area.len());
     }
 
@@ -793,7 +835,7 @@ mod tests {
             north_east: GeoHash::new(b"dr5rum").unwrap(),
         };
 
-        let mut geo_area = rect.geohash_regions(6, 100).unwrap();
+        let mut geo_area = rect.geohash_regions(6, 100).unwrap().unwrap();
         let mut expected = vec![
             GeoHash::new(b"dr5ru4").unwrap(),
             GeoHash::new(b"dr5ru5").unwrap(),
