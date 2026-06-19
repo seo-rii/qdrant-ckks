@@ -325,10 +325,13 @@ impl Iterator for DatabaseColumnIterator<'_> {
             return None;
         }
 
-        let item = (
-            Box::from(self.iter.key().unwrap()),
-            Box::from(self.iter.value().unwrap()),
-        );
+        let Some(key) = self.iter.key() else {
+            return None;
+        };
+        let Some(value) = self.iter.value() else {
+            return None;
+        };
+        let item = (Box::from(key), Box::from(value));
 
         // Search to next item for next iteration
         self.iter.next();
