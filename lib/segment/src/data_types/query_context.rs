@@ -97,7 +97,11 @@ impl QueryContext {
             self.idf_stats
                 .idf
                 .insert(vector_name.to_owned(), HashMap::default());
-            self.idf_stats.idf.get_mut(vector_name).unwrap()
+            let Some(idf) = self.idf_stats.idf.get_mut(vector_name) else {
+                log::error!("Failed to initialize IDF stats for vector {vector_name}");
+                return;
+            };
+            idf
         };
 
         for index in indices {
