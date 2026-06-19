@@ -101,6 +101,45 @@ fn write_vectors_to_file(path: &Path, data: &[f32]) {
 }
 
 #[test]
+fn test_cached_slice_rejects_range_past_file_len_after_cache_hit() {
+    let dir = tempfile::Builder::new()
+        .prefix("cached_slice_oob")
+        .tempdir()
+        .unwrap();
+    let vectors_path = dir.path().join("vectors.bin");
+    fs::write(&vectors_path, b"0123456789").unwrap();
+
+    let cacher = CacheController::new(&dir.path().join("cache.bin"), BLOCK_SIZE as u64).unwrap();
+    let cached_slice = CachedSlice::<u8>::open(&cacher, &vectors_path).unwrap();
+
+    assert_eq!(
+        cached_slice.get_range(0..10).unwrap().as_ref(),
+        b"0123456789"
+    );
+
+    let err = cached_slice.get_range(8..12).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
+fn test_cached_slice_rejects_zero_sized_type() {
+    let dir = tempfile::Builder::new()
+        .prefix("cached_slice_zst")
+        .tempdir()
+        .unwrap();
+    let vectors_path = dir.path().join("vectors.bin");
+    fs::write(&vectors_path, b"0123456789").unwrap();
+
+    let cacher = CacheController::new(&dir.path().join("cache.bin"), BLOCK_SIZE as u64).unwrap();
+    let err = match CachedSlice::<()>::open(&cacher, &vectors_path) {
+        Ok(_) => panic!("zero-sized cached slice opened unexpectedly"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
 fn test_cached_slice_vectors_sequential() {
     let dir = tempfile::Builder::new()
         .prefix("cached_slice_vectors")

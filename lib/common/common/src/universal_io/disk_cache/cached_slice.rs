@@ -29,6 +29,13 @@ pub struct CachedSlice<T> {
 impl<T: bytemuck::Pod> CachedSlice<T> {
     /// Open a file through the cache controller and return a typed view over it.
     pub fn open(controller: &Arc<CacheController>, path: &Path) -> io::Result<Self> {
+        if size_of::<T>() == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot cache zero-sized type",
+            ));
+        }
+
         let (file_id, len) = controller.open_file(path)?;
         Ok(Self {
             file_id,
@@ -49,7 +56,6 @@ impl<T: bytemuck::Pod> CachedSlice<T> {
     /// guarantees correct alignment for any `T`.
     pub fn get_range(&self, range: Range<usize>) -> io::Result<Cow<'_, [T]>> {
         let t_size = size_of::<T>();
-        debug_assert!(t_size != 0, "cannot use zero-sized type");
 
         let total_elements = range.end.checked_sub(range.start).ok_or_else(|| {
             io::Error::new(
@@ -74,6 +80,13 @@ impl<T: bytemuck::Pod> CachedSlice<T> {
             )
         })?;
         let byte_range = byte_start..byte_end;
+        if byte_range.end > self.len_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cached slice range exceeds file length",
+            ));
+        }
+
         let mut blocks_iter = self.blocks_for(byte_range)?.into_iter();
 
         // TODO(perf): if blocks are consecutive in the big cache file, we can still return without allocating.
