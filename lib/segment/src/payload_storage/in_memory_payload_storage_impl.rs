@@ -5,7 +5,7 @@ use common::types::PointOffsetType;
 use serde_json::Value;
 
 use crate::common::Flusher;
-use crate::common::operation_error::OperationResult;
+use crate::common::operation_error::{OperationError, OperationResult};
 use crate::json_path::JsonPath;
 use crate::payload_storage::PayloadStorage;
 use crate::payload_storage::in_memory_payload_storage::InMemoryPayloadStorage;
