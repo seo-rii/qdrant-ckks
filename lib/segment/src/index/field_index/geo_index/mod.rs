@@ -834,16 +834,16 @@ impl PayloadFieldIndex for GeoMapIndex {
         threshold: usize,
         key: PayloadKeyType,
     ) -> Box<dyn Iterator<Item = OperationResult<PayloadBlockCondition>> + '_> {
-        Box::new(
-            self.large_hashes(threshold)
-                .map_ok(move |(geo_hash, size)| PayloadBlockCondition {
-                    condition: FieldCondition::new_geo_bounding_box(
-                        key.clone(),
-                        geo_hash_to_box(geo_hash),
-                    ),
-                    cardinality: size,
-                }),
-        )
+        Box::new(self.large_hashes(threshold).map(move |item| {
+            let (geo_hash, size) = item?;
+            Ok(PayloadBlockCondition {
+                condition: FieldCondition::new_geo_bounding_box(
+                    key.clone(),
+                    geo_hash_to_box(geo_hash)?,
+                ),
+                cardinality: size,
+            })
+        }))
     }
 }
 

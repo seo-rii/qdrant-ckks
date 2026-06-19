@@ -264,8 +264,10 @@ pub fn encode_max_precision(lon: f64, lat: f64) -> Result<GeoHash, GeohashError>
     GeoHash::try_from(encoded_string)
 }
 
-pub fn geo_hash_to_box(geo_hash: GeoHash) -> GeoBoundingBox {
-    let rectangle = decode_bbox(EcoString::from(geo_hash).as_str()).unwrap();
+pub fn geo_hash_to_box(geo_hash: GeoHash) -> OperationResult<GeoBoundingBox> {
+    let rectangle = decode_bbox(EcoString::from(geo_hash).as_str()).map_err(|err| {
+        OperationError::service_error(format!("Failed to decode geohash bounding box: {err}"))
+    })?;
     let top_left = GeoPoint {
         lon: OrderedFloat(rectangle.min().x),
         lat: OrderedFloat(rectangle.max().y),
@@ -275,10 +277,10 @@ pub fn geo_hash_to_box(geo_hash: GeoHash) -> GeoBoundingBox {
         lat: OrderedFloat(rectangle.min().y),
     };
 
-    GeoBoundingBox {
+    Ok(GeoBoundingBox {
         top_left,
         bottom_right,
-    }
+    })
 }
 
 #[derive(Debug)]
@@ -1377,7 +1379,7 @@ mod tests {
 
     #[test]
     fn turn_geo_hash_to_box() {
-        let geo_box = geo_hash_to_box(GeoHash::new(b"dr5ruj4477kd").unwrap());
+        let geo_box = geo_hash_to_box(GeoHash::new(b"dr5ruj4477kd").unwrap()).unwrap();
         let center = GeoPoint {
             lat: OrderedFloat(40.76517460),
             lon: OrderedFloat(-74.00101399),
