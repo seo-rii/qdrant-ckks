@@ -840,6 +840,30 @@ mod private_result_oram_grpc_tests {
     }
 
     #[test]
+    fn manifest_and_bucket_proto_reject_version_overflow_without_reflecting_value() {
+        let fixture = PrivateResultRouteFixture::build();
+        let mut manifest = manifest_to_proto(fixture.manifest);
+        manifest.version = u32::MAX;
+        let err = manifest_from_proto(manifest).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("manifest.version"));
+        assert!(!err.message().contains(&u32::MAX.to_string()));
+
+        let err = bucket_from_proto(grpc::PrivateResultOramBucket {
+            version: u32::MAX,
+            bucket_id: 1,
+            index_epoch: 42,
+            ciphertext: "ciphertext".to_string(),
+            ciphertext_sha256: "sha".to_string(),
+            bucket_commitment: "commitment".to_string(),
+        })
+        .unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("bucket.version"));
+        assert!(!err.message().contains(&u32::MAX.to_string()));
+    }
+
+    #[test]
     fn private_result_oram_uploads_and_reads_through_grpc_service() {
         let _guard = route_e2e_guard();
         let fixture = PrivateResultRouteFixture::build();

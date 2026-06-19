@@ -656,7 +656,14 @@ mod private_hnsw_grpc_tests {
     }
 
     #[test]
-    fn bucket_proto_rejects_version_overflow() {
+    fn manifest_and_bucket_proto_reject_version_overflow_without_reflecting_value() {
+        let mut manifest = manifest_to_proto(sample_manifest());
+        manifest.version = u32::MAX;
+        let err = manifest_from_proto(manifest).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("manifest.version"));
+        assert!(!err.message().contains(&u32::MAX.to_string()));
+
         let err = bucket_from_proto(grpc::PrivateHnswBucket {
             version: u32::MAX,
             bucket_id: 1,
@@ -667,6 +674,8 @@ mod private_hnsw_grpc_tests {
         })
         .unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("bucket.version"));
+        assert!(!err.message().contains(&u32::MAX.to_string()));
     }
 
     #[test]
