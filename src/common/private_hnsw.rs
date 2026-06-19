@@ -3730,6 +3730,28 @@ mod private_hnsw_tests {
         assert!(rendered.contains("manifest result_privacy does not match runtime instance"));
         assert!(!rendered.contains("private_payload_oram_required"));
 
+        let mut private_payload_manifest = manifest.clone();
+        private_payload_manifest.result_privacy = ResultPrivacyMode::PrivatePayloadOramRequired;
+        let context = fixture_runtime_context(&private_payload_manifest);
+        let rendered = context
+            .validate_manifest_runtime_context(&private_payload_manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            rendered.contains("requires a private-result-oram/v1 payload rule"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+            "{rendered}"
+        );
+
+        let mut context = fixture_runtime_context(&private_payload_manifest);
+        context.private_result_oram_binding_configured = true;
+        context
+            .validate_manifest_runtime_context(&private_payload_manifest)
+            .unwrap();
+
         let mut context = fixture_runtime_context(&manifest);
         context.expected_hnsw.m = 99;
         let rendered = context
