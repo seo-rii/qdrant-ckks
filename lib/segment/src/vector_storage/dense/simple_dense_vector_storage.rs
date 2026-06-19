@@ -208,8 +208,12 @@ impl<T: PrimitiveVectorElement> SimpleDenseVectorStorage<T> {
             record.vector.copy_from_slice(vector);
         }
 
-        let key_enc = bincode::serialize(&key).unwrap();
-        let record_enc = bincode::serialize(&record).unwrap();
+        let key_enc = bincode::serialize(&key).map_err(|err| {
+            OperationError::service_error(format!("Failed to serialize dense vector key: {err}"))
+        })?;
+        let record_enc = bincode::serialize(&record).map_err(|err| {
+            OperationError::service_error(format!("Failed to serialize dense vector record: {err}"))
+        })?;
 
         hw_counter
             .vector_io_write_counter()

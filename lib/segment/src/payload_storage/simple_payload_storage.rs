@@ -47,7 +47,9 @@ impl SimplePayloadStorage {
         point_id: PointOffsetType,
         hw_counter: &HardwareCounterCell,
     ) -> OperationResult<()> {
-        let point_id_serialized = serde_cbor::to_vec(&point_id).unwrap();
+        let point_id_serialized = serde_cbor::to_vec(&point_id).map_err(|err| {
+            OperationError::service_error(format!("Failed to serialize payload point id: {err}"))
+        })?;
         hw_counter
             .payload_io_write_counter()
             .incr_delta(point_id_serialized.len());
@@ -55,7 +57,9 @@ impl SimplePayloadStorage {
         match self.payload.get(&point_id) {
             None => self.db_wrapper.remove(point_id_serialized),
             Some(payload) => {
-                let payload_serialized = serde_cbor::to_vec(payload).unwrap();
+                let payload_serialized = serde_cbor::to_vec(payload).map_err(|err| {
+                    OperationError::service_error(format!("Failed to serialize payload: {err}"))
+                })?;
                 hw_counter
                     .payload_io_write_counter()
                     .incr_delta(payload_serialized.len());

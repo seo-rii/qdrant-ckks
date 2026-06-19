@@ -133,7 +133,14 @@ impl PayloadStorage for InMemoryPayloadStorage {
             estimated_size += size_of::<PointOffsetType>();
             for (key, val) in val.0.iter() {
                 // account for key and value
-                estimated_size += key.len() + serde_json::to_string(val).unwrap().len()
+                let value_size = serde_json::to_string(val)
+                    .map_err(|err| {
+                        OperationError::service_error(format!(
+                            "Failed to serialize payload value for size estimation: {err}"
+                        ))
+                    })?
+                    .len();
+                estimated_size += key.len() + value_size;
             }
         }
         Ok(estimated_size)

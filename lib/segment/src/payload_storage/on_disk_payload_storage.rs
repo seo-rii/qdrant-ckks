@@ -36,7 +36,9 @@ impl OnDiskPayloadStorage {
         point_id: PointOffsetType,
         hw_counter: &HardwareCounterCell,
     ) -> OperationResult<()> {
-        let serialized = serde_cbor::to_vec(&point_id).unwrap();
+        let serialized = serde_cbor::to_vec(&point_id).map_err(|err| {
+            OperationError::service_error(format!("Failed to serialize payload point id: {err}"))
+        })?;
         hw_counter
             .payload_io_write_counter()
             .incr_delta(serialized.len());
@@ -49,8 +51,12 @@ impl OnDiskPayloadStorage {
         payload: &Payload,
         hw_counter: &HardwareCounterCell,
     ) -> OperationResult<()> {
-        let point_id_serialized = serde_cbor::to_vec(&point_id).unwrap();
-        let payload_serialized = serde_cbor::to_vec(payload).unwrap();
+        let point_id_serialized = serde_cbor::to_vec(&point_id).map_err(|err| {
+            OperationError::service_error(format!("Failed to serialize payload point id: {err}"))
+        })?;
+        let payload_serialized = serde_cbor::to_vec(payload).map_err(|err| {
+            OperationError::service_error(format!("Failed to serialize payload: {err}"))
+        })?;
         hw_counter
             .payload_io_write_counter()
             .incr_delta(point_id_serialized.len() + payload_serialized.len());
@@ -62,7 +68,9 @@ impl OnDiskPayloadStorage {
         point_id: PointOffsetType,
         hw_counter: &HardwareCounterCell,
     ) -> OperationResult<Option<Payload>> {
-        let key = serde_cbor::to_vec(&point_id).unwrap();
+        let key = serde_cbor::to_vec(&point_id).map_err(|err| {
+            OperationError::service_error(format!("Failed to serialize payload point id: {err}"))
+        })?;
         self.db_wrapper
             .get_pinned(&key, |raw| {
                 hw_counter.payload_io_read_counter().incr_delta(raw.len());
