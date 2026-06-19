@@ -231,7 +231,13 @@ impl GraphLinksView<'_> {
                 offsets[idx].get() == offsets[idx + 1].get()
             }
             CompressionInfo::Compressed { ref offsets, .. } => {
-                offsets.get(idx + 1).unwrap() == offsets.get(idx).unwrap()
+                let Some(start) = offsets.get(idx) else {
+                    return true;
+                };
+                let Some(end) = offsets.get(idx + 1) else {
+                    return true;
+                };
+                start == end
             }
             CompressionInfo::CompressedWithVectors { .. } => {
                 // Not intended to be used outside of tests.
@@ -253,10 +259,17 @@ impl GraphLinksView<'_> {
                 ref hnsw_m,
                 bits_per_unsorted,
             } => {
-                let neighbors_range =
-                    offsets.get(idx).unwrap() as usize..offsets.get(idx + 1).unwrap() as usize;
+                let Some(start) = offsets.get(idx) else {
+                    return Either::Left([].iter().copied());
+                };
+                let Some(end) = offsets.get(idx + 1) else {
+                    return Either::Left([].iter().copied());
+                };
+                let Some(neighbors) = neighbors.get(start as usize..end as usize) else {
+                    return Either::Left([].iter().copied());
+                };
                 Either::Right(iterate_packed_links(
-                    &neighbors[neighbors_range],
+                    neighbors,
                     bits_per_unsorted,
                     hnsw_m.level_m(level),
                 ))
