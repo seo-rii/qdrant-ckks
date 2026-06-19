@@ -1661,15 +1661,16 @@ mod tests {
     use std::collections::BTreeMap;
 
     use qdrant_sec::{
-        DistanceKind, FixedBudgetParams, OramKind, OramParams, PRIVATE_HNSW_ORAM_BINDING,
-        PrivateHnswBucketAeadBaseContext, PrivateHnswBucketAeadContext, PrivateHnswBuildPoint,
-        PrivateHnswClientCommitBucketRef, PrivateHnswClientCommitPlan, PrivateHnswClientError,
-        PrivateHnswClientKeys, PrivateHnswCommitSignatureContext, PrivateHnswEncryptedPathBatch,
-        PrivateHnswManifestBuildContext, PrivateHnswManifestValidationContext,
-        PrivateHnswNodeBlockPlaintext, PrivateHnswOramClientConfig, PrivateHnswOramError,
-        PrivateHnswOramPlaintextBucket, PrivateHnswParams, PrivateHnswSearchParams,
-        PrivateHnswSignatureVerification, PrivateHnswVectorEncoding, ResultPrivacyMode, SecretKey,
-        VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, build_private_hnsw_oram_manifest_from_encrypted_index,
+        DistanceKind, EncryptionError, FixedBudgetParams, OramKind, OramParams,
+        PRIVATE_HNSW_ORAM_BINDING, PrivateHnswBucketAeadBaseContext, PrivateHnswBucketAeadContext,
+        PrivateHnswBuildPoint, PrivateHnswClientCommitBucketRef, PrivateHnswClientCommitPlan,
+        PrivateHnswClientError, PrivateHnswClientKeys, PrivateHnswCommitSignatureContext,
+        PrivateHnswEncryptedPathBatch, PrivateHnswManifestBuildContext,
+        PrivateHnswManifestValidationContext, PrivateHnswNodeBlockPlaintext,
+        PrivateHnswOramClientConfig, PrivateHnswOramError, PrivateHnswOramPlaintextBucket,
+        PrivateHnswParams, PrivateHnswSearchParams, PrivateHnswSignatureVerification,
+        PrivateHnswVectorEncoding, ResultPrivacyMode, SecretKey, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+        build_private_hnsw_oram_manifest_from_encrypted_index,
         build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points,
         decode_private_hnsw_oram_bucket_plaintext, empty_private_hnsw_oram_plaintext_bucket,
         encode_private_hnsw_oram_bucket_plaintext, open_private_hnsw_oram_bucket,
@@ -1751,11 +1752,31 @@ mod tests {
     fn private_hnsw_client_error_mapping_redacts_structured_values() {
         let cases = [
             (
+                private_hnsw_client_error(PrivateHnswClientError::Encryption(
+                    EncryptionError::UnsupportedAlgorithm("aead-alg-777777".to_string()),
+                )),
+                vec!["aead-alg-777777", "777777"],
+            ),
+            (
                 private_hnsw_client_error(PrivateHnswClientError::TooManyNeighbors {
                     actual: 777_777,
                     limit: 888_888,
                 }),
                 vec!["777777", "888888"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::UnsupportedBlockVersion(65_000)),
+                vec!["65000"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::UnsupportedVectorEncoding(77)),
+                vec!["77"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::InvalidBucketContext(
+                    "bucket-context-777777",
+                )),
+                vec!["bucket-context-777777", "777777"],
             ),
             (
                 private_hnsw_client_error(PrivateHnswClientError::BucketCiphertextSizeMismatch {
@@ -1766,10 +1787,52 @@ mod tests {
                 vec!["777777", "888888", "999999"],
             ),
             (
+                private_hnsw_client_error(
+                    PrivateHnswClientError::UnsupportedBucketCiphertextVersion(77),
+                ),
+                vec!["77"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::InvalidOramClientConfig(
+                    "client-config-777777",
+                )),
+                vec!["client-config-777777", "777777"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::InvalidBuildConfig(
+                    "build-config-777777",
+                )),
+                vec!["build-config-777777", "777777"],
+            ),
+            (
                 private_hnsw_client_error(PrivateHnswClientError::OramInitialPlacementOverflow {
                     leaf: 777_777,
                 }),
                 vec!["777777"],
+            ),
+            (
+                private_hnsw_client_error(
+                    PrivateHnswClientError::UnsupportedClientStateSnapshotVersion(65_000),
+                ),
+                vec!["65000"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::InvalidClientStateContext(
+                    "client-state-context-777777",
+                )),
+                vec!["client-state-context-777777", "777777"],
+            ),
+            (
+                private_hnsw_client_error(
+                    PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(65_000),
+                ),
+                vec!["65000"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::InvalidSearchConfig(
+                    "search-config-777777",
+                )),
+                vec!["search-config-777777", "777777"],
             ),
             (
                 private_hnsw_client_error(PrivateHnswClientError::BucketOutOfRange {
@@ -1810,6 +1873,22 @@ mod tests {
                     fixed_steps: 888_888,
                 }),
                 vec!["777777", "888888"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::UnsupportedBucketVersion(65_000)),
+                vec!["65000"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::InvalidCommitSignatureContext(
+                    "commit-signature-context-777777",
+                )),
+                vec!["commit-signature-context-777777", "777777"],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::InvalidManifestSignatureContext(
+                    "manifest-signature-context-777777",
+                )),
+                vec!["manifest-signature-context-777777", "777777"],
             ),
         ];
 

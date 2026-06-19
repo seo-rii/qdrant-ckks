@@ -1490,13 +1490,13 @@ fn sync_dir(path: &Path) -> CollectionResult<()> {
 #[cfg(test)]
 mod tests {
     use qdrant_sec::{
-        OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
-        PrivateResultOramBucketCommitmentContext, PrivateResultOramClientCommitBucketRef,
-        PrivateResultOramCommitPlan, PrivateResultOramCommitSignatureContext,
-        PrivateResultOramError, PrivateResultOramSignatureVerification,
-        private_result_oram_bucket_commitment, private_result_oram_merkle_root_for_commitments,
-        sign_private_result_oram_commit, sign_private_result_oram_manifest,
-        verify_private_result_oram_merkle_proof,
+        EncryptionError, OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+        PRIVATE_RESULT_ORAM_BINDING, PrivateResultOramBucketCommitmentContext,
+        PrivateResultOramClientCommitBucketRef, PrivateResultOramCommitPlan,
+        PrivateResultOramCommitSignatureContext, PrivateResultOramError,
+        PrivateResultOramSignatureVerification, private_result_oram_bucket_commitment,
+        private_result_oram_merkle_root_for_commitments, sign_private_result_oram_commit,
+        sign_private_result_oram_manifest, verify_private_result_oram_merkle_proof,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use tempfile::TempDir;
@@ -1570,6 +1570,12 @@ mod tests {
     #[test]
     fn private_result_oram_error_mapping_redacts_structured_values() {
         let cases = [
+            (
+                private_result_oram_error(PrivateResultOramError::Encryption(
+                    EncryptionError::UnsupportedAlgorithm("aead-alg-777777".to_string()),
+                )),
+                vec!["aead-alg-777777", "777777"],
+            ),
             (
                 private_result_oram_error(PrivateResultOramError::UnsupportedManifestVersion(
                     65_000,
