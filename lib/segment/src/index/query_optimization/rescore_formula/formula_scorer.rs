@@ -309,7 +309,7 @@ impl FormulaScorer<'_> {
                 let mut multi_value = retriever(point_id);
                 match multi_value.len() {
                     0 => None,
-                    1 => Some(multi_value.pop().unwrap()),
+                    1 => multi_value.pop(),
                     _ => Some(Value::Array(multi_value.into_iter().collect())),
                 }
             })
