@@ -8939,7 +8939,12 @@ mod tests {
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use segment::types::Distance;
     use serde_json::json;
+    use storage::content_manager::collection_meta_ops::{
+        CollectionMetaOperations, CreateCollection, CreateCollectionOperation,
+    };
+    use storage::dispatcher::Dispatcher;
     use storage::rbac::Access;
+    use uuid::Uuid;
 
     use super::*;
     use crate::common::private_hnsw_wire_fixture::{
@@ -9008,6 +9013,42 @@ mod tests {
 
     fn valid_query_nonce_b64() -> String {
         BASE64URL_NOPAD.encode(&[7_u8; 12])
+    }
+
+    async fn create_plain_lookup_target_collection(dispatcher: &Dispatcher) {
+        dispatcher
+            .submit_collection_meta_op(
+                CollectionMetaOperations::CreateCollection(
+                    CreateCollectionOperation::new(
+                        "plain_docs".to_string(),
+                        CreateCollection {
+                            vectors: VectorsConfig::Multi(BTreeMap::from([(
+                                "plain".to_string(),
+                                VectorParamsBuilder::new(2, Distance::Euclid).build(),
+                            )])),
+                            sparse_vectors: None,
+                            hnsw_config: None,
+                            wal_config: None,
+                            optimizers_config: None,
+                            shard_number: Some(1),
+                            on_disk_payload: None,
+                            replication_factor: None,
+                            write_consistency_factor: None,
+                            quantization_config: None,
+                            sharding_method: None,
+                            encryption: None,
+                            strict_mode_config: None,
+                            uuid: Some(Uuid::new_v4()),
+                            metadata: None,
+                        },
+                    )
+                    .unwrap(),
+                ),
+                Auth::new_internal(Access::full("private HNSW lookup source test")),
+                None,
+            )
+            .await
+            .unwrap();
     }
 
     #[test]
@@ -9098,6 +9139,60 @@ mod tests {
                 StorageError::BadInput { description }
                     if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
                         && description.contains("/private-hnsw/{vector}/session")
+            ));
+        });
+    }
+
+    #[test]
+    fn private_hnsw_oram_lookup_source_requires_client_led_session() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("For test"));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            create_plain_lookup_target_collection(&dispatcher).await;
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+
+            let err = do_query_points(
+                &toc,
+                "plain_docs",
+                CollectionQueryRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Id(0.into()),
+                    ))),
+                    using: "plain".to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: Some(api::rest::LookupLocation {
+                        collection: COLLECTION_NAME.to_string(),
+                        vector: Some(VECTOR_NAME.to_string()),
+                        shard_key: None,
+                    }),
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("Point")
             ));
         });
     }

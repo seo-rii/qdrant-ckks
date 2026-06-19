@@ -14,6 +14,10 @@ use shard::retrieve::record_internal::RecordInternal;
 use crate::collection::Collection;
 use crate::common::batching::batch_requests;
 use crate::common::retrieve_request_trait::RetrieveRequest;
+use crate::config::{
+    EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
+    private_hnsw_oram_api_required_message,
+};
 use crate::operations::consistency_params::ReadConsistency;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
 use crate::operations::types::{
@@ -87,6 +91,35 @@ pub async fn retrieve_points_with_locked_collection(
             .await
         }
     }
+}
+
+async fn ensure_reference_vectors_do_not_use_private_hnsw_oram(
+    collection: &Collection,
+    vector_names: &[VectorNameBuf],
+) -> CollectionResult<()> {
+    let config = collection.config_snapshot().await;
+    let Some(encryption) = config.params.effective_encryption() else {
+        return Ok(());
+    };
+
+    for rule in &encryption.rules {
+        if !encryption_rule_uses_private_hnsw_oram(rule) {
+            continue;
+        }
+        let EncryptionSelector::VectorNames { names } = &rule.selector else {
+            continue;
+        };
+        if let Some(vector_name) = vector_names
+            .iter()
+            .find(|vector_name| names.iter().any(|name| name == *vector_name))
+        {
+            return Err(CollectionError::bad_input(
+                private_hnsw_oram_api_required_message(vector_name),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 pub type CollectionName = String;
@@ -243,19 +276,31 @@ impl<'coll_name> ReferencedPoints<'coll_name> {
                 .into_iter()
                 .collect();
             match collection_name {
-                None => vector_retrieves.push(retrieve_points_with_locked_collection(
-                    CollectionRefHolder::Ref(collection),
-                    points,
-                    vector_names,
-                    read_consistency,
-                    &shard_selector,
-                    timeout,
-                    hw_measurement_acc.clone(),
-                )),
+                None => {
+                    ensure_reference_vectors_do_not_use_private_hnsw_oram(
+                        collection,
+                        &vector_names,
+                    )
+                    .await?;
+                    vector_retrieves.push(retrieve_points_with_locked_collection(
+                        CollectionRefHolder::Ref(collection),
+                        points,
+                        vector_names,
+                        read_consistency,
+                        &shard_selector,
+                        timeout,
+                        hw_measurement_acc.clone(),
+                    ));
+                }
                 Some(name) => {
                     let other_collection = collection_by_name(name.clone()).await;
                     match other_collection {
                         Some(other_collection) => {
+                            ensure_reference_vectors_do_not_use_private_hnsw_oram(
+                                &other_collection,
+                                &vector_names,
+                            )
+                            .await?;
                             vector_retrieves.push(retrieve_points_with_locked_collection(
                                 CollectionRefHolder::Arc(other_collection),
                                 points,
