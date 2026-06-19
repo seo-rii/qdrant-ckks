@@ -266,6 +266,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "read_path_label"
                         | "read_path_labels"
                         | "read_paths"
+                        | "read_bucket"
+                        | "read_buckets"
                         | "paths"
                         | "access_path"
                         | "access_paths"
@@ -413,6 +415,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "readpathlabels"
                         | "readpath"
                         | "readpaths"
+                        | "readbucket"
+                        | "readbuckets"
                         | "accesspath"
                         | "accesspaths"
                         | "bucketcommitment"
@@ -1195,12 +1199,30 @@ mod tests {
         let mut read_paths_aliases = json!({
             "read_paths": ["qdrant-sec-private-hnsw-read-path-log-sentinel"],
             "readPaths": ["qdrant-sec-private-hnsw-camel-read-path-log-sentinel"],
+            "read_bucket": "qdrant-sec-private-result-read-bucket-log-sentinel",
+            "read_buckets": ["qdrant-sec-private-result-read-buckets-log-sentinel"],
+            "readBucket": "qdrant-sec-private-result-camel-read-bucket-log-sentinel",
+            "readBuckets": ["qdrant-sec-private-result-camel-read-buckets-log-sentinel"],
         });
         redact_sensitive_log_fields(&mut read_paths_aliases);
         let read_paths_serialized = serde_json::to_string(&read_paths_aliases).unwrap();
         assert!(!read_paths_serialized.contains("qdrant-sec-private-hnsw-read-path-log-sentinel"));
         assert!(
             !read_paths_serialized.contains("qdrant-sec-private-hnsw-camel-read-path-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized.contains("qdrant-sec-private-result-read-bucket-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized.contains("qdrant-sec-private-result-read-buckets-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized
+                .contains("qdrant-sec-private-result-camel-read-bucket-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized
+                .contains("qdrant-sec-private-result-camel-read-buckets-log-sentinel")
         );
 
         let mut first = json!({

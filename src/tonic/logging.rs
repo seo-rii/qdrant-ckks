@@ -195,6 +195,8 @@ mod tests {
              paths=raw-path-sentinel \
              accessPath=access-path-camel-sentinel \
              read_paths=read-path-sentinel \
+             read_buckets=read-bucket-sentinel \
+             readBuckets=read-bucket-camel-sentinel \
              root_hash=root-hash-sentinel \
              oldRootHash=old-root-hash-camel-sentinel \
              new_root_hash=new-root-hash-sentinel \
@@ -240,6 +242,8 @@ mod tests {
         assert!(!rendered.contains("raw-path-sentinel"));
         assert!(!rendered.contains("access-path-camel-sentinel"));
         assert!(!rendered.contains("read-path-sentinel"));
+        assert!(!rendered.contains("read-bucket-sentinel"));
+        assert!(!rendered.contains("read-bucket-camel-sentinel"));
         assert!(!rendered.contains("root-hash-sentinel"));
         assert!(!rendered.contains("old-root-hash-camel-sentinel"));
         assert!(!rendered.contains("new-root-hash-sentinel"));
