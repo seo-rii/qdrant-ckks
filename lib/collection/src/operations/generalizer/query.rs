@@ -173,9 +173,9 @@ impl Generalizer for VectorInternal {
     fn remove_details(&self) -> Self {
         match self {
             VectorInternal::Dense(dense) => VectorInternal::Dense(vec![dense.len() as f32]),
-            VectorInternal::Sparse(sparse) => VectorInternal::Sparse(
-                SparseVector::new(vec![sparse.len() as DimId], vec![0.0]).unwrap(),
-            ),
+            VectorInternal::Sparse(sparse) => {
+                VectorInternal::Sparse(generalized_sparse_vector(sparse.len()))
+            }
             VectorInternal::MultiDense(multi) => {
                 VectorInternal::MultiDense(MultiDenseVectorInternal::new(
                     vec![multi.num_vectors() as f32, multi.dim as f32],
@@ -183,6 +183,13 @@ impl Generalizer for VectorInternal {
                 ))
             }
         }
+    }
+}
+
+fn generalized_sparse_vector(len: usize) -> SparseVector {
+    SparseVector {
+        indices: vec![len.min(DimId::MAX as usize) as DimId],
+        values: vec![0.0],
     }
 }
 

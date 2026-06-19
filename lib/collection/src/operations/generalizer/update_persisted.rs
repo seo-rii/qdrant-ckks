@@ -251,14 +251,21 @@ impl Generalizer for VectorPersisted {
     fn remove_details(&self) -> Self {
         match self {
             VectorPersisted::Dense(dense) => VectorPersisted::Dense(vec![dense.len() as f32]),
-            VectorPersisted::Sparse(sparse) => VectorPersisted::Sparse(
-                SparseVector::new(vec![sparse.len() as DimId], vec![0.0]).unwrap(),
-            ),
+            VectorPersisted::Sparse(sparse) => {
+                VectorPersisted::Sparse(generalized_sparse_vector(sparse.len()))
+            }
             VectorPersisted::MultiDense(multi) => {
                 let dim = if multi.is_empty() { 0 } else { multi[0].len() };
                 VectorPersisted::MultiDense(vec![vec![multi.len() as f32, dim as f32]])
             }
         }
+    }
+}
+
+fn generalized_sparse_vector(len: usize) -> SparseVector {
+    SparseVector {
+        indices: vec![len.min(DimId::MAX as usize) as DimId],
+        values: vec![0.0],
     }
 }
 
