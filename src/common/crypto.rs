@@ -10219,12 +10219,13 @@ mod tests {
             "unexpected error: {err:?}",
         );
 
+        let malformed_public_key = "A".repeat(BASE64URL_NOPAD_32_BYTE_LEN + 1);
         settings
             .instances
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options[SIGNATURE_PUBLIC_KEYS_OPTION] = json!({
-            "tenant-a/private-hnsw-signing-v1": "A".repeat(BASE64URL_NOPAD_32_BYTE_LEN + 1),
+            "tenant-a/private-hnsw-signing-v1": malformed_public_key.clone(),
         });
         let err = validate_crypto_settings(&settings)
             .expect_err("private HNSW ORAM must reject malformed signature public keys");
@@ -10234,6 +10235,7 @@ mod tests {
                     && reason.contains("invalid encoded length")),
             "unexpected error: {err:?}",
         );
+        assert!(!err.to_string().contains(&malformed_public_key));
 
         let duplicate_public_key = BASE64URL_NOPAD.encode(&[11_u8; 32]);
         settings
@@ -10241,8 +10243,8 @@ mod tests {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options[SIGNATURE_PUBLIC_KEYS_OPTION] = json!({
-            "tenant-a/private-hnsw-signing-v1": duplicate_public_key,
-            "tenant-a/private-hnsw-signing-v2": duplicate_public_key,
+            "tenant-a/private-hnsw-signing-v1": duplicate_public_key.clone(),
+            "tenant-a/private-hnsw-signing-v2": duplicate_public_key.clone(),
         });
         let err = validate_crypto_settings(&settings)
             .expect_err("private HNSW ORAM must reject duplicate verifier key aliases");
@@ -10252,6 +10254,7 @@ mod tests {
                     && reason.contains("signature_public_keys")),
             "unexpected error: {err:?}",
         );
+        assert!(!err.to_string().contains(&duplicate_public_key));
     }
 
     #[test]
@@ -10901,14 +10904,32 @@ mod tests {
             "unexpected error: {err:?}",
         );
 
+        let malformed_public_key = "B".repeat(BASE64URL_NOPAD_32_BYTE_LEN + 1);
+        settings
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options[SIGNATURE_PUBLIC_KEYS_OPTION] = json!({
+            "tenant-a/private-result-signing-v1": malformed_public_key.clone(),
+        });
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private result ORAM must reject malformed signature public keys");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == SIGNATURE_PUBLIC_KEYS_OPTION
+                    && reason.contains("invalid encoded length")),
+            "unexpected error: {err:?}",
+        );
+        assert!(!err.to_string().contains(&malformed_public_key));
+
         let duplicate_public_key = BASE64URL_NOPAD.encode(&[12_u8; 32]);
         settings
             .instances
             .get_mut("payload_result_oram_v1")
             .unwrap()
             .options[SIGNATURE_PUBLIC_KEYS_OPTION] = json!({
-            "tenant-a/private-result-signing-v1": duplicate_public_key,
-            "tenant-a/private-result-signing-v2": duplicate_public_key,
+            "tenant-a/private-result-signing-v1": duplicate_public_key.clone(),
+            "tenant-a/private-result-signing-v2": duplicate_public_key.clone(),
         });
         let err = validate_crypto_settings(&settings)
             .expect_err("private result ORAM must reject duplicate verifier key aliases");
@@ -10918,6 +10939,7 @@ mod tests {
                     && reason.contains("signature_public_keys")),
             "unexpected error: {err:?}",
         );
+        assert!(!err.to_string().contains(&duplicate_public_key));
     }
 
     #[test]
