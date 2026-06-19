@@ -3251,10 +3251,17 @@ fn payload_touches_path(
     protected_path: &JsonPath,
 ) -> bool {
     if let Some(key) = key {
-        key.compatible(protected_path)
-    } else {
-        !protected_path.value_get(&payload.0).is_empty()
+        return key.compatible(protected_path);
     }
+
+    if payload.0.keys().any(|key| {
+        key.parse::<JsonPath>()
+            .is_ok_and(|payload_path| payload_path.compatible(protected_path))
+    }) {
+        return true;
+    }
+
+    !protected_path.value_get(&payload.0).is_empty()
 }
 
 fn payload_update_operation_kind(operation_name: &str) -> &'static str {
@@ -3296,11 +3303,7 @@ fn payload_touches_encrypted_config(
                     "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
                 ))
             })?;
-            if let Some(key) = key {
-                if key.compatible(&encrypted_json_path) {
-                    return Ok(true);
-                }
-            } else if !encrypted_json_path.value_get(&payload.0).is_empty() {
+            if payload_touches_path(payload, key, &encrypted_json_path) {
                 return Ok(true);
             }
         }
@@ -8386,6 +8389,83 @@ esac
         assert!(
             !payload_touches_encrypted_config(encryption, &payload, Some(&"body".parse().unwrap()))
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn payload_touches_encrypted_config_matches_literal_json_path_keys() {
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:docs".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 3,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "body_conf".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec!["document.body".to_string()],
+                },
+                instance: "docs_payload_v1".to_string(),
+                binding: Some("payload-field/v1".to_string()),
+            }],
+        };
+
+        for payload in [
+            segment::types::Payload(
+                json!({ "document.body": "literal protected path" })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+            segment::types::Payload(
+                json!({ "document.body.lang": "literal protected child path" })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+            segment::types::Payload(
+                json!({ "document": { "title": "parent update can replace protected child" } })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        ] {
+            assert!(payload_touches_encrypted_config(&encryption, &payload, None).unwrap());
+        }
+
+        let public_literal_sibling = segment::types::Payload(
+            json!({ "document.title": "literal public sibling" })
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
+        assert!(
+            !payload_touches_encrypted_config(&encryption, &public_literal_sibling, None).unwrap()
+        );
+
+        assert!(
+            payload_touches_encrypted_config(
+                &encryption,
+                &public_literal_sibling,
+                Some(&"document".parse().unwrap())
+            )
+            .unwrap()
+        );
+        assert!(
+            payload_touches_encrypted_config(
+                &encryption,
+                &public_literal_sibling,
+                Some(&"document.body.lang".parse().unwrap())
+            )
+            .unwrap()
+        );
+        assert!(
+            !payload_touches_encrypted_config(
+                &encryption,
+                &public_literal_sibling,
+                Some(&"document.title".parse().unwrap())
+            )
+            .unwrap()
         );
     }
 
