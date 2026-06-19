@@ -2,6 +2,7 @@ use std::cmp::max;
 use std::collections::TryReserveError;
 use std::mem;
 
+use crate::common::operation_error::{OperationError, OperationResult};
 use crate::common::vector_utils::{TrySetCapacity, TrySetCapacityExact};
 use crate::vector_storage::VectorOffsetType;
 use crate::vector_storage::common::CHUNK_SIZE;
@@ -62,16 +63,18 @@ impl<T: Copy + Clone + Default> VolatileChunkedVectors<T> {
         if self.chunks.is_empty() {
             return None;
         }
+        let len = count.checked_mul(self.dim)?;
         self.chunks
             .get(key / self.chunk_capacity)
             .and_then(|chunk_data| {
                 let idx = (key % self.chunk_capacity) * self.dim;
-                let range = idx..idx + count * self.dim;
+                let end = idx.checked_add(len)?;
+                let range = idx..end;
                 chunk_data.get(range)
             })
     }
 
-    pub fn push(&mut self, vector: &[T]) -> Result<VectorOffsetType, TryReserveError> {
+    pub fn push(&mut self, vector: &[T]) -> OperationResult<VectorOffsetType> {
         let new_id = self.len;
         self.insert(new_id, vector)?;
         Ok(new_id)
@@ -82,8 +85,14 @@ impl<T: Copy + Clone + Default> VolatileChunkedVectors<T> {
         self.chunk_capacity - (start_key % self.chunk_capacity)
     }
 
-    pub fn insert(&mut self, key: VectorOffsetType, vector: &[T]) -> Result<(), TryReserveError> {
-        assert_eq!(vector.len(), self.dim, "Vector size mismatch");
+    pub fn insert(&mut self, key: VectorOffsetType, vector: &[T]) -> OperationResult<()> {
+        if vector.len() != self.dim {
+            return Err(OperationError::service_error(format!(
+                "Vector size mismatch: expected {}, got {}",
+                self.dim,
+                vector.len()
+            )));
+        }
         self.insert_many(key, vector, 1)
     }
 
@@ -92,19 +101,27 @@ impl<T: Copy + Clone + Default> VolatileChunkedVectors<T> {
         key: VectorOffsetType,
         vectors: &[T],
         vectors_count: usize,
-    ) -> Result<(), TryReserveError> {
-        assert_eq!(
-            vectors.len(),
-            vectors_count * self.dim,
-            "Vector size mismatch"
-        );
-        assert!(
-            self.get_chunk_left_keys(key) >= vectors_count,
-            "Index out of bounds"
-        );
+    ) -> OperationResult<()> {
+        let expected_len = vectors_count.checked_mul(self.dim).ok_or_else(|| {
+            OperationError::service_error("Vector size overflows addressable memory")
+        })?;
+        if vectors.len() != expected_len {
+            return Err(OperationError::service_error(format!(
+                "Vector size mismatch: expected {expected_len}, got {}",
+                vectors.len()
+            )));
+        }
+        if self.get_chunk_left_keys(key) < vectors_count {
+            return Err(OperationError::service_error(
+                "Vector insertion crosses volatile chunk boundary",
+            ));
+        }
 
         let desired_capacity = self.chunk_capacity * self.dim;
-        let new_len = max(self.len, key + vectors_count);
+        let requested_len = key.checked_add(vectors_count).ok_or_else(|| {
+            OperationError::service_error("Vector insertion length overflows addressable memory")
+        })?;
+        let new_len = max(self.len, requested_len);
         let chunks_len = new_len.div_ceil(self.chunk_capacity);
 
         if chunks_len > self.chunks.len() {
@@ -130,12 +147,24 @@ impl<T: Copy + Clone + Default> VolatileChunkedVectors<T> {
 
             // Add new chunk with lower capacity.
             self.chunks.push(Default::default());
-            assert_eq!(self.chunks.len(), chunks_len);
+            if self.chunks.len() != chunks_len {
+                return Err(OperationError::service_error(format!(
+                    "Volatile vector chunk count mismatch: expected {chunks_len}, got {}",
+                    self.chunks.len()
+                )));
+            }
         }
 
         let chunk_idx = key / self.chunk_capacity;
-        let chunk_data = &mut self.chunks[chunk_idx];
+        let Some(chunk_data) = self.chunks.get_mut(chunk_idx) else {
+            return Err(OperationError::service_error(format!(
+                "Volatile vector chunk {chunk_idx} is missing"
+            )));
+        };
         let idx = (key % self.chunk_capacity) * self.dim;
+        let end = idx.checked_add(vectors.len()).ok_or_else(|| {
+            OperationError::service_error("Vector insertion range overflows addressable memory")
+        })?;
 
         // Grow the current chunk if needed to fit the new vector.
         //
@@ -147,15 +176,15 @@ impl<T: Copy + Clone + Default> VolatileChunkedVectors<T> {
         // <https://doc.rust-lang.org/std/vec/struct.Vec.html#capacity-and-reallocation>).
         // All other chunks allocate their capacity in full on first use to prevent expensive
         // reallocations when their data grows.
-        if chunk_data.len() < idx + vectors.len() {
+        if chunk_data.len() < end {
             // If the chunk is not the first one, allocate it fully on first use
             if chunk_idx != 0 {
                 chunk_data.try_set_capacity_exact(desired_capacity)?;
             }
-            chunk_data.resize_with(idx + vectors.len(), T::default);
+            chunk_data.resize_with(end, T::default);
         }
 
-        let data = &mut chunk_data[idx..idx + vectors.len()];
+        let data = &mut chunk_data[idx..end];
         data.copy_from_slice(vectors);
 
         // Update `self.len` only after the vector is successfully inserted.
