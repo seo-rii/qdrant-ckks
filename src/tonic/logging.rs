@@ -229,6 +229,9 @@ mod tests {
              resultIds=result-id-camel-sentinel \
              point_tokens=point-token-snake-sentinel \
              clientState=client-state-camel-sentinel \
+             position_map=position-map-snake-sentinel \
+             positionMap=position-map-camel-sentinel \
+             stash=stash-sentinel \
              tokenPositionMap=token-position-map-camel-sentinel \
              updated_bucket=updated-bucket-singular-sentinel \
              updated_buckets=updated-bucket-sentinel \
@@ -289,6 +292,9 @@ mod tests {
         assert!(!rendered.contains("result-id-camel-sentinel"));
         assert!(!rendered.contains("point-token-snake-sentinel"));
         assert!(!rendered.contains("client-state-camel-sentinel"));
+        assert!(!rendered.contains("position-map-snake-sentinel"));
+        assert!(!rendered.contains("position-map-camel-sentinel"));
+        assert!(!rendered.contains("stash-sentinel"));
         assert!(!rendered.contains("token-position-map-camel-sentinel"));
         assert!(!rendered.contains("updated-bucket-singular-sentinel"));
         assert!(!rendered.contains("updated-bucket-sentinel"));
