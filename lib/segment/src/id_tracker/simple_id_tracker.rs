@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::common::Flusher;
-use crate::common::operation_error::OperationResult;
+use crate::common::operation_error::{OperationError, OperationResult};
 use crate::common::rocksdb_buffered_update_wrapper::DatabaseColumnScheduledUpdateWrapper;
 use crate::common::rocksdb_wrapper::{DB_MAPPING_CF, DB_VERSIONS_CF, DatabaseColumnWrapper};
 use crate::id_tracker::point_mappings::PointMappings;
@@ -46,9 +46,13 @@ impl SimpleIdTracker {
             DatabaseColumnWrapper::new(store.clone(), DB_MAPPING_CF),
         );
         for (key, val) in mapping_db_wrapper.lock_db().iter()? {
-            let external_id = Self::restore_key(&key);
-            let internal_id: PointOffsetType =
-                bincode::deserialize::<PointOffsetType>(&val).unwrap();
+            let external_id = Self::restore_key(&key)?;
+            let internal_id: PointOffsetType = bincode::deserialize::<PointOffsetType>(&val)
+                .map_err(|err| {
+                    OperationError::service_error(format!(
+                        "Invalid simple id tracker mapping value: {err}",
+                    ))
+                })?;
             if internal_id as usize >= internal_to_external.len() {
                 internal_to_external.resize(internal_id as usize + 1, PointIdType::NumId(u64::MAX));
             }
@@ -92,8 +96,12 @@ impl SimpleIdTracker {
             DatabaseColumnWrapper::new(store, DB_VERSIONS_CF),
         );
         for (key, val) in versions_db_wrapper.lock_db().iter()? {
-            let external_id = Self::restore_key(&key);
-            let version: SeqNumberType = bincode::deserialize(&val).unwrap();
+            let external_id = Self::restore_key(&key)?;
+            let version: SeqNumberType = bincode::deserialize(&val).map_err(|err| {
+                OperationError::service_error(format!(
+                    "Invalid simple id tracker version value: {err}",
+                ))
+            })?;
             let internal_id = match external_id {
                 PointIdType::NumId(idx) => external_to_internal_num.get(&idx).copied(),
                 PointIdType::Uuid(uuid) => external_to_internal_uuid.get(&uuid).copied(),
@@ -132,9 +140,18 @@ impl SimpleIdTracker {
         bincode::serialize(&StoredPointId::from(external_id)).unwrap()
     }
 
-    fn restore_key(data: &[u8]) -> PointIdType {
-        let stored_external_id: StoredPointId = bincode::deserialize(data).unwrap();
-        PointIdType::from(stored_external_id)
+    fn restore_key(data: &[u8]) -> OperationResult<PointIdType> {
+        let stored_external_id: StoredPointId = bincode::deserialize(data).map_err(|err| {
+            OperationError::service_error(format!("Invalid simple id tracker key: {err}"))
+        })?;
+
+        match stored_external_id {
+            StoredPointId::NumId(idx) => Ok(PointIdType::NumId(idx)),
+            StoredPointId::Uuid(uuid) => Ok(PointIdType::Uuid(uuid)),
+            StoredPointId::String(_) => Err(OperationError::service_error(
+                "Unsupported string point id in simple id tracker",
+            )),
+        }
     }
 
     fn delete_key(&self, external_id: &PointIdType) -> OperationResult<()> {
@@ -386,6 +403,16 @@ mod tests {
         check_bincode_serialization(StoredPointId::NumId(123));
         check_bincode_serialization(StoredPointId::Uuid(Uuid::from_u128(123_u128)));
         check_bincode_serialization(StoredPointId::String("hello".to_string()));
+    }
+
+    #[test]
+    fn restore_key_rejects_invalid_or_unsupported_key() {
+        assert!(SimpleIdTracker::restore_key(b"not a bincode point id").is_err());
+
+        let string_id =
+            bincode::serialize(&StoredPointId::String("legacy-string-id".to_string())).unwrap();
+
+        assert!(SimpleIdTracker::restore_key(&string_id).is_err());
     }
 
     #[test]
