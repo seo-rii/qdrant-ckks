@@ -126,7 +126,11 @@ impl GeoHash {
         }
         let mut packed: u64 = 0;
         for (i, c) in s.iter().enumerate() {
-            let index = BASE32_CODES.iter().position(|x| x == c).unwrap() as u64;
+            let index = BASE32_CODES
+                .iter()
+                .position(|x| x == c)
+                .ok_or_else(|| GeohashError::InvalidHashCharacter(char::from(*c)))?
+                as u64;
             packed |= index << Self::shift_value(i);
         }
         packed |= s.len() as u64;
@@ -666,6 +670,14 @@ mod tests {
                 .cmp(&GeoHash::new(b"000000000000").unwrap()),
             "".cmp("000000000000"),
         );
+    }
+
+    #[test]
+    fn geohash_rejects_invalid_characters() {
+        assert!(matches!(
+            GeoHash::new(b"dr5ru!"),
+            Err(GeohashError::InvalidHashCharacter('!')),
+        ));
     }
 
     #[test]
