@@ -13,7 +13,7 @@ mod types;
 pub use types::*;
 mod update;
 
-use std::num::NonZero;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -156,17 +156,24 @@ impl EdgeShard {
     }
 
     pub fn flush(&self) {
+        if let Err(err) = self.try_flush() {
+            log::warn!("Failed to flush edge shard: {err}");
+        }
+    }
+
+    pub fn try_flush(&self) -> OperationResult<()> {
         self.wal
             .try_lock()
-            .expect("WAL lock acquired")
+            .ok_or_else(|| OperationError::service_error("failed to acquire WAL lock"))?
             .flush()
-            .expect("WAL flushed");
+            .map_err(|err| OperationError::service_error(err.to_string()))?;
 
         self.segments
             .try_read()
-            .expect("segment holder lock acquired")
-            .flush_all(true, true)
-            .expect("segments flushed");
+            .ok_or_else(|| OperationError::service_error("failed to acquire segment holder lock"))?
+            .flush_all(true, true)?;
+
+        Ok(())
     }
 
     /// This function removes edge-specific config and closes the shard.
@@ -190,7 +197,7 @@ fn default_wal_options() -> WalOptions {
     WalOptions {
         segment_capacity: 32 * 1024 * 1024,
         segment_queue_len: 0,
-        retain_closed: NonZero::new(1).unwrap(),
+        retain_closed: NonZeroUsize::MIN,
     }
 }
 
