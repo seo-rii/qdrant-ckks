@@ -173,7 +173,9 @@ impl GroupsAggregator {
         let mut groups = Vec::with_capacity(best_groups.len());
 
         for group_key in best_groups {
-            let mut group = self.groups.remove(&group_key).unwrap();
+            let Some(mut group) = self.groups.remove(&group_key) else {
+                continue;
+            };
             let scored_points_iter = group.drain().map(|(_, hit)| hit);
             let hits = match self.order {
                 Some(Order::LargeBetter) => {
