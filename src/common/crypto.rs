@@ -10676,6 +10676,7 @@ mod tests {
 
     #[test]
     fn validate_crypto_settings_rejects_private_result_oram_server_materials_and_backend() {
+        let material_sentinel = "tenant-a/private-result-server-rk-sentinel";
         let mut settings = CryptoSettings {
             zero_trust_profile: None,
             allow_inline_key_material: false,
@@ -10683,7 +10684,10 @@ mod tests {
                 "payload_result_oram_v1".to_string(),
                 CryptoInstanceConfig {
                     provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
-                    materials: HashMap::from([("sym_key".to_string(), "ignored".to_string())]),
+                    materials: HashMap::from([(
+                        "sym_key".to_string(),
+                        material_sentinel.to_string(),
+                    )]),
                     backend_ref: None,
                     options: private_result_oram_options(),
                 },
@@ -10698,13 +10702,15 @@ mod tests {
                 if option == "provider" && reason.contains("must not configure server materials")),
             "unexpected error: {err:?}",
         );
+        assert!(!format!("{err:?}").contains(material_sentinel));
 
         let instance = settings
             .instances
             .get_mut("payload_result_oram_v1")
             .unwrap();
         instance.materials.clear();
-        instance.backend_ref = Some("openfhe".to_string());
+        let backend_sentinel = "openfhe_private_result_backend_sentinel";
+        instance.backend_ref = Some(backend_sentinel.to_string());
         let err = validate_crypto_settings(&settings)
             .expect_err("private result ORAM must not configure a backend");
         assert!(
@@ -10712,6 +10718,7 @@ mod tests {
                 if option == "provider" && reason.contains("must not configure server materials")),
             "unexpected error: {err:?}",
         );
+        assert!(!format!("{err:?}").contains(backend_sentinel));
     }
 
     #[test]
