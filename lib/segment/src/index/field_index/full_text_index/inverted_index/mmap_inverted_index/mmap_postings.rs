@@ -218,11 +218,13 @@ impl<V: MmapPostingValue> MmapPostings<V> {
                 last_id,
             } = view.components();
 
-            bufw.write_all(
-                last_id
-                    .expect("posting must have at least one element")
-                    .as_bytes(),
-            )?;
+            let Some(last_id) = last_id else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "posting list must have at least one element",
+                ));
+            };
+            bufw.write_all(last_id.as_bytes())?;
 
             for chunk in chunks {
                 bufw.write_all(chunk.as_bytes())?;
@@ -289,5 +291,24 @@ impl<V: MmapPostingValue> MmapPostings<V> {
         (0..self.header.posting_count as u32)
             // we are iterating over existing posting lists, all of them should return `Some`
             .filter_map(|posting_idx| self.get(posting_idx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::types::PointOffsetType;
+    use posting_list::PostingList;
+
+    use super::*;
+
+    #[test]
+    fn create_rejects_empty_posting_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("postings.bin");
+        let posting = PostingList::<()>::from_iter(std::iter::empty::<(PointOffsetType, ())>());
+
+        let err = MmapPostings::create(path, &[posting]).unwrap_err();
+
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 }
