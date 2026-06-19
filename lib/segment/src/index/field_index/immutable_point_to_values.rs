@@ -63,8 +63,11 @@ impl<N: Default> ImmutablePointToValues<N> {
                 }
                 // Single value — store inline, skip container entirely
                 1 => {
-                    let value = values.into_iter().next().expect("length checked above");
-                    point_entries.push(PointValueEntry::Single(value));
+                    if let Some(value) = values.into_iter().next() {
+                        point_entries.push(PointValueEntry::Single(value));
+                    } else {
+                        point_entries.push(PointValueEntry::default());
+                    }
                 }
                 // Multiple values — store in container, record slice location
                 2.. => {
