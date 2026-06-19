@@ -158,30 +158,27 @@ where
 
         let hw_counter = HardwareCounterCell::disposable();
         let hw_counter_ref = hw_counter.ref_payload_index_io_write_counter();
-        store
-            .iter::<_, GridstoreError>(
-                |idx, values: Vec<_>| {
-                    for value in values {
-                        if point_to_values.len() <= idx as usize {
-                            point_to_values.resize_with(idx as usize + 1, Vec::new)
-                        }
-                        let point_values = &mut point_to_values[idx as usize];
-
-                        if point_values.is_empty() {
-                            indexed_points += 1;
-                        }
-                        values_count += 1;
-
-                        point_values.push(value.clone());
-                        map.entry(value).or_default().insert(idx);
+        store.iter::<_, GridstoreError>(
+            |idx, values: Vec<_>| {
+                for value in values {
+                    if point_to_values.len() <= idx as usize {
+                        point_to_values.resize_with(idx as usize + 1, Vec::new)
                     }
+                    let point_values = &mut point_to_values[idx as usize];
 
-                    Ok(true)
-                },
-                hw_counter_ref,
-            )
-            // unwrap safety: never returns an error
-            .unwrap();
+                    if point_values.is_empty() {
+                        indexed_points += 1;
+                    }
+                    values_count += 1;
+
+                    point_values.push(value.clone());
+                    map.entry(value).or_default().insert(idx);
+                }
+
+                Ok(true)
+            },
+            hw_counter_ref,
+        )?;
 
         Ok(Some(Self {
             map,

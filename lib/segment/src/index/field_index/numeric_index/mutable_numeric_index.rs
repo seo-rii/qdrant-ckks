@@ -329,16 +329,13 @@ where
         let mut in_memory_index = InMemoryNumericIndex::default();
         let hw_counter = HardwareCounterCell::disposable();
         let hw_counter_ref = hw_counter.ref_payload_index_io_write_counter();
-        store
-            .iter::<_, GridstoreError>(
-                |idx, values: Vec<T>| {
-                    in_memory_index.add_many_to_list(idx, values);
-                    Ok(true)
-                },
-                hw_counter_ref,
-            )
-            // unwrap safety: never returns an error
-            .unwrap();
+        store.iter::<_, GridstoreError>(
+            |idx, values: Vec<T>| {
+                in_memory_index.add_many_to_list(idx, values);
+                Ok(true)
+            },
+            hw_counter_ref,
+        )?;
 
         Ok(Some(Self {
             storage: Storage::Gridstore(store),
