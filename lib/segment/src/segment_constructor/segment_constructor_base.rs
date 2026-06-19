@@ -1065,7 +1065,7 @@ fn load_segment_state_v3(segment_path: &Path) -> OperationResult<SegmentState> {
         .map_err(|err| {
             OperationError::service_error(format!(
                 "Failed to read segment {}. Error: {}",
-                path.to_str().unwrap(),
+                path.display(),
                 err
             ))
         })
@@ -1088,7 +1088,7 @@ fn load_segment_state_v5(segment_path: &Path) -> OperationResult<SegmentState> {
         .map_err(|err| {
             OperationError::service_error(format!(
                 "Failed to read segment {}. Error: {}",
-                path.to_str().unwrap(),
+                path.display(),
                 err
             ))
         })
