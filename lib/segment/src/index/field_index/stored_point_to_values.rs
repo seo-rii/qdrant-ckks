@@ -16,6 +16,8 @@ use crate::common::operation_error::{OperationError, OperationResult};
 
 const POINT_TO_VALUES_PATH: &str = "point_to_values.bin";
 const NOT_ENOUGH_BYTES_ERROR_MESSAGE: &str = "Not enough bytes to operate with slice in file `point_to_values.bin`. Is the storage corrupted?";
+const CORRUPTED_RANGE_ERROR_MESSAGE: &str =
+    "Invalid range metadata in file `point_to_values.bin`. Is the storage corrupted?";
 const PADDING_SIZE: usize = 4096;
 
 /// Trait for values that can be stored in a file. It's used in `StoredPointToValues` to store values.
@@ -107,13 +109,27 @@ where
     {
         // calculate file size
         let mut points_count: usize = 0;
-        let mut values_size = 0;
+        let mut values_size = 0usize;
         for (point_id, values) in iter.clone() {
-            points_count = max(points_count, (point_id + 1) as usize);
-            values_size += values.map(|v| T::stored_size(v)).sum::<usize>();
+            points_count = max(
+                points_count,
+                (point_id as usize)
+                    .checked_add(1)
+                    .ok_or_else(|| OperationError::service_error(NOT_ENOUGH_BYTES_ERROR_MESSAGE))?,
+            );
+            for value in values {
+                values_size = values_size
+                    .checked_add(T::stored_size(value))
+                    .ok_or_else(|| OperationError::service_error(NOT_ENOUGH_BYTES_ERROR_MESSAGE))?;
+            }
         }
-        let ranges_size = points_count * std::mem::size_of::<MmapRange>();
-        let file_size = PADDING_SIZE + ranges_size + values_size;
+        let ranges_size = points_count
+            .checked_mul(std::mem::size_of::<MmapRange>())
+            .ok_or_else(|| OperationError::service_error(NOT_ENOUGH_BYTES_ERROR_MESSAGE))?;
+        let file_size = PADDING_SIZE
+            .checked_add(ranges_size)
+            .and_then(|size| size.checked_add(values_size))
+            .ok_or_else(|| OperationError::service_error(NOT_ENOUGH_BYTES_ERROR_MESSAGE))?;
 
         // create new file and mmap
         let file_name = path.join(POINT_TO_VALUES_PATH);
@@ -142,19 +158,27 @@ where
                 value
                     .write_to_prefix(bytes)
                     .ok_or_else(|| OperationError::service_error(NOT_ENOUGH_BYTES_ERROR_MESSAGE))?;
-                point_values_offset += T::stored_size(value);
+                point_values_offset = point_values_offset
+                    .checked_add(T::stored_size(value))
+                    .ok_or_else(|| OperationError::service_error(NOT_ENOUGH_BYTES_ERROR_MESSAGE))?;
             }
 
             let range = MmapRange {
                 start: start as u64,
                 count: values_count as u64,
             };
-            mmap.get_mut(
-                header.ranges_start as usize
-                    + point_id as usize * std::mem::size_of::<MmapRange>()..,
-            )
-            .and_then(|bytes| range.write_to_prefix(bytes).ok())
-            .ok_or_else(|| OperationError::service_error(NOT_ENOUGH_BYTES_ERROR_MESSAGE))?;
+            let range_offset = (header.ranges_start as usize)
+                .checked_add(
+                    (point_id as usize)
+                        .checked_mul(std::mem::size_of::<MmapRange>())
+                        .ok_or_else(|| {
+                            OperationError::service_error(NOT_ENOUGH_BYTES_ERROR_MESSAGE)
+                        })?,
+                )
+                .ok_or_else(|| OperationError::service_error(NOT_ENOUGH_BYTES_ERROR_MESSAGE))?;
+            mmap.get_mut(range_offset..)
+                .and_then(|bytes| range.write_to_prefix(bytes).ok())
+                .ok_or_else(|| OperationError::service_error(NOT_ENOUGH_BYTES_ERROR_MESSAGE))?;
         }
 
         mmap.flush()?;
@@ -187,6 +211,7 @@ where
                 description: NOT_ENOUGH_BYTES_ERROR_MESSAGE.to_owned(),
             }
         })?;
+        Self::validate_header(header, store.len()?)?;
 
         Ok(Self {
             file_name,
@@ -254,8 +279,12 @@ where
     }
 
     pub fn get_values_count(&self, point_id: PointOffsetType) -> OperationResult<Option<usize>> {
-        self.get_range(point_id)
-            .map_some(|range| range.count as usize)
+        let Some(range) = self.get_range(point_id)? else {
+            return Ok(None);
+        };
+        let count = usize::try_from(range.count)
+            .map_err(|_| OperationError::inconsistent_storage(CORRUPTED_RANGE_ERROR_MESSAGE))?;
+        Ok(Some(count))
     }
 
     pub fn len(&self) -> usize {
@@ -268,37 +297,110 @@ where
     }
 
     fn get_range(&self, point_id: PointOffsetType) -> OperationResult<Option<MmapRange>> {
-        if point_id < self.header.points_count as PointOffsetType {
-            let range_offset = (self.header.ranges_start as usize)
-                + (point_id as usize) * std::mem::size_of::<MmapRange>();
+        if u64::from(point_id) < self.header.points_count {
+            let point_offset = u64::from(point_id)
+                .checked_mul(std::mem::size_of::<MmapRange>() as u64)
+                .ok_or_else(|| {
+                    OperationError::inconsistent_storage(CORRUPTED_RANGE_ERROR_MESSAGE)
+                })?;
+            let range_offset = self
+                .header
+                .ranges_start
+                .checked_add(point_offset)
+                .ok_or_else(|| {
+                    OperationError::inconsistent_storage(CORRUPTED_RANGE_ERROR_MESSAGE)
+                })?;
 
             let bytes = self.store.read::<Random>(ReadRange {
-                byte_offset: range_offset as u64,
+                byte_offset: range_offset,
                 length: std::mem::size_of::<MmapRange>() as u64,
             })?;
-            Ok(MmapRange::read_from_prefix(&bytes)
-                .ok()
-                .map(|(range, _)| range))
+            let (range, _) = MmapRange::read_from_prefix(&bytes)
+                .map_err(|_| OperationError::inconsistent_storage(CORRUPTED_RANGE_ERROR_MESSAGE))?;
+            Ok(Some(range))
         } else {
             Ok(None)
         }
     }
 
     fn get_bytes_range(&self, point_id: PointOffsetType) -> OperationResult<Option<Range<u64>>> {
-        let Some(start) = self.get_range(point_id).map_some(|range| range.start)? else {
+        let Some(range) = self.get_range(point_id)? else {
             return Ok(None);
         };
+        let start = range.start;
 
         // Use next point's start as end offset for this one.
-        let end = match self.get_range(point_id + 1).map_some(|range| range.start)? {
-            Some(end) => end,
+        let next_point_id = point_id.checked_add(1);
+        let end = match next_point_id {
+            Some(next_point_id) => match self
+                .get_range(next_point_id)
+                .map_some(|range| range.start)?
+            {
+                Some(end) => end,
+                None => {
+                    // if there is no next point, then use end of file
+                    self.store.len()?
+                }
+            },
             None => {
                 // if there is no next point, then use end of file
                 self.store.len()?
             }
         };
+        let file_len = self.store.len()?;
+        let values_start = self.values_start()?;
+        if start > end || end > file_len || start < values_start || end < values_start {
+            return Err(OperationError::inconsistent_storage(
+                CORRUPTED_RANGE_ERROR_MESSAGE,
+            ));
+        }
 
         Ok(Some(start..end))
+    }
+
+    fn validate_header(header: Header, file_len: u64) -> OperationResult<()> {
+        if header.points_count > u64::from(PointOffsetType::MAX) {
+            return Err(OperationError::inconsistent_storage(
+                CORRUPTED_RANGE_ERROR_MESSAGE,
+            ));
+        }
+
+        if header.ranges_start < std::mem::size_of::<Header>() as u64
+            || header.ranges_start > file_len
+        {
+            return Err(OperationError::inconsistent_storage(
+                CORRUPTED_RANGE_ERROR_MESSAGE,
+            ));
+        }
+
+        let ranges_size = header
+            .points_count
+            .checked_mul(std::mem::size_of::<MmapRange>() as u64)
+            .ok_or_else(|| OperationError::inconsistent_storage(CORRUPTED_RANGE_ERROR_MESSAGE))?;
+        let ranges_end = header
+            .ranges_start
+            .checked_add(ranges_size)
+            .ok_or_else(|| OperationError::inconsistent_storage(CORRUPTED_RANGE_ERROR_MESSAGE))?;
+
+        if ranges_end > file_len {
+            return Err(OperationError::inconsistent_storage(
+                CORRUPTED_RANGE_ERROR_MESSAGE,
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn values_start(&self) -> OperationResult<u64> {
+        let ranges_size = self
+            .header
+            .points_count
+            .checked_mul(std::mem::size_of::<MmapRange>() as u64)
+            .ok_or_else(|| OperationError::inconsistent_storage(CORRUPTED_RANGE_ERROR_MESSAGE))?;
+        self.header
+            .ranges_start
+            .checked_add(ranges_size)
+            .ok_or_else(|| OperationError::inconsistent_storage(CORRUPTED_RANGE_ERROR_MESSAGE))
     }
 
     /// Populate all pages in the mmap.
@@ -381,12 +483,39 @@ impl<'a, T: StoredValue + ?Sized + 'a> Iterator for ValuesIter<'a, T> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Seek, SeekFrom, Write};
+
     use common::universal_io::MmapFile;
     use itertools::Itertools;
     use tempfile::Builder;
+    use zerocopy::{Immutable, IntoBytes};
 
     use super::*;
     use crate::types::GeoPoint;
+
+    fn write_struct_at<T: Immutable + IntoBytes>(file: &mut std::fs::File, offset: u64, value: &T) {
+        let mut bytes = vec![0; std::mem::size_of_val(value)];
+        value.write_to_prefix(&mut bytes).unwrap();
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        file.write_all(&bytes).unwrap();
+    }
+
+    fn create_point_to_values_file(path: &Path, len: u64) -> std::fs::File {
+        let file_path = path.join(POINT_TO_VALUES_PATH);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .read(true)
+            .open(file_path)
+            .unwrap();
+        file.set_len(len).unwrap();
+        file
+    }
+
+    fn assert_inconsistent_storage(err: OperationError) {
+        assert!(matches!(err, OperationError::InconsistentStorage { .. }));
+    }
 
     #[test]
     fn test_mmap_point_to_values_string() {
@@ -513,5 +642,78 @@ mod tests {
                 .unwrap_or_default();
             assert_eq!(&v, values);
         }
+    }
+
+    #[test]
+    fn test_rejects_corrupt_range_table_header() {
+        let dir = Builder::new()
+            .prefix("mmap_point_to_values")
+            .tempdir()
+            .unwrap();
+        let mut file =
+            create_point_to_values_file(dir.path(), std::mem::size_of::<Header>() as u64);
+        write_struct_at(
+            &mut file,
+            0,
+            &Header {
+                ranges_start: std::mem::size_of::<Header>() as u64,
+                points_count: 1,
+            },
+        );
+        drop(file);
+
+        let err = match StoredPointToValues::<GeoPoint, MmapFile>::open(dir.path(), false) {
+            Ok(_) => panic!("expected corrupt range table header to be rejected"),
+            Err(err) => err,
+        };
+        assert_inconsistent_storage(err);
+    }
+
+    #[test]
+    fn test_rejects_reversed_value_range() {
+        let dir = Builder::new()
+            .prefix("mmap_point_to_values")
+            .tempdir()
+            .unwrap();
+        let ranges_start = PADDING_SIZE as u64;
+        let values_start = ranges_start + 2 * std::mem::size_of::<MmapRange>() as u64;
+        let file_len = values_start + 64;
+        let mut file = create_point_to_values_file(dir.path(), file_len);
+        write_struct_at(
+            &mut file,
+            0,
+            &Header {
+                ranges_start,
+                points_count: 2,
+            },
+        );
+        write_struct_at(
+            &mut file,
+            ranges_start,
+            &MmapRange {
+                start: values_start + 32,
+                count: 1,
+            },
+        );
+        write_struct_at(
+            &mut file,
+            ranges_start + std::mem::size_of::<MmapRange>() as u64,
+            &MmapRange {
+                start: values_start,
+                count: 0,
+            },
+        );
+        drop(file);
+
+        let point_to_values =
+            match StoredPointToValues::<GeoPoint, MmapFile>::open(dir.path(), false) {
+                Ok(point_to_values) => point_to_values,
+                Err(err) => panic!("expected corrupt value range to be detected on read: {err}"),
+            };
+        let err = match point_to_values.values_iter(0, ConditionedCounter::never()) {
+            Ok(_) => panic!("expected reversed value range to be rejected"),
+            Err(err) => err,
+        };
+        assert_inconsistent_storage(err);
     }
 }
