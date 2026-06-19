@@ -247,15 +247,15 @@ where
         mut callback: impl FnMut(PointOffsetType, CowVector<'_>),
     ) {
         let point_offsets: Vec<_> = keys.into_iter().collect();
-        // Create a result vec of the appropriate size
-        self.vectors
-            .as_ref()
-            .unwrap()
-            .read_vectors_async::<P>(&point_offsets, |_pos, key, vector| {
-                let cow_vector = CowVector::from(T::slice_to_float_cow(Cow::Borrowed(vector)));
-                callback(key, cow_vector);
-            })
-            .unwrap();
+        let Some(vectors) = self.vectors.as_ref() else {
+            return;
+        };
+        if let Err(err) = vectors.read_vectors_async::<P>(&point_offsets, |_pos, key, vector| {
+            let cow_vector = CowVector::from(T::slice_to_float_cow(Cow::Borrowed(vector)));
+            callback(key, cow_vector);
+        }) {
+            log::warn!("Failed to read mmap dense vectors batch: {err}");
+        }
     }
 
     fn get_vector_opt<P: AccessPattern>(&self, key: PointOffsetType) -> Option<CowVector<'_>> {
@@ -280,8 +280,13 @@ where
         other_vectors: &'a mut impl Iterator<Item = (CowVector<'a>, bool)>,
         stopped: &AtomicBool,
     ) -> OperationResult<Range<PointOffsetType>> {
-        let dim = self.vector_dim();
-        let start_index = self.vectors.as_ref().unwrap().num_vectors as PointOffsetType;
+        let Some(vectors) = self.vectors.as_ref() else {
+            return Err(OperationError::service_error(
+                "Mmap dense vector storage is not initialized",
+            ));
+        };
+        let dim = vectors.dim;
+        let start_index = vectors.num_vectors as PointOffsetType;
         let mut end_index = start_index;
 
         // Extend vectors file, write other vectors into it
@@ -321,7 +326,11 @@ where
         // We must do that in the updated store, and cannot do it in the previous loop. That is
         // because the file backing delete storage must be resized, and for that we'd need to know
         // the exact number of vectors beforehand. When opening the store it is done automatically.
-        let store = self.vectors.as_mut().unwrap();
+        let Some(store) = self.vectors.as_mut() else {
+            return Err(OperationError::service_error(
+                "Mmap dense vector storage is not initialized after reopen",
+            ));
+        };
         for id in deleted_ids {
             check_process_stopped(stopped)?;
             store.delete(id);
@@ -352,7 +361,12 @@ where
     }
 
     fn delete_vector(&mut self, key: PointOffsetType) -> OperationResult<bool> {
-        Ok(self.vectors.as_mut().unwrap().delete(key))
+        let Some(vectors) = self.vectors.as_mut() else {
+            return Err(OperationError::service_error(
+                "Mmap dense vector storage is not initialized",
+            ));
+        };
+        Ok(vectors.delete(key))
     }
 
     fn is_deleted_vector(&self, key: PointOffsetType) -> bool {
