@@ -237,8 +237,10 @@ impl FullTextIndex {
     }
 
     #[cfg(feature = "rocksdb")]
-    pub(super) fn restore_key(data: &[u8]) -> PointOffsetType {
-        bincode::deserialize(data).unwrap()
+    pub(super) fn restore_key(data: &[u8]) -> OperationResult<PointOffsetType> {
+        bincode::deserialize(data).map_err(|e| {
+            OperationError::service_error(format!("Failed to deserialize full text index key: {e}"))
+        })
     }
 
     pub(super) fn serialize_document(tokens: Vec<Cow<str>>) -> OperationResult<Vec<u8>> {

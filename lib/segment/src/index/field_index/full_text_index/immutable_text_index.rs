@@ -50,7 +50,7 @@ impl ImmutableFullTextIndex {
         let db = db.lock_db();
         let phrase_matching = config.phrase_matching.unwrap_or_default();
         let iter = db.iter()?.map(|(key, value)| {
-            let idx = FullTextIndex::restore_key(&key);
+            let idx = FullTextIndex::restore_key(&key)?;
             let tokens = FullTextIndex::deserialize_document(&value)?;
             Ok((idx, tokens))
         });

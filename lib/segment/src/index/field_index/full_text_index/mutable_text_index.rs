@@ -63,7 +63,7 @@ impl MutableFullTextIndex {
         let db = db_wrapper.clone();
         let db = db.lock_db();
         let iter = db.iter()?.map(|(key, value)| {
-            let idx = FullTextIndex::restore_key(&key);
+            let idx = FullTextIndex::restore_key(&key)?;
             let str_tokens = FullTextIndex::deserialize_document(&value)?;
             Ok((idx, str_tokens))
         });
