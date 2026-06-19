@@ -4084,6 +4084,7 @@ mod tests {
         .join("\n");
         for leaked in [
             BASE64URL_NOPAD.encode(&[44; 32]),
+            format!("{:?}", [44u8; 32]),
             serde_json::to_string(&vec![44_u8, 45, 46]).unwrap(),
             "123456".to_string(),
             "654321".to_string(),
