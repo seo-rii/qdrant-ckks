@@ -21,7 +21,9 @@ impl SubscriberMap {
         }
         let sub = Arc::new(subscriber);
 
-        self.0.get_mut::<SubscriVec<E>>().unwrap().push(sub);
+        if let Some(subscribers) = self.0.get_mut::<SubscriVec<E>>() {
+            subscribers.push(sub);
+        }
     }
 
     fn get<E: 'static>(&self) -> Option<&SubscriVec<E>> {

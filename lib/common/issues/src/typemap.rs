@@ -18,12 +18,12 @@ impl TypeMap {
     pub fn get<T: 'static>(&self) -> Option<&T> {
         self.0
             .get(&TypeId::of::<T>())
-            .map(|value| value.downcast_ref().unwrap())
+            .and_then(|value| value.downcast_ref())
     }
 
     pub fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
         self.0
             .get_mut(&TypeId::of::<T>())
-            .map(|value| value.downcast_mut().unwrap())
+            .and_then(|value| value.downcast_mut())
     }
 }
