@@ -146,7 +146,7 @@ pub fn raw_sparse_scorer_impl<'a, TVectorStorage: SparseVectorStorage>(
                 RecoBestScoreQuery::from(reco_query),
                 vector_storage,
                 hardware_counter,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::RecommendSumScores(reco_query) => {
@@ -155,7 +155,7 @@ pub fn raw_sparse_scorer_impl<'a, TVectorStorage: SparseVectorStorage>(
                 RecoSumScoresQuery::from(reco_query),
                 vector_storage,
                 hardware_counter,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::Discover(discover_query) => {
@@ -164,7 +164,7 @@ pub fn raw_sparse_scorer_impl<'a, TVectorStorage: SparseVectorStorage>(
                 discover_query,
                 vector_storage,
                 hardware_counter,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::Context(context_query) => {
@@ -173,7 +173,7 @@ pub fn raw_sparse_scorer_impl<'a, TVectorStorage: SparseVectorStorage>(
                 context_query,
                 vector_storage,
                 hardware_counter,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
         QueryVector::FeedbackNaive(feedback_query) => {
@@ -183,7 +183,7 @@ pub fn raw_sparse_scorer_impl<'a, TVectorStorage: SparseVectorStorage>(
                 feedback_query.into_query(),
                 vector_storage,
                 hardware_counter,
-            );
+            )?;
             raw_scorer_from_query_scorer(query_scorer)
         }
     }

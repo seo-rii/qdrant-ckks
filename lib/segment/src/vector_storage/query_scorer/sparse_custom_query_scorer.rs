@@ -5,6 +5,7 @@ use common::types::{PointOffsetType, ScoreType};
 use sparse::common::sparse_vector::SparseVector;
 use sparse::common::types::{DimId, DimWeight};
 
+use crate::common::operation_error::OperationResult;
 use crate::vector_storage::SparseVectorStorage;
 use crate::vector_storage::query::{Query, TransformInto};
 use crate::vector_storage::query_scorer::QueryScorer;
@@ -29,12 +30,11 @@ impl<
         query: TQuery,
         vector_storage: &'a TVectorStorage,
         mut hardware_counter: HardwareCounterCell,
-    ) -> Self {
+    ) -> OperationResult<Self> {
         let query: TQuery = TransformInto::transform(query, |mut vector| {
             vector.sort_by_indices();
             Ok(vector)
-        })
-        .unwrap();
+        })?;
 
         hardware_counter.set_cpu_multiplier(size_of::<DimWeight>());
 
@@ -44,11 +44,11 @@ impl<
             hardware_counter.set_vector_io_read_multiplier(0);
         }
 
-        Self {
+        Ok(Self {
             vector_storage,
             query,
             hardware_counter,
-        }
+        })
     }
 }
 
