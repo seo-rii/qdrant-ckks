@@ -2900,7 +2900,7 @@ impl CollectionConfigInternal {
     pub fn save(&self, path: &Path) -> CollectionResult<()> {
         let config_path = path.join(COLLECTION_CONFIG_FILE);
         let af = AtomicFile::new(&config_path, AllowOverwrite);
-        let state_bytes = serde_json::to_vec(self).unwrap();
+        let state_bytes = self.to_bytes()?;
         af.write(|f| f.write_all(&state_bytes)).map_err(|err| {
             CollectionError::service_error(format!("Can't write {config_path:?}, error: {err}"))
         })?;
