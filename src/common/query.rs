@@ -9274,6 +9274,106 @@ mod tests {
     }
 
     #[test]
+    fn private_hnsw_oram_group_lookup_source_requires_client_led_session() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("For test"));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            create_plain_lookup_target_collection(&dispatcher).await;
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+            let group_by = "group".parse::<JsonPath>().unwrap();
+
+            let err = do_query_point_groups(
+                &toc,
+                "plain_docs",
+                CollectionQueryGroupsRequest {
+                    prefetch: Vec::new(),
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Id(0.into()),
+                    ))),
+                    using: "plain".to_string(),
+                    filter: None,
+                    params: None,
+                    score_threshold: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: Some(api::rest::LookupLocation {
+                        collection: COLLECTION_NAME.to_string(),
+                        vector: Some(VECTOR_NAME.to_string()),
+                        shard_key: None,
+                    }),
+                    group_by: group_by.clone(),
+                    group_size: 1,
+                    limit: 1,
+                    with_lookup: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("Point")
+            ));
+
+            let err = do_recommend_point_groups(
+                &toc,
+                "plain_docs",
+                RecommendGroupsRequestInternal {
+                    positive: vec![RecommendExample::PointId(0.into())],
+                    negative: Vec::new(),
+                    strategy: Some(RecommendStrategy::AverageVector),
+                    filter: None,
+                    params: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    score_threshold: None,
+                    using: Some(UsingVector::Name("plain".to_string())),
+                    lookup_from: Some(api::rest::LookupLocation {
+                        collection: COLLECTION_NAME.to_string(),
+                        vector: Some(VECTOR_NAME.to_string()),
+                        shard_key: None,
+                    }),
+                    group_request: api::rest::BaseGroupRequest {
+                        group_by,
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: None,
+                    },
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth,
+                None,
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("Point")
+            ));
+        });
+    }
+
+    #[test]
     fn private_hnsw_oram_context_and_mmr_require_client_led_session() {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
