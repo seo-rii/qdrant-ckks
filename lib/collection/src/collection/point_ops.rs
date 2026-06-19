@@ -4710,6 +4710,8 @@ mod tests {
                 "{message}"
             );
             assert!(!message.contains("runtime payload encryption"), "{message}");
+            assert!(!message.contains("document.body"), "{message}");
+            assert!(!message.contains("plaintext result payload"), "{message}");
 
             let peer_err =
                 reject_private_result_oram_payload_point_operation(&operation, &encryption, true)
@@ -4719,6 +4721,11 @@ mod tests {
             assert!(peer_message.contains(expected_kind), "{peer_message}");
             assert!(
                 peer_message.contains("/private-result-oram/session"),
+                "{peer_message}"
+            );
+            assert!(!peer_message.contains("document.body"), "{peer_message}");
+            assert!(
+                !peer_message.contains("plaintext result payload"),
                 "{peer_message}"
             );
         }

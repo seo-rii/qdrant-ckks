@@ -12437,6 +12437,10 @@ mod tests {
                 "unexpected error for {group_by}: {err}",
             );
             assert!(
+                !message.contains("document.body"),
+                "unexpected error for {group_by}: {err}",
+            );
+            assert!(
                 !message.contains("configure a blind index provider"),
                 "unexpected error for {group_by}: {err}",
             );
