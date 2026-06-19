@@ -314,51 +314,103 @@ impl GraphLinksView<'_> {
                 link_vector_size,
                 link_vector_alignment,
             } => {
-                let start = offsets.get(idx).unwrap() as usize;
-                let end = offsets.get(idx + 1).unwrap() as usize;
+                let empty = &neighbors[0..0];
+                let empty_result = || {
+                    (
+                        empty,
+                        iterate_packed_links(empty, bits_per_unsorted, hnsw_m.level_m(level)),
+                        empty.chunks_exact(link_vector_size.get()),
+                    )
+                };
 
-                common::mmap::advice::will_need_multiple_pages(&neighbors[start..end]);
+                let Some(start) = offsets.get(idx).map(|offset| offset as usize) else {
+                    return empty_result();
+                };
+                let Some(end) = offsets.get(idx + 1).map(|offset| offset as usize) else {
+                    return empty_result();
+                };
+                let Some(neighbor_bytes) = neighbors.get(start..end) else {
+                    return empty_result();
+                };
+
+                common::mmap::advice::will_need_multiple_pages(neighbor_bytes);
 
                 let mut pos = start;
 
                 // 1. Base vector (`B` in the doc, only on level 0).
                 let mut base_vector: &[u8] = &[];
                 if level == 0 {
-                    base_vector = &neighbors[pos..pos + base_vector_layout.size()];
+                    let base_vector_end = match pos.checked_add(base_vector_layout.size()) {
+                        Some(base_vector_end) if base_vector_end <= end => base_vector_end,
+                        _ => return empty_result(),
+                    };
+                    base_vector = &neighbors[pos..base_vector_end];
                     debug_assert!(
                         base_vector
                             .as_ptr()
                             .addr()
                             .is_multiple_of(base_vector_layout.align())
                     );
-                    pos += base_vector_layout.size();
+                    pos = base_vector_end;
                 }
 
                 // 2. The varint-encoded length (`#` in the doc).
-                let (neighbors_count, neighbors_count_size) =
-                    u64::decode_var(&neighbors[pos..end]).unwrap();
+                let Some(varint_bytes) = neighbors.get(pos..end) else {
+                    return empty_result();
+                };
+                let (neighbors_count, neighbors_count_size) = match u64::decode_var(varint_bytes) {
+                    Some(decoded) => decoded,
+                    None => return empty_result(),
+                };
+                let neighbors_count = match usize::try_from(neighbors_count) {
+                    Ok(neighbors_count) => neighbors_count,
+                    Err(_) => return empty_result(),
+                };
                 pos += neighbors_count_size;
 
                 // 3. Compressed links (`c` in the doc).
+                let Some(link_bytes_and_vectors) = neighbors.get(pos..end) else {
+                    return empty_result();
+                };
                 let links_size = packed_links_size(
-                    &neighbors[pos..end],
+                    link_bytes_and_vectors,
                     bits_per_unsorted,
                     hnsw_m.level_m(level),
-                    neighbors_count as usize,
+                    neighbors_count,
                 );
+                let links_end = match pos.checked_add(links_size) {
+                    Some(links_end) if links_end <= end => links_end,
+                    _ => return empty_result(),
+                };
                 let links = iterate_packed_links(
-                    &neighbors[pos..pos + links_size],
+                    &neighbors[pos..links_end],
                     bits_per_unsorted,
                     hnsw_m.level_m(level),
                 );
-                pos += links_size;
+                pos = links_end;
 
                 // 4. Padding to align link vectors (`_` in the doc).
-                pos = pos.next_multiple_of(link_vector_alignment as usize);
+                let link_vector_alignment = usize::from(link_vector_alignment);
+                if link_vector_alignment == 0 {
+                    return empty_result();
+                }
+                let link_vector_padding =
+                    (link_vector_alignment - pos % link_vector_alignment) % link_vector_alignment;
+                pos = match pos.checked_add(link_vector_padding) {
+                    Some(pos) => pos,
+                    None => return empty_result(),
+                };
 
                 // 5. Link vectors (`L` in the doc).
-                let link_vector_bytes = (neighbors_count as usize) * link_vector_size.get();
-                let link_vectors = &neighbors[pos..pos + link_vector_bytes];
+                let link_vector_bytes = match neighbors_count.checked_mul(link_vector_size.get()) {
+                    Some(link_vector_bytes) => link_vector_bytes,
+                    None => return empty_result(),
+                };
+                let link_vectors_end = match pos.checked_add(link_vector_bytes) {
+                    Some(link_vectors_end) if link_vectors_end <= end => link_vectors_end,
+                    _ => return empty_result(),
+                };
+                let link_vectors = &neighbors[pos..link_vectors_end];
                 debug_assert!(link_vectors.as_ptr().addr() % link_vector_alignment as usize == 0);
 
                 (
