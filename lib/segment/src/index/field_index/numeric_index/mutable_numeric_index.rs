@@ -285,7 +285,7 @@ where
                     u32::from_be_bytes(value.as_ref().try_into().map_err(|_| {
                         OperationError::service_error("incorrect numeric index value")
                     })?);
-                let (idx, value) = T::decode_key(&key);
+                let (idx, value) = T::decode_key(&key)?;
                 if idx != value_idx {
                     return Err(OperationError::service_error(
                         "incorrect numeric index key-value pair",

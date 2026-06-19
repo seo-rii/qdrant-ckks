@@ -67,7 +67,7 @@ pub trait StreamRange<T> {
 pub trait Encodable: Copy + Serialize + DeserializeOwned + 'static {
     fn encode_key(&self, id: PointOffsetType) -> Vec<u8>;
 
-    fn decode_key(key: &[u8]) -> (PointOffsetType, Self);
+    fn decode_key(key: &[u8]) -> OperationResult<(PointOffsetType, Self)>;
 
     fn cmp_encoded(&self, other: &Self) -> std::cmp::Ordering;
 }
@@ -77,7 +77,7 @@ impl Encodable for IntPayloadType {
         encode_i64_key_ascending(*self, id)
     }
 
-    fn decode_key(key: &[u8]) -> (PointOffsetType, Self) {
+    fn decode_key(key: &[u8]) -> OperationResult<(PointOffsetType, Self)> {
         decode_i64_key_ascending(key)
     }
 
@@ -91,7 +91,7 @@ impl Encodable for u128 {
         encode_u128_key_ascending(*self, id)
     }
 
-    fn decode_key(key: &[u8]) -> (PointOffsetType, Self) {
+    fn decode_key(key: &[u8]) -> OperationResult<(PointOffsetType, Self)> {
         decode_u128_key_ascending(key)
     }
 
@@ -105,7 +105,7 @@ impl Encodable for FloatPayloadType {
         encode_f64_key_ascending(*self, id)
     }
 
-    fn decode_key(key: &[u8]) -> (PointOffsetType, Self) {
+    fn decode_key(key: &[u8]) -> OperationResult<(PointOffsetType, Self)> {
         decode_f64_key_ascending(key)
     }
 
@@ -129,15 +129,15 @@ impl Encodable for DateTimePayloadType {
         encode_i64_key_ascending(self.timestamp(), id)
     }
 
-    fn decode_key(key: &[u8]) -> (PointOffsetType, Self) {
-        let (id, timestamp) = decode_i64_key_ascending(key);
+    fn decode_key(key: &[u8]) -> OperationResult<(PointOffsetType, Self)> {
+        let (id, timestamp) = decode_i64_key_ascending(key)?;
         let datetime =
             DateTime::from_timestamp(timestamp / 1000, (timestamp % 1000) as u32 * 1_000_000)
                 .unwrap_or_else(|| {
                     log::warn!("Failed to decode timestamp {timestamp}, fallback to UNIX_EPOCH");
                     DateTime::UNIX_EPOCH
                 });
-        (id, datetime.into())
+        Ok((id, datetime.into()))
     }
 
     fn cmp_encoded(&self, other: &Self) -> std::cmp::Ordering {

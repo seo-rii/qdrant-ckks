@@ -1,3 +1,5 @@
+use crate::common::operation_error::{OperationError, OperationResult};
+
 const FLOAT_NAN: u8 = 0x00;
 const FLOAT_NEG: u8 = 0x01;
 const FLOAT_ZERO: u8 = 0x02;
@@ -59,20 +61,36 @@ pub fn encode_f64_ascending(val: f64, buf: &mut Vec<u8>) {
 }
 
 /// Decode a f64 from a slice.
-pub fn decode_f64_ascending(buf: &[u8]) -> f64 {
-    match buf[0] {
-        FLOAT_NAN => f64::NAN,
+pub fn decode_f64_ascending(buf: &[u8]) -> OperationResult<f64> {
+    let Some((&prefix, rest)) = buf.split_first() else {
+        return Err(OperationError::service_error(
+            "cannot decode f64 from an empty key",
+        ));
+    };
+    if rest.len() < std::mem::size_of::<f64>() {
+        return Err(OperationError::service_error(
+            "cannot decode f64 from a truncated key",
+        ));
+    }
+    let bytes = rest[..std::mem::size_of::<f64>()]
+        .try_into()
+        .map_err(|_| OperationError::service_error("cannot decode f64 key bytes"))?;
+
+    match prefix {
+        FLOAT_NAN => Ok(f64::NAN),
         FLOAT_NEG => {
-            let u = u64::from_be_bytes(buf[1..9].try_into().expect("cannot decode f64"));
+            let u = u64::from_be_bytes(bytes);
             let f = !u;
-            f64::from_bits(f)
+            Ok(f64::from_bits(f))
         }
-        FLOAT_ZERO => 0f64,
+        FLOAT_ZERO => Ok(0f64),
         FLOAT_POS => {
-            let u = u64::from_be_bytes(buf[1..9].try_into().expect("cannot decode f64"));
-            f64::from_bits(u)
+            let u = u64::from_be_bytes(bytes);
+            Ok(f64::from_bits(u))
         }
-        _ => panic!("invalid f64 prefix"),
+        _ => Err(OperationError::service_error(format!(
+            "invalid f64 key prefix {prefix}"
+        ))),
     }
 }
 
@@ -83,9 +101,14 @@ pub fn encode_i64_ascending(val: i64, buf: &mut Vec<u8>) {
 }
 
 /// Decode a i64 from a slice
-pub fn decode_i64_ascending(buf: &[u8]) -> i64 {
-    let i = i64::from_be_bytes(buf[0..8].try_into().expect("cannot decode i64"));
-    i ^ i64::MIN
+pub fn decode_i64_ascending(buf: &[u8]) -> OperationResult<i64> {
+    let bytes: [u8; std::mem::size_of::<i64>()] = buf
+        .get(..std::mem::size_of::<i64>())
+        .ok_or_else(|| OperationError::service_error("cannot decode i64 from a truncated key"))?
+        .try_into()
+        .map_err(|_| OperationError::service_error("cannot decode i64 key bytes"))?;
+    let i = i64::from_be_bytes(bytes);
+    Ok(i ^ i64::MIN)
 }
 
 /// Encodes a f64 key so that it sort in ascending order.
@@ -112,15 +135,19 @@ pub fn encode_f64_key_ascending(key_val: f64, point_offset: u32) -> Vec<u8> {
     buf
 }
 
-pub fn decode_f64_key_ascending(buf: &[u8]) -> (u32, f64) {
-    (
-        u32::from_be_bytes(
-            (&buf[F64_KEY_LEN - std::mem::size_of::<u32>()..])
-                .try_into()
-                .unwrap(),
-        ),
-        decode_f64_ascending(buf),
-    )
+pub fn decode_f64_key_ascending(buf: &[u8]) -> OperationResult<(u32, f64)> {
+    if buf.len() != F64_KEY_LEN {
+        return Err(OperationError::service_error(format!(
+            "incorrect f64 key length {}, expected {F64_KEY_LEN}",
+            buf.len()
+        )));
+    }
+    let point_offset = u32::from_be_bytes(
+        buf[F64_KEY_LEN - std::mem::size_of::<u32>()..]
+            .try_into()
+            .map_err(|_| OperationError::service_error("cannot decode f64 point offset"))?,
+    );
+    Ok((point_offset, decode_f64_ascending(buf)?))
 }
 
 /// Encodes a i64 key so that it sort in ascending order.
@@ -145,15 +172,19 @@ pub fn encode_i64_key_ascending(key_val: i64, point_offset: u32) -> Vec<u8> {
     buf
 }
 
-pub fn decode_i64_key_ascending(buf: &[u8]) -> (u32, i64) {
-    (
-        u32::from_be_bytes(
-            (&buf[I64_KEY_LEN - std::mem::size_of::<u32>()..])
-                .try_into()
-                .unwrap(),
-        ),
-        decode_i64_ascending(buf),
-    )
+pub fn decode_i64_key_ascending(buf: &[u8]) -> OperationResult<(u32, i64)> {
+    if buf.len() != I64_KEY_LEN {
+        return Err(OperationError::service_error(format!(
+            "incorrect i64 key length {}, expected {I64_KEY_LEN}",
+            buf.len()
+        )));
+    }
+    let point_offset = u32::from_be_bytes(
+        buf[I64_KEY_LEN - std::mem::size_of::<u32>()..]
+            .try_into()
+            .map_err(|_| OperationError::service_error("cannot decode i64 point offset"))?,
+    );
+    Ok((point_offset, decode_i64_ascending(buf)?))
 }
 
 /// Encodes a u128 key so that it sort in ascending order.
@@ -178,15 +209,24 @@ pub fn encode_u128_key_ascending(key_val: u128, point_offset: u32) -> Vec<u8> {
     buf
 }
 
-pub fn decode_u128_key_ascending(buf: &[u8]) -> (u32, u128) {
-    (
-        u32::from_be_bytes(
-            (&buf[U128_KEY_LEN - std::mem::size_of::<u32>()..])
-                .try_into()
-                .unwrap(),
-        ),
-        u128::from_be_bytes(buf[0..16].try_into().expect("cannot decode u128")),
-    )
+pub fn decode_u128_key_ascending(buf: &[u8]) -> OperationResult<(u32, u128)> {
+    if buf.len() != U128_KEY_LEN {
+        return Err(OperationError::service_error(format!(
+            "incorrect u128 key length {}, expected {U128_KEY_LEN}",
+            buf.len()
+        )));
+    }
+    let point_offset = u32::from_be_bytes(
+        buf[U128_KEY_LEN - std::mem::size_of::<u32>()..]
+            .try_into()
+            .map_err(|_| OperationError::service_error("cannot decode u128 point offset"))?,
+    );
+    let value = u128::from_be_bytes(
+        buf[..std::mem::size_of::<u128>()]
+            .try_into()
+            .map_err(|_| OperationError::service_error("cannot decode u128 key bytes"))?,
+    );
+    Ok((point_offset, value))
 }
 
 #[cfg(test)]
@@ -194,7 +234,9 @@ mod tests {
     use std::cmp::Ordering;
 
     use crate::index::key_encoding::{
-        decode_f64_ascending, decode_i64_ascending, encode_f64_ascending, encode_i64_ascending,
+        decode_f64_ascending, decode_f64_key_ascending, decode_i64_ascending,
+        decode_i64_key_ascending, decode_u128_key_ascending, encode_f64_ascending,
+        encode_i64_ascending,
     };
 
     #[test]
@@ -245,10 +287,20 @@ mod tests {
         assert_eq!(zero_buf.cmp(&pos_buf), Ordering::Less);
     }
 
+    #[test]
+    fn test_decode_rejects_malformed_keys() {
+        assert!(decode_f64_ascending(&[]).is_err());
+        assert!(decode_f64_ascending(&[0x7f, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
+        assert!(decode_i64_ascending(&[0; 7]).is_err());
+        assert!(decode_f64_key_ascending(&[0; 12]).is_err());
+        assert!(decode_i64_key_ascending(&[0; 11]).is_err());
+        assert!(decode_u128_key_ascending(&[0; 19]).is_err());
+    }
+
     fn test_f64_encoding_roundtrip(val: f64) {
         let mut buf = Vec::new();
         encode_f64_ascending(val, &mut buf);
-        let dec_val = decode_f64_ascending(buf.as_slice());
+        let dec_val = decode_f64_ascending(buf.as_slice()).unwrap();
         if val.is_nan() {
             assert!(dec_val.is_nan());
             return;
@@ -259,7 +311,7 @@ mod tests {
     fn test_i64_encoding_roundtrip(val: i64) {
         let mut buf = Vec::new();
         encode_i64_ascending(val, &mut buf);
-        let res = decode_i64_ascending(buf.as_slice());
+        let res = decode_i64_ascending(buf.as_slice()).unwrap();
         assert_eq!(val, res);
     }
 }
