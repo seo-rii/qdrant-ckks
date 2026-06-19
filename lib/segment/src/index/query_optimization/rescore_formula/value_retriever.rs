@@ -71,31 +71,38 @@ fn payload_variable_retriever(
     hw_counter: &HardwareCounterCell,
 ) -> VariableRetrieverFn<'_> {
     let retriever_fn = move |point_id: PointOffsetType| {
-        payload_provider.with_payload(
-            point_id,
-            |payload| {
-                let values = payload.get_value_cloned(&json_path);
+        payload_provider
+            .try_with_payload(
+                point_id,
+                |payload| {
+                    let values = payload.get_value_cloned(&json_path);
 
-                if json_path.has_wildcard_suffix() {
-                    return values;
-                }
-
-                // Not using array wildcard `[]` on a key which has an array value will return the whole
-                // array as one value, let's flatten the array if that is the case.
-                //
-                // This is the same thing we do for indexing payload values
-                let mut multi_value = MultiValue::new();
-                for value in values {
-                    if let Value::Array(array) = value {
-                        multi_value.extend(array);
-                    } else {
-                        multi_value.push(value);
+                    if json_path.has_wildcard_suffix() {
+                        return values;
                     }
-                }
-                multi_value
-            },
-            hw_counter,
-        )
+
+                    // Not using array wildcard `[]` on a key which has an array value will return the whole
+                    // array as one value, let's flatten the array if that is the case.
+                    //
+                    // This is the same thing we do for indexing payload values
+                    let mut multi_value = MultiValue::new();
+                    for value in values {
+                        if let Value::Array(array) = value {
+                            multi_value.extend(array);
+                        } else {
+                            multi_value.push(value);
+                        }
+                    }
+                    multi_value
+                },
+                hw_counter,
+            )
+            .unwrap_or_else(|err| {
+                log::error!(
+                    "Failed to read payload for formula variable at point {point_id}: {err}"
+                );
+                MultiValue::new()
+            })
     };
     Box::new(retriever_fn)
 }

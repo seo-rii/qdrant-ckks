@@ -5,6 +5,7 @@ use atomic_refcell::AtomicRefCell;
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::PointOffsetType;
 
+use crate::common::operation_error::OperationResult;
 use crate::payload_storage::PayloadStorage;
 use crate::payload_storage::payload_storage_enum::PayloadStorageEnum;
 use crate::types::{OwnedPayloadRef, Payload};
@@ -23,12 +24,12 @@ impl PayloadProvider {
         }
     }
 
-    pub fn with_payload<F, G>(
+    pub fn try_with_payload<F, G>(
         &self,
         point_id: PointOffsetType,
         callback: F,
         hw_counter: &HardwareCounterCell,
-    ) -> G
+    ) -> OperationResult<G>
     where
         F: FnOnce(OwnedPayloadRef) -> G,
     {
@@ -42,28 +43,12 @@ impl PayloadProvider {
             PayloadStorageEnum::SimplePayloadStorage(s) => {
                 s.payload_ptr(point_id).map(OwnedPayloadRef::from)
             }
-            // Warn: Possible panic here
-            // Currently, it is possible that `read_payload` fails with Err,
-            // but it seems like a very rare possibility which might only happen
-            // if something is wrong with disk or storage is corrupted.
-            //
-            // In both cases it means that service can't be of use any longer.
-            // It is as good as dead. Therefore it is tolerable to just panic here.
-            // Downside is - API user won't be notified of the failure.
-            // It will just timeout.
-            //
-            // The alternative:
-            // Rewrite condition checking code to support error reporting.
-            // Which may lead to slowdown and assumes a lot of changes.
             #[cfg(feature = "rocksdb")]
             PayloadStorageEnum::OnDiskPayloadStorage(s) => s
-                .read_payload(point_id, hw_counter)
-                .unwrap_or_else(|err| panic!("Payload storage is corrupted: {err}"))
+                .read_payload(point_id, hw_counter)?
                 .map(OwnedPayloadRef::from),
             PayloadStorageEnum::MmapPayloadStorage(s) => {
-                let payload = s
-                    .get(point_id, hw_counter)
-                    .unwrap_or_else(|err| panic!("Payload storage is corrupted: {err}"));
+                let payload = s.get(point_id, hw_counter)?;
                 Some(OwnedPayloadRef::from(payload))
             }
         };
@@ -74,6 +59,6 @@ impl PayloadProvider {
             OwnedPayloadRef::from(&self.empty_payload)
         };
 
-        callback(payload)
+        Ok(callback(payload))
     }
 }

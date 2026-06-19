@@ -47,13 +47,20 @@ impl StructPayloadIndex {
                 .unwrap_or_else(|| {
                     let hw = hw_counter.fork();
                     Box::new(move |point_id| {
-                        payload_provider.with_payload(
+                        payload_provider
+                            .try_with_payload(
                             point_id,
                             |payload| {
                                 check_field_condition(field_condition, &payload, field_indexes, &hw)
                             },
                             &hw,
                         )
+                            .unwrap_or_else(|err| {
+                                log::error!(
+                                    "Failed to read payload for condition check at point {point_id}: {err}"
+                                );
+                                false
+                            })
                     })
                 }),
             // Use dedicated null index for `is_empty` check if it is available
@@ -72,11 +79,18 @@ impl StructPayloadIndex {
                     // Fallback to reading payload, in case we don't yet have null-index
                     let hw = hw_counter.fork();
                     let fallback = Box::new(move |point_id| {
-                        payload_provider.with_payload(
+                        payload_provider
+                            .try_with_payload(
                             point_id,
                             |payload| check_is_empty_condition(is_empty, &payload),
                             &hw,
                         )
+                            .unwrap_or_else(|err| {
+                                log::error!(
+                                    "Failed to read payload for is_empty condition at point {point_id}: {err}"
+                                );
+                                false
+                            })
                     });
 
                     if let Some(fallback_index) = fallback_index {
@@ -102,11 +116,18 @@ impl StructPayloadIndex {
                     // Fallback to reading payload
                     let hw = hw_counter.fork();
                     Box::new(move |point_id| {
-                        payload_provider.with_payload(
+                        payload_provider
+                            .try_with_payload(
                             point_id,
                             |payload| check_is_null_condition(is_null, &payload),
                             &hw,
                         )
+                            .unwrap_or_else(|err| {
+                                log::error!(
+                                    "Failed to read payload for is_null condition at point {point_id}: {err}"
+                                );
+                                false
+                            })
                     })
                 }
             }
@@ -153,7 +174,8 @@ impl StructPayloadIndex {
 
                 let hw = hw_counter.fork();
                 Box::new(move |point_id| {
-                    payload_provider.with_payload(
+                    payload_provider
+                        .try_with_payload(
                         point_id,
                         |payload| {
                             let field_values = payload.get_value(&nested_path);
@@ -182,6 +204,12 @@ impl StructPayloadIndex {
                         },
                         &hw,
                     )
+                        .unwrap_or_else(|err| {
+                            log::error!(
+                                "Failed to read payload for nested condition at point {point_id}: {err}"
+                            );
+                            false
+                        })
                 })
             }
             Condition::CustomIdChecker(cond) => {
