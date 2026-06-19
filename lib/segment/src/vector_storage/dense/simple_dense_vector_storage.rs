@@ -205,6 +205,13 @@ impl<T: PrimitiveVectorElement> SimpleDenseVectorStorage<T> {
         let record = &mut self.update_buffer;
         record.deleted = deleted;
         if let Some(vector) = vector {
+            if record.vector.len() != vector.len() {
+                return Err(OperationError::service_error(format!(
+                    "Dense vector length mismatch: expected {}, got {}",
+                    record.vector.len(),
+                    vector.len()
+                )));
+            }
             record.vector.copy_from_slice(vector);
         }
 
