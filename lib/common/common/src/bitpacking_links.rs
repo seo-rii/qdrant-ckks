@@ -118,18 +118,21 @@ pub fn packed_links_size(
         return 0;
     };
 
-    let mut total_bits = 0;
+    let mut total_bits: usize = 0;
     let actual_sorted_count = total_count.min(sorted_count);
 
     if actual_sorted_count > 0 {
-        total_bits += HEADER_BITS as usize;
+        total_bits = total_bits.saturating_add(HEADER_BITS as usize);
         let bits_per_sorted = (first_byte & make_bitmask::<u8>(HEADER_BITS)) + MIN_BITS_PER_VALUE;
-        total_bits += actual_sorted_count * bits_per_sorted as usize;
+        total_bits =
+            total_bits.saturating_add(actual_sorted_count.saturating_mul(bits_per_sorted as usize));
     }
 
     let unsorted_count = total_count - actual_sorted_count;
-    total_bits += unsorted_count * bits_per_unsorted as usize;
-    total_bits.div_ceil(u8::BITS as usize)
+    total_bits =
+        total_bits.saturating_add(unsorted_count.saturating_mul(bits_per_unsorted as usize));
+
+    total_bits / u8::BITS as usize + usize::from(total_bits % u8::BITS as usize != 0)
 }
 
 /// Iterator over links packed with [`pack_links`].
@@ -299,6 +302,15 @@ mod tests {
                 links.push(rng.random());
             }
         }
+    }
+
+    #[test]
+    fn test_packed_links_size_does_not_overflow() {
+        let size = packed_links_size(&[u8::MAX], u8::MAX, usize::MAX, usize::MAX);
+        let expected =
+            usize::MAX / u8::BITS as usize + usize::from(usize::MAX % u8::BITS as usize != 0);
+
+        assert_eq!(size, expected);
     }
 
     /// Generate `count` unique values in range `[0, 2^bits)`.

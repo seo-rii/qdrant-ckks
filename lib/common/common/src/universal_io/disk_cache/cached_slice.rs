@@ -228,7 +228,7 @@ mod tests {
         //     block 0
         // |                          ... |
         //  < range >
-        let blocks: Vec<_> = blocks_for_range_in_file(file_id, 0..100).collect();
+        let blocks = blocks_for_range_in_file(file_id, 0..100).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].key.offset.0, 0);
         assert_eq!(blocks[0].range, 0..100);
@@ -236,8 +236,7 @@ mod tests {
         //       block 0          block 1
         // |                |                 |
         //              < range >
-        let blocks: Vec<_> =
-            blocks_for_range_in_file(file_id, BLOCK_SIZE - 50..BLOCK_SIZE + 50).collect();
+        let blocks = blocks_for_range_in_file(file_id, BLOCK_SIZE - 50..BLOCK_SIZE + 50).unwrap();
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].key.offset.0, 0);
         assert_eq!(blocks[0].range, (BLOCK_SIZE - 50)..BLOCK_SIZE);
@@ -247,8 +246,7 @@ mod tests {
         //     block 2      block 3
         // |            |             |
         // <          range           >
-        let blocks: Vec<_> =
-            blocks_for_range_in_file(file_id, BLOCK_SIZE * 2..BLOCK_SIZE * 4).collect();
+        let blocks = blocks_for_range_in_file(file_id, BLOCK_SIZE * 2..BLOCK_SIZE * 4).unwrap();
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].key.offset.0, 2);
         assert_eq!(blocks[0].range, 0..BLOCK_SIZE);
@@ -258,8 +256,7 @@ mod tests {
         //  block 9  (last full block)   block 10 (partial block with trailing data)
         // |                           |         000000000000000000000|
         //    <         range                   >
-        let blocks: Vec<_> =
-            blocks_for_range_in_file(file_id, BLOCK_SIZE * 9 + 50..file_len).collect();
+        let blocks = blocks_for_range_in_file(file_id, BLOCK_SIZE * 9 + 50..file_len).unwrap();
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].key.offset.0, 9);
         assert_eq!(blocks[0].range, 50..BLOCK_SIZE);
