@@ -305,6 +305,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "leaf_labels"
                         | "client_state"
                         | "position_map"
+                        | "position_maps"
                         | "oram_position_map"
                         | "token_position_map"
                         | "stash"
@@ -459,6 +460,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "leaflabels"
                         | "clientstate"
                         | "positionmap"
+                        | "positionmaps"
                         | "orampositionmap"
                         | "tokenpositionmap"
                         | "entrynodeid"
@@ -1445,6 +1447,25 @@ mod tests {
                 .contains("qdrant-sec-private-result-camel-leaf-commitments-alias-log-sentinel")
         );
 
+        let mut position_map_aliases = json!({
+            "position_map": "qdrant-sec-private-oram-position-map-alias-log-sentinel",
+            "position_maps": ["qdrant-sec-private-oram-position-maps-alias-log-sentinel"],
+            "positionMap": "qdrant-sec-private-oram-camel-position-map-alias-log-sentinel",
+            "positionMaps": ["qdrant-sec-private-oram-camel-position-maps-alias-log-sentinel"],
+            "stash": "qdrant-sec-private-oram-stash-alias-log-sentinel"
+        });
+        redact_sensitive_log_fields(&mut position_map_aliases);
+        let position_map_aliases_serialized = serde_json::to_string(&position_map_aliases).unwrap();
+        for leaked in [
+            "qdrant-sec-private-oram-position-map-alias-log-sentinel",
+            "qdrant-sec-private-oram-position-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-position-map-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-position-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-stash-alias-log-sentinel",
+        ] {
+            assert!(!position_map_aliases_serialized.contains(leaked));
+        }
+
         let mut first = json!({
             "read_buckets": {
                 "session_id": "private-oram-session-a",
@@ -1471,7 +1492,8 @@ mod tests {
                     "leaf_hash": "leaf-hash-a",
                     "siblings": [{ "hash": "sibling-hash-a" }]
                 },
-                "token_position_map": { "fetch-token-a": 99 }
+                "token_position_map": { "fetch-token-a": 99 },
+                "position_maps": [{ "node-a": 1 }]
             }
         });
         let mut second = json!({
@@ -1497,7 +1519,8 @@ mod tests {
                     "leaf_hash": "leaf-hash-b",
                     "siblings": [{ "hash": "sibling-hash-b" }]
                 },
-                "token_position_map": { "fetch-token-b": 17 }
+                "token_position_map": { "fetch-token-b": 17 },
+                "position_maps": [{ "node-b": 2 }]
             }
         });
         redact_sensitive_log_fields(&mut first);
@@ -1534,6 +1557,8 @@ mod tests {
                     "siblings": [{ "hash": "private-oram-camel-sibling-hash-a" }]
                 },
                 "payloadFetchToken": "private-oram-camel-payload-fetch-token-a",
+                "positionMap": { "private-oram-camel-node-a": 31 },
+                "positionMaps": [{ "private-oram-camel-node-a": 32 }],
                 "tokenPositionMap": { "private-oram-camel-fetch-token-a": 99 },
                 "payloadOramLeaf": "private-oram-camel-payload-leaf-a"
             }
@@ -1566,6 +1591,8 @@ mod tests {
                     "siblings": [{ "hash": "private-oram-camel-sibling-hash-b" }]
                 },
                 "payloadFetchToken": "private-oram-camel-payload-fetch-token-b",
+                "positionMap": { "private-oram-camel-node-b": 41 },
+                "positionMaps": [{ "private-oram-camel-node-b": 42 }],
                 "tokenPositionMap": { "private-oram-camel-fetch-token-b": 17 },
                 "payloadOramLeaf": "private-oram-camel-payload-leaf-b"
             }
