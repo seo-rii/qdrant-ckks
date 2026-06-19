@@ -160,7 +160,10 @@ impl SplitByShard for BatchPersisted {
                                 }
                                 _ => unreachable!(), // TODO(sparse) propagate error
                             }
-                            batch.payloads.as_mut().unwrap().push(payload.clone());
+                            batch
+                                .payloads
+                                .get_or_insert_with(Vec::new)
+                                .push(payload.clone());
                         }
                     }
                 }
@@ -182,7 +185,10 @@ impl SplitByShard for BatchPersisted {
                                 }
                                 _ => unreachable!(), // TODO(sparse) propagate error
                             }
-                            batch.payloads.as_mut().unwrap().push(payload.clone());
+                            batch
+                                .payloads
+                                .get_or_insert_with(Vec::new)
+                                .push(payload.clone());
                         }
                     }
                 }
@@ -216,7 +222,10 @@ impl SplitByShard for BatchPersisted {
                                     _ => unreachable!(), // TODO(sparse) propagate error
                                 }
                             }
-                            batch.payloads.as_mut().unwrap().push(payload.clone());
+                            batch
+                                .payloads
+                                .get_or_insert_with(Vec::new)
+                                .push(payload.clone());
                         }
                     }
                 }
