@@ -668,10 +668,11 @@ pub fn ckks_ciphertext_from_payload<'a>(
             )));
         }
     }
-    let nonce = envelope
-        .get("nonce")
-        .and_then(serde_json::Value::as_str)
-        .expect("nonce was checked above");
+    let Some(nonce) = envelope.get("nonce").and_then(serde_json::Value::as_str) else {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' is missing nonce",
+        )));
+    };
     if nonce.len() != CKKS_CIPHERTEXT_SIDECAR_NONCE_B64_LEN {
         return Err(OperationError::service_error(format!(
             "stored CKKS vector sidecar entry '{vector_name}' has invalid nonce",
@@ -739,7 +740,7 @@ fn ckks_ciphertext_sidecar_identity_from_payload(
     let Some(ciphertext) = ckks_ciphertext_from_payload(payload, vector_name)? else {
         return Ok(None);
     };
-    let marker = payload
+    let Some(marker) = payload
         .0
         .get(CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD)
         .and_then(serde_json::Value::as_object)
@@ -747,36 +748,41 @@ fn ckks_ciphertext_sidecar_identity_from_payload(
         .and_then(serde_json::Value::as_object)
         .and_then(|value| value.get(CKKS_VECTOR_SIDECAR_MARKER))
         .and_then(serde_json::Value::as_object)
-        .expect("CKKS sidecar marker was validated above");
-    let envelope = marker
+    else {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' is malformed",
+        )));
+    };
+    let Some(envelope) = marker
         .get("envelope")
         .and_then(serde_json::Value::as_object)
-        .expect("CKKS sidecar envelope was validated above");
+    else {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' is missing envelope",
+        )));
+    };
 
     let mut digest = Sha256::new();
     digest.update(b"qdrant-sec/ckks-ciphertext-sidecar-identity/v1");
     update_digest_str(&mut digest, vector_name);
-    update_digest_u64(
-        &mut digest,
-        marker
-            .get("version")
-            .and_then(serde_json::Value::as_u64)
-            .expect("marker version was validated above"),
-    );
-    update_digest_str(
-        &mut digest,
-        marker
-            .get("scheme")
-            .and_then(serde_json::Value::as_str)
-            .expect("marker scheme was validated above"),
-    );
-    update_digest_u64(
-        &mut digest,
-        envelope
-            .get("version")
-            .and_then(serde_json::Value::as_u64)
-            .expect("envelope version was validated above"),
-    );
+    let Some(marker_version) = marker.get("version").and_then(serde_json::Value::as_u64) else {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has unsupported version",
+        )));
+    };
+    update_digest_u64(&mut digest, marker_version);
+    let Some(marker_scheme) = marker.get("scheme").and_then(serde_json::Value::as_str) else {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has unsupported scheme",
+        )));
+    };
+    update_digest_str(&mut digest, marker_scheme);
+    let Some(envelope_version) = envelope.get("version").and_then(serde_json::Value::as_u64) else {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' has unsupported envelope version",
+        )));
+    };
+    update_digest_u64(&mut digest, envelope_version);
     for field in [
         "algorithm",
         "key_id",
@@ -784,21 +790,19 @@ fn ckks_ciphertext_sidecar_identity_from_payload(
         "rk_id",
         "nonce",
     ] {
-        update_digest_str(
-            &mut digest,
-            envelope
-                .get(field)
-                .and_then(serde_json::Value::as_str)
-                .expect("required envelope field was validated above"),
-        );
+        let Some(value) = envelope.get(field).and_then(serde_json::Value::as_str) else {
+            return Err(OperationError::service_error(format!(
+                "stored CKKS vector sidecar entry '{vector_name}' is missing {field}",
+            )));
+        };
+        update_digest_str(&mut digest, value);
     }
-    update_digest_u64(
-        &mut digest,
-        envelope
-            .get("rk_epoch")
-            .and_then(serde_json::Value::as_u64)
-            .expect("rk_epoch was validated above"),
-    );
+    let Some(rk_epoch) = envelope.get("rk_epoch").and_then(serde_json::Value::as_u64) else {
+        return Err(OperationError::service_error(format!(
+            "stored CKKS vector sidecar entry '{vector_name}' is missing rk_epoch",
+        )));
+    };
+    update_digest_u64(&mut digest, rk_epoch);
     update_digest_str(&mut digest, ciphertext);
     Ok(Some(digest.finalize().to_vec()))
 }
