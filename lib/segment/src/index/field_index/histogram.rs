@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::Bound::{Excluded, Included, Unbounded};
 use std::ops::Bound;
@@ -23,8 +24,7 @@ pub struct Counts {
     pub right: usize,
 }
 
-#[allow(clippy::derive_ord_xor_partial_ord)]
-#[derive(PartialEq, PartialOrd, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Point<T> {
     pub val: T,
@@ -37,13 +37,49 @@ impl<T> Point<T> {
     }
 }
 
-impl<T: PartialEq> Eq for Point<T> {}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl<T: PartialOrd + Copy> Ord for Point<T> {
+    #[test]
+    fn point_order_handles_nan_values() {
+        let mut points = BTreeMap::new();
+        points.insert(Point::new(f64::NAN, 1), Counts { left: 0, right: 0 });
+        points.insert(Point::new(1.0, 2), Counts { left: 0, right: 0 });
+
+        assert_eq!(points.len(), 2);
+    }
+
+    #[test]
+    fn point_order_keeps_signed_zero_equal() {
+        assert_eq!(
+            Point::new(-0.0, 1).cmp(&Point::new(0.0, 1)),
+            Ordering::Equal,
+        );
+        assert_eq!(Point::new(-0.0, 1), Point::new(0.0, 1));
+    }
+}
+
+impl<T: Numericable> PartialEq for Point<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.idx == other.idx && self.val.total_order(other.val) == Ordering::Equal
+    }
+}
+
+impl<T: Numericable> Eq for Point<T> {}
+
+impl<T: Numericable> Ord for Point<T> {
     fn cmp(&self, other: &Point<T>) -> std::cmp::Ordering {
-        (self.val, self.idx)
-            .partial_cmp(&(other.val, other.idx))
-            .unwrap()
+        match self.val.total_order(other.val) {
+            Ordering::Equal => self.idx.cmp(&other.idx),
+            ordering => ordering,
+        }
+    }
+}
+
+impl<T: Numericable> PartialOrd for Point<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -55,6 +91,9 @@ pub trait Numericable: Num + PartialEq + PartialOrd + Copy {
     fn to_f64(self) -> f64;
     fn from_f64(x: f64) -> Self;
     fn from_u128(x: u128) -> Self;
+    fn total_order(self, b: Self) -> Ordering {
+        self.partial_cmp(&b).unwrap_or(Ordering::Equal)
+    }
     fn min(self, b: Self) -> Self {
         if self < b { self } else { b }
     }
@@ -102,6 +141,14 @@ impl Numericable for f64 {
     }
     fn from_u128(x: u128) -> Self {
         x as Self
+    }
+
+    fn total_order(self, b: Self) -> Ordering {
+        if self == b {
+            Ordering::Equal
+        } else {
+            self.total_cmp(&b)
+        }
     }
 }
 
