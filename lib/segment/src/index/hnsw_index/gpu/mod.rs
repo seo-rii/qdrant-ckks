@@ -151,7 +151,7 @@ mod tests {
 
         for &idx in &ids {
             let scorer = vector_holder.internal_scorer(idx);
-            graph_layers_builder.link_new_point(idx, scorer);
+            graph_layers_builder.link_new_point(idx, scorer).unwrap();
         }
 
         let search_vectors = (0..search_counts)

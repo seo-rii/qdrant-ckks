@@ -54,7 +54,7 @@ pub fn build_hnsw_on_gpu<'a, 'b>(
         for point in batch.points {
             check_stopped(stopped)?;
             let points_scorer = points_scorer_builder(point.point_id)?;
-            graph_layers_builder.link_new_point(point.point_id, points_scorer);
+            graph_layers_builder.link_new_point(point.point_id, points_scorer)?;
             cpu_linked_points_count += 1;
             if cpu_linked_points_count >= cpu_linked_points {
                 break;

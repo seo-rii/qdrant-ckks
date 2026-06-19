@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 
 use common::types::{PointOffsetType, ScoreType, ScoredPointOffset};
 
+use crate::common::operation_error::OperationResult;
 use crate::common::vector_utils::TrySetCapacityExact as _;
 
 pub struct LinksContainer {
@@ -143,19 +144,19 @@ impl LinksContainer {
         level_m: usize,
         mut score: impl FnMut(PointOffsetType, PointOffsetType) -> ScoreType,
         items: &mut ItemsBuffer,
-    ) {
+    ) -> OperationResult<()> {
         if level_m == 0 {
             // Unlikely.
-            return;
+            return Ok(());
         }
 
         if self.links.len() < level_m {
             self.links.push(new_point_id);
-            return;
+            return Ok(());
         }
 
         items.0.clear();
-        items.0.try_set_capacity_exact(level_m + 1).unwrap();
+        items.0.try_set_capacity_exact(level_m + 1)?;
         for (order, &link) in self.links.iter().enumerate() {
             items.0.push(Item {
                 idx: link,
@@ -219,6 +220,7 @@ impl LinksContainer {
             }
         }
         self.processed_by_heuristic = self.links.len() as u32;
+        Ok(())
     }
 }
 
@@ -439,7 +441,9 @@ mod tests {
 
             let mut items = ItemsBuffer::default();
             for &candidate_idx in candidate_indices.iter().skip(5) {
-                container.connect_with_heuristic(candidate_idx, query_idx, M, score, &mut items);
+                container
+                    .connect_with_heuristic(candidate_idx, query_idx, M, score, &mut items)
+                    .unwrap();
                 reference_container.connect_with_heuristic_simple(
                     candidate_idx,
                     query_idx,

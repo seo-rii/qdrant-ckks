@@ -540,7 +540,9 @@ mod tests {
             graph_layers_builder.set_levels(idx, level);
         }
         for idx in 0..(num_vectors as PointOffsetType) {
-            graph_layers_builder.link_new_point(idx, vector_holder.internal_scorer(idx));
+            graph_layers_builder
+                .link_new_point(idx, vector_holder.internal_scorer(idx))
+                .unwrap();
         }
 
         // Create GPU search context

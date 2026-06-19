@@ -403,7 +403,11 @@ impl GraphLayersBuilder {
             .fetch_max(level, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn link_new_point(&self, point_id: PointOffsetType, mut points_scorer: FilteredScorer) {
+    pub fn link_new_point(
+        &self,
+        point_id: PointOffsetType,
+        mut points_scorer: FilteredScorer,
+    ) -> OperationResult<()> {
         // Check if there is an suitable entry point
         //   - entry point level if higher or equal
         //   - it satisfies filters
@@ -426,8 +430,7 @@ impl GraphLayersBuilder {
                     level,
                     &mut points_scorer,
                     &AtomicBool::new(false),
-                )
-                .unwrap()
+                )?
             } else {
                 ScoredPointOffset {
                     idx: entry_point.point_id,
@@ -443,7 +446,7 @@ impl GraphLayersBuilder {
                     curr_level,
                     &mut points_scorer,
                     level_entry,
-                );
+                )?;
             }
         } else {
             // New point is a new empty entry (for this filter, at least)
@@ -459,6 +462,7 @@ impl GraphLayersBuilder {
             .new_point(point_id, level, |point_id| {
                 points_scorer.filters().check_vector(point_id)
             });
+        Ok(())
     }
 
     /// Add a new point using pre-existing links.
@@ -494,28 +498,26 @@ impl GraphLayersBuilder {
         curr_level: usize,
         points_scorer: &mut FilteredScorer,
         mut level_entry: ScoredPointOffset,
-    ) -> ScoredPointOffset {
-        let nearest = self
-            .search_on_level(
-                level_entry,
-                curr_level,
-                self.ef_construct,
-                points_scorer,
-                &AtomicBool::new(false),
-            )
-            .unwrap();
+    ) -> OperationResult<ScoredPointOffset> {
+        let nearest = self.search_on_level(
+            level_entry,
+            curr_level,
+            self.ef_construct,
+            points_scorer,
+            &AtomicBool::new(false),
+        )?;
 
         if let Some(the_nearest) = nearest.iter_unsorted().max() {
             level_entry = *the_nearest;
         }
 
         if self.use_heuristic {
-            self.link_with_heuristic(point_id, curr_level, points_scorer, nearest);
+            self.link_with_heuristic(point_id, curr_level, points_scorer, nearest)?;
         } else {
             self.link_without_heuristic(point_id, curr_level, points_scorer, nearest);
         }
 
-        level_entry
+        Ok(level_entry)
     }
 
     fn link_with_heuristic(
@@ -524,7 +526,7 @@ impl GraphLayersBuilder {
         curr_level: usize,
         points_scorer: &FilteredScorer,
         nearest: FixedLengthPriorityQueue<ScoredPointOffset>,
-    ) {
+    ) -> OperationResult<()> {
         let level_m = self.hnsw_m.level_m(curr_level);
         let scorer = |a, b| points_scorer.score_internal(a, b);
 
@@ -540,8 +542,9 @@ impl GraphLayersBuilder {
         for &other_point in &selected_nearest {
             self.links_layers[other_point as usize][curr_level]
                 .write()
-                .connect_with_heuristic(point_id, other_point, level_m, scorer, &mut items);
+                .connect_with_heuristic(point_id, other_point, level_m, scorer, &mut items)?;
         }
+        Ok(())
     }
 
     fn link_without_heuristic(
@@ -649,7 +652,7 @@ mod tests {
                 .into_par_iter()
                 .for_each(|idx| {
                     let scorer = vector_holder.internal_scorer(idx);
-                    graph_layers.link_new_point(idx, scorer);
+                    graph_layers.link_new_point(idx, scorer).unwrap();
                 });
         });
 
@@ -689,7 +692,7 @@ mod tests {
 
         for idx in 0..(num_vectors as PointOffsetType) {
             let scorer = vector_holder.internal_scorer(idx);
-            graph_layers.link_new_point(idx, scorer);
+            graph_layers.link_new_point(idx, scorer).unwrap();
         }
 
         (vector_holder, graph_layers)
@@ -915,7 +918,7 @@ mod tests {
             let scorer = vector_holder.internal_scorer(idx);
             let level = graph_layers_builder.get_random_layer(&mut rng);
             graph_layers_builder.set_levels(idx, level);
-            graph_layers_builder.link_new_point(idx, scorer);
+            graph_layers_builder.link_new_point(idx, scorer).unwrap();
         }
         let graph_layers = graph_layers_builder.into_graph_layers_ram(
             format.with_param_for_tests(vector_holder.graph_links_vectors().as_ref()),

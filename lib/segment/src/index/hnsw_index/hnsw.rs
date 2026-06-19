@@ -482,7 +482,7 @@ impl HNSWIndex {
                     internal_hardware_counter,
                 )?;
 
-                graph_layers_builder.link_new_point(vector_id, points_scorer);
+                graph_layers_builder.link_new_point(vector_id, points_scorer)?;
 
                 counter.fetch_add(1, Ordering::Relaxed);
 
@@ -825,7 +825,7 @@ impl HNSWIndex {
                 internal_hardware_counter,
             )?;
 
-            graph_layers_builder.link_new_point(block_point_id, points_scorer);
+            graph_layers_builder.link_new_point(block_point_id, points_scorer)?;
 
             counter.fetch_add(1, Ordering::Relaxed);
 

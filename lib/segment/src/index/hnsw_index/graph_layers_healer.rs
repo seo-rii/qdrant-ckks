@@ -160,7 +160,12 @@ impl<'a> GraphLayersHealer<'a> {
         nearest
     }
 
-    fn heal_point_on_level(&self, offset: PointOffsetType, level: usize, scorer: &dyn RawScorer) {
+    fn heal_point_on_level(
+        &self,
+        offset: PointOffsetType,
+        level: usize,
+        scorer: &dyn RawScorer,
+    ) -> OperationResult<()> {
         let level_m = self.hnsw_m.level_m(level);
 
         // Get current links and filter out deleted ones
@@ -204,9 +209,10 @@ impl<'a> GraphLayersHealer<'a> {
                     level_m,
                     scorer_fn,
                     &mut items,
-                );
+                )?;
             }
         }
+        Ok(())
     }
 
     pub fn heal(
@@ -230,7 +236,7 @@ impl<'a> GraphLayersHealer<'a> {
                     } else {
                         new_raw_scorer(query, vector_storage, internal_hardware_counter)?
                     };
-                    self.heal_point_on_level(offset, level, scorer.as_ref());
+                    self.heal_point_on_level(offset, level, scorer.as_ref())?;
                     Ok(())
                 })
         })
