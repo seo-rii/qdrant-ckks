@@ -209,11 +209,22 @@ impl SimpleBoolIndex {
         // Load in-memory index from RocksDB
         let mut memory = BoolMemory::new();
         for (key, value) in db_wrapper.lock_db().iter()? {
-            let idx = PointOffsetType::from_be_bytes(key.as_ref().try_into().unwrap());
+            let idx = PointOffsetType::from_be_bytes(key.as_ref().try_into().map_err(|_| {
+                OperationError::service_error(format!(
+                    "invalid bool index key length: expected {} bytes, got {}",
+                    std::mem::size_of::<PointOffsetType>(),
+                    key.len(),
+                ))
+            })?);
 
-            debug_assert_eq!(value.len(), 1);
+            let [value] = value.as_ref().try_into().map_err(|_| {
+                OperationError::service_error(format!(
+                    "invalid bool index value length: expected 1 byte, got {}",
+                    value.len(),
+                ))
+            })?;
 
-            let item = BooleanItem::from(value[0]);
+            let item = BooleanItem::from(value);
             memory.set_or_insert(idx, &item);
         }
 
