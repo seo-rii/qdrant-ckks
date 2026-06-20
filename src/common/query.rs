@@ -6048,10 +6048,17 @@ async fn preflight_private_result_oram_raw_payload_read(
         return Ok(());
     };
 
-    Err(StorageError::bad_input(format!(
+    Err(private_result_oram_raw_payload_read_error(
+        operation,
+        payload_path,
+    ))
+}
+
+fn private_result_oram_raw_payload_read_error(operation: &str, payload_path: &str) -> StorageError {
+    StorageError::bad_input(format!(
         "cannot {operation} private result ORAM payload field through ordinary collection payload reads; {}",
         private_result_oram_api_required_message(payload_path),
-    )))
+    ))
 }
 
 fn private_result_oram_raw_payload_read_violation<'a>(
@@ -12395,6 +12402,43 @@ mod tests {
                 private_result_oram_raw_payload_read_violation(&with_payload, &encryption).unwrap();
 
             assert_eq!(violation, None);
+        }
+    }
+
+    #[test]
+    fn private_result_oram_raw_payload_read_errors_redact_path_for_recommend_paths() {
+        for operation in [
+            "search results",
+            "recommend results",
+            "recommend grouped results",
+            "recommend group lookup",
+            "discover results",
+            "context results",
+        ] {
+            let message =
+                private_result_oram_raw_payload_read_error(operation, "document.body").to_string();
+
+            assert!(
+                message.contains(&format!(
+                    "cannot {operation} private result ORAM payload field"
+                )),
+                "{message}"
+            );
+            assert!(
+                message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                "{message}"
+            );
+            assert!(
+                message.contains("/private-result-oram/session"),
+                "{message}"
+            );
+            assert!(
+                message.contains("ordinary collection payload reads"),
+                "{message}"
+            );
+            assert!(!message.contains("document.body"), "{message}");
+            assert!(!message.contains("document"), "{message}");
+            assert!(!message.contains("body"), "{message}");
         }
     }
 }
