@@ -2085,7 +2085,12 @@ mod private_result_oram_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(duplicate_commit.code(), Code::InvalidArgument);
-            assert!(duplicate_commit.message().contains("duplicate bucket id"));
+            assert!(
+                duplicate_commit
+                    .message()
+                    .contains("commit signature verification failed")
+            );
+            assert!(!duplicate_commit.message().contains("duplicate bucket id"));
 
             let invalid_signature_duplicate_bucket =
                 PrivateResultOram::commit_private_result_oram_buckets(
@@ -2112,6 +2117,11 @@ mod private_result_oram_grpc_tests {
             );
             assert!(
                 invalid_signature_duplicate_bucket
+                    .message()
+                    .contains("commit signature verification failed")
+            );
+            assert!(
+                !invalid_signature_duplicate_bucket
                     .message()
                     .contains("duplicate bucket id")
             );

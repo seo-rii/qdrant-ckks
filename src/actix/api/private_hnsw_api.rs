@@ -2093,7 +2093,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "invalid path label"
+                "request validation failed"
             );
             assert!(!read_error.contains(path_label_sentinel), "{read_error}");
             assert!(
@@ -2897,7 +2897,7 @@ mod private_hnsw_rest_tests {
                 "{commit_old_root_shape_error}"
             );
 
-            post_json_error_contains!(
+            let duplicate_commit_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
                     session_id: session_id.clone(),
@@ -3000,7 +3000,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "ciphertext_sha256 must encode 32 bytes"
+                "request validation failed"
             );
             assert!(
                 !commit_hash_error.contains(commit_hash_sentinel),
@@ -3046,9 +3046,10 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "duplicate bucket id"
+                "request validation failed"
             );
-            post_json_error_contains!(
+            assert!(!duplicate_commit_error.contains("duplicate bucket id"));
+            let invalid_signature_duplicate_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
                     session_id: session_id.clone(),
@@ -3064,8 +3065,9 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "duplicate bucket id"
+                "request validation failed"
             );
+            assert!(!invalid_signature_duplicate_error.contains("duplicate bucket id"));
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
             while oversized_writeback_buckets.len() <= 3 {
                 oversized_writeback_buckets.push(search_run.updated_buckets[0].clone());

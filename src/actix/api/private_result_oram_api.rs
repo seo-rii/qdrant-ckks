@@ -1992,7 +1992,7 @@ mod private_result_oram_rest_tests {
                     .collect(),
             };
             let duplicate_commit_signature = fixture.sign_commit_unchecked(&duplicate_commit_plan);
-            post_json_error_contains!(
+            let duplicate_commit_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",
                 CommitPrivateResultOramBucketsRequest {
                     session_id: session_id.clone(),
@@ -2004,10 +2004,14 @@ mod private_result_oram_rest_tests {
                     commit_signature: duplicate_commit_signature,
                 },
                 StatusCode::BAD_REQUEST,
-                "duplicate bucket id"
+                "commit signature verification failed"
+            );
+            assert!(
+                !duplicate_commit_error.contains("duplicate bucket id"),
+                "{duplicate_commit_error}"
             );
 
-            post_json_error_contains!(
+            let invalid_signature_duplicate_commit_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",
                 CommitPrivateResultOramBucketsRequest {
                     session_id: session_id.clone(),
@@ -2019,7 +2023,11 @@ mod private_result_oram_rest_tests {
                     commit_signature: wrong_commit_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
-                "duplicate bucket id"
+                "commit signature verification failed"
+            );
+            assert!(
+                !invalid_signature_duplicate_commit_error.contains("duplicate bucket id"),
+                "{invalid_signature_duplicate_commit_error}"
             );
 
             let unconfigured_commit_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
