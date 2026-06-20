@@ -2327,6 +2327,63 @@ mod tests {
     }
 
     #[test]
+    fn initial_upload_bundle_preflights_existing_epoch_before_writes() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[18; 32]).unwrap();
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let original = fixture_upload_bundle(&key_pair);
+        store.write_initial_upload_bundle(&original, 4096).unwrap();
+
+        let mut replacement = original.clone();
+        let config = client_oram_config();
+        let plaintext_bucket = empty_private_hnsw_oram_plaintext_bucket(0, config).unwrap();
+        let encoded_bucket =
+            encode_private_hnsw_oram_bucket_plaintext(&plaintext_bucket, config).unwrap();
+        let replacement_bucket = seal_private_hnsw_oram_bucket(
+            &fixture_client_keys(),
+            client_bucket_base_context().for_bucket(0, replacement.manifest.index_epoch),
+            &encoded_bucket,
+        )
+        .unwrap();
+        replacement.buckets[0] = replacement_bucket;
+        replacement.manifest.root_hash =
+            PrivateHnswOramStore::merkle_root_for_commitments(&replacement.bucket_commitments())
+                .unwrap();
+        assert_ne!(replacement.manifest.root_hash, original.manifest.root_hash);
+
+        let err = store
+            .write_initial_upload_bundle(&replacement, 4096)
+            .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("current epoch/root"), "{rendered}");
+        assert_eq!(store.read_manifest().unwrap().0, original.manifest);
+        assert_eq!(
+            store
+                .read_bucket(
+                    0,
+                    original.manifest.index_epoch,
+                    original.manifest.bucket_count,
+                    4096,
+                )
+                .unwrap(),
+            original.buckets[0],
+        );
+        let proof = store
+            .read_merkle_path_batch(
+                &[0],
+                original.manifest.index_epoch,
+                &original.manifest.root_hash,
+                original.manifest.bucket_count,
+            )
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            original.buckets[0].bucket_commitment
+        );
+    }
+
+    #[test]
     fn initial_upload_bundle_matching_epoch_requires_existing_files_to_match() {
         let key_pair = Ed25519KeyPair::from_seed_unchecked(&[19; 32]).unwrap();
         let temp = TempDir::new().unwrap();
