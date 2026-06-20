@@ -3458,6 +3458,62 @@ mod tests {
     }
 
     #[test]
+    fn crash_window_before_epoch_cas_fails_closed_instead_of_serving_mixed_root() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old_bucket = fixture_bucket(0, 42, b"old result bucket");
+        let other_bucket = fixture_bucket(1, 42, b"other result bucket");
+        let old_commitments = vec![
+            old_bucket.bucket_commitment.clone(),
+            other_bucket.bucket_commitment.clone(),
+        ];
+        let old_root =
+            PrivateResultOramStore::merkle_root_for_commitments(&old_commitments).unwrap();
+        let old_epoch = PrivateResultOramEpochState {
+            index_epoch: 42,
+            root_hash: old_root.clone(),
+        };
+
+        store.write_initial_epoch(&old_epoch).unwrap();
+        store.write_bucket(&old_bucket, 42, 2, 128).unwrap();
+        store.write_bucket(&other_bucket, 42, 2, 128).unwrap();
+        store
+            .write_merkle_tree_from_commitments(42, old_root.clone(), old_commitments.clone())
+            .unwrap();
+
+        let updated_bucket = fixture_bucket(0, 43, b"new result bucket");
+        store.write_bucket(&updated_bucket, 43, 2, 128).unwrap();
+        assert_eq!(store.read_current_epoch().unwrap(), old_epoch);
+        let rendered = store.read_bucket(0, 42, 2, 128).unwrap_err().to_string();
+        assert!(rendered.contains("newer than requested epoch"));
+        assert!(!rendered.contains("42"), "{rendered}");
+        assert!(!rendered.contains("0"), "{rendered}");
+
+        let mut new_commitments = old_commitments;
+        new_commitments[0] = updated_bucket.bucket_commitment.clone();
+        let new_root =
+            PrivateResultOramStore::merkle_root_for_commitments(&new_commitments).unwrap();
+        store
+            .prepare_merkle_commit(
+                42,
+                &old_root,
+                43,
+                &new_root,
+                2,
+                std::slice::from_ref(&updated_bucket),
+            )
+            .unwrap()
+            .write()
+            .unwrap();
+        assert_eq!(store.read_current_epoch().unwrap(), old_epoch);
+        let rendered = store
+            .read_merkle_path_batch(&[0], 42, &old_root, 2)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("epoch mismatch"));
+    }
+
+    #[test]
     fn merkle_tree_validation_rejects_root_mismatch_without_computed_root() {
         let tree = PrivateResultOramMerkleTree {
             version: 1,
