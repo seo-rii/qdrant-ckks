@@ -1741,6 +1741,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn private_hnsw_store_rejects_unsafe_vector_path_components_without_reflecting_value() {
+        for vector_name in [
+            "../secret-vector-sentinel",
+            "/tmp/secret-vector-sentinel",
+            "tenant/secret-vector-sentinel",
+            "secret vector sentinel",
+            &"x".repeat(129),
+        ] {
+            let err = PrivateHnswOramStore::new("/tmp/hnsw-safe-path-test", vector_name)
+                .expect_err("unsafe vector name must not become a filesystem path component");
+            let rendered = err.to_string();
+            assert!(rendered.contains("safe path component"), "{rendered}");
+            assert!(!rendered.contains(vector_name), "{rendered}");
+        }
+
+        for vector_name in ["text", "text_v1", "tenant-a@text.1"] {
+            let store = PrivateHnswOramStore::new("/tmp/hnsw-safe-path-test", vector_name)
+                .expect("safe vector name should be accepted");
+            assert!(store.root_path().ends_with(vector_name));
+        }
+    }
+
     fn bucket_ciphertext(bytes: &[u8]) -> (String, String) {
         (
             BASE64URL_NOPAD.encode(bytes),
