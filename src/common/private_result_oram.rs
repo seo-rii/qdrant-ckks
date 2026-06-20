@@ -2275,6 +2275,38 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn session_registry_keeps_writer_lock_after_failed_action() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
+
+        let err = registry
+            .with_session_mut(
+                "collection-private-result-test",
+                "session-1",
+                now,
+                |_| -> StorageResult<()> {
+                    Err(StorageError::bad_request("synthetic failed session action"))
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("synthetic failed session action"));
+        assert!(registry.has_active_collection("collection-private-result-test", now));
+
+        let err = registry
+            .open(fixture_session("session-2", 20), now)
+            .unwrap_err();
+        assert!(err.to_string().contains("ConcurrentWriter"));
+
+        assert!(registry.close("collection-private-result-test", "session-1", now,));
+        registry
+            .open(fixture_session("session-2", 20), now)
+            .unwrap();
+    }
+
+    #[test]
     fn session_registry_wrong_close_keeps_writer_lock() {
         let now = 10;
         let mut registry = PrivateResultOramSessionRegistry::default();
