@@ -356,7 +356,9 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "root_hash"
                         | "root_hashes"
                         | "old_root_hash"
+                        | "old_root_hashes"
                         | "new_root_hash"
+                        | "new_root_hashes"
                         | "visited_node"
                         | "visited_nodes"
                         | "visited_node_id"
@@ -519,7 +521,9 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "roothash"
                         | "roothashes"
                         | "oldroothash"
+                        | "oldroothashes"
                         | "newroothash"
+                        | "newroothashes"
                         | "visitednode"
                         | "visitednodes"
                         | "visitednodeid"
@@ -971,7 +975,9 @@ mod tests {
                 "root_hash": "qdrant-sec-private-hnsw-root-hash-log-sentinel",
                 "rootHash": "qdrant-sec-private-hnsw-camel-root-hash-log-sentinel",
                 "old_root_hash": "qdrant-sec-private-hnsw-old-root-hash-log-sentinel",
+                "old_root_hashes": ["qdrant-sec-private-hnsw-old-root-hashes-log-sentinel"],
                 "newRootHash": "qdrant-sec-private-hnsw-camel-new-root-hash-log-sentinel",
+                "newRootHashes": ["qdrant-sec-private-hnsw-camel-new-root-hashes-log-sentinel"],
                 "bucket_ids": ["qdrant-sec-private-oram-bucket-id-log-sentinel"],
                 "bucketIds": ["qdrant-sec-private-oram-camel-bucket-id-log-sentinel"],
                 "bucketId": "qdrant-sec-private-oram-camel-single-bucket-id-log-sentinel",
@@ -1311,7 +1317,9 @@ mod tests {
             "qdrant-sec-private-hnsw-root-hash-log-sentinel",
             "qdrant-sec-private-hnsw-camel-root-hash-log-sentinel",
             "qdrant-sec-private-hnsw-old-root-hash-log-sentinel",
+            "qdrant-sec-private-hnsw-old-root-hashes-log-sentinel",
             "qdrant-sec-private-hnsw-camel-new-root-hash-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-new-root-hashes-log-sentinel",
             "qdrant-sec-private-oram-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-single-bucket-id-log-sentinel",

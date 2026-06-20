@@ -206,8 +206,11 @@ mod tests {
              bucketIdSequence=bucket-id-sequence-camel-sentinel \
              bucketIdSequences=bucket-id-sequences-camel-sentinel \
              root_hash=root-hash-sentinel \
+             rootHashes=root-hashes-camel-sentinel \
              oldRootHash=old-root-hash-camel-sentinel \
+             old_root_hashes=old-root-hashes-snake-sentinel \
              new_root_hash=new-root-hash-sentinel \
+             newRootHashes=new-root-hashes-camel-sentinel \
              path_label=leaf-sentinel candidate_heap=candidate-sentinel \
              candidateNodes=candidate-node-camel-sentinel \
              pathLabels=leaf-camel-sentinel \
@@ -271,8 +274,11 @@ mod tests {
         assert!(!rendered.contains("bucket-id-sequence-camel-sentinel"));
         assert!(!rendered.contains("bucket-id-sequences-camel-sentinel"));
         assert!(!rendered.contains("root-hash-sentinel"));
+        assert!(!rendered.contains("root-hashes-camel-sentinel"));
         assert!(!rendered.contains("old-root-hash-camel-sentinel"));
+        assert!(!rendered.contains("old-root-hashes-snake-sentinel"));
         assert!(!rendered.contains("new-root-hash-sentinel"));
+        assert!(!rendered.contains("new-root-hashes-camel-sentinel"));
         assert!(!rendered.contains("leaf-sentinel"));
         assert!(!rendered.contains("candidate-node-camel-sentinel"));
         assert!(!rendered.contains("leaf-camel-sentinel"));
