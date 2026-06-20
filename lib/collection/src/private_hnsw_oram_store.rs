@@ -2025,6 +2025,27 @@ mod tests {
         }
     }
 
+    fn fixture_bucket_commitment(
+        manifest: &PrivateHnswOramManifest,
+        bucket_id: u64,
+        index_epoch: u64,
+        ciphertext_sha256: &str,
+    ) -> String {
+        private_hnsw_bucket_commitment(
+            PrivateHnswBucketAeadContext {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id,
+                index_epoch,
+            },
+            ciphertext_sha256,
+        )
+        .unwrap()
+    }
+
     fn client_bucket_context(bucket_id: u64) -> PrivateHnswBucketAeadContext<'static> {
         client_bucket_base_context().for_bucket(bucket_id, 42)
     }
@@ -2729,7 +2750,7 @@ mod tests {
     }
 
     #[test]
-    fn writeback_commit_rejects_non_fixed_size_ciphertext_before_merkle_update() {
+    fn writeback_commit_rejects_invalid_bucket_and_wrong_root_before_writes() {
         let key_pair = Ed25519KeyPair::from_seed_unchecked(&[23; 32]).unwrap();
         let (bundle, updated_bucket, new, _) = fixture_signed_commit_update(&key_pair);
 
@@ -2737,6 +2758,77 @@ mod tests {
         let store = fixture_store(&temp);
         let old = store.write_initial_upload_bundle(&bundle, 4096).unwrap();
         let original_bucket = bundle.buckets[0].clone();
+        let assert_writeback_target_unchanged = || {
+            assert_eq!(store.read_current_epoch().unwrap(), old);
+            assert_eq!(
+                store
+                    .read_bucket(0, old.index_epoch, bundle.bucket_count(), 4096)
+                    .unwrap(),
+                original_bucket
+            );
+            let proof = store
+                .read_merkle_path_batch(
+                    &[0],
+                    old.index_epoch,
+                    &old.root_hash,
+                    bundle.bucket_count(),
+                )
+                .unwrap();
+            assert_eq!(proof.leaves[0].leaf_hash, original_bucket.bucket_commitment);
+        };
+
+        let mut hash_mismatch_bucket = updated_bucket.clone();
+        let mut hash_mismatch_raw = BASE64URL_NOPAD
+            .decode(hash_mismatch_bucket.ciphertext.as_bytes())
+            .unwrap();
+        hash_mismatch_raw[0] ^= 0xff;
+        hash_mismatch_bucket.ciphertext = BASE64URL_NOPAD.encode(&hash_mismatch_raw);
+        let err = store
+            .commit_writeback(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&hash_mismatch_bucket),
+                4096,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("ciphertext_sha256 mismatch"));
+        assert!(!err.contains(&hash_mismatch_bucket.ciphertext), "{err}");
+        assert_writeback_target_unchanged();
+
+        let mut short_ciphertext_bucket = updated_bucket.clone();
+        let short_raw = b"short-hnsw-commit";
+        let short_hash = BASE64URL_NOPAD.encode(Sha256::digest(short_raw).as_ref());
+        short_ciphertext_bucket.ciphertext = BASE64URL_NOPAD.encode(short_raw);
+        short_ciphertext_bucket.ciphertext_sha256 = short_hash.clone();
+        short_ciphertext_bucket.bucket_commitment = fixture_bucket_commitment(
+            &bundle.manifest,
+            short_ciphertext_bucket.bucket_id,
+            short_ciphertext_bucket.index_epoch,
+            &short_hash,
+        );
+        let mut short_commitments = bundle.bucket_commitments();
+        short_commitments[0] = short_ciphertext_bucket.bucket_commitment.clone();
+        let short_new = PrivateHnswOramEpochState {
+            index_epoch: new.index_epoch,
+            root_hash: PrivateHnswOramStore::merkle_root_for_commitments(&short_commitments)
+                .unwrap(),
+        };
+        let err = store
+            .commit_writeback(
+                &old,
+                &short_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&short_ciphertext_bucket),
+                4096,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("fixed ciphertext size"));
+        assert!(!err.contains("short-hnsw-commit"));
+        assert!(!err.contains(&short_ciphertext_bucket.ciphertext), "{err}");
+        assert_writeback_target_unchanged();
 
         let expected_bytes =
             private_hnsw_oram_bucket_ciphertext_bytes(&bundle.manifest.oram).unwrap();
@@ -2759,17 +2851,25 @@ mod tests {
 
         assert!(err.contains("fixed ciphertext size"));
         assert!(!err.contains(&oversized_bucket.ciphertext));
-        assert_eq!(store.read_current_epoch().unwrap(), old);
-        assert_eq!(
-            store
-                .read_bucket(0, old.index_epoch, bundle.bucket_count(), 4096)
-                .unwrap(),
-            original_bucket
-        );
-        let proof = store
-            .read_merkle_path_batch(&[0], old.index_epoch, &old.root_hash, bundle.bucket_count())
-            .unwrap();
-        assert_eq!(proof.leaves[0].leaf_hash, original_bucket.bucket_commitment);
+        assert_writeback_target_unchanged();
+
+        let wrong_root_new = PrivateHnswOramEpochState {
+            index_epoch: new.index_epoch,
+            root_hash: root_hash(99),
+        };
+        let err = store
+            .commit_writeback(
+                &old,
+                &wrong_root_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                4096,
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("new_root_hash mismatch"));
+        assert!(!err.contains(&wrong_root_new.root_hash), "{err}");
+        assert_writeback_target_unchanged();
     }
 
     #[test]
