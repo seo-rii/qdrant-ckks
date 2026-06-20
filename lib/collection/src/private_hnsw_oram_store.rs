@@ -3479,6 +3479,26 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn current_epoch_symlink_rejects_without_path_or_target_leak() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        store.ensure_layout().unwrap();
+        let outside = temp.path().join("outside-current-epoch.json");
+        fs::write(&outside, br#"{"index_epoch":42,"root_hash":"bad"}"#).unwrap();
+        symlink(outside, store.current_epoch_path()).unwrap();
+
+        let err = store.read_current_epoch().unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("non-symlink regular file"), "{rendered}");
+        assert!(!rendered.contains("outside-current-epoch"), "{rendered}");
+        assert!(!rendered.contains(CURRENT_EPOCH_FILE), "{rendered}");
+        assert!(!rendered.contains("private_hnsw_oram"), "{rendered}");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn ensure_layout_rejects_root_symlink_without_chmod_target() {
         use std::os::unix::fs::{PermissionsExt, symlink};
 
