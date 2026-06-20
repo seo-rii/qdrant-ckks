@@ -701,6 +701,7 @@ fn validate_private_hnsw_oram_vector_snapshot(
     let private_result_oram_path_batch_size =
         private_result_oram_snapshot_path_batch_size_for_hnsw_restore(
             collection_dir,
+            stable_crypto_id,
             params,
             manifest.result_privacy,
         )?;
@@ -850,6 +851,7 @@ fn private_result_oram_configured(params: &CollectionParams) -> CollectionResult
 
 fn private_result_oram_snapshot_path_batch_size_for_hnsw_restore(
     collection_dir: &Path,
+    stable_crypto_id: &str,
     params: &CollectionParams,
     result_privacy: ResultPrivacyMode,
 ) -> CollectionResult<Option<u32>> {
@@ -862,13 +864,13 @@ fn private_result_oram_snapshot_path_batch_size_for_hnsw_restore(
 
     validate_private_result_oram_snapshot_store_matches_config(collection_dir, true)?;
     let store = PrivateResultOramStore::new(collection_dir);
-    let (manifest, _) = store.read_manifest().map_err(|_| {
+    let (manifest, signature) = store.read_manifest().map_err(|_| {
         CollectionError::bad_request(
             "private HNSW ORAM snapshot restore result_privacy=private_payload_oram_required \
              requires a readable private result ORAM snapshot manifest",
         )
     })?;
-    validate_private_result_oram_manifest_shape(&manifest).map_err(private_result_restore_error)?;
+    validate_private_result_oram_restore_manifest(&manifest, &signature, stable_crypto_id, params)?;
     Ok(Some(manifest.oram.path_batch_size))
 }
 
@@ -2955,6 +2957,50 @@ mod tests {
             temp_dir.path(),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_result_oram_signature_key_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-result-private-bad-signature")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_with_result_config(uuid);
+        let mut hnsw_manifest = private_hnsw_manifest(uuid.to_string());
+        hnsw_manifest.result_privacy = ResultPrivacyMode::PrivatePayloadOramRequired;
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &hnsw_manifest);
+        let mut result_manifest = private_result_manifest(uuid.to_string());
+        result_manifest.key_id = "tenant-a/vector-private-rk".to_string();
+        result_manifest.rk_id = "tenant-a/vector-private-rk".to_string();
+        refresh_private_result_snapshot_manifest_root(&mut result_manifest);
+        write_private_result_snapshot_fixture(temp_dir.path(), &result_manifest);
+
+        let result_store = PrivateResultOramStore::new(temp_dir.path());
+        result_store
+            .write_manifest(
+                &result_manifest,
+                &PrivateResultOramSignature {
+                    alg: "ed25519".to_string(),
+                    key_id: "tenant-a/private-result-signing-v2".to_string(),
+                    sig: BASE64URL_NOPAD.encode(&[7; 64]),
+                },
+            )
+            .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("private result ORAM snapshot manifest signature key_id"));
+        assert!(!rendered.contains("tenant-a/private-result-signing-v2"));
+        assert!(!rendered.contains(&result_manifest.owner_signing_key_id));
+        assert!(!rendered.contains(&result_manifest.root_hash));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
     #[test]
