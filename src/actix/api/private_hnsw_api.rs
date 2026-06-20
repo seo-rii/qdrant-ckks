@@ -439,7 +439,8 @@ mod private_hnsw_rest_tests {
     use crate::common::private_hnsw_wire_fixture::{
         BASE_EPOCH, COLLECTION_ID, MAX_CIPHERTEXT_BYTES, NEXT_EPOCH, PrivateHnswRouteWireFixture,
         SESSION_ID, SIGNING_KEY_ID, create_private_hnsw_collection,
-        create_private_hnsw_collection_with_private_result_oram, route_e2e_guard, test_dispatcher,
+        create_private_hnsw_collection_with_private_result_oram,
+        create_private_hnsw_collection_with_vector_name, route_e2e_guard, test_dispatcher,
         test_distributed_dispatcher,
     };
 
@@ -873,6 +874,41 @@ mod private_hnsw_rest_tests {
                 .await
                 .unwrap()
             );
+        });
+    }
+
+    #[test]
+    fn rest_rejects_unsafe_configured_private_hnsw_vector_name_without_reflecting_it() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let unsafe_vector_name = "secret vector sentinel";
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection_with_vector_name(&dispatcher, unsafe_vector_name).await;
+            let app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(settings.clone()))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_hnsw_api),
+            )
+            .await;
+
+            let request = actix_test::TestRequest::get()
+                .uri("/collections/docs/private-hnsw/secret%20vector%20sentinel/manifest")
+                .to_request();
+            let response = actix_test::call_service(&app, request).await;
+            let status = response.status();
+            let body_bytes = actix_test::read_body(response).await;
+            let body = String::from_utf8_lossy(&body_bytes);
+
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(body.contains("safe store path component"), "{body}");
+            assert!(!body.contains(unsafe_vector_name), "{body}");
+            assert!(!body.contains("secret"), "{body}");
+            assert!(!body.contains("private_hnsw_oram"), "{body}");
+            assert!(!body.contains("/tmp"), "{body}");
         });
     }
 

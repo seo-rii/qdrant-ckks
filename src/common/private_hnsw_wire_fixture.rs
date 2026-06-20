@@ -589,23 +589,31 @@ pub(crate) fn route_e2e_guard() -> MutexGuard<'static, ()> {
 }
 
 pub(crate) async fn create_private_hnsw_collection(dispatcher: &Dispatcher) {
-    create_private_hnsw_collection_with_result_oram_rule(dispatcher, false).await
+    create_private_hnsw_collection_with_result_oram_rule(dispatcher, VECTOR_NAME, false).await
 }
 
 pub(crate) async fn create_private_hnsw_collection_with_private_result_oram(
     dispatcher: &Dispatcher,
 ) {
-    create_private_hnsw_collection_with_result_oram_rule(dispatcher, true).await
+    create_private_hnsw_collection_with_result_oram_rule(dispatcher, VECTOR_NAME, true).await
+}
+
+pub(crate) async fn create_private_hnsw_collection_with_vector_name(
+    dispatcher: &Dispatcher,
+    vector_name: &str,
+) {
+    create_private_hnsw_collection_with_result_oram_rule(dispatcher, vector_name, false).await
 }
 
 async fn create_private_hnsw_collection_with_result_oram_rule(
     dispatcher: &Dispatcher,
+    vector_name: &str,
     include_private_result_oram: bool,
 ) {
     let mut rules = vec![EncryptionRuleRef {
         id: "text_private_hnsw".to_string(),
         selector: EncryptionSelector::VectorNames {
-            names: vec![VECTOR_NAME.to_string()],
+            names: vec![vector_name.to_string()],
         },
         instance: "docs_private_hnsw_v1".to_string(),
         binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
@@ -629,7 +637,7 @@ async fn create_private_hnsw_collection_with_result_oram_rule(
                     CreateCollection {
                         vectors: collection::operations::types::VectorsConfig::Multi(
                             BTreeMap::from([(
-                                VECTOR_NAME.to_string(),
+                                vector_name.to_string(),
                                 VectorParamsBuilder::new(2, segment::types::Distance::Euclid)
                                     .build(),
                             )]),

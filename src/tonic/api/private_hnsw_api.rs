@@ -523,7 +523,8 @@ mod private_hnsw_grpc_tests {
         BASE_EPOCH, COLLECTION_ID, COLLECTION_NAME, MAX_CIPHERTEXT_BYTES, NEXT_EPOCH,
         PrivateHnswRouteWireFixture, SESSION_ID, SIGNING_KEY_ID, VECTOR_NAME,
         create_private_hnsw_collection, create_private_hnsw_collection_with_private_result_oram,
-        route_e2e_guard, test_dispatcher, test_distributed_dispatcher,
+        create_private_hnsw_collection_with_vector_name, route_e2e_guard, test_dispatcher,
+        test_distributed_dispatcher,
     };
 
     fn sample_manifest() -> PrivateHnswOramManifest {
@@ -862,6 +863,41 @@ mod private_hnsw_grpc_tests {
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert!(!restored_commit_buckets.is_empty());
+    }
+
+    #[test]
+    fn grpc_rejects_unsafe_configured_private_hnsw_vector_name_without_reflecting_it() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let unsafe_vector_name = "secret vector sentinel";
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection_with_vector_name(&dispatcher, unsafe_vector_name).await;
+            let service =
+                PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+
+            let err = PrivateHnswOram::get_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::GetPrivateHnswManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: unsafe_vector_name.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message().contains("safe store path component"),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains(unsafe_vector_name));
+            assert!(!err.message().contains("secret"));
+            assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains("/tmp"));
+        });
     }
 
     #[test]
