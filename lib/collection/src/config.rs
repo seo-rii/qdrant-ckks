@@ -421,6 +421,45 @@ mod ckks_tests {
     }
 
     #[test]
+    fn private_result_oram_payload_overlap_message_redacts_paths() {
+        for operation in [
+            "filter on",
+            "order by",
+            "group by",
+            "facet on",
+            "create payload index on",
+            "use",
+            "use formula condition on",
+        ] {
+            let message = private_result_oram_payload_selector_overlap_message(
+                operation,
+                "document.body.lang",
+                "document.body",
+            );
+
+            assert!(
+                message.contains(&format!(
+                    "cannot {operation} private result ORAM payload field"
+                )),
+                "{message}"
+            );
+            assert!(
+                message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                "{message}"
+            );
+            assert!(
+                message.contains("/private-result-oram/session"),
+                "{message}"
+            );
+            assert!(!message.contains("document.body"), "{message}");
+            assert!(!message.contains("document"), "{message}");
+            assert!(!message.contains("body"), "{message}");
+            assert!(!message.contains("lang"), "{message}");
+            assert!(!message.contains("blind index"), "{message}");
+        }
+    }
+
+    #[test]
     fn encryption_config_rejects_sparse_only_encrypted_vector_selector() {
         let params = CollectionParams {
             sparse_vectors: Some(BTreeMap::from([(
