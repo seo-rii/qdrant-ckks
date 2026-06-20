@@ -1461,6 +1461,27 @@ mod private_result_oram_rest_tests {
                 "{malformed_client_id_error}"
             );
 
+            let stale_epoch_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/session",
+                OpenPrivateResultOramSessionRequest {
+                    client_id: "tenant-a/sdk-instance-stale-epoch".to_string(),
+                    desired_epoch: NEXT_EPOCH,
+                    fixed_budget: true,
+                },
+                StatusCode::BAD_REQUEST,
+                "requested epoch"
+            );
+            let stale_epoch_error: Value = serde_json::from_str(&stale_epoch_error).unwrap();
+            let stale_epoch_error = stale_epoch_error["status"]["error"].as_str().unwrap();
+            assert!(
+                !stale_epoch_error.contains(&NEXT_EPOCH.to_string()),
+                "{stale_epoch_error}"
+            );
+            assert!(
+                !stale_epoch_error.contains(&BASE_EPOCH.to_string()),
+                "{stale_epoch_error}"
+            );
+
             let session_result = post_json_ok!(
                 "/collections/docs/private-result-oram/session",
                 OpenPrivateResultOramSessionRequest {

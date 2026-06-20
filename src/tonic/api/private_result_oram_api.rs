@@ -1242,6 +1242,22 @@ mod private_result_oram_grpc_tests {
                 err.message()
             );
 
+            let err = PrivateResultOram::open_private_result_oram_session(
+                &service,
+                Request::new(grpc::OpenPrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-stale-epoch".to_string(),
+                    desired_epoch: NEXT_EPOCH,
+                    fixed_budget: true,
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("requested epoch"));
+            assert!(!err.message().contains(&NEXT_EPOCH.to_string()));
+            assert!(!err.message().contains(&BASE_EPOCH.to_string()));
+
             let session = PrivateResultOram::open_private_result_oram_session(
                 &service,
                 Request::new(grpc::OpenPrivateResultOramSessionRequest {
