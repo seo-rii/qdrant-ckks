@@ -1974,6 +1974,9 @@ where
     NextLeaf: FnMut() -> Result<u64, PrivateResultOramError>,
 {
     validate_private_result_oram_client_config(config)?;
+    if writeback_epoch <= expected_epoch {
+        return Err(PrivateResultOramError::InvalidManifestField("new_epoch"));
+    }
     if payload_fetch_tokens.is_empty() {
         return Err(PrivateResultOramError::InvalidFetchPlanField(
             "payload_fetch_tokens",
@@ -4985,6 +4988,58 @@ mod tests {
             fixed_window_commit_plan.updated_buckets.len(),
             single_batch_writeback_budget,
         );
+    }
+
+    #[test]
+    fn encrypted_verified_token_fetch_rejects_non_advancing_writeback_epoch_before_access() {
+        use std::cell::Cell;
+
+        let keys = result_test_keys();
+        let base_context = result_bucket_base_context();
+        let config = result_client_config();
+        let payload_fetch_token = [11; 32];
+        let root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
+        let bucket_count = private_result_oram_bucket_count(config.tree_height).unwrap();
+        let mut state = PrivateResultOramClientState::with_position_map(
+            [(payload_fetch_token, 2)],
+            config.tree_height,
+        )
+        .unwrap();
+        let read_plan = PrivateResultOramReadBucketPlan {
+            batches: vec![PrivateResultOramReadBucketBatchPlan {
+                bucket_ids: vec![0, 1, 4, 9],
+                token_count: 1,
+            }],
+            token_count: 1,
+            path_batch_size: 1,
+        };
+        let next_leaf_called = Cell::new(false);
+
+        let err = fetch_private_result_oram_tokens_encrypted_verified(
+            &keys,
+            base_context,
+            42,
+            &root_hash,
+            bucket_count,
+            42,
+            &mut state,
+            config,
+            &[payload_fetch_token],
+            &read_plan,
+            &[],
+            || {
+                next_leaf_called.set(true);
+                Ok(0)
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            PrivateResultOramError::InvalidManifestField("new_epoch")
+        );
+        assert!(!next_leaf_called.get());
+        assert_eq!(state.position(&payload_fetch_token), Some(2));
     }
 
     #[test]

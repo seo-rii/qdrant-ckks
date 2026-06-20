@@ -3025,6 +3025,10 @@ where
     WriteBack: FnMut(&[PrivateHnswOramBucket]) -> Result<(), PrivateHnswClientError>,
     NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
 {
+    if writeback_epoch <= expected_epoch {
+        return Err(PrivateHnswClientError::InvalidCommitEpoch);
+    }
+
     search_private_hnsw_oram_plaintext(
         state,
         config,
@@ -3089,6 +3093,10 @@ where
     WriteBack: FnMut(&[PrivateHnswOramBucket]) -> Result<(), PrivateHnswClientError>,
     NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
 {
+    if writeback_epoch <= expected_epoch {
+        return Err(PrivateHnswClientError::InvalidCommitEpoch);
+    }
+
     search_private_hnsw_oram_plaintext_with_cache(
         state,
         config,
@@ -8766,6 +8774,92 @@ mod tests {
             open_private_hnsw_oram_plaintext_bucket(&keys, base_context, &root, config).unwrap();
         assert_eq!(root_plaintext.bucket_id, 0);
         assert!(root_plaintext.blocks.iter().any(|slot| slot.is_some()));
+    }
+
+    #[test]
+    fn verified_encrypted_oram_hnsw_search_rejects_non_advancing_writeback_epoch_before_read() {
+        use std::cell::RefCell;
+
+        let keys = test_keys();
+        let base_context = bucket_base_context();
+        let config = PrivateHnswOramClientConfig {
+            bucket_size: 2,
+            ..oram_config()
+        };
+        let root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
+        let mut state =
+            PrivateHnswOramClientState::with_position_map([([1; 32], 0)], config.tree_height)
+                .unwrap();
+        let params = PrivateHnswSearchParams {
+            entry_node_id: [1; 32],
+            k: 1,
+            ef: 1,
+            fixed_steps: 1,
+            distance: DistanceKind::Euclid,
+            padding_node_id: None,
+        };
+        let read_called = RefCell::new(false);
+        let writeback_called = RefCell::new(false);
+
+        let err = search_private_hnsw_oram_encrypted_verified(
+            &keys,
+            base_context,
+            42,
+            &root_hash,
+            private_hnsw_oram_bucket_count(config.tree_height).unwrap(),
+            42,
+            &mut state,
+            config,
+            &[1.0, 0.0],
+            params,
+            |_| {
+                *read_called.borrow_mut() = true;
+                Err(PrivateHnswClientError::PathBucketMismatch)
+            },
+            |_| {
+                *writeback_called.borrow_mut() = true;
+                Ok(())
+            },
+            || Ok(0),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, PrivateHnswClientError::InvalidCommitEpoch);
+        assert!(!*read_called.borrow());
+        assert!(!*writeback_called.borrow());
+        assert_eq!(state.position(&[1; 32]), Some(0));
+
+        let mut cached_state = state.clone();
+        let read_with_cache_called = RefCell::new(false);
+        let writeback_with_cache_called = RefCell::new(false);
+        let err = search_private_hnsw_oram_encrypted_verified_with_cache(
+            &keys,
+            base_context,
+            42,
+            &root_hash,
+            private_hnsw_oram_bucket_count(config.tree_height).unwrap(),
+            42,
+            &mut cached_state,
+            config,
+            &[1.0, 0.0],
+            params,
+            &PrivateHnswClientNodeCache::new(),
+            |_| {
+                *read_with_cache_called.borrow_mut() = true;
+                Err(PrivateHnswClientError::PathBucketMismatch)
+            },
+            |_| {
+                *writeback_with_cache_called.borrow_mut() = true;
+                Ok(())
+            },
+            || Ok(0),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, PrivateHnswClientError::InvalidCommitEpoch);
+        assert!(!*read_with_cache_called.borrow());
+        assert!(!*writeback_with_cache_called.borrow());
+        assert_eq!(cached_state.position(&[1; 32]), Some(0));
     }
 
     #[test]
