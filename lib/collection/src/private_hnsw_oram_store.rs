@@ -2935,6 +2935,49 @@ mod tests {
     }
 
     #[test]
+    fn writeback_commit_rejects_non_advancing_epoch_before_writes() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[23; 32]).unwrap();
+        let bundle = fixture_upload_bundle(&key_pair);
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old = store.write_initial_upload_bundle(&bundle, 4096).unwrap();
+        let original_bucket = bundle.buckets[0].clone();
+        let updated_bucket =
+            fixture_bucket(0, old.index_epoch, b"private-hnsw-non-advancing-sentinel");
+        let non_advancing_new = PrivateHnswOramEpochState {
+            index_epoch: old.index_epoch,
+            root_hash: root_hash(99),
+        };
+
+        let err = store
+            .commit_writeback(
+                &old,
+                &non_advancing_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                4096,
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("new epoch must be greater than old epoch"));
+        assert!(!err.contains("private-hnsw-non-advancing-sentinel"));
+        assert!(!err.contains(&updated_bucket.ciphertext), "{err}");
+        assert_eq!(store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            store
+                .read_bucket(0, old.index_epoch, bundle.bucket_count(), 4096)
+                .unwrap(),
+            original_bucket
+        );
+        let proof = store
+            .read_merkle_path_batch(&[0], old.index_epoch, &old.root_hash, bundle.bucket_count())
+            .unwrap();
+        assert_eq!(proof.leaves[0].leaf_hash, original_bucket.bucket_commitment);
+    }
+
+    #[test]
     fn writeback_commit_rejects_invalid_bucket_and_wrong_root_before_writes() {
         let key_pair = Ed25519KeyPair::from_seed_unchecked(&[23; 32]).unwrap();
         let (bundle, updated_bucket, new, _) = fixture_signed_commit_update(&key_pair);
