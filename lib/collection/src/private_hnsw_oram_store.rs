@@ -3499,6 +3499,33 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn current_epoch_group_world_accessible_rejects_without_epoch_or_path_leak() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let epoch = PrivateHnswOramEpochState {
+            index_epoch: 42,
+            root_hash: root_hash(42),
+        };
+        store.write_initial_epoch(&epoch).unwrap();
+        fs::set_permissions(
+            store.current_epoch_path(),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        let err = store.read_current_epoch().unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("group/world accessible"), "{rendered}");
+        assert!(!rendered.contains("42"), "{rendered}");
+        assert!(!rendered.contains(&epoch.root_hash), "{rendered}");
+        assert!(!rendered.contains(CURRENT_EPOCH_FILE), "{rendered}");
+        assert!(!rendered.contains("private_hnsw_oram"), "{rendered}");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn ensure_layout_rejects_root_symlink_without_chmod_target() {
         use std::os::unix::fs::{PermissionsExt, symlink};
 
