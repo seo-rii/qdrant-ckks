@@ -2275,6 +2275,26 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn session_registry_wrong_close_keeps_writer_lock() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
+
+        assert!(!registry.close("other-collection", "session-1", now));
+        assert!(registry.has_active_collection("collection-private-result-test", now));
+
+        let err = registry
+            .open(fixture_session("session-2", 20), now)
+            .unwrap_err();
+        assert!(err.to_string().contains("ConcurrentWriter"));
+
+        assert!(registry.close("collection-private-result-test", "session-1", now,));
+        assert!(!registry.has_active_collection("collection-private-result-test", now));
+    }
+
+    #[test]
     fn session_registry_blocks_snapshot_and_upload_windows() {
         let now = 10;
         let mut registry = PrivateResultOramSessionRegistry::default();
