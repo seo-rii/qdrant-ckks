@@ -610,25 +610,28 @@ mod tests {
                         && !description.contains("document.body")
             ));
 
-            schema.clear();
-            schema.insert(
-                field_name.parse().unwrap(),
-                PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
-            );
-            let err = validate_payload_index_schema_for_encryption(
-                schema.iter(),
-                &collection_params,
-                "recover",
-            )
-            .unwrap_err();
-            assert!(matches!(
-                err,
-                CollectionError::BadInput { description }
-                    if description.contains("recover payload index schema")
-                        && description.contains("private result ORAM payload field")
-                        && description.contains("/private-result-oram/session")
-                        && !description.contains("document.body")
-            ));
+            for action in ["recover", "create shard key"] {
+                schema.clear();
+                schema.insert(
+                    field_name.parse().unwrap(),
+                    PayloadFieldSchema::FieldType(PayloadSchemaType::Keyword),
+                );
+                let err = validate_payload_index_schema_for_encryption(
+                    schema.iter(),
+                    &collection_params,
+                    action,
+                )
+                .unwrap_err();
+                let action_label = format!("{action} payload index schema");
+                assert!(matches!(
+                    err,
+                    CollectionError::BadInput { description }
+                        if description.contains(&action_label)
+                            && description.contains("private result ORAM payload field")
+                            && description.contains("/private-result-oram/session")
+                            && !description.contains("document.body")
+                ));
+            }
         }
     }
 
