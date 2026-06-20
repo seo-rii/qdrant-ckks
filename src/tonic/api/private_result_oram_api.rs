@@ -1242,11 +1242,12 @@ mod private_result_oram_grpc_tests {
                 err.message()
             );
 
+            let fixed_budget_client_id = "tenant-a/sdk-instance-fixed-budget-off";
             let err = PrivateResultOram::open_private_result_oram_session(
                 &service,
                 Request::new(grpc::OpenPrivateResultOramSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
-                    client_id: "tenant-a/sdk-instance-fixed-budget-off".to_string(),
+                    client_id: fixed_budget_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: false,
                 }),
@@ -1257,6 +1258,11 @@ mod private_result_oram_grpc_tests {
             assert!(
                 err.message()
                     .contains("strict mode requires fixed_budget=true")
+            );
+            assert!(
+                !err.message().contains(fixed_budget_client_id),
+                "{}",
+                err.message()
             );
 
             let err = PrivateResultOram::open_private_result_oram_session(

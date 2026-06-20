@@ -1461,15 +1461,20 @@ mod private_result_oram_rest_tests {
                 "{malformed_client_id_error}"
             );
 
-            post_json_error_contains!(
+            let fixed_budget_client_id = "tenant-a/sdk-instance-fixed-budget-off";
+            let fixed_budget_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/session",
                 OpenPrivateResultOramSessionRequest {
-                    client_id: "tenant-a/sdk-instance-fixed-budget-off".to_string(),
+                    client_id: fixed_budget_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: false,
                 },
                 StatusCode::BAD_REQUEST,
                 "strict mode requires fixed_budget=true"
+            );
+            assert!(
+                !fixed_budget_error.contains(fixed_budget_client_id),
+                "{fixed_budget_error}"
             );
 
             let stale_epoch_error = post_json_error_contains!(

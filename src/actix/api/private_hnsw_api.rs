@@ -1753,16 +1753,21 @@ mod private_hnsw_rest_tests {
                 "{malformed_client_id_error}"
             );
 
-            post_json_error_contains!(
+            let fixed_budget_client_id = "tenant-a/sdk-instance-fixed-budget-off";
+            let fixed_budget_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
-                    client_id: "tenant-a/sdk-instance-fixed-budget-off".to_string(),
+                    client_id: fixed_budget_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: false,
                     result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
                 },
                 StatusCode::BAD_REQUEST,
                 "strict mode requires fixed_budget=true"
+            );
+            assert!(
+                !fixed_budget_error.contains(fixed_budget_client_id),
+                "{fixed_budget_error}"
             );
             let stale_epoch_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
