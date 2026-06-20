@@ -1446,7 +1446,7 @@ fn validate_path_component(value: &str, label: &str) -> CollectionResult<()> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
     {
         return Err(CollectionError::bad_request(format!(
-            "private HNSW ORAM {label} is not a safe path component",
+            "private HNSW ORAM {label} is not a safe store path component",
         )));
     }
     Ok(())
@@ -1753,7 +1753,7 @@ mod tests {
             let err = PrivateHnswOramStore::new("/tmp/hnsw-safe-path-test", vector_name)
                 .expect_err("unsafe vector name must not become a filesystem path component");
             let rendered = err.to_string();
-            assert!(rendered.contains("safe path component"), "{rendered}");
+            assert!(rendered.contains("safe store path component"), "{rendered}");
             assert!(!rendered.contains(vector_name), "{rendered}");
         }
 
