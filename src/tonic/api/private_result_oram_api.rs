@@ -1500,12 +1500,17 @@ mod private_result_oram_grpc_tests {
             assert!(
                 invalid_signature_bad_path
                     .message()
-                    .contains("valid ORAM paths")
+                    .contains("read_buckets signature verification failed")
             );
             assert!(
                 !invalid_signature_bad_path
                     .message()
                     .contains(&wrong_read_signature.sig)
+            );
+            assert!(
+                !invalid_signature_bad_path
+                    .message()
+                    .contains("valid ORAM paths")
             );
             assert!(
                 !invalid_signature_bad_path
@@ -1531,12 +1536,17 @@ mod private_result_oram_grpc_tests {
             assert!(
                 invalid_signature_out_of_range
                     .message()
-                    .contains("bucket id is out of range")
+                    .contains("read_buckets signature verification failed")
             );
             assert!(
                 !invalid_signature_out_of_range
                     .message()
                     .contains(&wrong_read_signature.sig)
+            );
+            assert!(
+                !invalid_signature_out_of_range
+                    .message()
+                    .contains("bucket id is out of range")
             );
             assert!(
                 !invalid_signature_out_of_range

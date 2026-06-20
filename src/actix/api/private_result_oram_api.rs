@@ -1636,10 +1636,11 @@ mod private_result_oram_rest_tests {
                     read_signature: wrong_read_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
-                "valid ORAM paths"
+                "read_buckets signature verification failed"
             );
             assert!(!invalid_signature_bad_path_error.contains(&wrong_read_signature.sig));
             assert!(!invalid_signature_bad_path_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!invalid_signature_bad_path_error.contains("valid ORAM paths"));
 
             let invalid_signature_out_of_range_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
@@ -1651,10 +1652,11 @@ mod private_result_oram_rest_tests {
                     read_signature: wrong_read_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
-                "bucket id is out of range"
+                "read_buckets signature verification failed"
             );
             assert!(!invalid_signature_out_of_range_error.contains(&wrong_read_signature.sig));
             assert!(!invalid_signature_out_of_range_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!invalid_signature_out_of_range_error.contains("bucket id is out of range"));
 
             let unconfigured_read_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
             let mut unconfigured_read_key_signature = fixture.read_signature(&read_bucket_ids);

@@ -4431,6 +4431,36 @@ mod private_hnsw_rest_tests {
 
             let duplicate_path = fixture.entry_leaf_label();
             let duplicate_paths = vec![duplicate_path.clone(), duplicate_path.clone()];
+            let invalid_duplicate_request = actix_test::TestRequest::post()
+                .uri("/collections/docs/private-hnsw/text/oram/read_paths")
+                .set_json(OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: duplicate_paths.clone(),
+                    padding: OramReadPadding {
+                        requested_paths: 2,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                })
+                .to_request();
+            let invalid_duplicate_response =
+                actix_test::call_service(&app, invalid_duplicate_request).await;
+            assert_eq!(invalid_duplicate_response.status(), StatusCode::BAD_REQUEST);
+            let invalid_duplicate_body = actix_test::read_body(invalid_duplicate_response).await;
+            let invalid_duplicate_body = String::from_utf8_lossy(&invalid_duplicate_body);
+            assert!(invalid_duplicate_body.contains("request validation failed"));
+            assert!(!invalid_duplicate_body.contains("duplicate path label"));
+            assert!(
+                !invalid_duplicate_body.contains(&duplicate_path),
+                "{invalid_duplicate_body}"
+            );
+
             let duplicate_signature = fixture.sign_read_paths(&duplicate_paths, 2, true);
             let duplicate_request = actix_test::TestRequest::post()
                 .uri("/collections/docs/private-hnsw/text/oram/read_paths")
