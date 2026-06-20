@@ -2302,6 +2302,134 @@ mod tests {
     }
 
     #[test]
+    fn initial_upload_bundle_rejects_root_mismatch() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[18; 32]).unwrap();
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let mut bundle = fixture_upload_bundle(&key_pair);
+        let computed_root =
+            PrivateHnswOramStore::merkle_root_for_commitments(&bundle.bucket_commitments())
+                .unwrap();
+        bundle.manifest.root_hash = root_hash(99);
+        assert_ne!(computed_root, bundle.manifest.root_hash);
+
+        let err = store
+            .write_initial_upload_bundle(&bundle, 4096)
+            .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("Merkle root mismatch"));
+        assert!(!rendered.contains(&computed_root), "{rendered}");
+        assert!(
+            !store.root_path().exists(),
+            "invalid initial upload must not create private HNSW ORAM layout"
+        );
+    }
+
+    #[test]
+    fn initial_upload_bundle_matching_epoch_requires_existing_files_to_match() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[19; 32]).unwrap();
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let original = fixture_upload_bundle(&key_pair);
+        store.write_initial_upload_bundle(&original, 4096).unwrap();
+        store.write_initial_upload_bundle(&original, 4096).unwrap();
+
+        let mut replacement = original.buckets[0].clone();
+        let mut replacement_raw = BASE64URL_NOPAD
+            .decode(replacement.ciphertext.as_bytes())
+            .unwrap();
+        replacement_raw[0] ^= 0x55;
+        replacement.ciphertext = BASE64URL_NOPAD.encode(&replacement_raw);
+        replacement.ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest(&replacement_raw).as_ref());
+        assert_ne!(replacement, original.buckets[0]);
+        store
+            .write_bucket(
+                &replacement,
+                original.manifest.index_epoch,
+                original.manifest.bucket_count,
+                4096,
+            )
+            .unwrap();
+
+        let err = store
+            .write_initial_upload_bundle(&original, 4096)
+            .unwrap_err();
+        assert!(err.to_string().contains("existing bucket set"));
+        assert_eq!(
+            store
+                .read_bucket(
+                    0,
+                    original.manifest.index_epoch,
+                    original.manifest.bucket_count,
+                    4096,
+                )
+                .unwrap(),
+            replacement
+        );
+    }
+
+    #[test]
+    fn initial_upload_bundle_matching_epoch_requires_existing_manifest_to_match() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[20; 32]).unwrap();
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let original = fixture_upload_bundle(&key_pair);
+        store.write_initial_upload_bundle(&original, 4096).unwrap();
+
+        let mut tampered_signature = original.manifest_signature.clone();
+        tampered_signature.sig = BASE64URL_NOPAD.encode(&[8; 64]);
+        store
+            .write_manifest(&original.manifest, &tampered_signature)
+            .unwrap();
+
+        let err = store
+            .write_initial_upload_bundle(&original, 4096)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("existing manifest"));
+        assert_eq!(store.read_manifest().unwrap().1, tampered_signature);
+        assert_eq!(
+            store.read_current_epoch().unwrap().root_hash,
+            original.manifest.root_hash
+        );
+    }
+
+    #[test]
+    fn initial_upload_bundle_matching_epoch_requires_existing_merkle_tree_to_match() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[21; 32]).unwrap();
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let original = fixture_upload_bundle(&key_pair);
+        store.write_initial_upload_bundle(&original, 4096).unwrap();
+
+        let mut tampered_commitments = original.bucket_commitments();
+        tampered_commitments[1] = root_hash(88);
+        let tampered_root =
+            PrivateHnswOramStore::merkle_root_for_commitments(&tampered_commitments).unwrap();
+        assert_ne!(tampered_root, original.manifest.root_hash);
+        store
+            .write_merkle_tree_from_commitments(
+                original.manifest.index_epoch,
+                tampered_root.clone(),
+                tampered_commitments,
+            )
+            .unwrap();
+
+        let err = store
+            .write_initial_upload_bundle(&original, 4096)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("existing Merkle tree"));
+        assert_eq!(
+            store.read_current_epoch().unwrap().root_hash,
+            original.manifest.root_hash
+        );
+        assert_eq!(store.read_merkle_tree().unwrap().root_hash, tampered_root);
+    }
+
+    #[test]
     fn missing_layout_reads_fail_as_not_found() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
