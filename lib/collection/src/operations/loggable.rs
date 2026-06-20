@@ -304,11 +304,21 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "leaf_label"
                         | "leaf_labels"
                         | "client_state"
+                        | "client_state_snapshot"
+                        | "client_state_snapshots"
+                        | "encrypted_client_state_snapshot"
+                        | "encrypted_client_state_snapshots"
                         | "position_map"
                         | "position_maps"
+                        | "position_map_snapshot"
+                        | "position_map_snapshots"
                         | "oram_position_map"
+                        | "oram_position_map_snapshot"
                         | "token_position_map"
+                        | "token_position_map_snapshot"
                         | "stash"
+                        | "stash_snapshot"
+                        | "stash_snapshots"
                         | "entry_node_id"
                         | "entry_node_ids"
                         | "level_mask"
@@ -459,10 +469,20 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "leaflabel"
                         | "leaflabels"
                         | "clientstate"
+                        | "clientstatesnapshot"
+                        | "clientstatesnapshots"
+                        | "encryptedclientstatesnapshot"
+                        | "encryptedclientstatesnapshots"
                         | "positionmap"
                         | "positionmaps"
+                        | "positionmapsnapshot"
+                        | "positionmapsnapshots"
                         | "orampositionmap"
+                        | "orampositionmapsnapshot"
                         | "tokenpositionmap"
+                        | "tokenpositionmapsnapshot"
+                        | "stashsnapshot"
+                        | "stashsnapshots"
                         | "entrynodeid"
                         | "entrynodeids"
                         | "levelmask"
@@ -1100,6 +1120,43 @@ mod tests {
         });
         for (key, field_value) in [
             (
+                "position_map_snapshot",
+                json!("qdrant-sec-private-hnsw-position-map-snapshot-log-sentinel"),
+            ),
+            (
+                "oramPositionMapSnapshot",
+                json!("qdrant-sec-private-hnsw-camel-oram-position-map-snapshot-log-sentinel"),
+            ),
+        ] {
+            insert_test_json_field(
+                &mut private_hnsw_oram_access,
+                &["private_hnsw", "client_state"],
+                key,
+                field_value,
+            );
+        }
+        for (key, field_value) in [
+            (
+                "client_state_snapshot",
+                json!("qdrant-sec-private-hnsw-client-state-snapshot-log-sentinel"),
+            ),
+            (
+                "clientStateSnapshot",
+                json!("qdrant-sec-private-hnsw-camel-client-state-snapshot-log-sentinel"),
+            ),
+            (
+                "encrypted_client_state_snapshot",
+                json!("qdrant-sec-private-hnsw-encrypted-client-state-snapshot-log-sentinel"),
+            ),
+            (
+                "encryptedClientStateSnapshot",
+                json!("qdrant-sec-private-hnsw-camel-encrypted-client-state-snapshot-log-sentinel"),
+            ),
+            (
+                "stashSnapshot",
+                json!("qdrant-sec-private-hnsw-camel-stash-snapshot-log-sentinel"),
+            ),
+            (
                 "read_bucket_id",
                 json!("qdrant-sec-private-oram-single-read-bucket-log-sentinel"),
             ),
@@ -1156,6 +1213,28 @@ mod tests {
             );
         }
         for (key, field_value) in [
+            (
+                "token_position_map_snapshot",
+                json!("qdrant-sec-private-result-token-position-map-snapshot-log-sentinel"),
+            ),
+            (
+                "tokenPositionMapSnapshot",
+                json!("qdrant-sec-private-result-camel-token-position-map-snapshot-log-sentinel"),
+            ),
+            (
+                "clientStateSnapshots",
+                json!(["qdrant-sec-private-result-camel-client-state-snapshots-log-sentinel"]),
+            ),
+            (
+                "encryptedClientStateSnapshots",
+                json!([
+                    "qdrant-sec-private-result-camel-encrypted-client-state-snapshots-log-sentinel"
+                ]),
+            ),
+            (
+                "stash_snapshots",
+                json!(["qdrant-sec-private-result-stash-snapshots-log-sentinel"]),
+            ),
             (
                 "read_bucket_id",
                 json!("qdrant-sec-private-result-single-read-bucket-log-sentinel"),
@@ -1276,9 +1355,16 @@ mod tests {
             "qdrant-sec-private-hnsw-oram-path-log-sentinel",
             "qdrant-sec-private-hnsw-camel-oram-path-log-sentinel",
             "qdrant-sec-private-hnsw-position-map-log-sentinel",
+            "qdrant-sec-private-hnsw-position-map-snapshot-log-sentinel",
             "qdrant-sec-private-hnsw-oram-position-map-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-oram-position-map-snapshot-log-sentinel",
             "qdrant-sec-private-hnsw-stash-log-sentinel",
             "qdrant-sec-private-hnsw-camel-client-state-log-sentinel",
+            "qdrant-sec-private-hnsw-client-state-snapshot-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-client-state-snapshot-log-sentinel",
+            "qdrant-sec-private-hnsw-encrypted-client-state-snapshot-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-encrypted-client-state-snapshot-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-stash-snapshot-log-sentinel",
             "qdrant-sec-private-hnsw-node-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-single-node-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-node-id-log-sentinel",
@@ -1359,10 +1445,15 @@ mod tests {
             "qdrant-sec-private-result-camel-fetch-token-log-sentinel",
             "qdrant-sec-private-result-token-position-map-log-sentinel",
             "qdrant-sec-private-result-camel-token-position-map-log-sentinel",
+            "qdrant-sec-private-result-token-position-map-snapshot-log-sentinel",
+            "qdrant-sec-private-result-camel-token-position-map-snapshot-log-sentinel",
             "qdrant-sec-private-result-payload-oram-leaf-log-sentinel",
             "qdrant-sec-private-result-camel-payload-oram-leaf-log-sentinel",
             "qdrant-sec-private-result-id-log-sentinel",
             "qdrant-sec-private-result-stash-log-sentinel",
+            "qdrant-sec-private-result-camel-client-state-snapshots-log-sentinel",
+            "qdrant-sec-private-result-camel-encrypted-client-state-snapshots-log-sentinel",
+            "qdrant-sec-private-result-stash-snapshots-log-sentinel",
         ] {
             assert!(!serialized.contains(sentinel));
         }
