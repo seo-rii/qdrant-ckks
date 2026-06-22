@@ -706,6 +706,7 @@ pub async fn do_upload_private_hnsw_buckets(
     buckets: Vec<PrivateHnswOramBucket>,
 ) -> StorageResult<PrivateHnswOramEpochState> {
     validate_root_hash_string(&root_hash, "root_hash")?;
+    validate_private_hnsw_upload_bucket_request_shape(&buckets)?;
     let pass = auth.check_collection_access(
         collection_name,
         AccessRequirements::new().write(),
@@ -2270,6 +2271,17 @@ fn validate_private_hnsw_commit_request_shape(
     Ok(())
 }
 
+fn validate_private_hnsw_upload_bucket_request_shape(
+    buckets: &[PrivateHnswOramBucket],
+) -> StorageResult<()> {
+    if buckets.is_empty() {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM bucket upload must contain at least one bucket",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_private_hnsw_read_path_labels(paths: &[String], tree_height: u32) -> StorageResult<()> {
     validate_unique_path_labels(paths)?;
     for path in paths {
@@ -2442,6 +2454,18 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("updated_buckets must contain"));
         assert!(!rendered.contains("session is missing or expired"));
+    }
+
+    #[test]
+    fn upload_bucket_request_shape_rejects_empty_bucket_set_before_store_lookup() {
+        let bucket = fixture_bucket(0, 42);
+        validate_private_hnsw_upload_bucket_request_shape(std::slice::from_ref(&bucket)).unwrap();
+
+        let err = validate_private_hnsw_upload_bucket_request_shape(&[]).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("bucket upload must contain"));
+        assert!(!rendered.contains("manifest"));
+        assert!(!rendered.contains("private_hnsw_oram"));
     }
 
     #[test]

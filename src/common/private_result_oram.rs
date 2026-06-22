@@ -647,6 +647,7 @@ pub async fn do_upload_private_result_oram_buckets(
     buckets: Vec<qdrant_sec::PrivateResultOramBucket>,
 ) -> StorageResult<PrivateResultOramEpochState> {
     validate_base64url_32_string(&root_hash, "root_hash")?;
+    validate_upload_bucket_request_shape(&buckets)?;
     let pass = auth.check_collection_access(
         collection_name,
         AccessRequirements::new().write(),
@@ -1650,6 +1651,17 @@ fn validate_commit_bucket_request_shape(
     Ok(())
 }
 
+fn validate_upload_bucket_request_shape(
+    buckets: &[qdrant_sec::PrivateResultOramBucket],
+) -> StorageResult<()> {
+    if buckets.is_empty() {
+        return Err(StorageError::bad_request(
+            "private result ORAM bucket upload must contain at least one bucket",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_bucket_read_request_budget(
     manifest: &PrivateResultOramManifest,
     bucket_ids: &[u64],
@@ -2332,6 +2344,18 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("commit updated_buckets must contain"));
         assert!(!rendered.contains("session is missing or expired"));
+    }
+
+    #[test]
+    fn upload_bucket_request_shape_rejects_empty_bucket_set_before_store_lookup() {
+        let bucket = fixture_readable_bucket(0, 42, 7, &BASE64URL_NOPAD.encode(&[8; 32]));
+        validate_upload_bucket_request_shape(std::slice::from_ref(&bucket)).unwrap();
+
+        let err = validate_upload_bucket_request_shape(&[]).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("bucket upload must contain"));
+        assert!(!rendered.contains("manifest"));
+        assert!(!rendered.contains("private_result_oram"));
     }
 
     #[test]
