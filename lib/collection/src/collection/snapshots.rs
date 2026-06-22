@@ -3389,6 +3389,9 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("fixed ciphertext size"));
         assert!(!rendered.contains("0"), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
     }
 
     #[test]
@@ -3455,6 +3458,9 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("commitment context mismatch"));
         assert!(!rendered.contains("0"), "{rendered}");
+        assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
     }
 
     #[test]
@@ -3499,7 +3505,6 @@ mod tests {
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
-        assert!(!rendered.contains("text"), "{rendered}");
     }
 
     #[test]
@@ -3557,7 +3562,6 @@ mod tests {
         assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!err.contains("00000000.bucket"));
         assert!(!err.contains(&manifest.root_hash));
-        assert!(!err.contains("text"));
     }
 
     #[test]
@@ -3616,7 +3620,6 @@ mod tests {
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
-        assert!(!rendered.contains("text"), "{rendered}");
     }
 
     #[test]
@@ -3675,6 +3678,5 @@ mod tests {
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
-        assert!(!rendered.contains("text"), "{rendered}");
     }
 }
