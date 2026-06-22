@@ -1927,6 +1927,9 @@ mod tests {
             .to_string();
 
         assert!(rendered.contains("manifest upload does not match existing current manifest"));
+        assert!(!rendered.contains(&replacement_signature.sig));
+        assert!(!rendered.contains(&signature.sig));
+        assert!(!rendered.contains(&manifest.root_hash));
         assert_eq!(store.read_current_epoch().unwrap(), epoch);
         assert_eq!(store.read_manifest().unwrap(), (manifest, signature));
     }

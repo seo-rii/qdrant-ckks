@@ -2619,18 +2619,19 @@ mod tests {
             sig: BASE64URL_NOPAD.encode(&[8; 64]),
             ..signature.clone()
         };
-        let err = store
+        let rendered = store
             .write_manifest_with_initial_epoch_if_absent_or_matching(
                 &replacement,
                 &replacement_signature,
                 &epoch,
             )
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
 
-        assert!(
-            err.to_string()
-                .contains("manifest upload does not match existing current manifest")
-        );
+        assert!(rendered.contains("manifest upload does not match existing current manifest"));
+        assert!(!rendered.contains(&replacement_signature.sig));
+        assert!(!rendered.contains(&signature.sig));
+        assert!(!rendered.contains(&manifest.root_hash));
         assert_eq!(store.read_current_epoch().unwrap(), epoch);
         assert_eq!(store.read_manifest().unwrap(), (manifest, signature));
     }
