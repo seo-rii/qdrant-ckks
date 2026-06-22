@@ -558,20 +558,21 @@ fn private_oram_snapshot_source_dir(
     collection_dir: &Path,
     dir_name: &str,
 ) -> CollectionResult<Option<PathBuf>> {
+    let label = private_oram_label(dir_name);
     let source_dir = collection_dir.join(dir_name);
     match std::fs::symlink_metadata(&source_dir) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() => {
             Err(CollectionError::service_error(format!(
-                "{dir_name} snapshot source must be a non-symlink directory",
+                "{label} snapshot source must be a non-symlink directory",
             )))
         }
         Ok(_) => {
-            validate_private_oram_snapshot_source_tree(&source_dir, private_oram_label(dir_name))?;
+            validate_private_oram_snapshot_source_tree(&source_dir, label)?;
             Ok(Some(source_dir))
         }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
         Err(err) => Err(CollectionError::service_error(format!(
-            "failed to inspect {dir_name} snapshot source: {err}"
+            "failed to inspect {label} snapshot source: {err}"
         ))),
     }
 }
@@ -1836,9 +1837,12 @@ mod tests {
 
         let err =
             private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
 
-        assert!(err.to_string().contains("non-symlink directory"));
-        assert!(!err.to_string().contains("outside-private-hnsw-oram"));
+        assert!(rendered.contains("private HNSW ORAM snapshot source"));
+        assert!(rendered.contains("non-symlink directory"));
+        assert!(!rendered.contains("outside-private-hnsw-oram"));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
     }
 
     #[cfg(unix)]
@@ -1887,9 +1891,12 @@ mod tests {
 
         let err =
             private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
 
-        assert!(err.to_string().contains("non-symlink directory"));
-        assert!(!err.to_string().contains("outside-private-result-oram"));
+        assert!(rendered.contains("private result ORAM snapshot source"));
+        assert!(rendered.contains("non-symlink directory"));
+        assert!(!rendered.contains("outside-private-result-oram"));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
     #[cfg(unix)]
