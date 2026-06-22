@@ -988,6 +988,49 @@ mod private_hnsw_grpc_tests {
             );
             assert!(!err.message().contains("manifest"), "{}", err.message());
 
+            let mut duplicate_upload_before_manifest_buckets =
+                fixture.encrypted_build.buckets.clone();
+            assert!(
+                duplicate_upload_before_manifest_buckets.len() >= 2,
+                "route fixture must contain at least two ORAM buckets"
+            );
+            duplicate_upload_before_manifest_buckets[1] =
+                duplicate_upload_before_manifest_buckets[0].clone();
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: duplicate_upload_before_manifest_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("duplicate bucket"));
+            assert!(
+                !err.message().contains(&fixture.encrypted_build.root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains("private_hnsw_oram"),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("manifest"), "{}", err.message());
+
             let err = PrivateHnswOram::open_private_hnsw_session(
                 &service,
                 Request::new(grpc::OpenPrivateHnswSessionRequest {

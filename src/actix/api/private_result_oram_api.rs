@@ -1240,6 +1240,28 @@ mod private_result_oram_rest_tests {
             assert!(!empty_upload_before_manifest.contains("private_result_oram"));
             assert!(!empty_upload_before_manifest.contains("manifest"));
 
+            let mut duplicate_upload_before_manifest_buckets = fixture.buckets.clone();
+            assert!(
+                duplicate_upload_before_manifest_buckets.len() >= 2,
+                "route fixture must contain at least two ORAM buckets"
+            );
+            duplicate_upload_before_manifest_buckets[1] =
+                duplicate_upload_before_manifest_buckets[0].clone();
+            let duplicate_upload_before_manifest = post_json_error_contains!(
+                "/collections/docs/private-result-oram/buckets",
+                UploadPrivateResultOramBucketsRequest {
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: duplicate_upload_before_manifest_buckets,
+                },
+                StatusCode::BAD_REQUEST,
+                "duplicate bucket"
+            );
+            assert!(!duplicate_upload_before_manifest.contains(&fixture.manifest.root_hash));
+            assert!(!duplicate_upload_before_manifest.contains(&fixture.buckets[0].ciphertext));
+            assert!(!duplicate_upload_before_manifest.contains("private_result_oram"));
+            assert!(!duplicate_upload_before_manifest.contains("manifest"));
+
             let unsupported_manifest_alg_sentinel = "rsa-pss-result-manifest-sentinel";
             let mut unsupported_alg_manifest_signature = fixture.signature.clone();
             unsupported_alg_manifest_signature.alg = unsupported_manifest_alg_sentinel.to_string();

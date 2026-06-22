@@ -920,6 +920,58 @@ mod private_result_oram_grpc_tests {
             );
             assert!(!empty_upload_before_manifest.message().contains("manifest"));
 
+            let mut duplicate_upload_before_manifest_buckets = fixture.buckets.clone();
+            assert!(
+                duplicate_upload_before_manifest_buckets.len() >= 2,
+                "route fixture must contain at least two ORAM buckets"
+            );
+            duplicate_upload_before_manifest_buckets[1] =
+                duplicate_upload_before_manifest_buckets[0].clone();
+            let duplicate_upload_before_manifest =
+                PrivateResultOram::upload_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        buckets: duplicate_upload_before_manifest_buckets
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                duplicate_upload_before_manifest.code(),
+                Code::InvalidArgument
+            );
+            assert!(
+                duplicate_upload_before_manifest
+                    .message()
+                    .contains("duplicate bucket")
+            );
+            assert!(
+                !duplicate_upload_before_manifest
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !duplicate_upload_before_manifest
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !duplicate_upload_before_manifest
+                    .message()
+                    .contains("private_result_oram")
+            );
+            assert!(
+                !duplicate_upload_before_manifest
+                    .message()
+                    .contains("manifest")
+            );
+
             let unsupported_manifest_alg_sentinel = "rsa-pss-result-manifest-sentinel";
             let mut unsupported_alg_manifest_signature = fixture.signature.clone();
             unsupported_alg_manifest_signature.alg = unsupported_manifest_alg_sentinel.to_string();

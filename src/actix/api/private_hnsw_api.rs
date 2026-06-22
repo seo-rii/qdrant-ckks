@@ -1063,6 +1063,43 @@ mod private_hnsw_rest_tests {
                 "{empty_upload_before_manifest_error}"
             );
 
+            let mut duplicate_upload_before_manifest_buckets =
+                fixture.encrypted_build.buckets.clone();
+            assert!(
+                duplicate_upload_before_manifest_buckets.len() >= 2,
+                "route fixture must contain at least two ORAM buckets"
+            );
+            duplicate_upload_before_manifest_buckets[1] =
+                duplicate_upload_before_manifest_buckets[0].clone();
+            let duplicate_upload_before_manifest_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: duplicate_upload_before_manifest_buckets,
+                },
+                StatusCode::BAD_REQUEST,
+                "duplicate bucket"
+            );
+            assert!(
+                !duplicate_upload_before_manifest_error
+                    .contains(&fixture.encrypted_build.root_hash),
+                "{duplicate_upload_before_manifest_error}"
+            );
+            assert!(
+                !duplicate_upload_before_manifest_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{duplicate_upload_before_manifest_error}"
+            );
+            assert!(
+                !duplicate_upload_before_manifest_error.contains("private_hnsw_oram"),
+                "{duplicate_upload_before_manifest_error}"
+            );
+            assert!(
+                !duplicate_upload_before_manifest_error.contains("manifest"),
+                "{duplicate_upload_before_manifest_error}"
+            );
+
             let missing_manifest_session_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
