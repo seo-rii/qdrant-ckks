@@ -3087,7 +3087,7 @@ mod private_result_oram_tests {
     }
 
     #[test]
-    fn session_open_storage_recheck_requires_bucket_file() {
+    fn session_open_storage_recheck_rejects_manifest_or_epoch_drift() {
         let mut session = fixture_session("session-1", 20);
         session.bucket_count = 1;
         session.manifest.bucket_count = 1;
@@ -3126,6 +3126,76 @@ mod private_result_oram_tests {
         )
         .unwrap();
 
+        let stale_epoch = PrivateResultOramEpochState {
+            index_epoch: session.index_epoch + 1,
+            root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+        };
+        store
+            .compare_and_swap_epoch(&expected_epoch, &stale_epoch)
+            .unwrap();
+        let err = ensure_private_result_oram_session_open_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("session open observed concurrent manifest or epoch update"));
+        assert!(!rendered.contains(&stale_epoch.root_hash));
+        assert!(!rendered.contains(&expected_epoch.root_hash));
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateResultOramStore::new(temp.path());
+        store.write_initial_epoch(&expected_epoch).unwrap();
+        store.write_manifest(&session.manifest, &signature).unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                expected_epoch.index_epoch,
+                expected_epoch.root_hash.clone(),
+                vec![expected_epoch.root_hash.clone()],
+            )
+            .unwrap();
+        let bucket =
+            fixture_readable_bucket(0, expected_epoch.index_epoch, 12, &expected_epoch.root_hash);
+        store
+            .write_bucket(
+                &bucket,
+                expected_epoch.index_epoch,
+                session.manifest.bucket_count,
+                4096,
+            )
+            .unwrap();
+        let mut changed_manifest = session.manifest.clone();
+        changed_manifest.logical_result_count += 1;
+        store.write_manifest(&changed_manifest, &signature).unwrap();
+        let err = ensure_private_result_oram_session_open_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("session open observed concurrent manifest or epoch update"));
+        assert!(!rendered.contains(&expected_epoch.root_hash));
+        assert!(!rendered.contains(&signature.sig));
+
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateResultOramStore::new(temp.path());
+        store.write_initial_epoch(&expected_epoch).unwrap();
+        store.write_manifest(&session.manifest, &signature).unwrap();
+        let err = ensure_private_result_oram_session_open_storage_matches(
+            &store,
+            &expected_epoch,
+            &session.manifest,
+            &signature,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("encrypted bucket data is unavailable"));
+        assert!(!rendered.contains(&expected_epoch.root_hash));
+
         let temp = tempfile::TempDir::new().unwrap();
         let store = PrivateResultOramStore::new(temp.path());
         store.write_initial_epoch(&expected_epoch).unwrap();
@@ -3144,10 +3214,10 @@ mod private_result_oram_tests {
             &signature,
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("encrypted bucket data is unavailable")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("encrypted bucket data is unavailable"));
+        assert!(!rendered.contains("00000000.bucket"));
+        assert!(!rendered.contains(&expected_epoch.root_hash));
     }
 
     fn recovered_snapshot_manifest() -> PrivateResultOramManifest {

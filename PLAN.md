@@ -403,7 +403,7 @@
 - REST/gRPC ORAM session fixture는 strict mode `fixed_budget=false`, non-current desired epoch, result privacy mismatch를 session open에서 거부한다.
 - REST/gRPC manifest upload fixture는 route settings가 `private_payload_oram_required` runtime mode로 drift되면 collection-level result ORAM binding requirement 또는 HNSW manifest policy에서 fail closed 되는지 검증한다.
 - REST/gRPC ORAM session fixture는 active session이 있는 같은 private index에 대해 두 번째 session open을 `ConcurrentWriter`로 거부한다.
-- session open은 registry에 active session을 등록한 뒤 stored manifest/signature/current epoch가 open 중 바뀌지 않았는지 다시 확인하고, drift가 있으면 방금 연 session을 닫은 뒤 fail closed 한다.
+- session open은 registry에 active session을 등록한 뒤 stored manifest/signature/current epoch가 open 중 바뀌지 않았는지 다시 확인하고, drift가 있으면 방금 연 session을 닫은 뒤 fail closed 한다. Private HNSW ORAM과 private result ORAM common tests 모두 epoch drift, manifest drift, missing Merkle metadata, and missing bucket files를 sanitized error로 고정한다.
 - REST/gRPC session open은 signed manifest/current epoch만 있고 encrypted bucket/Merkle upload가 아직 완료되지 않은 상태도 fail closed 한다.
 - session registry는 lease가 만료된 session을 제거하면서 같은 private index의 single-writer lock도 해제하고, 만료된 session id 재사용은 read/commit/close 모두에서 fail closed 한다.
 - session registry는 failed session action이나 wrong collection/vector close 요청 이후에도 active session과 single-writer lock을 보존한다. private HNSW와 private result ORAM 모두 잘못된 close가 session id를 제거하거나 writer lock을 고아 상태로 남기지 않는지 회귀 테스트로 고정했다.
