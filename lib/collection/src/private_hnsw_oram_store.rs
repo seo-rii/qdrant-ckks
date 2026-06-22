@@ -2410,10 +2410,14 @@ mod tests {
             )
             .unwrap();
 
-        let err = store
+        let rendered = store
             .write_initial_upload_bundle(&original, 4096)
-            .unwrap_err();
-        assert!(err.to_string().contains("existing bucket set"));
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("existing bucket set"));
+        assert!(!rendered.contains(&replacement.ciphertext));
+        assert!(!rendered.contains(&replacement.bucket_commitment));
+        assert!(!rendered.contains(&original.buckets[0].ciphertext));
         assert_eq!(
             store
                 .read_bucket(
@@ -2441,11 +2445,15 @@ mod tests {
             .write_manifest(&original.manifest, &tampered_signature)
             .unwrap();
 
-        let err = store
+        let rendered = store
             .write_initial_upload_bundle(&original, 4096)
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
 
-        assert!(err.to_string().contains("existing manifest"));
+        assert!(rendered.contains("existing manifest"));
+        assert!(!rendered.contains(&tampered_signature.sig));
+        assert!(!rendered.contains(&original.manifest_signature.sig));
+        assert!(!rendered.contains(&original.manifest.root_hash));
         assert_eq!(store.read_manifest().unwrap().1, tampered_signature);
         assert_eq!(
             store.read_current_epoch().unwrap().root_hash,
@@ -2474,11 +2482,14 @@ mod tests {
             )
             .unwrap();
 
-        let err = store
+        let rendered = store
             .write_initial_upload_bundle(&original, 4096)
-            .unwrap_err();
+            .unwrap_err()
+            .to_string();
 
-        assert!(err.to_string().contains("existing Merkle tree"));
+        assert!(rendered.contains("existing Merkle tree"));
+        assert!(!rendered.contains(&tampered_root));
+        assert!(!rendered.contains(&original.manifest.root_hash));
         assert_eq!(
             store.read_current_epoch().unwrap().root_hash,
             original.manifest.root_hash
