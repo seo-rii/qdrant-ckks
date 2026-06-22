@@ -3570,7 +3570,7 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("request validation failed"));
+            assert!(err.message().contains("ciphertext_sha256"));
             assert!(
                 !err.message().contains(commit_hash_sentinel),
                 "{}",

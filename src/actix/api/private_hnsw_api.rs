@@ -3222,7 +3222,7 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "request validation failed"
+                "ciphertext_sha256"
             );
             assert!(
                 !commit_hash_error.contains(commit_hash_sentinel),

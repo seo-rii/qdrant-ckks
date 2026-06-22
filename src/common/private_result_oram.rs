@@ -1648,6 +1648,10 @@ fn validate_commit_bucket_request_shape(
             "private result ORAM commit updated_buckets must contain at least one bucket",
         ));
     }
+    for bucket in updated_buckets {
+        validate_base64url_32_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
+        validate_base64url_32_string(&bucket.bucket_commitment, "bucket_commitment")?;
+    }
     Ok(())
 }
 
@@ -2354,6 +2358,40 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("commit updated_buckets must contain"));
         assert!(!rendered.contains("session is missing or expired"));
+    }
+
+    #[test]
+    fn commit_bucket_request_shape_rejects_malformed_bucket_hash_before_session_lookup() {
+        let mut bucket = fixture_readable_bucket(0, 43, 7, &BASE64URL_NOPAD.encode(&[8; 32]));
+        let sentinel = "result-commit-hash-sentinel";
+        bucket.ciphertext_sha256 = sentinel.to_string();
+
+        let err = validate_commit_bucket_request_shape(std::slice::from_ref(&bucket)).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("ciphertext_sha256"), "{rendered}");
+        assert!(
+            !rendered.contains("session is missing or expired"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+    }
+
+    #[test]
+    fn commit_bucket_request_shape_rejects_malformed_bucket_commitment_before_session_lookup() {
+        let mut bucket = fixture_readable_bucket(0, 43, 7, &BASE64URL_NOPAD.encode(&[8; 32]));
+        let sentinel = "result-commit-commitment-sentinel";
+        bucket.bucket_commitment = sentinel.to_string();
+
+        let err = validate_commit_bucket_request_shape(std::slice::from_ref(&bucket)).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("bucket_commitment"), "{rendered}");
+        assert!(
+            !rendered.contains("session is missing or expired"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
     }
 
     #[test]
