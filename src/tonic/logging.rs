@@ -202,7 +202,9 @@ mod tests {
              read_bucket_ids=read-bucket-id-sentinel \
              readBucketIds=read-bucket-id-camel-sentinel \
              read_bucket_id_sequence=read-bucket-id-sequence-sentinel \
+             readBucketIdSequence=read-bucket-id-sequence-camel-sentinel \
              read_bucket_id_sequences=read-bucket-id-sequences-sentinel \
+             bucket_id_sequence=bucket-id-sequence-snake-sentinel \
              bucketIdSequence=bucket-id-sequence-camel-sentinel \
              bucketIdSequences=bucket-id-sequences-camel-sentinel \
              root_hash=root-hash-sentinel \
@@ -270,7 +272,9 @@ mod tests {
         assert!(!rendered.contains("read-bucket-id-sentinel"));
         assert!(!rendered.contains("read-bucket-id-camel-sentinel"));
         assert!(!rendered.contains("read-bucket-id-sequence-sentinel"));
+        assert!(!rendered.contains("read-bucket-id-sequence-camel-sentinel"));
         assert!(!rendered.contains("read-bucket-id-sequences-sentinel"));
+        assert!(!rendered.contains("bucket-id-sequence-snake-sentinel"));
         assert!(!rendered.contains("bucket-id-sequence-camel-sentinel"));
         assert!(!rendered.contains("bucket-id-sequences-camel-sentinel"));
         assert!(!rendered.contains("root-hash-sentinel"));
