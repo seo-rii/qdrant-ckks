@@ -1090,8 +1090,9 @@ therefore fails with the same sanitized owner-mismatch error whether or not the
 key id is configured.
 `refresh_private_result_oram_manifest_for_commit` and
 `sign_private_result_oram_manifest_refresh` mirror the private HNSW helper by
-deriving the next signed manifest only when a commit plan's old epoch/root
-matches the current result ORAM manifest. The collection crate implements
+first validating the current result ORAM manifest shape and deriving the next
+signed manifest only when a commit plan's old epoch/root matches it. The
+collection crate implements
 `PrivateResultOramStore` for the payload/result layer. It writes
 `private_result_oram/manifest.json`,
 `manifest.sig`, encrypted bucket files, Merkle commitment metadata, and
@@ -1278,11 +1279,13 @@ Before submitting an ORAM writeback, clients can call
 current signed manifest, updated bucket ciphertext hashes,
 collection/vector/key lineage, and proposed bucket epoch before producing
 signature bucket refs. The planner enforces the same fixed writeback budget as
-the server commit guard. After the writeback commit succeeds, clients can call
+the server commit guard and rejects malformed manifest context before bucket
+commitment planning. After the writeback commit succeeds, clients can call
 `refresh_private_hnsw_oram_manifest_for_commit` to derive the next signed
 manifest body from the commit plan, or
 `sign_private_hnsw_oram_manifest_refresh` to derive and sign it in one step;
-both reject a plan whose old epoch/root does not match the current manifest.
+both first validate the current manifest shape and reject a plan whose old
+epoch/root does not match it.
 The server-side private HNSW tests now package a tiny SDK-built encrypted index,
 sign its manifest, and verify that the initial
 bucket upload bundle satisfies the same manifest epoch/root and Merkle
@@ -1307,9 +1310,11 @@ buckets forward from an older bucket epoch; the current Merkle root commits to
 each bucket commitment, and clients open each bucket with the epoch recorded in
 that bucket while rejecting buckets newer than the requested index epoch. Search
 clients should open server `read_paths` responses with
-`search_private_hnsw_oram_encrypted_verified`, which checks the response
-epoch/root/bucket count and Merkle path batch proof before decrypting buckets
-or issuing ORAM writeback. SDKs may keep high-level HNSW nodes in a local
+`search_private_hnsw_oram_encrypted_verified`, which preflights the client-pinned
+root hash and manifest-derived bucket count before issuing a server read, then
+checks the response epoch/root/bucket count and Merkle path batch proof before
+decrypting buckets or issuing ORAM writeback. SDKs may keep high-level HNSW
+nodes in a local
 `PrivateHnswClientNodeCache` and call the `*_with_cache` search helpers. A cache
 hit still consumes a padding ORAM access through `padding_node_id`, so fixed-step
 request volume remains constant while the client uses its local upper-layer node
