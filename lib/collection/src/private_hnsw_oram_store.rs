@@ -2684,6 +2684,52 @@ mod tests {
     }
 
     #[test]
+    fn post_commit_manifest_refresh_rejects_stale_epoch_without_overwriting() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old_manifest = fixture_manifest();
+        let old_signature = fixture_signature();
+        let old_epoch = PrivateHnswOramEpochState {
+            index_epoch: old_manifest.index_epoch,
+            root_hash: old_manifest.root_hash.clone(),
+        };
+        let new_epoch = PrivateHnswOramEpochState {
+            index_epoch: old_manifest.index_epoch + 1,
+            root_hash: root_hash(43),
+        };
+
+        store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(
+                &old_manifest,
+                &old_signature,
+                &old_epoch,
+            )
+            .unwrap();
+        store
+            .compare_and_swap_epoch(&old_epoch, &new_epoch)
+            .unwrap();
+
+        let rendered = store
+            .write_manifest_with_initial_epoch_if_absent_or_matching(
+                &old_manifest,
+                &old_signature,
+                &old_epoch,
+            )
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("current epoch/root does not match uploaded manifest"));
+        assert!(!rendered.contains(&old_signature.sig), "{rendered}");
+        assert!(!rendered.contains(&old_epoch.root_hash), "{rendered}");
+        assert!(!rendered.contains(&new_epoch.root_hash), "{rendered}");
+        assert_eq!(store.read_current_epoch().unwrap(), new_epoch);
+        assert_eq!(
+            store.read_manifest().unwrap(),
+            (old_manifest, old_signature)
+        );
+    }
+
+    #[test]
     fn manifest_initial_epoch_publish_requires_manifest_write_success() {
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
@@ -3397,6 +3443,16 @@ mod tests {
             !rendered.contains(&tampered_manifest.root_hash),
             "{rendered}"
         );
+        assert!(!rendered.contains(&old.root_hash), "{rendered}");
+        assert!(
+            !rendered.contains(&bundle.manifest_signature.sig),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&updated_bucket.ciphertext), "{rendered}");
+        assert!(
+            !rendered.contains(&updated_bucket.bucket_commitment),
+            "{rendered}"
+        );
         assert_eq!(store.read_current_epoch().unwrap(), old);
         assert_eq!(
             store
@@ -3439,6 +3495,20 @@ mod tests {
             .to_string();
 
         assert!(rendered.contains("manifest bucket_count"));
+        assert!(
+            !rendered.contains(&tampered_manifest.bucket_count.to_string()),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&old.root_hash), "{rendered}");
+        assert!(
+            !rendered.contains(&bundle.manifest_signature.sig),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&updated_bucket.ciphertext), "{rendered}");
+        assert!(
+            !rendered.contains(&updated_bucket.bucket_commitment),
+            "{rendered}"
+        );
         assert_eq!(store.read_current_epoch().unwrap(), old);
         assert_eq!(
             store
