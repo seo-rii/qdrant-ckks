@@ -2279,6 +2279,14 @@ fn validate_private_hnsw_upload_bucket_request_shape(
             "private HNSW ORAM bucket upload must contain at least one bucket",
         ));
     }
+    let mut seen_bucket_ids = HashSet::with_capacity(buckets.len());
+    for bucket in buckets {
+        if !seen_bucket_ids.insert(bucket.bucket_id) {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM bucket upload contains duplicate bucket",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -2466,6 +2474,19 @@ mod private_hnsw_tests {
         assert!(rendered.contains("bucket upload must contain"));
         assert!(!rendered.contains("manifest"));
         assert!(!rendered.contains("private_hnsw_oram"));
+    }
+
+    #[test]
+    fn upload_bucket_request_shape_rejects_duplicate_bucket_before_store_lookup() {
+        let bucket = fixture_bucket(0, 42);
+        let duplicate = vec![bucket.clone(), bucket];
+
+        let err = validate_private_hnsw_upload_bucket_request_shape(&duplicate).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("duplicate bucket"));
+        assert!(!rendered.contains("manifest"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains(&duplicate[0].ciphertext));
     }
 
     #[test]
