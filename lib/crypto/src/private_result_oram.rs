@@ -5043,6 +5043,141 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_verified_token_fetch_rejects_malformed_read_plan_before_access() {
+        use std::cell::Cell;
+
+        let keys = result_test_keys();
+        let base_context = result_bucket_base_context();
+        let config = result_client_config();
+        let payload_fetch_token = [11; 32];
+        let root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
+        let bucket_count = private_result_oram_bucket_count(config.tree_height).unwrap();
+        let mut state = PrivateResultOramClientState::with_position_map(
+            [(payload_fetch_token, 2)],
+            config.tree_height,
+        )
+        .unwrap();
+        let valid_plan = PrivateResultOramReadBucketPlan {
+            batches: vec![PrivateResultOramReadBucketBatchPlan {
+                bucket_ids: vec![0, 1, 4, 9],
+                token_count: 1,
+            }],
+            token_count: 1,
+            path_batch_size: 1,
+        };
+        let valid_batch = PrivateResultOramEncryptedBucketBatch {
+            index_epoch: 42,
+            root_hash: root_hash.clone(),
+            bucket_count,
+            proof_value: "{}".to_string(),
+            buckets: Vec::new(),
+        };
+        let next_leaf_called = Cell::new(false);
+
+        macro_rules! assert_rejects_before_access {
+            ($tokens:expr, $plan:expr, $expected_bucket_count:expr, $batches:expr, $expected:expr) => {{
+                next_leaf_called.set(false);
+                let err = fetch_private_result_oram_tokens_encrypted_verified(
+                    &keys,
+                    base_context,
+                    42,
+                    &root_hash,
+                    $expected_bucket_count,
+                    43,
+                    &mut state,
+                    config,
+                    $tokens,
+                    $plan,
+                    $batches,
+                    || {
+                        next_leaf_called.set(true);
+                        Ok(0)
+                    },
+                )
+                .unwrap_err();
+                assert_eq!(err, $expected);
+                assert!(!next_leaf_called.get());
+                assert_eq!(state.position(&payload_fetch_token), Some(2));
+            }};
+        }
+
+        let empty_tokens: &[[u8; 32]] = &[];
+        assert_rejects_before_access!(
+            empty_tokens,
+            &PrivateResultOramReadBucketPlan {
+                token_count: 0,
+                ..valid_plan.clone()
+            },
+            bucket_count,
+            &[],
+            PrivateResultOramError::InvalidFetchPlanField("payload_fetch_tokens")
+        );
+
+        assert_rejects_before_access!(
+            &[payload_fetch_token],
+            &PrivateResultOramReadBucketPlan {
+                token_count: 2,
+                ..valid_plan.clone()
+            },
+            bucket_count,
+            &[],
+            PrivateResultOramError::InvalidFetchPlanField("read_plan")
+        );
+
+        assert_rejects_before_access!(
+            &[payload_fetch_token],
+            &PrivateResultOramReadBucketPlan {
+                path_batch_size: 0,
+                ..valid_plan.clone()
+            },
+            bucket_count,
+            &[],
+            PrivateResultOramError::InvalidFetchPlanField("path_batch_size")
+        );
+
+        assert_rejects_before_access!(
+            &[payload_fetch_token],
+            &valid_plan,
+            bucket_count - 1,
+            &[],
+            PrivateResultOramError::InvalidFetchPlanField("bucket_count")
+        );
+
+        assert_rejects_before_access!(
+            &[payload_fetch_token],
+            &PrivateResultOramReadBucketPlan {
+                batches: Vec::new(),
+                ..valid_plan.clone()
+            },
+            bucket_count,
+            &[],
+            PrivateResultOramError::InvalidFetchPlanField("batches")
+        );
+
+        assert_rejects_before_access!(
+            &[payload_fetch_token],
+            &valid_plan,
+            bucket_count,
+            &[],
+            PrivateResultOramError::InvalidFetchPlanField("encrypted_batches")
+        );
+
+        assert_rejects_before_access!(
+            &[payload_fetch_token],
+            &PrivateResultOramReadBucketPlan {
+                batches: vec![PrivateResultOramReadBucketBatchPlan {
+                    bucket_ids: vec![0, 1, 4, 9],
+                    token_count: 2,
+                }],
+                ..valid_plan
+            },
+            bucket_count,
+            std::slice::from_ref(&valid_batch),
+            PrivateResultOramError::InvalidFetchPlanField("token_count")
+        );
+    }
+
+    #[test]
     fn encrypted_verified_token_fetch_rejects_bad_metadata_and_duplicate_tokens() {
         let keys = result_test_keys();
         let base_context = result_bucket_base_context();
