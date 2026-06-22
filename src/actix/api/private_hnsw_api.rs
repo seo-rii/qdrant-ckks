@@ -1060,6 +1060,85 @@ mod private_hnsw_rest_tests {
                 "{malformed_root_before_manifest_error}"
             );
 
+            let malformed_bucket_hash_before_manifest_sentinel = "hnsw-rest-upload-hash-sentinel";
+            let mut malformed_bucket_hash_before_manifest_buckets =
+                fixture.encrypted_build.buckets.clone();
+            malformed_bucket_hash_before_manifest_buckets[0].ciphertext_sha256 =
+                malformed_bucket_hash_before_manifest_sentinel.to_string();
+            let malformed_bucket_hash_before_manifest_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: malformed_bucket_hash_before_manifest_buckets,
+                },
+                StatusCode::BAD_REQUEST,
+                "ciphertext_sha256"
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest_error
+                    .contains(malformed_bucket_hash_before_manifest_sentinel),
+                "{malformed_bucket_hash_before_manifest_error}"
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest_error
+                    .contains(&fixture.encrypted_build.root_hash),
+                "{malformed_bucket_hash_before_manifest_error}"
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{malformed_bucket_hash_before_manifest_error}"
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest_error.contains("private_hnsw_oram"),
+                "{malformed_bucket_hash_before_manifest_error}"
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest_error.contains("manifest"),
+                "{malformed_bucket_hash_before_manifest_error}"
+            );
+
+            let malformed_bucket_commitment_before_manifest_sentinel =
+                "hnsw-rest-upload-commitment-sentinel";
+            let mut malformed_bucket_commitment_before_manifest_buckets =
+                fixture.encrypted_build.buckets.clone();
+            malformed_bucket_commitment_before_manifest_buckets[0].bucket_commitment =
+                malformed_bucket_commitment_before_manifest_sentinel.to_string();
+            let malformed_bucket_commitment_before_manifest_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: malformed_bucket_commitment_before_manifest_buckets,
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket_commitment"
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest_error
+                    .contains(malformed_bucket_commitment_before_manifest_sentinel),
+                "{malformed_bucket_commitment_before_manifest_error}"
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest_error
+                    .contains(&fixture.encrypted_build.root_hash),
+                "{malformed_bucket_commitment_before_manifest_error}"
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{malformed_bucket_commitment_before_manifest_error}"
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest_error.contains("private_hnsw_oram"),
+                "{malformed_bucket_commitment_before_manifest_error}"
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest_error.contains("manifest"),
+                "{malformed_bucket_commitment_before_manifest_error}"
+            );
+
             let empty_upload_before_manifest_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/buckets",
                 UploadPrivateHnswBucketsRequest {

@@ -966,6 +966,99 @@ mod private_hnsw_grpc_tests {
             );
             assert!(!err.message().contains("manifest"), "{}", err.message());
 
+            let malformed_bucket_hash_before_manifest_sentinel = "hnsw-grpc-upload-hash-sentinel";
+            let mut malformed_bucket_hash_before_manifest_buckets =
+                fixture.encrypted_build.buckets.clone();
+            malformed_bucket_hash_before_manifest_buckets[0].ciphertext_sha256 =
+                malformed_bucket_hash_before_manifest_sentinel.to_string();
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: malformed_bucket_hash_before_manifest_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("ciphertext_sha256"));
+            assert!(
+                !err.message()
+                    .contains(malformed_bucket_hash_before_manifest_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&fixture.encrypted_build.root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains("private_hnsw_oram"),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("manifest"), "{}", err.message());
+
+            let malformed_bucket_commitment_before_manifest_sentinel =
+                "hnsw-grpc-upload-commitment-sentinel";
+            let mut malformed_bucket_commitment_before_manifest_buckets =
+                fixture.encrypted_build.buckets.clone();
+            malformed_bucket_commitment_before_manifest_buckets[0].bucket_commitment =
+                malformed_bucket_commitment_before_manifest_sentinel.to_string();
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: malformed_bucket_commitment_before_manifest_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("bucket_commitment"));
+            assert!(
+                !err.message()
+                    .contains(malformed_bucket_commitment_before_manifest_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&fixture.encrypted_build.root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains("private_hnsw_oram"),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("manifest"), "{}", err.message());
+
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &service,
                 Request::new(grpc::UploadPrivateHnswBucketsRequest {

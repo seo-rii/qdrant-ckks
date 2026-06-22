@@ -925,6 +925,115 @@ mod private_result_oram_grpc_tests {
                     .contains("manifest")
             );
 
+            let malformed_bucket_hash_before_manifest_sentinel = "result-grpc-upload-hash-sentinel";
+            let mut malformed_bucket_hash_before_manifest_buckets = fixture.buckets.clone();
+            malformed_bucket_hash_before_manifest_buckets[0].ciphertext_sha256 =
+                malformed_bucket_hash_before_manifest_sentinel.to_string();
+            let malformed_bucket_hash_before_manifest =
+                PrivateResultOram::upload_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        buckets: malformed_bucket_hash_before_manifest_buckets
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                malformed_bucket_hash_before_manifest.code(),
+                Code::InvalidArgument
+            );
+            assert!(
+                malformed_bucket_hash_before_manifest
+                    .message()
+                    .contains("ciphertext_sha256")
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest
+                    .message()
+                    .contains(malformed_bucket_hash_before_manifest_sentinel)
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest
+                    .message()
+                    .contains("private_result_oram")
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest
+                    .message()
+                    .contains("manifest")
+            );
+
+            let malformed_bucket_commitment_before_manifest_sentinel =
+                "result-grpc-upload-commitment-sentinel";
+            let mut malformed_bucket_commitment_before_manifest_buckets = fixture.buckets.clone();
+            malformed_bucket_commitment_before_manifest_buckets[0].bucket_commitment =
+                malformed_bucket_commitment_before_manifest_sentinel.to_string();
+            let malformed_bucket_commitment_before_manifest =
+                PrivateResultOram::upload_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        buckets: malformed_bucket_commitment_before_manifest_buckets
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                malformed_bucket_commitment_before_manifest.code(),
+                Code::InvalidArgument
+            );
+            assert!(
+                malformed_bucket_commitment_before_manifest
+                    .message()
+                    .contains("bucket_commitment")
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest
+                    .message()
+                    .contains(malformed_bucket_commitment_before_manifest_sentinel)
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest
+                    .message()
+                    .contains("private_result_oram")
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest
+                    .message()
+                    .contains("manifest")
+            );
+
             let empty_upload_before_manifest =
                 PrivateResultOram::upload_private_result_oram_buckets(
                     &service,
