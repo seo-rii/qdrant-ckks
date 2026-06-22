@@ -3705,11 +3705,10 @@ mod private_hnsw_tests {
             &signature,
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("session open observed concurrent manifest or epoch update")
-        );
-        assert!(!err.to_string().contains(&stale_epoch.root_hash));
+        let rendered = err.to_string();
+        assert!(rendered.contains("session open observed concurrent manifest or epoch update"));
+        assert!(!rendered.contains(&stale_epoch.root_hash));
+        assert!(!rendered.contains(&expected_epoch.root_hash));
 
         let temp = tempfile::TempDir::new().unwrap();
         let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
@@ -3742,10 +3741,10 @@ mod private_hnsw_tests {
             &signature,
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("session open observed concurrent manifest or epoch update")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("session open observed concurrent manifest or epoch update"));
+        assert!(!rendered.contains(&expected_epoch.root_hash));
+        assert!(!rendered.contains(&signature.sig));
 
         let temp = tempfile::TempDir::new().unwrap();
         let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
@@ -3758,10 +3757,9 @@ mod private_hnsw_tests {
             &signature,
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("encrypted bucket data is unavailable")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("encrypted bucket data is unavailable"));
+        assert!(!rendered.contains(&expected_epoch.root_hash));
 
         let temp = tempfile::TempDir::new().unwrap();
         let store = PrivateHnswOramStore::new(temp.path(), "text").unwrap();
@@ -3781,10 +3779,10 @@ mod private_hnsw_tests {
             &signature,
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("encrypted bucket data is unavailable")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("encrypted bucket data is unavailable"));
+        assert!(!rendered.contains("00000000.bucket"));
+        assert!(!rendered.contains(&expected_epoch.root_hash));
     }
 
     fn fixture_signature() -> PrivateHnswOramSignature {
