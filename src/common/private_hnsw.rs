@@ -2927,6 +2927,28 @@ mod private_hnsw_tests {
         })
         .unwrap();
 
+        let unsupported_alg = "rsa-pss-hnsw-client-signature-sentinel";
+        let err = validate_client_signature_shape(&PrivateHnswClientSignature {
+            alg: unsupported_alg.to_string(),
+            key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+            sig: BASE64URL_NOPAD.encode(&[7; 64]),
+        })
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature algorithm must be ed25519"));
+        assert!(!rendered.contains(unsupported_alg), "{rendered}");
+
+        let malformed_key_id = "tenant-a/private-hnsw-signing-v1!sentinel";
+        let err = validate_client_signature_shape(&PrivateHnswClientSignature {
+            alg: "ed25519".to_string(),
+            key_id: malformed_key_id.to_string(),
+            sig: BASE64URL_NOPAD.encode(&[7; 64]),
+        })
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature key_id is invalid"));
+        assert!(!rendered.contains(malformed_key_id), "{rendered}");
+
         let oversized = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 64]), "A".repeat(64));
         let err = validate_client_signature_shape(&PrivateHnswClientSignature {
             alg: "ed25519".to_string(),
