@@ -1912,6 +1912,16 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !invalid_signature_out_of_range
                     .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !invalid_signature_out_of_range
+                    .message()
+                    .contains(&session.session_id)
+            );
+            assert!(
+                !invalid_signature_out_of_range
+                    .message()
                     .contains("bucket id is out of range")
             );
             assert!(
@@ -2073,6 +2083,40 @@ mod private_result_oram_grpc_tests {
             assert!(under_budget_read.message().contains("fixed path budget"));
             assert!(
                 !under_budget_read
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
+            );
+
+            let malformed_path_bucket_ids = vec![0, 2, 3, 0, 1, 4];
+            let malformed_path_signature = fixture.read_signature(&malformed_path_bucket_ids);
+            let malformed_path_read = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: malformed_path_bucket_ids,
+                    read_signature: Some(signature_to_proto(malformed_path_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(malformed_path_read.code(), Code::InvalidArgument);
+            assert!(malformed_path_read.message().contains("valid ORAM paths"));
+            assert!(
+                !malformed_path_read
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(!malformed_path_read.message().contains(&session.session_id));
+            assert!(
+                !malformed_path_read
+                    .message()
+                    .contains(&malformed_path_signature.sig)
+            );
+            assert!(
+                !malformed_path_read
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
             );

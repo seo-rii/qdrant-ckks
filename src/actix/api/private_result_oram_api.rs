@@ -1840,6 +1840,8 @@ mod private_result_oram_rest_tests {
             );
             assert!(!invalid_signature_out_of_range_error.contains(&wrong_read_signature.sig));
             assert!(!invalid_signature_out_of_range_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!invalid_signature_out_of_range_error.contains(&fixture.manifest.root_hash));
+            assert!(!invalid_signature_out_of_range_error.contains(&session_id));
             assert!(!invalid_signature_out_of_range_error.contains("bucket id is out of range"));
 
             let unconfigured_read_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
@@ -1949,6 +1951,25 @@ mod private_result_oram_rest_tests {
                 "fixed path budget"
             );
             assert!(!under_budget_error.contains(&fixture.buckets[0].ciphertext));
+
+            let malformed_path_bucket_ids = vec![0, 2, 3, 0, 1, 4];
+            let malformed_path_signature = fixture.read_signature(&malformed_path_bucket_ids);
+            let malformed_path_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: malformed_path_bucket_ids,
+                    read_signature: malformed_path_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "valid ORAM paths"
+            );
+            assert!(!malformed_path_error.contains(&fixture.manifest.root_hash));
+            assert!(!malformed_path_error.contains(&session_id));
+            assert!(!malformed_path_error.contains(&malformed_path_signature.sig));
+            assert!(!malformed_path_error.contains(&fixture.buckets[0].ciphertext));
 
             let unknown_read_session_sentinel = "read-session-id-sentinel";
             let unknown_read_error = post_json_error_contains!(
