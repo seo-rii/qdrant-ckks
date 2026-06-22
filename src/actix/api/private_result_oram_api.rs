@@ -1534,6 +1534,7 @@ mod private_result_oram_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "upload requires no active session"
             );
+            assert!(!active_manifest_upload_error.contains(&fixture.manifest.root_hash));
             assert!(!active_manifest_upload_error.contains(&session_id));
 
             let active_bucket_upload_error = post_json_error_contains!(
@@ -1547,6 +1548,7 @@ mod private_result_oram_rest_tests {
                 "upload requires no active session"
             );
             assert!(!active_bucket_upload_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!active_bucket_upload_error.contains(&fixture.manifest.root_hash));
             assert!(!active_bucket_upload_error.contains(&session_id));
 
             let active_snapshot_error = crate::common::collections::do_create_snapshot(

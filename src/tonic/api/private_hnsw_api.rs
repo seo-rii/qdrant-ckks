@@ -2192,6 +2192,11 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
             assert!(
+                !err.message().contains(&fixture.encrypted_build.root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
                 !err.message().contains(&session.session_id),
                 "{}",
                 err.message()

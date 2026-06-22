@@ -2004,6 +2004,10 @@ mod private_hnsw_rest_tests {
                 "{active_bucket_upload_error}"
             );
             assert!(
+                !active_bucket_upload_error.contains(&fixture.encrypted_build.root_hash),
+                "{active_bucket_upload_error}"
+            );
+            assert!(
                 !active_bucket_upload_error.contains(&session_id),
                 "{active_bucket_upload_error}"
             );

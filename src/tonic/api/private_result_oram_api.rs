@@ -1334,6 +1334,11 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !active_manifest_upload
                     .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !active_manifest_upload
+                    .message()
                     .contains(&session.session_id)
             );
 
@@ -1363,6 +1368,11 @@ mod private_result_oram_grpc_tests {
                 !active_bucket_upload
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !active_bucket_upload
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
             );
             assert!(!active_bucket_upload.message().contains(&session.session_id));
 
