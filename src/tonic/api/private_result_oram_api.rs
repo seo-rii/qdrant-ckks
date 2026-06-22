@@ -1058,6 +1058,40 @@ mod private_result_oram_grpc_tests {
                     .contains(bucket_upload_root_sentinel)
             );
 
+            let empty_bucket_upload = PrivateResultOram::upload_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: Vec::new(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(empty_bucket_upload.code(), Code::InvalidArgument);
+            assert!(
+                empty_bucket_upload
+                    .message()
+                    .contains("bucket upload must contain")
+            );
+            assert!(
+                !empty_bucket_upload
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !empty_bucket_upload
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !empty_bucket_upload
+                    .message()
+                    .contains("private_result_oram")
+            );
+            assert!(!empty_bucket_upload.message().contains("manifest"));
+
             let mut hash_mismatch_buckets = fixture.buckets.clone();
             hash_mismatch_buckets[0].ciphertext =
                 BASE64URL_NOPAD.encode(b"private-result-upload-ciphertext-sentinel");

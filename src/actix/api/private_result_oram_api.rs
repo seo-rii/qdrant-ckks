@@ -1313,6 +1313,21 @@ mod private_result_oram_rest_tests {
             );
             assert!(!malformed_bucket_upload_root_error.contains(bucket_upload_root_sentinel));
 
+            let empty_bucket_upload_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/buckets",
+                UploadPrivateResultOramBucketsRequest {
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: Vec::new(),
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket upload must contain"
+            );
+            assert!(!empty_bucket_upload_error.contains(&fixture.manifest.root_hash));
+            assert!(!empty_bucket_upload_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!empty_bucket_upload_error.contains("private_result_oram"));
+            assert!(!empty_bucket_upload_error.contains("manifest"));
+
             let mut hash_mismatch_buckets = fixture.buckets.clone();
             hash_mismatch_buckets[0].ciphertext =
                 BASE64URL_NOPAD.encode(b"private-result-upload-ciphertext-sentinel");

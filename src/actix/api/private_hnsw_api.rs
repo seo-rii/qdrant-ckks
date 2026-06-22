@@ -1514,6 +1514,33 @@ mod private_hnsw_rest_tests {
                 "{bucket_upload_root_shape_error}"
             );
 
+            let empty_bucket_upload_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: Vec::new(),
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket upload must contain"
+            );
+            assert!(
+                !empty_bucket_upload_error.contains(&fixture.encrypted_build.root_hash),
+                "{empty_bucket_upload_error}"
+            );
+            assert!(
+                !empty_bucket_upload_error.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{empty_bucket_upload_error}"
+            );
+            assert!(
+                !empty_bucket_upload_error.contains("private_hnsw_oram"),
+                "{empty_bucket_upload_error}"
+            );
+            assert!(
+                !empty_bucket_upload_error.contains("manifest"),
+                "{empty_bucket_upload_error}"
+            );
+
             let mut hash_mismatch_buckets = fixture.encrypted_build.buckets.clone();
             let replacement = if hash_mismatch_buckets[0].ciphertext_sha256.starts_with('A') {
                 "B"

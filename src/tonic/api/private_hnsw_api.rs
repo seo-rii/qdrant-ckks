@@ -1577,6 +1577,38 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
 
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: Vec::new(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("bucket upload must contain"));
+            assert!(
+                !err.message().contains(&fixture.encrypted_build.root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains("private_hnsw_oram"),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("manifest"), "{}", err.message());
+
             let mut hash_mismatch_buckets = fixture.encrypted_build.buckets.clone();
             let replacement = if hash_mismatch_buckets[0].ciphertext_sha256.starts_with('A') {
                 "B"
