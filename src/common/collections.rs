@@ -1854,11 +1854,24 @@ mod tests {
 
     #[test]
     fn private_oram_shard_key_guard_blocks_layout_changes_until_bucket_migration_supported() {
-        for (label, config) in [
-            ("private HNSW ORAM", private_hnsw_collection_config()),
+        for (label, config, sentinels) in [
+            (
+                "private HNSW ORAM",
+                private_hnsw_collection_config(),
+                [
+                    "tenant-a/vector-private-rk",
+                    "docs_text_private_hnsw",
+                    PRIVATE_HNSW_ORAM_BINDING,
+                ],
+            ),
             (
                 "private result ORAM",
                 private_result_oram_collection_config(),
+                [
+                    "tenant-a/result-private-rk",
+                    "body_private_result_oram",
+                    PRIVATE_RESULT_ORAM_BINDING,
+                ],
             ),
         ] {
             for operation in private_oram_shard_key_change_operations() {
@@ -1873,6 +1886,7 @@ mod tests {
                             .contains("consensus-backed epoch/root ownership"),
                     "unexpected {label} shard-key error for {operation:?}: {err}",
                 );
+                assert_no_private_oram_config_leak(&err.to_string(), &sentinels);
             }
         }
 
@@ -1890,11 +1904,24 @@ mod tests {
     fn private_oram_drop_replica_guard_blocks_until_bucket_migration_supported() {
         let operation = private_oram_drop_replica_operation();
 
-        for (label, config) in [
-            ("private HNSW ORAM", private_hnsw_collection_config()),
+        for (label, config, sentinels) in [
+            (
+                "private HNSW ORAM",
+                private_hnsw_collection_config(),
+                [
+                    "tenant-a/vector-private-rk",
+                    "docs_text_private_hnsw",
+                    PRIVATE_HNSW_ORAM_BINDING,
+                ],
+            ),
             (
                 "private result ORAM",
                 private_result_oram_collection_config(),
+                [
+                    "tenant-a/result-private-rk",
+                    "body_private_result_oram",
+                    PRIVATE_RESULT_ORAM_BINDING,
+                ],
             ),
         ] {
             let err = reject_private_oram_cluster_replica_remove_until_supported(
@@ -1908,6 +1935,7 @@ mod tests {
                         .contains("consensus-backed epoch/root ownership"),
                 "unexpected {label} replica removal error: {err}",
             );
+            assert_no_private_oram_config_leak(&err.to_string(), &sentinels);
         }
 
         reject_private_oram_cluster_replica_remove_until_supported(
