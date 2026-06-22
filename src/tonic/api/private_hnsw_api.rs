@@ -3578,6 +3578,29 @@ mod private_hnsw_grpc_tests {
             );
             assert!(
                 !err.message()
+                    .contains(&search_run.commit_plan.old_root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.new_root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&fixture.client_signature().sig),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
                     .contains("commit signature verification failed"),
                 "{}",
                 err.message()
@@ -3610,6 +3633,29 @@ mod private_hnsw_grpc_tests {
             assert!(err.message().contains("bucket_commitment"));
             assert!(
                 !err.message().contains(commit_commitment_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.old_root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.new_root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&fixture.client_signature().sig),
                 "{}",
                 err.message()
             );

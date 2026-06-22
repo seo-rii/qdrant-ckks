@@ -3229,6 +3229,22 @@ mod private_hnsw_rest_tests {
                 "{commit_hash_error}"
             );
             assert!(
+                !commit_hash_error.contains(&search_run.commit_plan.old_root_hash),
+                "{commit_hash_error}"
+            );
+            assert!(
+                !commit_hash_error.contains(&search_run.commit_plan.new_root_hash),
+                "{commit_hash_error}"
+            );
+            assert!(
+                !commit_hash_error.contains(&search_run.updated_buckets[0].ciphertext),
+                "{commit_hash_error}"
+            );
+            assert!(
+                !commit_hash_error.contains(&fixture.client_signature().sig),
+                "{commit_hash_error}"
+            );
+            assert!(
                 !commit_hash_error.contains("commit signature verification failed"),
                 "{commit_hash_error}"
             );
@@ -3256,6 +3272,22 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !commit_commitment_error.contains(commit_commitment_sentinel),
+                "{commit_commitment_error}"
+            );
+            assert!(
+                !commit_commitment_error.contains(&search_run.commit_plan.old_root_hash),
+                "{commit_commitment_error}"
+            );
+            assert!(
+                !commit_commitment_error.contains(&search_run.commit_plan.new_root_hash),
+                "{commit_commitment_error}"
+            );
+            assert!(
+                !commit_commitment_error.contains(&search_run.updated_buckets[0].ciphertext),
+                "{commit_commitment_error}"
+            );
+            assert!(
+                !commit_commitment_error.contains(&fixture.client_signature().sig),
                 "{commit_commitment_error}"
             );
             assert!(

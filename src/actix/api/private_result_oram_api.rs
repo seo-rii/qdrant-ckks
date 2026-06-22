@@ -2139,6 +2139,9 @@ mod private_result_oram_rest_tests {
                 "ciphertext_sha256"
             );
             assert!(!malformed_hash_commit_error.contains(commit_hash_sentinel));
+            assert!(!malformed_hash_commit_error.contains(&fixture.manifest.root_hash));
+            assert!(!malformed_hash_commit_error.contains(&new_root_hash));
+            assert!(!malformed_hash_commit_error.contains(&updated_bucket.ciphertext));
             assert!(!malformed_hash_commit_error.contains(&commit_signature.sig));
             assert!(
                 !malformed_hash_commit_error.contains("commit signature verification failed"),
@@ -2164,6 +2167,9 @@ mod private_result_oram_rest_tests {
                 "bucket_commitment"
             );
             assert!(!malformed_commitment_commit_error.contains(commit_commitment_sentinel));
+            assert!(!malformed_commitment_commit_error.contains(&fixture.manifest.root_hash));
+            assert!(!malformed_commitment_commit_error.contains(&new_root_hash));
+            assert!(!malformed_commitment_commit_error.contains(&updated_bucket.ciphertext));
             assert!(!malformed_commitment_commit_error.contains(&commit_signature.sig));
             assert!(
                 !malformed_commitment_commit_error.contains("commit signature verification failed"),

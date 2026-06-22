@@ -2390,6 +2390,17 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !malformed_hash_commit
                     .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(!malformed_hash_commit.message().contains(&new_root_hash));
+            assert!(
+                !malformed_hash_commit
+                    .message()
+                    .contains(&updated_bucket.ciphertext)
+            );
+            assert!(
+                !malformed_hash_commit
+                    .message()
                     .contains(&commit_signature.sig)
             );
             assert!(
@@ -2431,6 +2442,21 @@ mod private_result_oram_grpc_tests {
                 !malformed_commitment_commit
                     .message()
                     .contains(commit_commitment_sentinel)
+            );
+            assert!(
+                !malformed_commitment_commit
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !malformed_commitment_commit
+                    .message()
+                    .contains(&new_root_hash)
+            );
+            assert!(
+                !malformed_commitment_commit
+                    .message()
+                    .contains(&updated_bucket.ciphertext)
             );
             assert!(
                 !malformed_commitment_commit
