@@ -2590,6 +2590,7 @@ pub fn refresh_private_result_oram_manifest_for_commit(
     manifest: &PrivateResultOramManifest,
     plan: &PrivateResultOramCommitPlan,
 ) -> Result<PrivateResultOramManifest, PrivateResultOramError> {
+    validate_private_result_oram_manifest_shape(manifest)?;
     if manifest.index_epoch != plan.old_epoch || manifest.root_hash != plan.old_root_hash {
         return Err(PrivateResultOramError::ManifestCommitMismatch);
     }
@@ -6615,6 +6616,13 @@ mod tests {
         .unwrap();
         assert_eq!(epoch.epoch, 43);
         assert_eq!(epoch.root_hash, [43; 32]);
+
+        let mut wrong_provider = manifest.clone();
+        wrong_provider.provider = "payload/wrong-result-oram@v1".to_string();
+        assert_eq!(
+            refresh_private_result_oram_manifest_for_commit(&wrong_provider, &plan),
+            Err(PrivateResultOramError::InvalidProvider)
+        );
 
         let mut stale_plan = plan.clone();
         stale_plan.old_root_hash = commitment(99);

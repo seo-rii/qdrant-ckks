@@ -2588,6 +2588,8 @@ pub fn refresh_private_hnsw_oram_manifest_for_commit(
     manifest: &PrivateHnswOramManifest,
     plan: &PrivateHnswClientCommitPlan,
 ) -> Result<PrivateHnswOramManifest, PrivateHnswClientError> {
+    validate_private_hnsw_oram_manifest_shape(manifest)
+        .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest"))?;
     if manifest.index_epoch != plan.old_epoch || manifest.root_hash != plan.old_root_hash {
         return Err(PrivateHnswClientError::ManifestCommitMismatch);
     }
@@ -6351,6 +6353,15 @@ mod tests {
         .unwrap();
         assert_eq!(epoch.epoch, 43);
         assert_eq!(epoch.root_hash, [43; 32]);
+
+        let mut wrong_provider = manifest.clone();
+        wrong_provider.provider = "vector/wrong-hnsw-oram@v1".to_string();
+        assert_eq!(
+            refresh_private_hnsw_oram_manifest_for_commit(&wrong_provider, &plan),
+            Err(PrivateHnswClientError::InvalidManifestSignatureContext(
+                "manifest"
+            ))
+        );
 
         let mut stale_plan = plan.clone();
         stale_plan.old_root_hash = commitment(99);
