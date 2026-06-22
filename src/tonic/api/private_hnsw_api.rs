@@ -4029,6 +4029,11 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap();
 
+            let assert_manifest_error_redacts = |message: &str| {
+                assert!(!message.contains(&fixture.manifest.root_hash));
+                assert!(!message.contains(&fixture.manifest_signature.sig));
+            };
+
             let err = PrivateHnswOram::get_private_hnsw_manifest(
                 &fixed_budget_drifted_service,
                 Request::new(grpc::GetPrivateHnswManifestRequest {
@@ -4043,6 +4048,7 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest fixed_budget does not match runtime instance")
             );
+            assert_manifest_error_redacts(err.message());
 
             let err = PrivateHnswOram::get_private_hnsw_manifest(
                 &hnsw_drifted_service,
@@ -4058,6 +4064,7 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest hnsw does not match runtime instance")
             );
+            assert_manifest_error_redacts(err.message());
 
             let err = PrivateHnswOram::get_private_hnsw_manifest(
                 &oram_drifted_service,
@@ -4073,6 +4080,7 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest oram does not match runtime instance")
             );
+            assert_manifest_error_redacts(err.message());
 
             let err = PrivateHnswOram::get_private_hnsw_manifest(
                 &reserved_privacy_service,
@@ -4088,6 +4096,7 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("requires a private-result-oram/v1 payload rule")
             );
+            assert_manifest_error_redacts(err.message());
         });
     }
 
@@ -4167,6 +4176,10 @@ mod private_hnsw_grpc_tests {
                     .map(bucket_to_proto)
                     .collect(),
             };
+            let assert_bucket_error_redacts = |message: &str| {
+                assert!(!message.contains(&fixture.encrypted_build.root_hash));
+                assert!(!message.contains(&fixture.encrypted_build.buckets[0].ciphertext));
+            };
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &fixed_budget_drifted_service,
                 Request::new(bucket_request()),
@@ -4178,6 +4191,7 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest fixed_budget does not match runtime instance")
             );
+            assert_bucket_error_redacts(err.message());
 
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &hnsw_drifted_service,
@@ -4190,6 +4204,7 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest hnsw does not match runtime instance")
             );
+            assert_bucket_error_redacts(err.message());
 
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &oram_drifted_service,
@@ -4202,6 +4217,7 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest oram does not match runtime instance")
             );
+            assert_bucket_error_redacts(err.message());
 
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &reserved_privacy_service,
@@ -4214,6 +4230,7 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("requires a private-result-oram/v1 payload rule")
             );
+            assert_bucket_error_redacts(err.message());
 
             PrivateHnswOram::upload_private_hnsw_buckets(&service, Request::new(bucket_request()))
                 .await

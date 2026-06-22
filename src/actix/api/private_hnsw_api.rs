@@ -3673,6 +3673,11 @@ mod private_hnsw_rest_tests {
             .await;
             assert_eq!(upload_response.status(), StatusCode::OK);
 
+            let assert_manifest_error_redacts = |body: &str| {
+                assert!(!body.contains(&fixture.manifest.root_hash), "{body}");
+                assert!(!body.contains(&fixture.manifest_signature.sig), "{body}");
+            };
+
             let response = actix_test::call_service(
                 &fixed_budget_drifted_app,
                 actix_test::TestRequest::get()
@@ -3688,6 +3693,7 @@ mod private_hnsw_rest_tests {
                 body.contains("manifest fixed_budget does not match runtime instance"),
                 "{body}"
             );
+            assert_manifest_error_redacts(&body);
 
             let response = actix_test::call_service(
                 &hnsw_drifted_app,
@@ -3704,6 +3710,7 @@ mod private_hnsw_rest_tests {
                 body.contains("manifest hnsw does not match runtime instance"),
                 "{body}"
             );
+            assert_manifest_error_redacts(&body);
 
             let response = actix_test::call_service(
                 &oram_drifted_app,
@@ -3720,6 +3727,7 @@ mod private_hnsw_rest_tests {
                 body.contains("manifest oram does not match runtime instance"),
                 "{body}"
             );
+            assert_manifest_error_redacts(&body);
 
             let response = actix_test::call_service(
                 &reserved_privacy_app,
@@ -3736,6 +3744,7 @@ mod private_hnsw_rest_tests {
                 body.contains("requires a private-result-oram/v1 payload rule"),
                 "{body}"
             );
+            assert_manifest_error_redacts(&body);
         });
     }
 
@@ -3834,6 +3843,13 @@ mod private_hnsw_rest_tests {
                 root_hash: fixture.encrypted_build.root_hash.clone(),
                 buckets: fixture.encrypted_build.buckets.clone(),
             };
+            let assert_bucket_error_redacts = |body: &str| {
+                assert!(!body.contains(&fixture.encrypted_build.root_hash), "{body}");
+                assert!(
+                    !body.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                    "{body}"
+                );
+            };
             let response = actix_test::call_service(
                 &fixed_budget_drifted_app,
                 actix_test::TestRequest::post()
@@ -3850,6 +3866,7 @@ mod private_hnsw_rest_tests {
                 body.contains("manifest fixed_budget does not match runtime instance"),
                 "{body}"
             );
+            assert_bucket_error_redacts(&body);
 
             let response = actix_test::call_service(
                 &hnsw_drifted_app,
@@ -3867,6 +3884,7 @@ mod private_hnsw_rest_tests {
                 body.contains("manifest hnsw does not match runtime instance"),
                 "{body}"
             );
+            assert_bucket_error_redacts(&body);
 
             let response = actix_test::call_service(
                 &oram_drifted_app,
@@ -3884,6 +3902,7 @@ mod private_hnsw_rest_tests {
                 body.contains("manifest oram does not match runtime instance"),
                 "{body}"
             );
+            assert_bucket_error_redacts(&body);
 
             let response = actix_test::call_service(
                 &reserved_privacy_app,
@@ -3901,6 +3920,7 @@ mod private_hnsw_rest_tests {
                 body.contains("requires a private-result-oram/v1 payload rule"),
                 "{body}"
             );
+            assert_bucket_error_redacts(&body);
 
             let response = actix_test::call_service(
                 &app,
