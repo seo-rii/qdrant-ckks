@@ -1632,7 +1632,7 @@ mod private_hnsw_rest_tests {
                 "route fixture must contain at least two ORAM buckets"
             );
             duplicate_bucket_set[1] = duplicate_bucket_set[0].clone();
-            post_json_error_contains!(
+            let duplicate_bucket_upload_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/buckets",
                 UploadPrivateHnswBucketsRequest {
                     index_epoch: fixture.encrypted_build.index_epoch,
@@ -1641,6 +1641,19 @@ mod private_hnsw_rest_tests {
                 },
                 StatusCode::BAD_REQUEST,
                 "duplicate bucket"
+            );
+            assert!(
+                !duplicate_bucket_upload_error.contains(&fixture.encrypted_build.root_hash),
+                "{duplicate_bucket_upload_error}"
+            );
+            assert!(
+                !duplicate_bucket_upload_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{duplicate_bucket_upload_error}"
+            );
+            assert!(
+                !duplicate_bucket_upload_error.contains("private_hnsw_oram"),
+                "{duplicate_bucket_upload_error}"
             );
 
             let auth = Auth::new_internal(Access::full("private HNSW ORAM upload route test"));

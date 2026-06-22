@@ -1763,6 +1763,22 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("duplicate bucket"));
+            assert!(
+                !err.message().contains(&fixture.encrypted_build.root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains("private_hnsw_oram"),
+                "{}",
+                err.message()
+            );
 
             let auth = Auth::new_internal(Access::full("private HNSW ORAM upload grpc test"));
             let collection_pass = auth
