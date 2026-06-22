@@ -3506,6 +3506,8 @@ mod private_hnsw_rest_tests {
                 body.contains("requires a private-result-oram/v1 payload rule"),
                 "{body}"
             );
+            assert!(!body.contains(&fixture.manifest.root_hash), "{body}");
+            assert!(!body.contains(&fixture.manifest_signature.sig), "{body}");
         });
     }
 

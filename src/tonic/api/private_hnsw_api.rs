@@ -3889,6 +3889,8 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("requires a private-result-oram/v1 payload rule")
             );
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
+            assert!(!err.message().contains(&fixture.manifest_signature.sig));
         });
     }
 
