@@ -1666,6 +1666,8 @@ fn validate_upload_bucket_request_shape(
                 "private result ORAM bucket upload contains duplicate bucket",
             ));
         }
+        validate_base64url_32_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
+        validate_base64url_32_string(&bucket.bucket_commitment, "bucket_commitment")?;
     }
     Ok(())
 }
@@ -2377,6 +2379,36 @@ mod private_result_oram_tests {
         assert!(!rendered.contains("manifest"));
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains(&duplicate[0].ciphertext));
+    }
+
+    #[test]
+    fn upload_bucket_request_shape_rejects_malformed_bucket_hash_before_store_lookup() {
+        let mut bucket = fixture_readable_bucket(0, 42, 7, &BASE64URL_NOPAD.encode(&[8; 32]));
+        let sentinel = "result-upload-hash-sentinel";
+        bucket.ciphertext_sha256 = sentinel.to_string();
+
+        let err = validate_upload_bucket_request_shape(std::slice::from_ref(&bucket)).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("ciphertext_sha256"), "{rendered}");
+        assert!(!rendered.contains("manifest"), "{rendered}");
+        assert!(!rendered.contains("private_result_oram"), "{rendered}");
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+    }
+
+    #[test]
+    fn upload_bucket_request_shape_rejects_malformed_bucket_commitment_before_store_lookup() {
+        let mut bucket = fixture_readable_bucket(0, 42, 7, &BASE64URL_NOPAD.encode(&[8; 32]));
+        let sentinel = "result-upload-commitment-sentinel";
+        bucket.bucket_commitment = sentinel.to_string();
+
+        let err = validate_upload_bucket_request_shape(std::slice::from_ref(&bucket)).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("bucket_commitment"), "{rendered}");
+        assert!(!rendered.contains("manifest"), "{rendered}");
+        assert!(!rendered.contains("private_result_oram"), "{rendered}");
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
     }
 
     #[test]

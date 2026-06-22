@@ -2286,6 +2286,8 @@ fn validate_private_hnsw_upload_bucket_request_shape(
                 "private HNSW ORAM bucket upload contains duplicate bucket",
             ));
         }
+        validate_root_hash_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
+        validate_root_hash_string(&bucket.bucket_commitment, "bucket_commitment")?;
     }
     Ok(())
 }
@@ -2487,6 +2489,38 @@ mod private_hnsw_tests {
         assert!(!rendered.contains("manifest"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains(&duplicate[0].ciphertext));
+    }
+
+    #[test]
+    fn upload_bucket_request_shape_rejects_malformed_bucket_hash_before_store_lookup() {
+        let mut bucket = fixture_bucket(0, 42);
+        let sentinel = "hnsw-upload-hash-sentinel";
+        bucket.ciphertext_sha256 = sentinel.to_string();
+
+        let err = validate_private_hnsw_upload_bucket_request_shape(std::slice::from_ref(&bucket))
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("ciphertext_sha256"), "{rendered}");
+        assert!(!rendered.contains("manifest"), "{rendered}");
+        assert!(!rendered.contains("private_hnsw_oram"), "{rendered}");
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+    }
+
+    #[test]
+    fn upload_bucket_request_shape_rejects_malformed_bucket_commitment_before_store_lookup() {
+        let mut bucket = fixture_bucket(0, 42);
+        let sentinel = "hnsw-upload-commitment-sentinel";
+        bucket.bucket_commitment = sentinel.to_string();
+
+        let err = validate_private_hnsw_upload_bucket_request_shape(std::slice::from_ref(&bucket))
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("bucket_commitment"), "{rendered}");
+        assert!(!rendered.contains("manifest"), "{rendered}");
+        assert!(!rendered.contains("private_hnsw_oram"), "{rendered}");
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
     }
 
     #[test]
