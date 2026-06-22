@@ -2089,6 +2089,44 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn common_debug_redacts_private_result_oram_session_and_read_values() {
+        let mut session = fixture_session("result-common-session-sentinel", 20);
+        session._client_id = "result-common-client-sentinel".to_string();
+        session.collection_path =
+            std::path::PathBuf::from("/tmp/qdrant-private-result-common-path-sentinel");
+        let root_hash = session.root_hash.clone();
+        let response = session.response();
+        let bucket = fixture_readable_bucket(0, session.index_epoch, 21, &root_hash);
+        let ciphertext = bucket.ciphertext.clone();
+        let read_response = PrivateResultOramReadBucketsResponse {
+            index_epoch: session.index_epoch,
+            root_hash: root_hash.clone(),
+            buckets: vec![bucket],
+            proof: PrivateResultOramReadProof {
+                kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
+                value: "result-common-proof-sentinel".to_string(),
+            },
+        };
+
+        let rendered = [
+            format!("{session:?}"),
+            format!("{response:?}"),
+            format!("{read_response:?}"),
+        ]
+        .join("\n");
+        for leaked in [
+            "result-common-session-sentinel",
+            "result-common-client-sentinel",
+            "qdrant-private-result-common-path-sentinel",
+            root_hash.as_str(),
+            ciphertext.as_str(),
+            "result-common-proof-sentinel",
+        ] {
+            assert!(!rendered.contains(leaked), "{rendered}");
+        }
+    }
+
+    #[test]
     fn signature_shape_errors_do_not_reflect_submitted_values() {
         let unsupported_alg = "rsa-pss-result-signature-sentinel";
         let rendered = private_result_oram_error(
