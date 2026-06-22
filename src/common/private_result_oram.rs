@@ -747,6 +747,7 @@ pub async fn do_read_private_result_oram_buckets(
         .map_err(private_result_oram_error)?;
     validate_private_result_oram_session_id_shape(session_id)?;
     validate_base64url_32_string(&root_hash, "root_hash")?;
+    validate_read_bucket_request_shape(&bucket_ids)?;
     let request_context = collection_context_for_request(
         toc,
         auth,
@@ -1628,15 +1629,20 @@ fn validate_bucket_read_request(
     validate_bucket_read_request_details(manifest, bucket_ids)
 }
 
-fn validate_bucket_read_request_budget(
-    manifest: &PrivateResultOramManifest,
-    bucket_ids: &[u64],
-) -> StorageResult<()> {
+fn validate_read_bucket_request_shape(bucket_ids: &[u64]) -> StorageResult<()> {
     if bucket_ids.is_empty() {
         return Err(StorageError::bad_request(
             "private result ORAM read_buckets request is empty",
         ));
     }
+    Ok(())
+}
+
+fn validate_bucket_read_request_budget(
+    manifest: &PrivateResultOramManifest,
+    bucket_ids: &[u64],
+) -> StorageResult<()> {
+    validate_read_bucket_request_shape(bucket_ids)?;
     let path_len_u64 = u64::from(manifest.oram.tree_height)
         .checked_add(1)
         .ok_or_else(|| {
@@ -2293,6 +2299,16 @@ mod private_result_oram_tests {
         let rendered = out_of_range.to_string();
         assert!(rendered.contains("out of range"));
         assert!(!rendered.contains("7"), "{rendered}");
+    }
+
+    #[test]
+    fn bucket_read_request_shape_rejects_empty_before_session_lookup() {
+        validate_read_bucket_request_shape(&[0]).unwrap();
+
+        let err = validate_read_bucket_request_shape(&[]).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("read_buckets request is empty"));
+        assert!(!rendered.contains("session is missing or expired"));
     }
 
     #[test]
