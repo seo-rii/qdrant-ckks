@@ -2015,6 +2015,7 @@ mod tests {
 
         assert!(err.to_string().contains("non-symlink directory"));
         assert!(!err.to_string().contains("missing-result-oram-target"));
+        assert!(!err.to_string().contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
     #[test]
