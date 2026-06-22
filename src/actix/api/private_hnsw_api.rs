@@ -1035,6 +1035,34 @@ mod private_hnsw_rest_tests {
                 "{missing_manifest_bucket_error}"
             );
 
+            let empty_upload_before_manifest_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: Vec::new(),
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket upload must contain"
+            );
+            assert!(
+                !empty_upload_before_manifest_error.contains(&fixture.encrypted_build.root_hash),
+                "{empty_upload_before_manifest_error}"
+            );
+            assert!(
+                !empty_upload_before_manifest_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{empty_upload_before_manifest_error}"
+            );
+            assert!(
+                !empty_upload_before_manifest_error.contains("private_hnsw_oram"),
+                "{empty_upload_before_manifest_error}"
+            );
+            assert!(
+                !empty_upload_before_manifest_error.contains("manifest"),
+                "{empty_upload_before_manifest_error}"
+            );
+
             let missing_manifest_session_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {

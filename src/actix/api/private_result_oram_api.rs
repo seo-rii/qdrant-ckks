@@ -1225,6 +1225,21 @@ mod private_result_oram_rest_tests {
             );
             assert!(!missing_manifest_upload.contains("private_result_oram"));
 
+            let empty_upload_before_manifest = post_json_error_contains!(
+                "/collections/docs/private-result-oram/buckets",
+                UploadPrivateResultOramBucketsRequest {
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: Vec::new(),
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket upload must contain"
+            );
+            assert!(!empty_upload_before_manifest.contains(&fixture.manifest.root_hash));
+            assert!(!empty_upload_before_manifest.contains(&fixture.buckets[0].ciphertext));
+            assert!(!empty_upload_before_manifest.contains("private_result_oram"));
+            assert!(!empty_upload_before_manifest.contains("manifest"));
+
             let unsupported_manifest_alg_sentinel = "rsa-pss-result-manifest-sentinel";
             let mut unsupported_alg_manifest_signature = fixture.signature.clone();
             unsupported_alg_manifest_signature.alg = unsupported_manifest_alg_sentinel.to_string();
