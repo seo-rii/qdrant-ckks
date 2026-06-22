@@ -3052,6 +3052,7 @@ pub fn plan_private_result_oram_commit_for_manifest(
     current_leaf_commitments: &[String],
     updated_buckets: &[PrivateResultOramBucket],
 ) -> Result<PrivateResultOramCommitPlan, PrivateResultOramError> {
+    validate_private_result_oram_manifest_shape(manifest)?;
     let manifest_bucket_count = usize::try_from(manifest.bucket_count)
         .map_err(|_| PrivateResultOramError::InvalidManifestField("bucket_count"))?;
     if current_leaf_commitments.len() != manifest_bucket_count {
@@ -6203,13 +6204,15 @@ mod tests {
 
     #[test]
     fn commit_plan_for_manifest_rejects_bucket_commitment_context_mismatch() {
-        let leaf_commitments = vec![commitment(1), commitment(2), commitment(3), commitment(4)];
+        let leaf_commitments = vec![commitment(1), commitment(2), commitment(3)];
         let old_root = private_result_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
-        let manifest = PrivateResultOramManifest {
-            root_hash: old_root.clone(),
-            bucket_count: leaf_commitments.len() as u64,
-            ..fixture_manifest()
-        };
+        let mut manifest = fixture_manifest();
+        manifest.oram.tree_height = 1;
+        manifest.oram.path_batch_size = 2;
+        manifest.bucket_count = leaf_commitments.len() as u64;
+        manifest.logical_result_count = 2;
+        manifest.dummy_result_count = 0;
+        manifest.root_hash = old_root.clone();
         let updated_bucket = fixture_upload_bucket(2, 43, 9, &manifest);
 
         let plan = plan_private_result_oram_commit_for_manifest(
@@ -6233,6 +6236,18 @@ mod tests {
                 std::slice::from_ref(&wrong_commitment),
             ),
             Err(PrivateResultOramError::InvalidBucketCommitment)
+        );
+
+        let mut wrong_provider = manifest.clone();
+        wrong_provider.provider = "payload/wrong-result-oram@v1".to_string();
+        assert_eq!(
+            plan_private_result_oram_commit_for_manifest(
+                &wrong_provider,
+                43,
+                &leaf_commitments,
+                std::slice::from_ref(&updated_bucket),
+            ),
+            Err(PrivateResultOramError::InvalidProvider)
         );
 
         let mut short_ciphertext = updated_bucket.clone();
@@ -6271,7 +6286,7 @@ mod tests {
         );
 
         let wrong_bucket_count = PrivateResultOramManifest {
-            bucket_count: 3,
+            bucket_count: 2,
             ..manifest
         };
         assert_eq!(
