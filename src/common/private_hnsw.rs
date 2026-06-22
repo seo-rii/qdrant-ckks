@@ -944,6 +944,7 @@ pub async fn do_read_private_hnsw_paths(
     validate_client_signature_shape(&client_signature)?;
     validate_private_hnsw_session_id_shape(session_id)?;
     validate_root_hash_string(root_hash, "root_hash")?;
+    validate_private_hnsw_read_path_label_request_shape(&paths)?;
     let request_context = collection_context_for_request(
         toc,
         auth,
@@ -2238,6 +2239,25 @@ fn validate_unique_path_labels(paths: &[String]) -> StorageResult<()> {
     Ok(())
 }
 
+fn validate_private_hnsw_read_path_label_request_shape(paths: &[String]) -> StorageResult<()> {
+    for path in paths {
+        if path.len() != PRIVATE_HNSW_ORAM_LEAF_LABEL_B64_LEN {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM request validation failed",
+            ));
+        }
+        let bytes = BASE64URL_NOPAD.decode(path.as_bytes()).map_err(|_| {
+            StorageError::bad_request("private HNSW ORAM request validation failed")
+        })?;
+        if bytes.len() != 8 {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM request validation failed",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_private_hnsw_read_path_labels(paths: &[String], tree_height: u32) -> StorageResult<()> {
     validate_unique_path_labels(paths)?;
     for path in paths {
@@ -2372,6 +2392,33 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("duplicate path label"));
         assert!(!rendered.contains(&BASE64URL_NOPAD.encode(&5u64.to_be_bytes())));
+    }
+
+    #[test]
+    fn read_path_label_request_shape_rejects_malformed_values_before_session_lookup() {
+        let valid = BASE64URL_NOPAD.encode(&5u64.to_be_bytes());
+        validate_private_hnsw_read_path_label_request_shape(std::slice::from_ref(&valid)).unwrap();
+        validate_private_hnsw_read_path_label_request_shape(&[valid.clone(), valid]).unwrap();
+
+        let oversized = format!(
+            "{}{}",
+            BASE64URL_NOPAD.encode(&5u64.to_be_bytes()),
+            "A".repeat(128)
+        );
+        let err =
+            validate_private_hnsw_read_path_label_request_shape(std::slice::from_ref(&oversized))
+                .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains(&oversized));
+
+        let malformed = "not-base64!".to_string();
+        let err =
+            validate_private_hnsw_read_path_label_request_shape(std::slice::from_ref(&malformed))
+                .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains(&malformed), "{rendered}");
     }
 
     #[test]
