@@ -1266,6 +1266,14 @@ mod tests {
                 json!(["qdrant-sec-private-result-camel-read-bucket-id-sequence-log-sentinel"]),
             ),
             (
+                "bucket_id_sequence",
+                json!(["qdrant-sec-private-result-bucket-id-sequence-log-sentinel"]),
+            ),
+            (
+                "bucketIdSequence",
+                json!(["qdrant-sec-private-result-camel-bucket-id-sequence-log-sentinel"]),
+            ),
+            (
                 "bucket_id_sequences",
                 json!(["qdrant-sec-private-result-bucket-sequences-log-sentinel"]),
             ),
@@ -1424,6 +1432,8 @@ mod tests {
             "qdrant-sec-private-result-camel-read-bucket-id-log-sentinel",
             "qdrant-sec-private-result-read-bucket-id-sequence-log-sentinel",
             "qdrant-sec-private-result-camel-read-bucket-id-sequence-log-sentinel",
+            "qdrant-sec-private-result-bucket-id-sequence-log-sentinel",
+            "qdrant-sec-private-result-camel-bucket-id-sequence-log-sentinel",
             "qdrant-sec-private-result-bucket-sequences-log-sentinel",
             "qdrant-sec-private-result-camel-bucket-sequences-log-sentinel",
             "qdrant-sec-private-result-bucket-commitment-log-sentinel",
