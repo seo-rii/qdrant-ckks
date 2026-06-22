@@ -2678,6 +2678,7 @@ mod private_result_oram_grpc_tests {
             let drifted_service =
                 PrivateResultOramService::new(Arc::new(dispatcher.clone()), drifted_settings);
             let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            let read_signature = fixture.read_signature(&read_bucket_ids);
             let err = PrivateResultOram::read_private_result_oram_buckets(
                 &drifted_service,
                 Request::new(grpc::ReadPrivateResultOramBucketsRequest {
@@ -2686,9 +2687,7 @@ mod private_result_oram_grpc_tests {
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.manifest.root_hash.clone(),
                     bucket_ids: read_bucket_ids.clone(),
-                    read_signature: Some(signature_to_proto(
-                        fixture.read_signature(&read_bucket_ids),
-                    )),
+                    read_signature: Some(signature_to_proto(read_signature.clone())),
                 }),
             )
             .await
@@ -2699,6 +2698,9 @@ mod private_result_oram_grpc_tests {
                     .contains("manifest oram does not match runtime instance")
             );
             assert!(!err.message().contains("tree_height"));
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&read_signature.sig));
 
             let closed = PrivateResultOram::close_private_result_oram_session(
                 &service,
@@ -2785,9 +2787,9 @@ mod private_result_oram_grpc_tests {
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: fixture.manifest.root_hash.clone(),
-                    new_root_hash,
+                    new_root_hash: new_root_hash.clone(),
                     updated_buckets: vec![bucket_to_proto(updated_bucket.clone())],
-                    commit_signature: Some(signature_to_proto(commit_signature)),
+                    commit_signature: Some(signature_to_proto(commit_signature.clone())),
                 }),
             )
             .await
@@ -2798,6 +2800,10 @@ mod private_result_oram_grpc_tests {
                     .contains("manifest oram does not match runtime instance")
             );
             assert!(!err.message().contains("tree_height"));
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
+            assert!(!err.message().contains(&new_root_hash));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&commit_signature.sig));
             assert!(!err.message().contains(&updated_bucket.ciphertext));
 
             let closed = PrivateResultOram::close_private_result_oram_session(

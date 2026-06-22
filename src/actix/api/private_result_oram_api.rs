@@ -2524,6 +2524,7 @@ mod private_result_oram_rest_tests {
             let session_id = session_result["session_id"].as_str().unwrap().to_string();
 
             let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            let read_signature = fixture.read_signature(&read_bucket_ids);
             let drift_error = post_json_error_contains_on!(
                 &drifted_app,
                 "/collections/docs/private-result-oram/oram/read_buckets",
@@ -2532,12 +2533,18 @@ mod private_result_oram_rest_tests {
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
                     bucket_ids: read_bucket_ids.clone(),
-                    read_signature: fixture.read_signature(&read_bucket_ids),
+                    read_signature: read_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
                 "manifest oram does not match runtime instance"
             );
             assert!(!drift_error.contains("tree_height"), "{drift_error}");
+            assert!(
+                !drift_error.contains(&fixture.manifest.root_hash),
+                "{drift_error}"
+            );
+            assert!(!drift_error.contains(&session_id), "{drift_error}");
+            assert!(!drift_error.contains(&read_signature.sig), "{drift_error}");
 
             let close_uri =
                 format!("/collections/docs/private-result-oram/session/{session_id}/close");
@@ -2652,14 +2659,24 @@ mod private_result_oram_rest_tests {
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: fixture.manifest.root_hash.clone(),
-                    new_root_hash,
+                    new_root_hash: new_root_hash.clone(),
                     updated_buckets: vec![updated_bucket.clone()],
-                    commit_signature,
+                    commit_signature: commit_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
                 "manifest oram does not match runtime instance"
             );
             assert!(!drift_error.contains("tree_height"), "{drift_error}");
+            assert!(
+                !drift_error.contains(&fixture.manifest.root_hash),
+                "{drift_error}"
+            );
+            assert!(!drift_error.contains(&new_root_hash), "{drift_error}");
+            assert!(!drift_error.contains(&session_id), "{drift_error}");
+            assert!(
+                !drift_error.contains(&commit_signature.sig),
+                "{drift_error}"
+            );
             assert!(
                 !drift_error.contains(&updated_bucket.ciphertext),
                 "{drift_error}"
