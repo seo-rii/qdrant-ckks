@@ -4047,72 +4047,132 @@ mod private_hnsw_rest_tests {
 
             let paths = vec![fixture.entry_leaf_label()];
             let signature = fixture.sign_read_paths(&paths, 1, true);
-            post_json_error_contains!(
+            let fixed_budget_drift_error = post_json_error_contains!(
                 &drifted_app,
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths,
+                    paths: paths.clone(),
                     padding: OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     },
                     client_signature: PrivateHnswClientSignature {
-                        alg: signature.alg,
-                        key_id: signature.key_id,
-                        sig: signature.sig,
+                        alg: signature.alg.clone(),
+                        key_id: signature.key_id.clone(),
+                        sig: signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "manifest fixed_budget does not match runtime instance"
             );
+            assert!(
+                !fixed_budget_drift_error.contains(&fixture.encrypted_build.root_hash),
+                "{fixed_budget_drift_error}"
+            );
+            assert!(
+                !fixed_budget_drift_error.contains(&session_id),
+                "{fixed_budget_drift_error}"
+            );
+            assert!(
+                !fixed_budget_drift_error.contains(&paths[0]),
+                "{fixed_budget_drift_error}"
+            );
+            assert!(
+                !fixed_budget_drift_error.contains(&signature.key_id),
+                "{fixed_budget_drift_error}"
+            );
+            assert!(
+                !fixed_budget_drift_error.contains(&signature.sig),
+                "{fixed_budget_drift_error}"
+            );
             let hnsw_drift_paths = vec![fixture.entry_leaf_label()];
             let hnsw_drift_signature = fixture.sign_read_paths(&hnsw_drift_paths, 1, true);
-            post_json_error_contains!(
+            let hnsw_drift_error = post_json_error_contains!(
                 &hnsw_drifted_app,
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: hnsw_drift_paths,
+                    paths: hnsw_drift_paths.clone(),
                     padding: OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     },
                     client_signature: PrivateHnswClientSignature {
-                        alg: hnsw_drift_signature.alg,
-                        key_id: hnsw_drift_signature.key_id,
-                        sig: hnsw_drift_signature.sig,
+                        alg: hnsw_drift_signature.alg.clone(),
+                        key_id: hnsw_drift_signature.key_id.clone(),
+                        sig: hnsw_drift_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "manifest hnsw does not match runtime instance"
             );
+            assert!(
+                !hnsw_drift_error.contains(&fixture.encrypted_build.root_hash),
+                "{hnsw_drift_error}"
+            );
+            assert!(
+                !hnsw_drift_error.contains(&session_id),
+                "{hnsw_drift_error}"
+            );
+            assert!(
+                !hnsw_drift_error.contains(&hnsw_drift_paths[0]),
+                "{hnsw_drift_error}"
+            );
+            assert!(
+                !hnsw_drift_error.contains(&hnsw_drift_signature.key_id),
+                "{hnsw_drift_error}"
+            );
+            assert!(
+                !hnsw_drift_error.contains(&hnsw_drift_signature.sig),
+                "{hnsw_drift_error}"
+            );
             let reserved_paths = vec![fixture.entry_leaf_label()];
             let reserved_signature = fixture.sign_read_paths(&reserved_paths, 1, true);
-            post_json_error_contains!(
+            let reserved_privacy_error = post_json_error_contains!(
                 &reserved_privacy_app,
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: reserved_paths,
+                    paths: reserved_paths.clone(),
                     padding: OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     },
                     client_signature: PrivateHnswClientSignature {
-                        alg: reserved_signature.alg,
-                        key_id: reserved_signature.key_id,
-                        sig: reserved_signature.sig,
+                        alg: reserved_signature.alg.clone(),
+                        key_id: reserved_signature.key_id.clone(),
+                        sig: reserved_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "requires a private-result-oram/v1 payload rule"
+            );
+            assert!(
+                !reserved_privacy_error.contains(&fixture.encrypted_build.root_hash),
+                "{reserved_privacy_error}"
+            );
+            assert!(
+                !reserved_privacy_error.contains(&session_id),
+                "{reserved_privacy_error}"
+            );
+            assert!(
+                !reserved_privacy_error.contains(&reserved_paths[0]),
+                "{reserved_privacy_error}"
+            );
+            assert!(
+                !reserved_privacy_error.contains(&reserved_signature.key_id),
+                "{reserved_privacy_error}"
+            );
+            assert!(
+                !reserved_privacy_error.contains(&reserved_signature.sig),
+                "{reserved_privacy_error}"
             );
 
             let close_request = actix_test::TestRequest::post()
@@ -4260,7 +4320,7 @@ mod private_hnsw_rest_tests {
             let session_id = session["session_id"].as_str().unwrap().to_string();
 
             let run = fixture.run_single_search_collect_writeback();
-            post_json_error_contains!(
+            let oram_drift_error = post_json_error_contains!(
                 &drifted_app,
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -4268,19 +4328,43 @@ mod private_hnsw_rest_tests {
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: fixture.encrypted_build.root_hash.clone(),
-                    new_root_hash: run.commit_plan.new_root_hash,
-                    updated_buckets: run.updated_buckets,
+                    new_root_hash: run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
-                        alg: run.commit_signature.alg,
-                        key_id: run.commit_signature.key_id,
-                        sig: run.commit_signature.sig,
+                        alg: run.commit_signature.alg.clone(),
+                        key_id: run.commit_signature.key_id.clone(),
+                        sig: run.commit_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "manifest oram does not match runtime instance"
             );
+            assert!(
+                !oram_drift_error.contains(&fixture.encrypted_build.root_hash),
+                "{oram_drift_error}"
+            );
+            assert!(
+                !oram_drift_error.contains(&run.commit_plan.new_root_hash),
+                "{oram_drift_error}"
+            );
+            assert!(
+                !oram_drift_error.contains(&session_id),
+                "{oram_drift_error}"
+            );
+            assert!(
+                !oram_drift_error.contains(&run.commit_signature.key_id),
+                "{oram_drift_error}"
+            );
+            assert!(
+                !oram_drift_error.contains(&run.commit_signature.sig),
+                "{oram_drift_error}"
+            );
+            assert!(
+                !oram_drift_error.contains(&run.updated_buckets[0].ciphertext),
+                "{oram_drift_error}"
+            );
             let hnsw_run = fixture.run_single_search_collect_writeback();
-            post_json_error_contains!(
+            let hnsw_drift_error = post_json_error_contains!(
                 &hnsw_drifted_app,
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -4288,19 +4372,43 @@ mod private_hnsw_rest_tests {
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: fixture.encrypted_build.root_hash.clone(),
-                    new_root_hash: hnsw_run.commit_plan.new_root_hash,
-                    updated_buckets: hnsw_run.updated_buckets,
+                    new_root_hash: hnsw_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: hnsw_run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
-                        alg: hnsw_run.commit_signature.alg,
-                        key_id: hnsw_run.commit_signature.key_id,
-                        sig: hnsw_run.commit_signature.sig,
+                        alg: hnsw_run.commit_signature.alg.clone(),
+                        key_id: hnsw_run.commit_signature.key_id.clone(),
+                        sig: hnsw_run.commit_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "manifest hnsw does not match runtime instance"
             );
+            assert!(
+                !hnsw_drift_error.contains(&fixture.encrypted_build.root_hash),
+                "{hnsw_drift_error}"
+            );
+            assert!(
+                !hnsw_drift_error.contains(&hnsw_run.commit_plan.new_root_hash),
+                "{hnsw_drift_error}"
+            );
+            assert!(
+                !hnsw_drift_error.contains(&session_id),
+                "{hnsw_drift_error}"
+            );
+            assert!(
+                !hnsw_drift_error.contains(&hnsw_run.commit_signature.key_id),
+                "{hnsw_drift_error}"
+            );
+            assert!(
+                !hnsw_drift_error.contains(&hnsw_run.commit_signature.sig),
+                "{hnsw_drift_error}"
+            );
+            assert!(
+                !hnsw_drift_error.contains(&hnsw_run.updated_buckets[0].ciphertext),
+                "{hnsw_drift_error}"
+            );
             let reserved_run = fixture.run_single_search_collect_writeback();
-            post_json_error_contains!(
+            let reserved_privacy_error = post_json_error_contains!(
                 &reserved_privacy_app,
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -4308,16 +4416,40 @@ mod private_hnsw_rest_tests {
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: fixture.encrypted_build.root_hash.clone(),
-                    new_root_hash: reserved_run.commit_plan.new_root_hash,
-                    updated_buckets: reserved_run.updated_buckets,
+                    new_root_hash: reserved_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: reserved_run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
-                        alg: reserved_run.commit_signature.alg,
-                        key_id: reserved_run.commit_signature.key_id,
-                        sig: reserved_run.commit_signature.sig,
+                        alg: reserved_run.commit_signature.alg.clone(),
+                        key_id: reserved_run.commit_signature.key_id.clone(),
+                        sig: reserved_run.commit_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "requires a private-result-oram/v1 payload rule"
+            );
+            assert!(
+                !reserved_privacy_error.contains(&fixture.encrypted_build.root_hash),
+                "{reserved_privacy_error}"
+            );
+            assert!(
+                !reserved_privacy_error.contains(&reserved_run.commit_plan.new_root_hash),
+                "{reserved_privacy_error}"
+            );
+            assert!(
+                !reserved_privacy_error.contains(&session_id),
+                "{reserved_privacy_error}"
+            );
+            assert!(
+                !reserved_privacy_error.contains(&reserved_run.commit_signature.key_id),
+                "{reserved_privacy_error}"
+            );
+            assert!(
+                !reserved_privacy_error.contains(&reserved_run.commit_signature.sig),
+                "{reserved_privacy_error}"
+            );
+            assert!(
+                !reserved_privacy_error.contains(&reserved_run.updated_buckets[0].ciphertext),
+                "{reserved_privacy_error}"
             );
 
             let close_request = actix_test::TestRequest::post()

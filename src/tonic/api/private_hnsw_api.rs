@@ -4506,12 +4506,12 @@ mod private_hnsw_grpc_tests {
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths,
+                    paths: paths.clone(),
                     padding: Some(grpc::OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     }),
-                    client_signature: Some(signature_to_proto(signature)),
+                    client_signature: Some(signature_to_proto(signature.clone())),
                 }),
             )
             .await
@@ -4521,6 +4521,11 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest fixed_budget does not match runtime instance")
             );
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&paths[0]));
+            assert!(!err.message().contains(&signature.key_id));
+            assert!(!err.message().contains(&signature.sig));
 
             let hnsw_drifted_service =
                 PrivateHnswOramService::new(Arc::new(dispatcher.clone()), hnsw_drifted_settings);
@@ -4534,12 +4539,12 @@ mod private_hnsw_grpc_tests {
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: hnsw_drift_paths,
+                    paths: hnsw_drift_paths.clone(),
                     padding: Some(grpc::OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     }),
-                    client_signature: Some(signature_to_proto(hnsw_drift_signature)),
+                    client_signature: Some(signature_to_proto(hnsw_drift_signature.clone())),
                 }),
             )
             .await
@@ -4549,6 +4554,11 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest hnsw does not match runtime instance")
             );
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&hnsw_drift_paths[0]));
+            assert!(!err.message().contains(&hnsw_drift_signature.key_id));
+            assert!(!err.message().contains(&hnsw_drift_signature.sig));
 
             let reserved_privacy_service = PrivateHnswOramService::new(
                 Arc::new(dispatcher.clone()),
@@ -4564,12 +4574,12 @@ mod private_hnsw_grpc_tests {
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: reserved_paths,
+                    paths: reserved_paths.clone(),
                     padding: Some(grpc::OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     }),
-                    client_signature: Some(signature_to_proto(reserved_signature)),
+                    client_signature: Some(signature_to_proto(reserved_signature.clone())),
                 }),
             )
             .await
@@ -4579,6 +4589,11 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("requires a private-result-oram/v1 payload rule")
             );
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&reserved_paths[0]));
+            assert!(!err.message().contains(&reserved_signature.key_id));
+            assert!(!err.message().contains(&reserved_signature.sig));
 
             let closed = PrivateHnswOram::close_private_hnsw_session(
                 &service,
@@ -4697,7 +4712,7 @@ mod private_hnsw_grpc_tests {
                         .cloned()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(run.commit_signature)),
+                    commit_signature: Some(signature_to_proto(run.commit_signature.clone())),
                 }),
             )
             .await
@@ -4707,6 +4722,12 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest oram does not match runtime instance")
             );
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(!err.message().contains(&run.commit_plan.new_root_hash));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&run.commit_signature.key_id));
+            assert!(!err.message().contains(&run.commit_signature.sig));
+            assert!(!err.message().contains(&run.updated_buckets[0].ciphertext));
 
             let hnsw_run = fixture.run_single_search_collect_writeback();
             let hnsw_drifted_service =
@@ -4727,7 +4748,7 @@ mod private_hnsw_grpc_tests {
                         .cloned()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(hnsw_run.commit_signature)),
+                    commit_signature: Some(signature_to_proto(hnsw_run.commit_signature.clone())),
                 }),
             )
             .await
@@ -4736,6 +4757,15 @@ mod private_hnsw_grpc_tests {
             assert!(
                 err.message()
                     .contains("manifest hnsw does not match runtime instance")
+            );
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(!err.message().contains(&hnsw_run.commit_plan.new_root_hash));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&hnsw_run.commit_signature.key_id));
+            assert!(!err.message().contains(&hnsw_run.commit_signature.sig));
+            assert!(
+                !err.message()
+                    .contains(&hnsw_run.updated_buckets[0].ciphertext)
             );
 
             let reserved_run = fixture.run_single_search_collect_writeback();
@@ -4759,7 +4789,9 @@ mod private_hnsw_grpc_tests {
                         .cloned()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(reserved_run.commit_signature)),
+                    commit_signature: Some(signature_to_proto(
+                        reserved_run.commit_signature.clone(),
+                    )),
                 }),
             )
             .await
@@ -4768,6 +4800,21 @@ mod private_hnsw_grpc_tests {
             assert!(
                 err.message()
                     .contains("requires a private-result-oram/v1 payload rule")
+            );
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(
+                !err.message()
+                    .contains(&reserved_run.commit_plan.new_root_hash)
+            );
+            assert!(!err.message().contains(&session.session_id));
+            assert!(
+                !err.message()
+                    .contains(&reserved_run.commit_signature.key_id)
+            );
+            assert!(!err.message().contains(&reserved_run.commit_signature.sig));
+            assert!(
+                !err.message()
+                    .contains(&reserved_run.updated_buckets[0].ciphertext)
             );
 
             let closed = PrivateHnswOram::close_private_hnsw_session(
