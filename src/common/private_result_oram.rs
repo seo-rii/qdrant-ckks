@@ -2912,49 +2912,49 @@ mod private_result_oram_tests {
         )
         .unwrap();
 
-        let temp = tempfile::TempDir::new().unwrap();
-        let store = PrivateResultOramStore::new(temp.path());
-        store.write_initial_epoch(&expected_epoch).unwrap();
-        store.write_manifest(&session.manifest, &signature).unwrap();
-        store
-            .write_merkle_tree_from_commitments(
-                expected_epoch.index_epoch,
-                expected_epoch.root_hash.clone(),
-                leaf_commitments.clone(),
-            )
-            .unwrap();
-        for (bucket_id, bucket_commitment) in leaf_commitments.iter().enumerate() {
-            if bucket_id == 1 {
-                continue;
-            }
-            let bucket = fixture_readable_bucket(
-                bucket_id as u64,
-                expected_epoch.index_epoch,
-                19,
-                bucket_commitment,
-            );
+        for missing_bucket_id in [0_u64, 1, bucket_count - 1] {
+            let temp = tempfile::TempDir::new().unwrap();
+            let store = PrivateResultOramStore::new(temp.path());
+            store.write_initial_epoch(&expected_epoch).unwrap();
+            store.write_manifest(&session.manifest, &signature).unwrap();
             store
-                .write_bucket(
-                    &bucket,
+                .write_merkle_tree_from_commitments(
                     expected_epoch.index_epoch,
-                    session.manifest.bucket_count,
-                    4096,
+                    expected_epoch.root_hash.clone(),
+                    leaf_commitments.clone(),
                 )
                 .unwrap();
+            for (bucket_id, bucket_commitment) in leaf_commitments.iter().enumerate() {
+                if bucket_id as u64 == missing_bucket_id {
+                    continue;
+                }
+                let bucket = fixture_readable_bucket(
+                    bucket_id as u64,
+                    expected_epoch.index_epoch,
+                    19,
+                    bucket_commitment,
+                );
+                store
+                    .write_bucket(
+                        &bucket,
+                        expected_epoch.index_epoch,
+                        session.manifest.bucket_count,
+                        4096,
+                    )
+                    .unwrap();
+            }
+            let err = ensure_private_result_oram_restored_snapshot_storage_matches(
+                &store,
+                &expected_epoch,
+                &session.manifest,
+                &signature,
+            )
+            .unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("encrypted bucket data is unavailable"));
+            assert!(!rendered.contains(&format!("{missing_bucket_id:08}.bucket")));
+            assert!(!rendered.contains(&expected_epoch.root_hash));
         }
-        let err = ensure_private_result_oram_restored_snapshot_storage_matches(
-            &store,
-            &expected_epoch,
-            &session.manifest,
-            &signature,
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("encrypted bucket data is unavailable")
-        );
-        assert!(!err.to_string().contains("00000001.bucket"));
-        assert!(!err.to_string().contains(&expected_epoch.root_hash));
     }
 
     fn read_shape_manifest() -> PrivateResultOramManifest {
