@@ -3232,6 +3232,36 @@ mod private_hnsw_rest_tests {
                 !commit_hash_error.contains("commit signature verification failed"),
                 "{commit_hash_error}"
             );
+            let commit_commitment_sentinel = "AAAA";
+            let mut malformed_commitment_buckets = search_run.updated_buckets.clone();
+            malformed_commitment_buckets[0].bucket_commitment =
+                commit_commitment_sentinel.to_string();
+            let commit_commitment_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/commit",
+                OramCommitRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: malformed_commitment_buckets,
+                    commit_signature: PrivateHnswClientSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: fixture.client_signature().sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket_commitment"
+            );
+            assert!(
+                !commit_commitment_error.contains(commit_commitment_sentinel),
+                "{commit_commitment_error}"
+            );
+            assert!(
+                !commit_commitment_error.contains("commit signature verification failed"),
+                "{commit_commitment_error}"
+            );
             let duplicate_commit_bucket = search_run.updated_buckets[0].clone();
             let duplicate_commit_buckets = vec![
                 duplicate_commit_bucket.clone(),

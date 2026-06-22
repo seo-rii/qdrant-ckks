@@ -2121,6 +2121,55 @@ mod private_result_oram_rest_tests {
             );
             assert!(!empty_commit_error.contains(&commit_signature.sig));
 
+            let commit_hash_sentinel = "AAAA";
+            let mut malformed_hash_commit_buckets = vec![updated_bucket.clone()];
+            malformed_hash_commit_buckets[0].ciphertext_sha256 = commit_hash_sentinel.to_string();
+            let malformed_hash_commit_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: malformed_hash_commit_buckets,
+                    commit_signature: commit_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "ciphertext_sha256"
+            );
+            assert!(!malformed_hash_commit_error.contains(commit_hash_sentinel));
+            assert!(!malformed_hash_commit_error.contains(&commit_signature.sig));
+            assert!(
+                !malformed_hash_commit_error.contains("commit signature verification failed"),
+                "{malformed_hash_commit_error}"
+            );
+
+            let commit_commitment_sentinel = "AAAA";
+            let mut malformed_commitment_commit_buckets = vec![updated_bucket.clone()];
+            malformed_commitment_commit_buckets[0].bucket_commitment =
+                commit_commitment_sentinel.to_string();
+            let malformed_commitment_commit_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: malformed_commitment_commit_buckets,
+                    commit_signature: commit_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "bucket_commitment"
+            );
+            assert!(!malformed_commitment_commit_error.contains(commit_commitment_sentinel));
+            assert!(!malformed_commitment_commit_error.contains(&commit_signature.sig));
+            assert!(
+                !malformed_commitment_commit_error.contains("commit signature verification failed"),
+                "{malformed_commitment_commit_error}"
+            );
+
             let oversized_commit_buckets = vec![updated_bucket.clone(); 8];
             let oversized_commit_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",

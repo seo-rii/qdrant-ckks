@@ -2355,6 +2355,94 @@ mod private_result_oram_grpc_tests {
             );
             assert!(!empty_commit.message().contains(&commit_signature.sig));
 
+            let commit_hash_sentinel = "AAAA";
+            let mut malformed_hash_commit_buckets = vec![updated_bucket.clone()];
+            malformed_hash_commit_buckets[0].ciphertext_sha256 = commit_hash_sentinel.to_string();
+            let malformed_hash_commit = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: new_root_hash.clone(),
+                    updated_buckets: malformed_hash_commit_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(malformed_hash_commit.code(), Code::InvalidArgument);
+            assert!(
+                malformed_hash_commit
+                    .message()
+                    .contains("ciphertext_sha256")
+            );
+            assert!(
+                !malformed_hash_commit
+                    .message()
+                    .contains(commit_hash_sentinel)
+            );
+            assert!(
+                !malformed_hash_commit
+                    .message()
+                    .contains(&commit_signature.sig)
+            );
+            assert!(
+                !malformed_hash_commit
+                    .message()
+                    .contains("commit signature verification failed")
+            );
+
+            let commit_commitment_sentinel = "AAAA";
+            let mut malformed_commitment_commit_buckets = vec![updated_bucket.clone()];
+            malformed_commitment_commit_buckets[0].bucket_commitment =
+                commit_commitment_sentinel.to_string();
+            let malformed_commitment_commit =
+                PrivateResultOram::commit_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: session.session_id.clone(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: fixture.manifest.root_hash.clone(),
+                        new_root_hash: new_root_hash.clone(),
+                        updated_buckets: malformed_commitment_commit_buckets
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                        commit_signature: Some(signature_to_proto(commit_signature.clone())),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(malformed_commitment_commit.code(), Code::InvalidArgument);
+            assert!(
+                malformed_commitment_commit
+                    .message()
+                    .contains("bucket_commitment")
+            );
+            assert!(
+                !malformed_commitment_commit
+                    .message()
+                    .contains(commit_commitment_sentinel)
+            );
+            assert!(
+                !malformed_commitment_commit
+                    .message()
+                    .contains(&commit_signature.sig)
+            );
+            assert!(
+                !malformed_commitment_commit
+                    .message()
+                    .contains("commit signature verification failed")
+            );
+
             let oversized_commit = PrivateResultOram::commit_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::CommitPrivateResultOramBucketsRequest {
