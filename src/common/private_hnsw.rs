@@ -1066,6 +1066,7 @@ pub async fn do_commit_private_hnsw_paths(
     validate_private_hnsw_session_id_shape(session_id)?;
     validate_root_hash_string(&old_root_hash, "old_root_hash")?;
     validate_root_hash_string(&new_root_hash, "new_root_hash")?;
+    validate_private_hnsw_commit_request_shape(&updated_buckets)?;
     let request_context = collection_context_for_request(
         toc,
         auth,
@@ -2258,6 +2259,17 @@ fn validate_private_hnsw_read_path_label_request_shape(paths: &[String]) -> Stor
     Ok(())
 }
 
+fn validate_private_hnsw_commit_request_shape(
+    updated_buckets: &[PrivateHnswOramBucket],
+) -> StorageResult<()> {
+    if updated_buckets.is_empty() {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM commit updated_buckets must contain at least one bucket",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_private_hnsw_read_path_labels(paths: &[String], tree_height: u32) -> StorageResult<()> {
     validate_unique_path_labels(paths)?;
     for path in paths {
@@ -2419,6 +2431,17 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("request validation failed"));
         assert!(!rendered.contains(&malformed), "{rendered}");
+    }
+
+    #[test]
+    fn commit_request_shape_rejects_empty_writeback_before_session_lookup() {
+        let bucket = fixture_bucket(0, 43);
+        validate_private_hnsw_commit_request_shape(std::slice::from_ref(&bucket)).unwrap();
+
+        let err = validate_private_hnsw_commit_request_shape(&[]).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("updated_buckets must contain"));
+        assert!(!rendered.contains("session is missing or expired"));
     }
 
     #[test]

@@ -852,6 +852,7 @@ pub async fn do_commit_private_result_oram_buckets(
     validate_private_result_oram_session_id_shape(session_id)?;
     validate_base64url_32_string(&old_root_hash, "old_root_hash")?;
     validate_base64url_32_string(&new_root_hash, "new_root_hash")?;
+    validate_commit_bucket_request_shape(&updated_buckets)?;
     let request_context = collection_context_for_request(
         toc,
         auth,
@@ -1638,6 +1639,17 @@ fn validate_read_bucket_request_shape(bucket_ids: &[u64]) -> StorageResult<()> {
     Ok(())
 }
 
+fn validate_commit_bucket_request_shape(
+    updated_buckets: &[qdrant_sec::PrivateResultOramBucket],
+) -> StorageResult<()> {
+    if updated_buckets.is_empty() {
+        return Err(StorageError::bad_request(
+            "private result ORAM commit updated_buckets must contain at least one bucket",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_bucket_read_request_budget(
     manifest: &PrivateResultOramManifest,
     bucket_ids: &[u64],
@@ -2308,6 +2320,17 @@ mod private_result_oram_tests {
         let err = validate_read_bucket_request_shape(&[]).unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("read_buckets request is empty"));
+        assert!(!rendered.contains("session is missing or expired"));
+    }
+
+    #[test]
+    fn commit_bucket_request_shape_rejects_empty_before_session_lookup() {
+        let bucket = fixture_readable_bucket(0, 43, 7, &BASE64URL_NOPAD.encode(&[8; 32]));
+        validate_commit_bucket_request_shape(std::slice::from_ref(&bucket)).unwrap();
+
+        let err = validate_commit_bucket_request_shape(&[]).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("commit updated_buckets must contain"));
         assert!(!rendered.contains("session is missing or expired"));
     }
 
