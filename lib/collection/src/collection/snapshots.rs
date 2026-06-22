@@ -3496,6 +3496,10 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("private HNSW ORAM file"));
         assert!(!rendered.contains("00000000.bucket"), "{rendered}");
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert!(!rendered.contains("text"), "{rendered}");
     }
 
     #[test]
@@ -3536,6 +3540,7 @@ mod tests {
                 private_hnsw_snapshot_leaf_commitments(&manifest),
             )
             .unwrap();
+        let snapshot_path = snapshot_dir.path().to_string_lossy().into_owned();
 
         let err = Collection::restore_snapshot(
             SnapshotData::Unpacked(snapshot_dir),
@@ -3547,9 +3552,12 @@ mod tests {
         .to_string();
 
         assert!(err.contains("private HNSW ORAM file not found"), "{err}");
+        assert!(!err.contains(&snapshot_path));
         assert!(!err.contains(target_dir.path().to_string_lossy().as_ref()));
         assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!err.contains("00000000.bucket"));
+        assert!(!err.contains(&manifest.root_hash));
+        assert!(!err.contains("text"));
     }
 
     #[test]
@@ -3605,6 +3613,10 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("private HNSW ORAM file"));
         assert!(!rendered.contains("00000002.bucket"), "{rendered}");
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert!(!rendered.contains("text"), "{rendered}");
     }
 
     #[test]
@@ -3660,5 +3672,9 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("private HNSW ORAM file"));
         assert!(!rendered.contains("00000001.bucket"), "{rendered}");
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert!(!rendered.contains("text"), "{rendered}");
     }
 }
