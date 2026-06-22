@@ -7236,6 +7236,34 @@ mod tests {
     }
 
     #[test]
+    fn neighbor_clustered_leaf_plan_deduplicates_cycles_and_appends_disconnected_tail() {
+        let config = PrivateHnswOramClientConfig {
+            tree_height: 3,
+            ..oram_config()
+        };
+        let clustered_tail = node_block_with_vector(4, &[4.0, 0.0], vec![[2; 32]]);
+        let disconnected = node_block_with_vector(5, &[5.0, 0.0], vec![]);
+        let second_neighbor = node_block_with_vector(3, &[3.0, 0.0], vec![[4; 32]]);
+        let entry = node_block_with_vector(1, &[1.0, 0.0], vec![[2; 32], [2; 32], [3; 32]]);
+        let first_neighbor = node_block_with_vector(2, &[2.0, 0.0], vec![[1; 32], [4; 32]]);
+
+        let leaves = plan_private_hnsw_oram_neighbor_clustered_leaves(
+            config,
+            &[
+                clustered_tail,
+                disconnected,
+                second_neighbor,
+                entry.clone(),
+                first_neighbor,
+            ],
+            entry.node_id,
+        )
+        .unwrap();
+
+        assert_eq!(leaves, vec![3, 4, 2, 0, 1]);
+    }
+
+    #[test]
     fn f32_reference_bulk_build_constructs_searchable_neighbor_graph() {
         use std::cell::RefCell;
 
