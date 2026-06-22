@@ -1879,6 +1879,10 @@ mod private_hnsw_rest_tests {
                 "{active_snapshot_bucket_upload_error}"
             );
             assert!(
+                !active_snapshot_bucket_upload_error.contains(&fixture.encrypted_build.root_hash),
+                "{active_snapshot_bucket_upload_error}"
+            );
+            assert!(
                 !active_snapshot_bucket_upload_error.contains("private_hnsw_oram"),
                 "{active_snapshot_bucket_upload_error}"
             );

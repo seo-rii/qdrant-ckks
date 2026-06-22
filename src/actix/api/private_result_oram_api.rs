@@ -1419,6 +1419,10 @@ mod private_result_oram_rest_tests {
                 "{active_snapshot_bucket_upload_error}"
             );
             assert!(
+                !active_snapshot_bucket_upload_error.contains(&fixture.manifest.root_hash),
+                "{active_snapshot_bucket_upload_error}"
+            );
+            assert!(
                 !active_snapshot_bucket_upload_error.contains("private_result_oram"),
                 "{active_snapshot_bucket_upload_error}"
             );
