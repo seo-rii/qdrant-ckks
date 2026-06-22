@@ -2997,6 +2997,49 @@ mod private_hnsw_tests {
     }
 
     #[test]
+    fn signature_shape_errors_do_not_reflect_submitted_values() {
+        let unsupported_alg = "rsa-pss-hnsw-signature-sentinel";
+        let rendered = private_hnsw_error(
+            validate_private_hnsw_oram_manifest_signature_shape(&PrivateHnswOramSignature {
+                alg: unsupported_alg.to_string(),
+                key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+                sig: BASE64URL_NOPAD.encode(&[7; 64]),
+            })
+            .unwrap_err(),
+        )
+        .to_string();
+        assert!(rendered.contains("signature algorithm must be ed25519"));
+        assert!(!rendered.contains(unsupported_alg), "{rendered}");
+
+        let oversized_signature = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 64]), "A".repeat(64));
+        let rendered = private_hnsw_error(
+            validate_private_hnsw_oram_manifest_signature_shape(&PrivateHnswOramSignature {
+                alg: "ed25519".to_string(),
+                key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+                sig: oversized_signature.clone(),
+            })
+            .unwrap_err(),
+        )
+        .to_string();
+        assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains(&oversized_signature), "{rendered}");
+
+        let mut malformed_signature = BASE64URL_NOPAD.encode(&[7; 64]);
+        malformed_signature.replace_range(0..1, "!");
+        let rendered = private_hnsw_error(
+            validate_private_hnsw_oram_manifest_signature_shape(&PrivateHnswOramSignature {
+                alg: "ed25519".to_string(),
+                key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+                sig: malformed_signature.clone(),
+            })
+            .unwrap_err(),
+        )
+        .to_string();
+        assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains(&malformed_signature), "{rendered}");
+    }
+
+    #[test]
     fn private_hnsw_store_error_mapping_redacts_store_details() {
         let sentinel = "qdrant-sec-private-hnsw-store-detail-sentinel";
         let rendered =
