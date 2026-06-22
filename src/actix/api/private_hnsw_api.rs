@@ -1035,6 +1035,31 @@ mod private_hnsw_rest_tests {
                 "{missing_manifest_bucket_error}"
             );
 
+            let upload_root_before_manifest_sentinel = "AAAA";
+            let malformed_root_before_manifest_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: upload_root_before_manifest_sentinel.to_string(),
+                    buckets: fixture.encrypted_build.buckets.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "root_hash must encode 32 bytes"
+            );
+            assert!(
+                !malformed_root_before_manifest_error
+                    .contains(upload_root_before_manifest_sentinel),
+                "{malformed_root_before_manifest_error}"
+            );
+            assert!(
+                !malformed_root_before_manifest_error.contains("private_hnsw_oram"),
+                "{malformed_root_before_manifest_error}"
+            );
+            assert!(
+                !malformed_root_before_manifest_error.contains("manifest"),
+                "{malformed_root_before_manifest_error}"
+            );
+
             let empty_upload_before_manifest_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/buckets",
                 UploadPrivateHnswBucketsRequest {

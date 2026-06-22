@@ -885,6 +885,46 @@ mod private_result_oram_grpc_tests {
             assert_eq!(missing_manifest.code(), Code::NotFound);
             assert!(!missing_manifest.message().contains("private_result_oram"));
 
+            let upload_root_before_manifest_sentinel = "AAAA";
+            let malformed_root_before_manifest =
+                PrivateResultOram::upload_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: upload_root_before_manifest_sentinel.to_string(),
+                        buckets: fixture
+                            .buckets
+                            .clone()
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(malformed_root_before_manifest.code(), Code::InvalidArgument);
+            assert!(
+                malformed_root_before_manifest
+                    .message()
+                    .contains("root_hash must be a base64url sha256 value")
+            );
+            assert!(
+                !malformed_root_before_manifest
+                    .message()
+                    .contains(upload_root_before_manifest_sentinel)
+            );
+            assert!(
+                !malformed_root_before_manifest
+                    .message()
+                    .contains("private_result_oram")
+            );
+            assert!(
+                !malformed_root_before_manifest
+                    .message()
+                    .contains("manifest")
+            );
+
             let empty_upload_before_manifest =
                 PrivateResultOram::upload_private_result_oram_buckets(
                     &service,

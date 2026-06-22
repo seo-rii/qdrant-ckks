@@ -1225,6 +1225,21 @@ mod private_result_oram_rest_tests {
             );
             assert!(!missing_manifest_upload.contains("private_result_oram"));
 
+            let upload_root_before_manifest_sentinel = "AAAA";
+            let malformed_root_before_manifest = post_json_error_contains!(
+                "/collections/docs/private-result-oram/buckets",
+                UploadPrivateResultOramBucketsRequest {
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: upload_root_before_manifest_sentinel.to_string(),
+                    buckets: fixture.buckets.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "root_hash must be a base64url sha256 value"
+            );
+            assert!(!malformed_root_before_manifest.contains(upload_root_before_manifest_sentinel));
+            assert!(!malformed_root_before_manifest.contains("private_result_oram"));
+            assert!(!malformed_root_before_manifest.contains("manifest"));
+
             let empty_upload_before_manifest = post_json_error_contains!(
                 "/collections/docs/private-result-oram/buckets",
                 UploadPrivateResultOramBucketsRequest {

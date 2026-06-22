@@ -933,6 +933,39 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("private_hnsw_oram"));
             assert!(!err.message().contains("/tmp"));
 
+            let upload_root_before_manifest_sentinel = "AAAA";
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: upload_root_before_manifest_sentinel.to_string(),
+                    buckets: fixture
+                        .encrypted_build
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("root_hash must encode 32 bytes"));
+            assert!(
+                !err.message().contains(upload_root_before_manifest_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains("private_hnsw_oram"),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("manifest"), "{}", err.message());
+
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &service,
                 Request::new(grpc::UploadPrivateHnswBucketsRequest {
