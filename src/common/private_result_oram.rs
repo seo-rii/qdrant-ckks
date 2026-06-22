@@ -2227,6 +2227,14 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn distributed_session_epoch_mode_requires_consensus_backed_cas() {
+        assert!(validate_private_result_oram_session_cluster_epoch_mode(false).is_ok());
+
+        let err = validate_private_result_oram_session_cluster_epoch_mode(true).unwrap_err();
+        assert!(err.to_string().contains("consensus-backed epoch/root CAS"));
+    }
+
+    #[test]
     fn session_registry_enforces_single_writer_and_expiration() {
         let now = 10;
         let expired_at = 20;
