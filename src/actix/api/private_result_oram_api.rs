@@ -2337,6 +2337,14 @@ mod private_result_oram_rest_tests {
                 !drifted_manifest_upload_error.contains("tree_height"),
                 "{drifted_manifest_upload_error}"
             );
+            assert!(
+                !drifted_manifest_upload_error.contains(&fixture.manifest.root_hash),
+                "{drifted_manifest_upload_error}"
+            );
+            assert!(
+                !drifted_manifest_upload_error.contains(&fixture.signature.sig),
+                "{drifted_manifest_upload_error}"
+            );
 
             let _ = post_json_ok_on!(
                 &app,
@@ -2357,12 +2365,21 @@ mod private_result_oram_rest_tests {
                 !drifted_manifest_read_error.contains("tree_height"),
                 "{drifted_manifest_read_error}"
             );
+            assert!(
+                !drifted_manifest_read_error.contains(&fixture.manifest.root_hash),
+                "{drifted_manifest_read_error}"
+            );
+            assert!(
+                !drifted_manifest_read_error.contains(&fixture.signature.sig),
+                "{drifted_manifest_read_error}"
+            );
 
+            let missing_bucket_client_id = "tenant-a/sdk-instance-missing-buckets-test";
             let missing_bucket_session_error = post_json_error_contains_on!(
                 &app,
                 "/collections/docs/private-result-oram/session",
                 OpenPrivateResultOramSessionRequest {
-                    client_id: "tenant-a/sdk-instance-missing-buckets-test".to_string(),
+                    client_id: missing_bucket_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                 },
@@ -2375,6 +2392,10 @@ mod private_result_oram_rest_tests {
             );
             assert!(
                 !missing_bucket_session_error.contains("/tmp"),
+                "{missing_bucket_session_error}"
+            );
+            assert!(
+                !missing_bucket_session_error.contains(missing_bucket_client_id),
                 "{missing_bucket_session_error}"
             );
 
@@ -2394,6 +2415,10 @@ mod private_result_oram_rest_tests {
                 "{drifted_bucket_upload_error}"
             );
             assert!(
+                !drifted_bucket_upload_error.contains(&fixture.manifest.root_hash),
+                "{drifted_bucket_upload_error}"
+            );
+            assert!(
                 !drifted_bucket_upload_error.contains(&fixture.buckets[0].ciphertext),
                 "{drifted_bucket_upload_error}"
             );
@@ -2408,11 +2433,12 @@ mod private_result_oram_rest_tests {
                 }
             );
 
+            let setup_drift_client_id = "tenant-a/sdk-instance-setup-drift-test";
             let drifted_session_error = post_json_error_contains_on!(
                 &drifted_app,
                 "/collections/docs/private-result-oram/session",
                 OpenPrivateResultOramSessionRequest {
-                    client_id: "tenant-a/sdk-instance-setup-drift-test".to_string(),
+                    client_id: setup_drift_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                 },
@@ -2421,6 +2447,14 @@ mod private_result_oram_rest_tests {
             );
             assert!(
                 !drifted_session_error.contains("tree_height"),
+                "{drifted_session_error}"
+            );
+            assert!(
+                !drifted_session_error.contains(&fixture.manifest.root_hash),
+                "{drifted_session_error}"
+            );
+            assert!(
+                !drifted_session_error.contains(setup_drift_client_id),
                 "{drifted_session_error}"
             );
         });

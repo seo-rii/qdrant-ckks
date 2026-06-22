@@ -2496,6 +2496,16 @@ mod private_result_oram_grpc_tests {
                     .contains("manifest oram does not match runtime instance")
             );
             assert!(!drifted_manifest_upload.message().contains("tree_height"));
+            assert!(
+                !drifted_manifest_upload
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !drifted_manifest_upload
+                    .message()
+                    .contains(&fixture.signature.sig)
+            );
 
             PrivateResultOram::upload_private_result_oram_manifest(
                 &service,
@@ -2523,12 +2533,23 @@ mod private_result_oram_grpc_tests {
                     .contains("manifest oram does not match runtime instance")
             );
             assert!(!drifted_manifest_read.message().contains("tree_height"));
+            assert!(
+                !drifted_manifest_read
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !drifted_manifest_read
+                    .message()
+                    .contains(&fixture.signature.sig)
+            );
 
+            let missing_bucket_client_id = "tenant-a/sdk-instance-missing-buckets-test";
             let missing_bucket_session = PrivateResultOram::open_private_result_oram_session(
                 &service,
                 Request::new(grpc::OpenPrivateResultOramSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
-                    client_id: "tenant-a/sdk-instance-missing-buckets-test".to_string(),
+                    client_id: missing_bucket_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                 }),
@@ -2547,6 +2568,11 @@ mod private_result_oram_grpc_tests {
                     .contains("private_result_oram")
             );
             assert!(!missing_bucket_session.message().contains("/tmp"));
+            assert!(
+                !missing_bucket_session
+                    .message()
+                    .contains(missing_bucket_client_id)
+            );
 
             let drifted_bucket_upload = PrivateResultOram::upload_private_result_oram_buckets(
                 &drifted_service,
@@ -2574,6 +2600,11 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !drifted_bucket_upload
                     .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !drifted_bucket_upload
+                    .message()
                     .contains(&fixture.buckets[0].ciphertext)
             );
 
@@ -2594,11 +2625,12 @@ mod private_result_oram_grpc_tests {
             .await
             .unwrap();
 
+            let setup_drift_client_id = "tenant-a/sdk-instance-setup-drift-test";
             let drifted_session = PrivateResultOram::open_private_result_oram_session(
                 &drifted_service,
                 Request::new(grpc::OpenPrivateResultOramSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
-                    client_id: "tenant-a/sdk-instance-setup-drift-test".to_string(),
+                    client_id: setup_drift_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                 }),
@@ -2612,6 +2644,12 @@ mod private_result_oram_grpc_tests {
                     .contains("manifest oram does not match runtime instance")
             );
             assert!(!drifted_session.message().contains("tree_height"));
+            assert!(
+                !drifted_session
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(!drifted_session.message().contains(setup_drift_client_id));
         });
     }
 
