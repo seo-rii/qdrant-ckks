@@ -2046,6 +2046,11 @@ mod private_hnsw_grpc_tests {
                 !err.message()
                     .contains("active-snapshot-bucket-upload-ciphertext-sentinel")
             );
+            assert!(
+                !err.message().contains(&fixture.encrypted_build.root_hash),
+                "{}",
+                err.message()
+            );
             assert!(!err.message().contains("private_hnsw_oram"));
             drop(snapshot_guard);
 

@@ -1190,6 +1190,11 @@ mod private_result_oram_grpc_tests {
                 !err.message()
                     .contains("active-result-snapshot-bucket-ciphertext-sentinel")
             );
+            assert!(
+                !err.message().contains(&fixture.manifest.root_hash),
+                "{}",
+                err.message()
+            );
             assert!(!err.message().contains("private_result_oram"));
             drop(snapshot_guard);
 
