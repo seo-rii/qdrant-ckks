@@ -3434,12 +3434,13 @@ mod private_hnsw_rest_tests {
             .await;
             assert_eq!(bucket_response.status(), StatusCode::OK);
 
+            let distributed_client_id = "tenant-a/distributed-sdk-instance";
             let response = actix_test::call_service(
                 &app,
                 actix_test::TestRequest::post()
                     .uri("/collections/docs/private-hnsw/text/session")
                     .set_json(&OpenPrivateHnswSessionRequest {
-                        client_id: "tenant-a/distributed-sdk-instance".to_string(),
+                        client_id: distributed_client_id.to_string(),
                         desired_epoch: BASE_EPOCH,
                         fixed_budget: true,
                         result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
@@ -3452,6 +3453,14 @@ mod private_hnsw_rest_tests {
             let body = String::from_utf8_lossy(&body_bytes);
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
             assert!(body.contains("consensus-backed epoch/root CAS"), "{body}");
+            assert!(!body.contains(distributed_client_id), "{body}");
+            assert!(!body.contains(&fixture.manifest.root_hash), "{body}");
+            assert!(!body.contains(&fixture.manifest_signature.sig), "{body}");
+            assert!(!body.contains(&fixture.encrypted_build.root_hash), "{body}");
+            assert!(
+                !body.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{body}"
+            );
         });
     }
 

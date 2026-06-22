@@ -2418,6 +2418,9 @@ mod private_result_oram_grpc_tests {
         actix_web::rt::System::new().block_on(async {
             create_private_result_collection(&dispatcher).await;
             let service = PrivateResultOramService::new(Arc::new(dispatcher.clone()), settings);
+            let manifest_root_hash = fixture.manifest.root_hash.clone();
+            let manifest_signature = fixture.signature.sig.clone();
+            let first_bucket_ciphertext = fixture.buckets[0].ciphertext.clone();
 
             PrivateResultOram::upload_private_result_oram_manifest(
                 &service,
@@ -2442,11 +2445,12 @@ mod private_result_oram_grpc_tests {
             .await
             .unwrap();
 
+            let distributed_client_id = "tenant-a/distributed-result-sdk-instance";
             let err = PrivateResultOram::open_private_result_oram_session(
                 &service,
                 Request::new(grpc::OpenPrivateResultOramSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
-                    client_id: "tenant-a/distributed-result-sdk-instance".to_string(),
+                    client_id: distributed_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                 }),
@@ -2455,6 +2459,10 @@ mod private_result_oram_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("consensus-backed epoch/root CAS"));
+            assert!(!err.message().contains(distributed_client_id));
+            assert!(!err.message().contains(&manifest_root_hash));
+            assert!(!err.message().contains(&manifest_signature));
+            assert!(!err.message().contains(&first_bucket_ciphertext));
         });
     }
 

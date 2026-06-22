@@ -3829,12 +3829,13 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap();
 
+            let distributed_client_id = "tenant-a/distributed-sdk-instance";
             let err = PrivateHnswOram::open_private_hnsw_session(
                 &service,
                 Request::new(grpc::OpenPrivateHnswSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
-                    client_id: "tenant-a/distributed-sdk-instance".to_string(),
+                    client_id: distributed_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                     result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
@@ -3844,6 +3845,14 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("consensus-backed epoch/root CAS"));
+            assert!(!err.message().contains(distributed_client_id));
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
+            assert!(!err.message().contains(&fixture.manifest_signature.sig));
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext)
+            );
         });
     }
 

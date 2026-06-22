@@ -2773,12 +2773,13 @@ mod private_result_oram_rest_tests {
             let bucket_body = String::from_utf8_lossy(&bucket_body_bytes);
             assert_eq!(bucket_status, StatusCode::OK, "{bucket_body}");
 
+            let distributed_client_id = "tenant-a/distributed-result-sdk-instance";
             let session_response = actix_test::call_service(
                 &app,
                 actix_test::TestRequest::post()
                     .uri("/collections/docs/private-result-oram/session")
                     .set_json(&OpenPrivateResultOramSessionRequest {
-                        client_id: "tenant-a/distributed-result-sdk-instance".to_string(),
+                        client_id: distributed_client_id.to_string(),
                         desired_epoch: BASE_EPOCH,
                         fixed_budget: true,
                     })
@@ -2790,6 +2791,10 @@ mod private_result_oram_rest_tests {
             let body = String::from_utf8_lossy(&body_bytes);
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
             assert!(body.contains("consensus-backed epoch/root CAS"), "{body}");
+            assert!(!body.contains(distributed_client_id), "{body}");
+            assert!(!body.contains(&fixture.manifest.root_hash), "{body}");
+            assert!(!body.contains(&fixture.signature.sig), "{body}");
+            assert!(!body.contains(&fixture.buckets[0].ciphertext), "{body}");
         });
     }
 }
