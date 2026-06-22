@@ -1333,6 +1333,26 @@ mod private_result_oram_rest_tests {
             );
             assert!(!bucket_upload_hash_mismatch_error.contains(&hash_mismatch_ciphertext));
 
+            let mut duplicate_bucket_set = fixture.buckets.clone();
+            assert!(
+                duplicate_bucket_set.len() >= 2,
+                "route fixture must contain at least two ORAM buckets"
+            );
+            duplicate_bucket_set[1] = duplicate_bucket_set[0].clone();
+            let duplicate_bucket_upload_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/buckets",
+                UploadPrivateResultOramBucketsRequest {
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: duplicate_bucket_set,
+                },
+                StatusCode::BAD_REQUEST,
+                "duplicate bucket"
+            );
+            assert!(!duplicate_bucket_upload_error.contains(&fixture.manifest.root_hash));
+            assert!(!duplicate_bucket_upload_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!duplicate_bucket_upload_error.contains("private_result_oram"));
+
             let buckets_result = post_json_ok!(
                 "/collections/docs/private-result-oram/buckets",
                 UploadPrivateResultOramBucketsRequest {

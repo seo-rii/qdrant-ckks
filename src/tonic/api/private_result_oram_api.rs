@@ -1097,6 +1097,48 @@ mod private_result_oram_grpc_tests {
                     .contains(&hash_mismatch_ciphertext)
             );
 
+            let mut duplicate_bucket_set = fixture.buckets.clone();
+            assert!(
+                duplicate_bucket_set.len() >= 2,
+                "route fixture must contain at least two ORAM buckets"
+            );
+            duplicate_bucket_set[1] = duplicate_bucket_set[0].clone();
+            let duplicate_bucket_upload = PrivateResultOram::upload_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: duplicate_bucket_set
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(duplicate_bucket_upload.code(), Code::InvalidArgument);
+            assert!(
+                duplicate_bucket_upload
+                    .message()
+                    .contains("duplicate bucket")
+            );
+            assert!(
+                !duplicate_bucket_upload
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !duplicate_bucket_upload
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !duplicate_bucket_upload
+                    .message()
+                    .contains("private_result_oram")
+            );
+
             let bucket_epoch = PrivateResultOram::upload_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::UploadPrivateResultOramBucketsRequest {
