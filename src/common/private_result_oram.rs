@@ -2754,6 +2754,54 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn active_session_current_epoch_preflight_rejects_stale_store_epoch() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateResultOramStore::new(temp.path());
+        let old_root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
+        let old = PrivateResultOramEpochState {
+            index_epoch: 42,
+            root_hash: old_root_hash.clone(),
+        };
+        let stale_current = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+        };
+
+        store.write_initial_epoch(&old).unwrap();
+        store.compare_and_swap_epoch(&old, &stale_current).unwrap();
+
+        let err = ensure_private_result_oram_active_session_current_epoch(
+            &store,
+            old.index_epoch,
+            &old.root_hash,
+            "commit",
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("commit current epoch/root does not match active session"));
+        assert!(!err.contains("42"), "{err}");
+        assert!(!err.contains("43"), "{err}");
+        assert!(!err.contains(&old.root_hash), "{err}");
+        assert!(!err.contains(&stale_current.root_hash), "{err}");
+
+        let err = ensure_private_result_oram_active_session_current_epoch(
+            &store,
+            old.index_epoch,
+            &old.root_hash,
+            "read_buckets",
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("read_buckets current epoch/root does not match active session"));
+        assert!(!err.contains("42"), "{err}");
+        assert!(!err.contains("43"), "{err}");
+        assert!(!err.contains(&old.root_hash), "{err}");
+        assert!(!err.contains(&stale_current.root_hash), "{err}");
+    }
+
+    #[test]
     fn session_open_storage_recheck_requires_bucket_file() {
         let mut session = fixture_session("session-1", 20);
         session.bucket_count = 1;
