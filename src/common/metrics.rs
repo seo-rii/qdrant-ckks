@@ -1573,6 +1573,10 @@ mod tests {
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
             ),
             (
+                "/collections/docs/private-hnsw/text/oram/commit/updated-bucket-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit",
+            ),
+            (
                 "/collections/docs/private-hnsw/text/session/client-state-sentinel",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/session",
             ),
@@ -1587,6 +1591,10 @@ mod tests {
             (
                 "/collections/docs/private-result-oram/oram/read_buckets/result-bucket-id-sentinel",
                 "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+            ),
+            (
+                "/collections/docs/private-result-oram/oram/commit/result-updated-bucket-sentinel",
+                "/collections/{collection_name}/private-result-oram/oram/commit",
             ),
         ];
         for (raw, canonical) in rest_cases {
@@ -1605,6 +1613,14 @@ mod tests {
             (
                 "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths/leaf-label-sentinel",
                 "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths",
+            ),
+            (
+                "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths/updated-bucket-sentinel",
+                "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths",
+            ),
+            (
+                "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets/result-updated-bucket-sentinel",
+                "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets",
             ),
             (
                 "/qdrant.PrivateResultOram/ClosePrivateResultOramSession/result-session-id-sentinel",
