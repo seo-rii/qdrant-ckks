@@ -2103,6 +2103,19 @@ mod private_result_oram_tests {
         assert!(rendered.contains("request validation failed"));
         assert!(!rendered.contains(unsupported_alg), "{rendered}");
 
+        let malformed_key_id = "tenant-a/private-result-signing-v1!sentinel";
+        let rendered = private_result_oram_error(
+            validate_private_result_oram_manifest_signature_shape(&PrivateResultOramSignature {
+                alg: "ed25519".to_string(),
+                key_id: malformed_key_id.to_string(),
+                sig: BASE64URL_NOPAD.encode(&[7; 64]),
+            })
+            .unwrap_err(),
+        )
+        .to_string();
+        assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains(malformed_key_id), "{rendered}");
+
         let oversized_signature = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 64]), "A".repeat(64));
         let rendered = private_result_oram_error(
             validate_private_result_oram_manifest_signature_shape(&PrivateResultOramSignature {

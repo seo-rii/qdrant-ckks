@@ -3033,6 +3033,19 @@ mod private_hnsw_tests {
         assert!(rendered.contains("signature algorithm must be ed25519"));
         assert!(!rendered.contains(unsupported_alg), "{rendered}");
 
+        let malformed_key_id = "tenant-a/private-hnsw-signing-v1!sentinel";
+        let rendered = private_hnsw_error(
+            validate_private_hnsw_oram_manifest_signature_shape(&PrivateHnswOramSignature {
+                alg: "ed25519".to_string(),
+                key_id: malformed_key_id.to_string(),
+                sig: BASE64URL_NOPAD.encode(&[7; 64]),
+            })
+            .unwrap_err(),
+        )
+        .to_string();
+        assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains(malformed_key_id), "{rendered}");
+
         let oversized_signature = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 64]), "A".repeat(64));
         let rendered = private_hnsw_error(
             validate_private_hnsw_oram_manifest_signature_shape(&PrivateHnswOramSignature {
