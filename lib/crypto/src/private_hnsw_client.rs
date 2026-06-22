@@ -1995,6 +1995,23 @@ pub fn plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
     fixed_path_count: usize,
     padding_leaf: u64,
 ) -> Result<PrivateHnswGraphTraversalPathBatchPlan, PrivateHnswClientError> {
+    validate_oram_client_config(config)?;
+    if fixed_path_count == 0 {
+        return Err(PrivateHnswClientError::InvalidSearchConfig(
+            "fixed_path_count",
+        ));
+    }
+    validate_private_hnsw_oram_leaf(padding_leaf, config.tree_height)?;
+    let leaf_count = private_hnsw_oram_leaf_count(config.tree_height)?;
+    if u64::try_from(fixed_path_count)
+        .map_err(|_| PrivateHnswClientError::InvalidSearchConfig("fixed_path_count"))?
+        > leaf_count
+    {
+        return Err(PrivateHnswClientError::InvalidSearchConfig(
+            "fixed_path_count",
+        ));
+    }
+
     let directional_plan = plan_private_hnsw_oram_directional_neighbor_filter(
         current_block,
         neighbor_blocks,
@@ -4947,6 +4964,64 @@ mod tests {
         assert_eq!(
             sparse_leaves.iter().collect::<BTreeSet<_>>().len(),
             sparse_leaves.len()
+        );
+        assert_eq!(
+            plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
+                &state,
+                config,
+                &current,
+                &[
+                    forward_far.clone(),
+                    backward.clone(),
+                    sideways.clone(),
+                    forward_near.clone(),
+                ],
+                &[10.0, 0.0],
+                DistanceKind::Euclid,
+                0,
+                7,
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "fixed_path_count"
+            ))
+        );
+        assert_eq!(
+            plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
+                &state,
+                config,
+                &current,
+                &[
+                    forward_far.clone(),
+                    backward.clone(),
+                    sideways.clone(),
+                    forward_near.clone(),
+                ],
+                &[10.0, 0.0],
+                DistanceKind::Euclid,
+                9,
+                7,
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "fixed_path_count"
+            ))
+        );
+        assert_eq!(
+            plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
+                &state,
+                config,
+                &current,
+                &[
+                    forward_far.clone(),
+                    backward.clone(),
+                    sideways.clone(),
+                    forward_near.clone(),
+                ],
+                &[10.0, 0.0],
+                DistanceKind::Euclid,
+                3,
+                8,
+            ),
+            Err(PrivateHnswClientError::LeafOutOfRange)
         );
 
         let duplicate_position_state = PrivateHnswOramClientState::with_position_map(
