@@ -2089,6 +2089,49 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn signature_shape_errors_do_not_reflect_submitted_values() {
+        let unsupported_alg = "rsa-pss-result-signature-sentinel";
+        let rendered = private_result_oram_error(
+            validate_private_result_oram_manifest_signature_shape(&PrivateResultOramSignature {
+                alg: unsupported_alg.to_string(),
+                key_id: SIGNING_KEY_ID.to_string(),
+                sig: BASE64URL_NOPAD.encode(&[7; 64]),
+            })
+            .unwrap_err(),
+        )
+        .to_string();
+        assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains(unsupported_alg), "{rendered}");
+
+        let oversized_signature = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 64]), "A".repeat(64));
+        let rendered = private_result_oram_error(
+            validate_private_result_oram_manifest_signature_shape(&PrivateResultOramSignature {
+                alg: "ed25519".to_string(),
+                key_id: SIGNING_KEY_ID.to_string(),
+                sig: oversized_signature.clone(),
+            })
+            .unwrap_err(),
+        )
+        .to_string();
+        assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains(&oversized_signature), "{rendered}");
+
+        let mut malformed_signature = BASE64URL_NOPAD.encode(&[7; 64]);
+        malformed_signature.replace_range(0..1, "!");
+        let rendered = private_result_oram_error(
+            validate_private_result_oram_manifest_signature_shape(&PrivateResultOramSignature {
+                alg: "ed25519".to_string(),
+                key_id: SIGNING_KEY_ID.to_string(),
+                sig: malformed_signature.clone(),
+            })
+            .unwrap_err(),
+        )
+        .to_string();
+        assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains(&malformed_signature), "{rendered}");
+    }
+
+    #[test]
     fn manifest_signature_owner_key_preflight_rejects_non_owner_key() {
         let manifest = read_shape_manifest();
         let signature = PrivateResultOramSignature {
