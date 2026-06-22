@@ -2810,6 +2810,35 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn read_proof_bucket_commitment_mismatch_rejects_without_ciphertext_leak() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let store = PrivateResultOramStore::new(temp.path());
+        let bucket_commitment = BASE64URL_NOPAD.encode(&[7; 32]);
+        let bucket = fixture_readable_bucket(0, 42, 11, &bucket_commitment);
+        let root = PrivateResultOramStore::merkle_root_for_commitments(&[bucket
+            .bucket_commitment
+            .clone()])
+        .unwrap();
+        store
+            .write_merkle_tree_from_commitments(
+                42,
+                root.clone(),
+                vec![bucket.bucket_commitment.clone()],
+            )
+            .unwrap();
+
+        let mut proof = store.read_merkle_path_batch(&[0], 42, &root, 1).unwrap();
+        proof.leaves[0].leaf_hash = BASE64URL_NOPAD.encode(&[99; 32]);
+
+        let err = ensure_private_result_oram_read_proof_matches_buckets(&proof, &[bucket.clone()])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("bucket/proof consistency validation failed"));
+        assert!(!err.contains(&bucket.ciphertext));
+        assert!(!err.contains(&bucket.bucket_commitment));
+    }
+
+    #[test]
     fn session_open_storage_recheck_requires_bucket_file() {
         let mut session = fixture_session("session-1", 20);
         session.bucket_count = 1;
