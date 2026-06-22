@@ -523,8 +523,11 @@ fn sanitize_private_hnsw_snapshot_layout_error(
     err: CollectionError,
 ) -> StorageError {
     let rendered = err.to_string();
-    let collection_path = collection_path.to_string_lossy();
-    if rendered.contains(collection_path.as_ref()) || rendered.contains(PRIVATE_HNSW_ORAM_DIR) {
+    if private_oram_layout_error_contains_sensitive_detail(
+        &rendered,
+        collection_path,
+        PRIVATE_HNSW_ORAM_DIR,
+    ) {
         return StorageError::bad_input("private HNSW ORAM snapshot layout validation failed");
     }
     StorageError::from(err)
@@ -535,11 +538,34 @@ fn sanitize_private_result_oram_snapshot_layout_error(
     err: CollectionError,
 ) -> StorageError {
     let rendered = err.to_string();
-    let collection_path = collection_path.to_string_lossy();
-    if rendered.contains(collection_path.as_ref()) || rendered.contains(PRIVATE_RESULT_ORAM_DIR) {
+    if private_oram_layout_error_contains_sensitive_detail(
+        &rendered,
+        collection_path,
+        PRIVATE_RESULT_ORAM_DIR,
+    ) {
         return StorageError::bad_input("private result ORAM snapshot layout validation failed");
     }
     StorageError::from(err)
+}
+
+fn private_oram_layout_error_contains_sensitive_detail(
+    rendered: &str,
+    collection_path: &std::path::Path,
+    private_oram_dir: &str,
+) -> bool {
+    let collection_path = collection_path.to_string_lossy();
+    rendered.contains(collection_path.as_ref())
+        || rendered.contains(private_oram_dir)
+        || rendered
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')))
+            .any(|token| token.ends_with(".bucket") || looks_like_base64url_sha256_token(token))
+}
+
+fn looks_like_base64url_sha256_token(token: &str) -> bool {
+    token.len() == 43
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 fn validate_existing_collection_crypto_identity(
@@ -667,6 +693,23 @@ mod tests {
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!rendered.contains("private_hnsw_oram"));
 
+        let leaked_bucket = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::not_found("private HNSW ORAM bucket 00000000.bucket"),
+        );
+        let rendered = leaked_bucket.to_string();
+        assert!(rendered.contains("private HNSW ORAM snapshot layout validation failed"));
+        assert!(!rendered.contains("00000000.bucket"));
+
+        let leaked_root = "A".repeat(43);
+        let err = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!("private HNSW ORAM root mismatch {leaked_root}")),
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("private HNSW ORAM snapshot layout validation failed"));
+        assert!(!rendered.contains(&leaked_root));
+
         let safe = sanitize_private_hnsw_snapshot_layout_error(
             temp_dir.path(),
             CollectionError::bad_request(
@@ -696,6 +739,25 @@ mod tests {
         assert!(rendered.contains("private result ORAM snapshot layout validation failed"));
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+
+        let leaked_bucket = sanitize_private_result_oram_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::not_found("private result ORAM bucket 00000000.bucket"),
+        );
+        let rendered = leaked_bucket.to_string();
+        assert!(rendered.contains("private result ORAM snapshot layout validation failed"));
+        assert!(!rendered.contains("00000000.bucket"));
+
+        let leaked_root = "A".repeat(43);
+        let err = sanitize_private_result_oram_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private result ORAM root mismatch {leaked_root}"
+            )),
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("private result ORAM snapshot layout validation failed"));
+        assert!(!rendered.contains(&leaked_root));
 
         let safe = sanitize_private_result_oram_snapshot_layout_error(
             temp_dir.path(),
