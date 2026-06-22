@@ -979,6 +979,82 @@ mod tests {
         }
     }
 
+    #[test]
+    fn private_hnsw_debug_redacts_ciphertext_and_access_pattern_values() {
+        let encrypted_bucket = PrivateHnswOramBucket {
+            version: 1,
+            bucket_id: 987_654,
+            index_epoch: 42,
+            ciphertext: "HNSW-CIPHERTEXT-SENTINEL".to_string(),
+            ciphertext_sha256: "HNSW-SHA-SENTINEL".to_string(),
+            bucket_commitment: "HNSW-COMMITMENT-SENTINEL".to_string(),
+        };
+        let signature = PrivateHnswOramSignature {
+            alg: "ed25519".to_string(),
+            key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+            sig: "HNSW-SIGNATURE-SENTINEL".to_string(),
+        };
+        let mut manifest = fixture_manifest();
+        manifest.root_hash = "HNSW-MANIFEST-ROOT-SENTINEL".to_string();
+        let commit_refs = [PrivateHnswOramCommitBucketRef {
+            bucket_id: 987_654,
+            ciphertext_sha256: "HNSW-SHA-SENTINEL",
+        }];
+        let commit_signature_input = PrivateHnswOramCommitSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: "HNSW-OLD-ROOT-SENTINEL",
+            new_root_hash: "HNSW-NEW-ROOT-SENTINEL",
+            updated_buckets: &commit_refs,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+        let paths = ["HNSW-PATH-LABEL-SENTINEL"];
+        let read_paths_signature_input = PrivateHnswOramReadPathsSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: "HNSW-ROOT-SENTINEL",
+            paths: &paths,
+            requested_paths: 1,
+            dummy_paths_included: true,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+
+        let rendered = [
+            format!("{encrypted_bucket:?}"),
+            format!("{signature:?}"),
+            format!("{manifest:?}"),
+            format!("{:?}", commit_refs[0]),
+            format!("{commit_signature_input:?}"),
+            format!("{read_paths_signature_input:?}"),
+        ]
+        .join("\n");
+        for leaked in [
+            "987654",
+            "HNSW-CIPHERTEXT-SENTINEL",
+            "HNSW-SHA-SENTINEL",
+            "HNSW-COMMITMENT-SENTINEL",
+            "HNSW-SIGNATURE-SENTINEL",
+            "HNSW-MANIFEST-ROOT-SENTINEL",
+            "HNSW-OLD-ROOT-SENTINEL",
+            "HNSW-NEW-ROOT-SENTINEL",
+            "HNSW-ROOT-SENTINEL",
+            "HNSW-PATH-LABEL-SENTINEL",
+        ] {
+            assert!(!rendered.contains(leaked), "{rendered}");
+        }
+    }
+
     fn fixture_manifest() -> PrivateHnswOramManifest {
         PrivateHnswOramManifest {
             version: 1,
