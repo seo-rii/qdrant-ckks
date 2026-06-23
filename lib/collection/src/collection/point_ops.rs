@@ -3806,11 +3806,19 @@ fn payload_redaction_plan_for_encryption(
             | (EncryptionSelector::MetadataKeys { keys: paths }, Some(METADATA_VALUE_BINDING)) => {
                 if redact_encrypted_values {
                     for path in paths {
-                        let json_path = path.parse::<JsonPath>().map_err(|err| {
-                            CollectionError::bad_input(format!(
-                                "encrypted payload field path '{path}' is invalid: {err:?}",
-                            ))
-                        })?;
+                        let json_path = if encryption_rule_uses_private_result_oram(rule) {
+                            path.parse::<JsonPath>().map_err(|_| {
+                                CollectionError::bad_input(
+                                    "private result ORAM payload field path is invalid",
+                                )
+                            })?
+                        } else {
+                            path.parse::<JsonPath>().map_err(|err| {
+                                CollectionError::bad_input(format!(
+                                    "encrypted payload field path '{path}' is invalid: {err:?}",
+                                ))
+                            })?
+                        };
                         plan.encrypted_payload_paths
                             .push((json_path, PayloadRedactionKind::AnyValue));
                     }
@@ -4815,6 +4823,14 @@ mod tests {
         assert!(err.contains("private result ORAM payload field path is invalid"));
         assert!(!err.contains(secret_path), "{err}");
         assert!(!err.contains("private-result-secret"), "{err}");
+
+        let err = payload_redaction_plan_for_encryption(true, &encryption)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("private result ORAM payload field path is invalid"));
+        assert!(!err.contains(secret_path), "{err}");
+        assert!(!err.contains("private-result-secret"), "{err}");
+        assert!(!err.contains("JsonPath"), "{err}");
     }
 
     #[test]
