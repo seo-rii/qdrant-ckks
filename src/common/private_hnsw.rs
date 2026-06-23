@@ -2273,7 +2273,13 @@ fn validate_private_hnsw_commit_request_shape(
             "private HNSW ORAM commit updated_buckets must contain at least one bucket",
         ));
     }
+    let mut seen_bucket_ids = HashSet::with_capacity(updated_buckets.len());
     for bucket in updated_buckets {
+        if !seen_bucket_ids.insert(bucket.bucket_id) {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM commit updated_buckets contains duplicate bucket",
+            ));
+        }
         validate_root_hash_string(&bucket.ciphertext_sha256, "ciphertext_sha256")?;
         validate_root_hash_string(&bucket.bucket_commitment, "bucket_commitment")?;
     }
@@ -2477,6 +2483,21 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("updated_buckets must contain"));
         assert!(!rendered.contains("session is missing or expired"));
+    }
+
+    #[test]
+    fn commit_request_shape_rejects_duplicate_bucket_before_session_lookup() {
+        let bucket = fixture_bucket(0, 43);
+        let duplicate = vec![bucket.clone(), bucket];
+
+        let err = validate_private_hnsw_commit_request_shape(&duplicate).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("duplicate bucket"));
+        assert!(
+            !rendered.contains("session is missing or expired"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&duplicate[0].ciphertext), "{rendered}");
     }
 
     #[test]
