@@ -411,15 +411,17 @@ impl fmt::Debug for RedactedShardTransferOperation<'_> {
                 .debug_struct("Finish")
                 .field("transfer", &RedactedShardTransfer(transfer))
                 .finish(),
-            ShardTransferOperations::SnapshotRecovered(transfer) => {
-                f.debug_tuple("SnapshotRecovered").field(transfer).finish()
-            }
-            ShardTransferOperations::RecoveryToPartial(transfer) => {
-                f.debug_tuple("RecoveryToPartial").field(transfer).finish()
-            }
+            ShardTransferOperations::SnapshotRecovered(transfer) => f
+                .debug_struct("SnapshotRecovered")
+                .field("transfer", &RedactedShardTransferKey(transfer))
+                .finish(),
+            ShardTransferOperations::RecoveryToPartial(transfer) => f
+                .debug_struct("RecoveryToPartial")
+                .field("transfer", &RedactedShardTransferKey(transfer))
+                .finish(),
             ShardTransferOperations::Abort { transfer, reason } => f
                 .debug_struct("Abort")
-                .field("transfer", transfer)
+                .field("transfer", &RedactedShardTransferKey(transfer))
                 .field("reason_present", &(!reason.is_empty()))
                 .finish(),
         }
@@ -457,6 +459,20 @@ impl fmt::Debug for RedactedShardTransferRestart<'_> {
             .field("method", &transfer.method)
             .field("filter_present", &false)
             .field("filter_condition_count", &Option::<usize>::None)
+            .finish()
+    }
+}
+
+struct RedactedShardTransferKey<'a>(&'a ShardTransferKey);
+
+impl fmt::Debug for RedactedShardTransferKey<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let transfer = self.0;
+        f.debug_struct("ShardTransferKey")
+            .field("shard_id", &transfer.shard_id)
+            .field("to_shard_id", &transfer.to_shard_id)
+            .field("from", &transfer.from)
+            .field("to", &transfer.to)
             .finish()
     }
 }
@@ -899,6 +915,37 @@ mod tests {
 
         assert!(!log_line.contains("qdrant-sec-transfer-abort-sentinel"));
         assert!(log_line.contains("reason_present: true"), "{log_line}");
+    }
+
+    #[test]
+    fn shard_transfer_key_stage_log_projection_uses_redacted_key_wrapper() {
+        let transfer = ShardTransferKey {
+            shard_id: 1,
+            to_shard_id: Some(2),
+            from: 3,
+            to: 4,
+        };
+
+        for operation in [
+            ShardTransferOperations::SnapshotRecovered(transfer),
+            ShardTransferOperations::RecoveryToPartial(transfer),
+            ShardTransferOperations::Abort {
+                transfer,
+                reason: "qdrant-sec-transfer-key-stage-abort-sentinel".to_string(),
+            },
+        ] {
+            let log_line = format!("{:?}", operation.redacted_log());
+
+            assert!(log_line.contains("ShardTransferKey"), "{log_line}");
+            assert!(log_line.contains("shard_id: 1"), "{log_line}");
+            assert!(log_line.contains("to_shard_id: Some(2)"), "{log_line}");
+            assert!(log_line.contains("from: 3"), "{log_line}");
+            assert!(log_line.contains("to: 4"), "{log_line}");
+            assert!(
+                !log_line.contains("qdrant-sec-transfer-key-stage-abort-sentinel"),
+                "{log_line}",
+            );
+        }
     }
 
     #[test]
