@@ -381,6 +381,9 @@ mod private_result_oram_rest_tests {
     };
     use collection::operations::types::VectorsConfig;
     use collection::operations::vector_params_builder::VectorParamsBuilder;
+    use collection::private_result_oram_store::{
+        PrivateResultOramEpochState, PrivateResultOramStore,
+    };
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
         OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
@@ -1786,6 +1789,139 @@ mod private_result_oram_rest_tests {
             let session_id = session_result["session_id"].as_str().unwrap().to_string();
             assert_eq!(session_result["collection_id"], COLLECTION_ID);
             assert_eq!(session_result["index_epoch"], BASE_EPOCH);
+
+            let uploaded_store = PrivateResultOramStore::new(collection.path());
+            let current_epoch_path = uploaded_store
+                .root_path()
+                .join("epochs")
+                .join("current.json");
+            let original_current_epoch_bytes = std::fs::read(&current_epoch_path).unwrap();
+            let stale_current_root = BASE64URL_NOPAD.encode(&[88; 32]);
+            std::fs::write(
+                &current_epoch_path,
+                serde_json::to_vec_pretty(&PrivateResultOramEpochState {
+                    index_epoch: BASE_EPOCH,
+                    root_hash: stale_current_root.clone(),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+
+            let stale_current_read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            let stale_current_read_signature =
+                fixture.read_signature(&stale_current_read_bucket_ids);
+            let stale_current_read_session_id = session_id.clone();
+            let stale_current_read_root_hash = fixture.manifest.root_hash.clone();
+            let stale_current_read_signature_key_id = stale_current_read_signature.key_id.clone();
+            let stale_current_read_signature_sig = stale_current_read_signature.sig.clone();
+            let stale_current_read_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: stale_current_read_session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: stale_current_read_root_hash.clone(),
+                    bucket_ids: stale_current_read_bucket_ids,
+                    read_signature: stale_current_read_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "read_buckets current epoch/root does not match active session"
+            );
+            assert!(
+                !stale_current_read_error.contains(&stale_current_read_root_hash),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains(&stale_current_root),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains(&stale_current_read_session_id),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains(&stale_current_read_signature_key_id),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains(&stale_current_read_signature_sig),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains(&fixture.buckets[0].ciphertext),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains("private_result_oram"),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains("/tmp"),
+                "{stale_current_read_error}"
+            );
+
+            let (
+                stale_current_updated_bucket,
+                stale_current_commit_signature,
+                stale_current_new_root,
+            ) = fixture.commit_bucket();
+            let stale_current_commit_session_id = session_id.clone();
+            let stale_current_commit_old_root_hash = fixture.manifest.root_hash.clone();
+            let stale_current_commit_signature_key_id =
+                stale_current_commit_signature.key_id.clone();
+            let stale_current_commit_signature_sig = stale_current_commit_signature.sig.clone();
+            let stale_current_commit_bucket_ciphertext =
+                stale_current_updated_bucket.ciphertext.clone();
+            let stale_current_commit_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: stale_current_commit_session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: stale_current_commit_old_root_hash.clone(),
+                    new_root_hash: stale_current_new_root.clone(),
+                    updated_buckets: vec![stale_current_updated_bucket],
+                    commit_signature: stale_current_commit_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "commit current epoch/root does not match active session"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_old_root_hash),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_new_root),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_root),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_session_id),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_signature_key_id),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_signature_sig),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_bucket_ciphertext),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains("private_result_oram"),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains("/tmp"),
+                "{stale_current_commit_error}"
+            );
+            std::fs::write(&current_epoch_path, original_current_epoch_bytes).unwrap();
 
             let duplicate_session_client_id = "tenant-a/sdk-instance-2";
             let duplicate_session_error = post_json_error_contains!(
