@@ -2502,7 +2502,9 @@ mod private_result_oram_tests {
                 now,
             )
             .unwrap_err();
-        assert!(err.to_string().contains("ConcurrentWriter"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("ConcurrentWriter"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
 
         let err = registry
             .with_session_mut(
@@ -2547,7 +2549,9 @@ mod private_result_oram_tests {
         let err = registry
             .open(fixture_session("session-2", 20), now)
             .unwrap_err();
-        assert!(err.to_string().contains("ConcurrentWriter"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("ConcurrentWriter"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
 
         assert!(registry.close("collection-private-result-test", "session-1", now,));
         registry
@@ -2569,7 +2573,9 @@ mod private_result_oram_tests {
         let err = registry
             .open(fixture_session("session-2", 20), now)
             .unwrap_err();
-        assert!(err.to_string().contains("ConcurrentWriter"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("ConcurrentWriter"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
 
         assert!(registry.close("collection-private-result-test", "session-1", now,));
         assert!(!registry.has_active_collection("collection-private-result-test", now));
@@ -2586,20 +2592,18 @@ mod private_result_oram_tests {
         let err = registry
             .open(fixture_session("session-1", 20), now)
             .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("session open requires no active collection snapshot")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("session open requires no active collection snapshot"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
         let err = ensure_private_result_oram_write_window_in_registry(
             &mut registry,
             "collection-private-result-test",
             now,
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("upload requires no active collection snapshot")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("upload requires no active collection snapshot"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
         registry.release_collection_snapshot("collection-private-result-test");
 
         registry
@@ -2608,17 +2612,15 @@ mod private_result_oram_tests {
         let err = registry
             .open(fixture_session("session-1", 20), now)
             .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("session open requires no active upload")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("session open requires no active upload"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
         let err = registry
             .begin_collection_snapshot("collection-private-result-test", now)
             .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("snapshot requires no active private ORAM upload")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("snapshot requires no active private ORAM upload"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
         registry.release_upload("collection-private-result-test");
 
         registry
@@ -2630,10 +2632,9 @@ mod private_result_oram_tests {
             now,
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("upload requires no active session")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("upload requires no active session"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
         assert!(registry.close("collection-private-result-test", "session-1", now,));
 
         registry
@@ -3331,6 +3332,20 @@ mod private_result_oram_tests {
             bucket_count: manifest.bucket_count,
             max_bucket_ciphertext_bytes: 4096,
             manifest,
+        }
+    }
+
+    fn assert_private_result_registry_error_redacts_ids(rendered: &str) {
+        for sentinel in [
+            "collection-private-result-test",
+            "session-1",
+            "session-2",
+            "qdrant-private-result-oram-test",
+        ] {
+            assert!(
+                !rendered.contains(sentinel),
+                "private result ORAM registry error leaked `{sentinel}`: {rendered}",
+            );
         }
     }
 

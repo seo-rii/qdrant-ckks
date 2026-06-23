@@ -3851,6 +3851,21 @@ mod private_hnsw_tests {
         }
     }
 
+    fn assert_private_hnsw_registry_error_redacts_ids(rendered: &str) {
+        for sentinel in [
+            "collection-uuid-1",
+            "text",
+            "session-1",
+            "session-2",
+            "qdrant-private-hnsw-test",
+        ] {
+            assert!(
+                !rendered.contains(sentinel),
+                "private HNSW ORAM registry error leaked `{sentinel}`: {rendered}",
+            );
+        }
+    }
+
     fn fixture_runtime_context(manifest: &PrivateHnswOramManifest) -> ResolvedPrivateHnswContext {
         ResolvedPrivateHnswContext {
             collection_path: std::path::PathBuf::from("/tmp/qdrant-private-hnsw-test"),
@@ -4093,7 +4108,9 @@ mod private_hnsw_tests {
             },
             now,
         );
-        assert!(err.unwrap_err().to_string().contains("ConcurrentWriter"));
+        let rendered = err.unwrap_err().to_string();
+        assert!(rendered.contains("ConcurrentWriter"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
         assert!(registry.close("collection-uuid-1", "text", "session-1", now));
         assert!(!registry.has_active_collection("collection-uuid-1", now));
         assert!(!registry.has_active_index("collection-uuid-1", "text", now));
@@ -4125,7 +4142,9 @@ mod private_hnsw_tests {
         let err = registry
             .open(fixture_session("session-2", 20), now)
             .unwrap_err();
-        assert!(err.to_string().contains("ConcurrentWriter"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("ConcurrentWriter"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
 
         assert!(registry.close("collection-uuid-1", "text", "session-1", now));
         registry
@@ -4172,10 +4191,9 @@ mod private_hnsw_tests {
             now,
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("snapshot requires no active private ORAM session")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("snapshot requires no active private ORAM session"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
         assert!(
             ensure_no_active_private_hnsw_collection_session_in_registry(
                 &mut registry,
@@ -4197,10 +4215,9 @@ mod private_hnsw_tests {
         let err = registry
             .open(fixture_session("session-1", 20), now)
             .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("session open requires no active collection snapshot")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("session open requires no active collection snapshot"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
 
         registry.release_collection_snapshot("collection-uuid-1");
         registry
@@ -4254,10 +4271,9 @@ mod private_hnsw_tests {
             now,
         )
         .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("upload requires no active collection snapshot")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("upload requires no active collection snapshot"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
 
         registry.release_collection_snapshot("collection-uuid-1");
         ensure_private_hnsw_write_window_in_registry(
@@ -4280,15 +4296,16 @@ mod private_hnsw_tests {
         let err = registry
             .open(fixture_session("session-1", 20), now)
             .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("session open requires no active upload")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("session open requires no active upload"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
 
         let err = registry
             .begin_upload("collection-uuid-1", "text", now)
             .unwrap_err();
-        assert!(err.to_string().contains("upload requires no active upload"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("upload requires no active upload"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
 
         registry.release_upload("collection-uuid-1", "text");
         registry
@@ -4307,10 +4324,9 @@ mod private_hnsw_tests {
         let err = registry
             .begin_collection_snapshot("collection-uuid-1", now)
             .unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("snapshot requires no active private ORAM upload")
-        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("snapshot requires no active private ORAM upload"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
         registry
             .begin_collection_snapshot("other-collection", now)
             .unwrap();
