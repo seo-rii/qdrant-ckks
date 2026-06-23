@@ -1634,10 +1634,11 @@ mod private_result_oram_rest_tests {
                 "{fixed_budget_error}"
             );
 
+            let stale_epoch_client_id = "tenant-a/sdk-instance-stale-epoch";
             let stale_epoch_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/session",
                 OpenPrivateResultOramSessionRequest {
-                    client_id: "tenant-a/sdk-instance-stale-epoch".to_string(),
+                    client_id: stale_epoch_client_id.to_string(),
                     desired_epoch: NEXT_EPOCH,
                     fixed_budget: true,
                 },
@@ -1654,6 +1655,10 @@ mod private_result_oram_rest_tests {
                 !stale_epoch_error.contains(&BASE_EPOCH.to_string()),
                 "{stale_epoch_error}"
             );
+            assert!(
+                !stale_epoch_error.contains(stale_epoch_client_id),
+                "{stale_epoch_error}"
+            );
 
             let session_result = post_json_ok!(
                 "/collections/docs/private-result-oram/session",
@@ -1667,15 +1672,20 @@ mod private_result_oram_rest_tests {
             assert_eq!(session_result["collection_id"], COLLECTION_ID);
             assert_eq!(session_result["index_epoch"], BASE_EPOCH);
 
-            post_json_error_contains!(
+            let duplicate_session_client_id = "tenant-a/sdk-instance-2";
+            let duplicate_session_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/session",
                 OpenPrivateResultOramSessionRequest {
-                    client_id: "tenant-a/sdk-instance-2".to_string(),
+                    client_id: duplicate_session_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                 },
                 StatusCode::BAD_REQUEST,
                 "active session"
+            );
+            assert!(
+                !duplicate_session_error.contains(duplicate_session_client_id),
+                "{duplicate_session_error}"
             );
 
             let active_manifest_upload_error = post_json_error_contains!(

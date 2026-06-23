@@ -1584,11 +1584,12 @@ mod private_result_oram_grpc_tests {
                 err.message()
             );
 
+            let stale_epoch_client_id = "tenant-a/sdk-instance-stale-epoch";
             let err = PrivateResultOram::open_private_result_oram_session(
                 &service,
                 Request::new(grpc::OpenPrivateResultOramSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
-                    client_id: "tenant-a/sdk-instance-stale-epoch".to_string(),
+                    client_id: stale_epoch_client_id.to_string(),
                     desired_epoch: NEXT_EPOCH,
                     fixed_budget: true,
                 }),
@@ -1599,6 +1600,7 @@ mod private_result_oram_grpc_tests {
             assert!(err.message().contains("requested epoch"));
             assert!(!err.message().contains(&NEXT_EPOCH.to_string()));
             assert!(!err.message().contains(&BASE_EPOCH.to_string()));
+            assert!(!err.message().contains(stale_epoch_client_id));
 
             let session = PrivateResultOram::open_private_result_oram_session(
                 &service,
@@ -1615,11 +1617,12 @@ mod private_result_oram_grpc_tests {
             assert_eq!(session.collection_id, COLLECTION_ID);
             assert_eq!(session.index_epoch, BASE_EPOCH);
 
+            let duplicate_session_client_id = "tenant-a/sdk-instance-2";
             let duplicate_session = PrivateResultOram::open_private_result_oram_session(
                 &service,
                 Request::new(grpc::OpenPrivateResultOramSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
-                    client_id: "tenant-a/sdk-instance-2".to_string(),
+                    client_id: duplicate_session_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                 }),
@@ -1628,6 +1631,11 @@ mod private_result_oram_grpc_tests {
             .unwrap_err();
             assert_eq!(duplicate_session.code(), Code::InvalidArgument);
             assert!(duplicate_session.message().contains("active session"));
+            assert!(
+                !duplicate_session
+                    .message()
+                    .contains(duplicate_session_client_id)
+            );
 
             let active_manifest_upload = PrivateResultOram::upload_private_result_oram_manifest(
                 &service,

@@ -1212,10 +1212,11 @@ mod private_hnsw_rest_tests {
                 "{duplicate_upload_before_manifest_error}"
             );
 
+            let before_manifest_client_id = "tenant-a/sdk-instance-before-manifest";
             let missing_manifest_session_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
-                    client_id: "tenant-a/sdk-instance-before-manifest".to_string(),
+                    client_id: before_manifest_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                     result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
@@ -1229,6 +1230,10 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !missing_manifest_session_error.contains("/tmp"),
+                "{missing_manifest_session_error}"
+            );
+            assert!(
+                !missing_manifest_session_error.contains(before_manifest_client_id),
                 "{missing_manifest_session_error}"
             );
 
@@ -1996,10 +2001,11 @@ mod private_hnsw_rest_tests {
                 !fixed_budget_error.contains(fixed_budget_client_id),
                 "{fixed_budget_error}"
             );
+            let stale_epoch_client_id = "tenant-a/sdk-instance-stale-epoch";
             let stale_epoch_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
-                    client_id: "tenant-a/sdk-instance-stale-epoch".to_string(),
+                    client_id: stale_epoch_client_id.to_string(),
                     desired_epoch: NEXT_EPOCH,
                     fixed_budget: true,
                     result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
@@ -2017,16 +2023,25 @@ mod private_hnsw_rest_tests {
                 !stale_epoch_error.contains(&BASE_EPOCH.to_string()),
                 "{stale_epoch_error}"
             );
-            post_json_error_contains!(
+            assert!(
+                !stale_epoch_error.contains(stale_epoch_client_id),
+                "{stale_epoch_error}"
+            );
+            let result_privacy_client_id = "tenant-a/sdk-instance-private-result";
+            let result_privacy_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
-                    client_id: "tenant-a/sdk-instance-private-result".to_string(),
+                    client_id: result_privacy_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                     result_privacy: qdrant_sec::ResultPrivacyMode::PrivatePayloadOramRequired,
                 },
                 StatusCode::BAD_REQUEST,
                 "requested result_privacy does not match manifest"
+            );
+            assert!(
+                !result_privacy_error.contains(result_privacy_client_id),
+                "{result_privacy_error}"
             );
 
             let auth = Auth::new_internal(Access::full("private HNSW ORAM route test"));
@@ -2181,16 +2196,21 @@ mod private_hnsw_rest_tests {
                 "{active_full_snapshot_error}"
             );
 
-            post_json_error_contains!(
+            let duplicate_session_client_id = "tenant-a/sdk-instance-2";
+            let duplicate_session_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
-                    client_id: "tenant-a/sdk-instance-2".to_string(),
+                    client_id: duplicate_session_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                     result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
                 },
                 StatusCode::BAD_REQUEST,
                 "ConcurrentWriter"
+            );
+            assert!(
+                !duplicate_session_error.contains(duplicate_session_client_id),
+                "{duplicate_session_error}"
             );
 
             let (refreshed_manifest, refreshed_signature) =
