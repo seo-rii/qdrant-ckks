@@ -4399,6 +4399,20 @@ mod tests {
     }
 
     #[test]
+    fn private_hnsw_vector_search_error_uses_session_api() {
+        let encryption = private_hnsw_encryption("embedding");
+
+        let err = encrypted_vector_search_error(&encryption, "embedding", "search").unwrap();
+        let message = format!("{err}");
+        assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        assert!(message.contains("/private-hnsw/{vector}/session"));
+        assert!(!message.contains("embedding"), "{message}");
+        assert!(!message.contains("runtime CKKS sidecar"), "{message}");
+
+        assert!(encrypted_vector_search_error(&encryption, "public", "search").is_none());
+    }
+
+    #[test]
     fn private_hnsw_filter_error_uses_session_api() {
         let rule = private_hnsw_vector_rule("embedding");
 
