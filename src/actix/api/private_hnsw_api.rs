@@ -3640,7 +3640,11 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "request validation failed"
+                "commit updated_buckets contains duplicate bucket"
+            );
+            assert!(
+                !duplicate_bucket_commit_error.contains("commit signature verification failed"),
+                "{duplicate_bucket_commit_error}"
             );
             assert!(!duplicate_bucket_commit_error.contains("duplicate bucket id"));
             assert!(!duplicate_bucket_commit_error.contains(&session_id));
@@ -3666,7 +3670,11 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "request validation failed"
+                "commit updated_buckets contains duplicate bucket"
+            );
+            assert!(
+                !invalid_signature_duplicate_error.contains("commit signature verification failed"),
+                "{invalid_signature_duplicate_error}"
             );
             assert!(!invalid_signature_duplicate_error.contains("duplicate bucket id"));
             assert!(!invalid_signature_duplicate_error.contains(&session_id));
@@ -3687,8 +3695,17 @@ mod private_hnsw_rest_tests {
                     .contains(&invalid_signature_duplicate_signature.sig)
             );
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
+            let mut next_bucket_id = oversized_writeback_buckets
+                .iter()
+                .map(|bucket| bucket.bucket_id)
+                .max()
+                .unwrap_or(0)
+                + 1;
             while oversized_writeback_buckets.len() <= 3 {
-                oversized_writeback_buckets.push(search_run.updated_buckets[0].clone());
+                let mut bucket = search_run.updated_buckets[0].clone();
+                bucket.bucket_id = next_bucket_id;
+                next_bucket_id += 1;
+                oversized_writeback_buckets.push(bucket);
             }
             let oversized_commit_signature = fixture.client_signature();
             let oversized_commit_error = post_json_error_contains!(

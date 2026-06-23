@@ -3970,7 +3970,14 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("request validation failed"));
+            assert!(
+                err.message()
+                    .contains("commit updated_buckets contains duplicate bucket")
+            );
+            assert!(
+                !err.message()
+                    .contains("commit signature verification failed")
+            );
             assert!(!err.message().contains("duplicate bucket id"));
             assert!(!err.message().contains(&session.session_id));
             assert!(!err.message().contains(&duplicate_commit_old_root));
@@ -4002,7 +4009,14 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("request validation failed"));
+            assert!(
+                err.message()
+                    .contains("commit updated_buckets contains duplicate bucket")
+            );
+            assert!(
+                !err.message()
+                    .contains("commit signature verification failed")
+            );
             assert!(!err.message().contains("duplicate bucket id"));
             assert!(!err.message().contains(&session.session_id));
             assert!(
@@ -4023,8 +4037,17 @@ mod private_hnsw_grpc_tests {
             );
 
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
+            let mut next_bucket_id = oversized_writeback_buckets
+                .iter()
+                .map(|bucket| bucket.bucket_id)
+                .max()
+                .unwrap_or(0)
+                + 1;
             while oversized_writeback_buckets.len() <= 3 {
-                oversized_writeback_buckets.push(search_run.updated_buckets[0].clone());
+                let mut bucket = search_run.updated_buckets[0].clone();
+                bucket.bucket_id = next_bucket_id;
+                next_bucket_id += 1;
+                oversized_writeback_buckets.push(bucket);
             }
             let oversized_commit_signature = fixture.client_signature();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
