@@ -2247,6 +2247,7 @@ fn validate_private_hnsw_read_path_label_request_shape(paths: &[String]) -> Stor
             "private HNSW ORAM read_paths request is empty",
         ));
     }
+    validate_unique_path_labels(paths)?;
     for path in paths {
         if path.len() != PRIVATE_HNSW_ORAM_LEAF_LABEL_B64_LEN {
             return Err(StorageError::bad_request(
@@ -2446,12 +2447,24 @@ mod private_hnsw_tests {
     #[test]
     fn read_path_label_request_shape_rejects_malformed_values_before_session_lookup() {
         let valid = BASE64URL_NOPAD.encode(&5u64.to_be_bytes());
+        let valid_other = BASE64URL_NOPAD.encode(&6u64.to_be_bytes());
         validate_private_hnsw_read_path_label_request_shape(std::slice::from_ref(&valid)).unwrap();
-        validate_private_hnsw_read_path_label_request_shape(&[valid.clone(), valid]).unwrap();
+        validate_private_hnsw_read_path_label_request_shape(&[valid.clone(), valid_other]).unwrap();
 
         let err = validate_private_hnsw_read_path_label_request_shape(&[]).unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("read_paths request is empty"));
+
+        let err =
+            validate_private_hnsw_read_path_label_request_shape(&[valid.clone(), valid.clone()])
+                .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("duplicate path label"));
+        assert!(
+            !rendered.contains("session is missing or expired"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&valid), "{rendered}");
 
         let oversized = format!(
             "{}{}",
