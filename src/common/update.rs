@@ -8503,6 +8503,19 @@ esac
         assert!(err.contains("private result ORAM payload field path is invalid"));
         assert!(!err.contains(secret_path), "{err}");
         assert!(!err.contains("private-result-update-secret"), "{err}");
+
+        let upsert = PointInsertOperations::PointsList(api::rest::schema::PointsList {
+            points: Vec::new(),
+            shard_key: None,
+            update_filter: None,
+            update_mode: None,
+        });
+        let err = private_result_oram_payload_upsert_violation(&encryption, &upsert)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("private result ORAM payload field path is invalid"));
+        assert!(!err.contains(secret_path), "{err}");
+        assert!(!err.contains("private-result-update-secret"), "{err}");
     }
 
     #[test]
