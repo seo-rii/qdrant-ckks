@@ -4487,6 +4487,38 @@ mod private_hnsw_tests {
     }
 
     #[test]
+    fn collection_snapshot_guard_uses_exact_private_hnsw_upload_collection_prefix() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .begin_upload("collection-uuid-10", "text", now)
+            .unwrap();
+
+        registry
+            .begin_collection_snapshot("collection-uuid-1", now)
+            .unwrap();
+        registry.release_collection_snapshot("collection-uuid-1");
+
+        let err = registry
+            .begin_collection_snapshot("collection-uuid-10", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("snapshot requires no active private ORAM upload"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
+        registry.release_upload("collection-uuid-10", "text");
+
+        registry
+            .begin_upload("collection-uuid-1", "image", now)
+            .unwrap();
+        let err = registry
+            .begin_collection_snapshot("collection-uuid-1", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("snapshot requires no active private ORAM upload"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
+    }
+
+    #[test]
     fn session_registry_expiration_releases_writer_lock() {
         let now = 10;
         let expired_at = 20;
