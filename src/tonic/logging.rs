@@ -225,7 +225,13 @@ mod tests {
              readPathLabels=read-path-labels-camel-sentinel \
              oramPaths=oram-path-camel-sentinel \
              accessedLeafLabels=accessed-leaf-camel-sentinel \
+             bucket_plaintext=bucket-plaintext-sentinel \
+             plaintextBucket=plaintext-bucket-camel-sentinel \
+             block_plaintext=block-plaintext-sentinel \
+             plaintextBlock=plaintext-block-camel-sentinel \
              entryNodeId=entry-node-camel-sentinel \
+             node_block=node-block-sentinel \
+             nodePlaintext=node-plaintext-camel-sentinel \
              levelMask=level-mask-camel-sentinel \
              visitedNodeIds=visited-node-camel-sentinel \
              neighbors=neighbors-sentinel \
@@ -239,6 +245,10 @@ mod tests {
              fetchTokens=short-fetch-token-camel-sentinel \
              payload_fetch_token=fetch-token-sentinel \
              payloadFetchTokens=fetch-token-camel-sentinel \
+             payload_bytes=payload-bytes-sentinel \
+             payloadPlaintext=payload-plaintext-camel-sentinel \
+             vector_bytes=vector-bytes-sentinel \
+             vectorPlaintext=vector-plaintext-camel-sentinel \
              resultIds=result-id-camel-sentinel \
              point_tokens=point-token-snake-sentinel \
              clientState=client-state-camel-sentinel \
@@ -305,7 +315,13 @@ mod tests {
         assert!(!rendered.contains("read-path-labels-camel-sentinel"));
         assert!(!rendered.contains("oram-path-camel-sentinel"));
         assert!(!rendered.contains("accessed-leaf-camel-sentinel"));
+        assert!(!rendered.contains("bucket-plaintext-sentinel"));
+        assert!(!rendered.contains("plaintext-bucket-camel-sentinel"));
+        assert!(!rendered.contains("block-plaintext-sentinel"));
+        assert!(!rendered.contains("plaintext-block-camel-sentinel"));
         assert!(!rendered.contains("entry-node-camel-sentinel"));
+        assert!(!rendered.contains("node-block-sentinel"));
+        assert!(!rendered.contains("node-plaintext-camel-sentinel"));
         assert!(!rendered.contains("level-mask-camel-sentinel"));
         assert!(!rendered.contains("visited-node-camel-sentinel"));
         assert!(!rendered.contains("neighbors-sentinel"));
@@ -320,6 +336,10 @@ mod tests {
         assert!(!rendered.contains("short-fetch-token-camel-sentinel"));
         assert!(!rendered.contains("fetch-token-sentinel"));
         assert!(!rendered.contains("fetch-token-camel-sentinel"));
+        assert!(!rendered.contains("payload-bytes-sentinel"));
+        assert!(!rendered.contains("payload-plaintext-camel-sentinel"));
+        assert!(!rendered.contains("vector-bytes-sentinel"));
+        assert!(!rendered.contains("vector-plaintext-camel-sentinel"));
         assert!(!rendered.contains("result-id-camel-sentinel"));
         assert!(!rendered.contains("point-token-snake-sentinel"));
         assert!(!rendered.contains("client-state-camel-sentinel"));
