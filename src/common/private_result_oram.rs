@@ -2782,7 +2782,7 @@ mod private_result_oram_tests {
     }
 
     #[test]
-    fn session_registry_reference_counts_fail_closed_and_cleanup_zero() {
+    fn session_registry_snapshot_refcounts_and_upload_marker_cleanup_fail_closed() {
         let now = 10;
         let mut registry = PrivateResultOramSessionRegistry::default();
         registry
