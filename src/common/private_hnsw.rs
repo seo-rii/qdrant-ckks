@@ -55,6 +55,7 @@ const PRIVATE_HNSW_ORAM_ROOT_HASH_B64_LEN: usize = 43;
 const PRIVATE_HNSW_ORAM_SIGNATURE_B64_LEN: usize = 86;
 const PRIVATE_HNSW_ORAM_CLIENT_ID_MAX_LEN: usize = 256;
 const PRIVATE_HNSW_ORAM_SESSION_ID_MAX_LEN: usize = 128;
+const PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX: usize = 1024;
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswManifestRecord {
@@ -2247,6 +2248,11 @@ fn validate_private_hnsw_read_path_label_request_shape(paths: &[String]) -> Stor
             "private HNSW ORAM read_paths request is empty",
         ));
     }
+    if paths.len() > PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM read_paths request exceeds maximum path batch size",
+        ));
+    }
     validate_unique_path_labels(paths)?;
     for path in paths {
         if path.len() != PRIVATE_HNSW_ORAM_LEAF_LABEL_B64_LEN {
@@ -2454,6 +2460,19 @@ mod private_hnsw_tests {
         let err = validate_private_hnsw_read_path_label_request_shape(&[]).unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("read_paths request is empty"));
+
+        let oversized_batch = (0..=PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX)
+            .map(|leaf| BASE64URL_NOPAD.encode(&(leaf as u64).to_be_bytes()))
+            .collect::<Vec<_>>();
+        let err =
+            validate_private_hnsw_read_path_label_request_shape(&oversized_batch).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("maximum path batch size"));
+        assert!(
+            !rendered.contains("session is missing or expired"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&oversized_batch[0]), "{rendered}");
 
         let err =
             validate_private_hnsw_read_path_label_request_shape(&[valid.clone(), valid.clone()])

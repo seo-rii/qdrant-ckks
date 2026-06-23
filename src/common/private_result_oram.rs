@@ -44,6 +44,10 @@ const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const ED25519_PUBLIC_KEY_BYTES: usize = 32;
 const PRIVATE_RESULT_ORAM_CLIENT_ID_MAX_LEN: usize = 256;
 const PRIVATE_RESULT_ORAM_SESSION_ID_MAX_LEN: usize = 128;
+const PRIVATE_RESULT_ORAM_PATH_BATCH_SIZE_MAX: usize = 1024;
+const PRIVATE_RESULT_ORAM_TREE_HEIGHT_MAX: usize = 20;
+const PRIVATE_RESULT_ORAM_READ_BUCKET_IDS_MAX: usize =
+    PRIVATE_RESULT_ORAM_PATH_BATCH_SIZE_MAX * (PRIVATE_RESULT_ORAM_TREE_HEIGHT_MAX + 1);
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateResultOramManifestRecord {
@@ -1637,6 +1641,11 @@ fn validate_read_bucket_request_shape(bucket_ids: &[u64]) -> StorageResult<()> {
             "private result ORAM read_buckets request is empty",
         ));
     }
+    if bucket_ids.len() > PRIVATE_RESULT_ORAM_READ_BUCKET_IDS_MAX {
+        return Err(StorageError::bad_request(
+            "private result ORAM read_buckets request exceeds maximum bucket batch size",
+        ));
+    }
     Ok(())
 }
 
@@ -2353,6 +2362,20 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("read_buckets request is empty"));
         assert!(!rendered.contains("session is missing or expired"));
+    }
+
+    #[test]
+    fn bucket_read_request_shape_rejects_oversized_batch_before_session_lookup() {
+        let bucket_ids = vec![0; PRIVATE_RESULT_ORAM_READ_BUCKET_IDS_MAX + 1];
+
+        let err = validate_read_bucket_request_shape(&bucket_ids).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("maximum bucket batch size"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(
+            !rendered.contains(&(bucket_ids.len()).to_string()),
+            "{rendered}"
+        );
     }
 
     #[test]
