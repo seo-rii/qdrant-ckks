@@ -2593,14 +2593,20 @@ mod private_result_oram_rest_tests {
             assert_eq!(commit_result["index_epoch"], NEXT_EPOCH);
             assert_eq!(commit_result["root_hash"], new_root_hash);
 
+            let stale_commit_old_root_hash = fixture.manifest.root_hash.clone();
+            let stale_commit_new_root_hash = new_root_hash.clone();
+            let stale_commit_session_id = session_id.clone();
+            let stale_commit_signature_key_id = commit_signature.key_id.clone();
+            let stale_commit_signature_sig = commit_signature.sig.clone();
+            let stale_commit_bucket_ciphertext = updated_bucket.ciphertext.clone();
             let stale_commit_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",
                 CommitPrivateResultOramBucketsRequest {
-                    session_id: session_id.clone(),
+                    session_id: stale_commit_session_id.clone(),
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
-                    old_root_hash: fixture.manifest.root_hash.clone(),
-                    new_root_hash,
+                    old_root_hash: stale_commit_old_root_hash.clone(),
+                    new_root_hash: stale_commit_new_root_hash.clone(),
                     updated_buckets: vec![updated_bucket],
                     commit_signature,
                 },
@@ -2608,6 +2614,12 @@ mod private_result_oram_rest_tests {
                 "old epoch/root"
             );
             assert!(!stale_commit_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!stale_commit_error.contains(&stale_commit_old_root_hash));
+            assert!(!stale_commit_error.contains(&stale_commit_new_root_hash));
+            assert!(!stale_commit_error.contains(&stale_commit_session_id));
+            assert!(!stale_commit_error.contains(&stale_commit_signature_key_id));
+            assert!(!stale_commit_error.contains(&stale_commit_signature_sig));
+            assert!(!stale_commit_error.contains(&stale_commit_bucket_ciphertext));
 
             let close_uri =
                 format!("/collections/docs/private-result-oram/session/{session_id}/close");
