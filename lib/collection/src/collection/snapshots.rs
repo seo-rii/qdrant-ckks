@@ -3590,6 +3590,7 @@ mod tests {
         assert!(!rendered.contains("00000000.bucket"), "{rendered}");
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("buckets"), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
     }
 
@@ -3646,6 +3647,7 @@ mod tests {
         assert!(!err.contains(&snapshot_path));
         assert!(!err.contains(target_dir.path().to_string_lossy().as_ref()));
         assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains("buckets"));
         assert!(!err.contains("00000000.bucket"));
         assert!(!err.contains(&manifest.root_hash));
     }
@@ -3705,6 +3707,7 @@ mod tests {
         assert!(!rendered.contains("00000002.bucket"), "{rendered}");
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("buckets"), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
     }
 
@@ -3763,6 +3766,7 @@ mod tests {
         assert!(!rendered.contains("00000001.bucket"), "{rendered}");
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("buckets"), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
     }
 }
