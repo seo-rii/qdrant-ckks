@@ -271,6 +271,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "read_bucket_ids"
                         | "read_bucket_id_sequence"
                         | "read_bucket_id_sequences"
+                        | "read_bucket_sequence"
+                        | "read_bucket_sequences"
                         | "read_buckets"
                         | "paths"
                         | "access_path"
@@ -293,7 +295,13 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "bucket_ids"
                         | "bucket_id_sequence"
                         | "bucket_id_sequences"
+                        | "bucket_sequence"
+                        | "bucket_sequences"
                         | "updated_bucket"
+                        | "updated_bucket_commitment"
+                        | "updated_bucket_commitments"
+                        | "updated_bucket_id"
+                        | "updated_bucket_ids"
                         | "updated_buckets"
                         | "accessed_leaf_label"
                         | "accessed_leaf_labels"
@@ -441,6 +449,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "readbucketids"
                         | "readbucketidsequence"
                         | "readbucketidsequences"
+                        | "readbucketsequence"
+                        | "readbucketsequences"
                         | "readbuckets"
                         | "accesspath"
                         | "accesspaths"
@@ -462,7 +472,13 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "bucketids"
                         | "bucketidsequence"
                         | "bucketidsequences"
+                        | "bucketsequence"
+                        | "bucketsequences"
                         | "updatedbucket"
+                        | "updatedbucketcommitment"
+                        | "updatedbucketcommitments"
+                        | "updatedbucketid"
+                        | "updatedbucketids"
                         | "updatedbuckets"
                         | "accessedleaflabel"
                         | "accessedleaflabels"
@@ -1126,6 +1142,39 @@ mod tests {
         });
         for (key, field_value) in [
             (
+                "bucket_sequence",
+                json!(["qdrant-sec-private-oram-bucket-sequence-log-sentinel"]),
+            ),
+            (
+                "bucketSequences",
+                json!(["qdrant-sec-private-oram-camel-bucket-sequence-log-sentinel"]),
+            ),
+            (
+                "updated_bucket_id",
+                json!("qdrant-sec-private-oram-updated-bucket-id-flat-log-sentinel"),
+            ),
+            (
+                "updatedBucketId",
+                json!("qdrant-sec-private-oram-camel-updated-bucket-id-flat-log-sentinel"),
+            ),
+            (
+                "updated_bucket_commitment",
+                json!("qdrant-sec-private-oram-updated-bucket-commitment-flat-log-sentinel"),
+            ),
+            (
+                "updatedBucketCommitment",
+                json!("qdrant-sec-private-oram-camel-updated-bucket-commitment-flat-log-sentinel"),
+            ),
+        ] {
+            insert_test_json_field(
+                &mut private_hnsw_oram_access,
+                &["private_hnsw"],
+                key,
+                field_value,
+            );
+        }
+        for (key, field_value) in [
+            (
                 "position_map_snapshot",
                 json!("qdrant-sec-private-hnsw-position-map-snapshot-log-sentinel"),
             ),
@@ -1266,6 +1315,18 @@ mod tests {
                 json!(["qdrant-sec-private-result-camel-read-bucket-id-sequence-log-sentinel"]),
             ),
             (
+                "read_bucket_sequence",
+                json!(["qdrant-sec-private-result-read-bucket-sequence-log-sentinel"]),
+            ),
+            (
+                "readBucketSequence",
+                json!(["qdrant-sec-private-result-camel-read-bucket-sequence-log-sentinel"]),
+            ),
+            (
+                "read_bucket_sequences",
+                json!(["qdrant-sec-private-result-read-bucket-sequences-log-sentinel"]),
+            ),
+            (
                 "bucket_id_sequence",
                 json!(["qdrant-sec-private-result-bucket-id-sequence-log-sentinel"]),
             ),
@@ -1280,6 +1341,18 @@ mod tests {
             (
                 "bucketIdSequences",
                 json!(["qdrant-sec-private-result-camel-bucket-sequences-log-sentinel"]),
+            ),
+            (
+                "bucket_sequence",
+                json!(["qdrant-sec-private-result-short-bucket-sequence-log-sentinel"]),
+            ),
+            (
+                "bucketSequence",
+                json!(["qdrant-sec-private-result-camel-short-bucket-sequence-log-sentinel"]),
+            ),
+            (
+                "bucket_sequences",
+                json!(["qdrant-sec-private-result-short-bucket-sequences-log-sentinel"]),
             ),
             (
                 "leaf_commitment",
@@ -1331,6 +1404,8 @@ mod tests {
             "qdrant-sec-private-oram-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-single-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-bucket-sequence-log-sentinel",
+            "qdrant-sec-private-oram-camel-bucket-sequence-log-sentinel",
             "qdrant-sec-private-oram-single-read-bucket-log-sentinel",
             "qdrant-sec-private-oram-camel-single-read-bucket-log-sentinel",
             "qdrant-sec-private-oram-read-bucket-id-log-sentinel",
@@ -1352,6 +1427,10 @@ mod tests {
             "qdrant-sec-private-oram-updated-single-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-updated-single-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-camel-updated-bucket-log-sentinel",
+            "qdrant-sec-private-oram-updated-bucket-id-flat-log-sentinel",
+            "qdrant-sec-private-oram-camel-updated-bucket-id-flat-log-sentinel",
+            "qdrant-sec-private-oram-updated-bucket-commitment-flat-log-sentinel",
+            "qdrant-sec-private-oram-camel-updated-bucket-commitment-flat-log-sentinel",
             "qdrant-sec-private-oram-camel-updated-single-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-updated-single-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-proof-bucket-id-log-sentinel",
@@ -1432,10 +1511,16 @@ mod tests {
             "qdrant-sec-private-result-camel-read-bucket-id-log-sentinel",
             "qdrant-sec-private-result-read-bucket-id-sequence-log-sentinel",
             "qdrant-sec-private-result-camel-read-bucket-id-sequence-log-sentinel",
+            "qdrant-sec-private-result-read-bucket-sequence-log-sentinel",
+            "qdrant-sec-private-result-camel-read-bucket-sequence-log-sentinel",
+            "qdrant-sec-private-result-read-bucket-sequences-log-sentinel",
             "qdrant-sec-private-result-bucket-id-sequence-log-sentinel",
             "qdrant-sec-private-result-camel-bucket-id-sequence-log-sentinel",
             "qdrant-sec-private-result-bucket-sequences-log-sentinel",
             "qdrant-sec-private-result-camel-bucket-sequences-log-sentinel",
+            "qdrant-sec-private-result-short-bucket-sequence-log-sentinel",
+            "qdrant-sec-private-result-camel-short-bucket-sequence-log-sentinel",
+            "qdrant-sec-private-result-short-bucket-sequences-log-sentinel",
             "qdrant-sec-private-result-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-camel-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-leaf-commitment-log-sentinel",
@@ -1488,6 +1573,12 @@ mod tests {
             "readBucketId": "qdrant-sec-private-result-camel-single-read-bucket-alias-log-sentinel",
             "readBucketIds": ["qdrant-sec-private-result-camel-read-bucket-id-alias-log-sentinel"],
             "readBuckets": ["qdrant-sec-private-result-camel-read-buckets-log-sentinel"],
+            "read_bucket_sequence": ["qdrant-sec-private-result-read-bucket-sequence-alias-log-sentinel"],
+            "readBucketSequence": ["qdrant-sec-private-result-camel-read-bucket-sequence-alias-log-sentinel"],
+            "readBucketSequences": ["qdrant-sec-private-result-camel-read-bucket-sequences-alias-log-sentinel"],
+            "bucket_sequence": ["qdrant-sec-private-result-short-bucket-sequence-alias-log-sentinel"],
+            "bucketSequence": ["qdrant-sec-private-result-camel-short-bucket-sequence-alias-log-sentinel"],
+            "bucketSequences": ["qdrant-sec-private-result-camel-short-bucket-sequences-alias-log-sentinel"],
             "bucket_id_sequences": ["qdrant-sec-private-result-bucket-sequences-alias-log-sentinel"],
             "bucketIdSequences": ["qdrant-sec-private-result-camel-bucket-sequences-alias-log-sentinel"],
             "leaf_commitment": "qdrant-sec-private-result-leaf-commitment-alias-log-sentinel",
@@ -1531,6 +1622,16 @@ mod tests {
             !read_paths_serialized
                 .contains("qdrant-sec-private-result-camel-single-read-bucket-alias-log-sentinel")
         );
+        for leaked in [
+            "qdrant-sec-private-result-read-bucket-sequence-alias-log-sentinel",
+            "qdrant-sec-private-result-camel-read-bucket-sequence-alias-log-sentinel",
+            "qdrant-sec-private-result-camel-read-bucket-sequences-alias-log-sentinel",
+            "qdrant-sec-private-result-short-bucket-sequence-alias-log-sentinel",
+            "qdrant-sec-private-result-camel-short-bucket-sequence-alias-log-sentinel",
+            "qdrant-sec-private-result-camel-short-bucket-sequences-alias-log-sentinel",
+        ] {
+            assert!(!read_paths_serialized.contains(leaked));
+        }
         assert!(
             !read_paths_serialized
                 .contains("qdrant-sec-private-result-bucket-sequences-alias-log-sentinel")
@@ -1586,6 +1687,8 @@ mod tests {
                 "accessed_leaf_labels": ["accessed-leaf-a"],
                 "oram_paths": ["oram-path-a"],
                 "bucket_ids": [1, 2, 3],
+                "bucket_sequence": [3, 2, 1],
+                "read_bucket_sequence": [10, 11],
                 "bucket_commitments": ["bucket-commitment-a"],
                 "visited_node_ids": ["visited-node-a"],
                 "neighbor_id": "neighbor-a",
@@ -1616,6 +1719,8 @@ mod tests {
                 "accessed_leaf_labels": ["accessed-leaf-b"],
                 "oram_paths": ["oram-path-b"],
                 "bucket_ids": [9, 10, 11],
+                "bucket_sequence": [11, 10, 9],
+                "read_bucket_sequence": [12, 13],
                 "bucket_commitments": ["bucket-commitment-b", "bucket-commitment-c"],
                 "visited_node_ids": ["visited-node-b"],
                 "neighbor_id": "neighbor-b",
@@ -1647,6 +1752,8 @@ mod tests {
                 "oldRootHash": "private-oram-camel-old-root-a",
                 "newRootHash": "private-oram-camel-new-root-a",
                 "bucketIds": [1, 2, 3],
+                "bucketSequence": [3, 2, 1],
+                "readBucketSequence": [10, 11],
                 "accessPaths": ["private-oram-camel-access-path-a"],
                 "accessedLeafLabels": ["private-oram-camel-accessed-leaf-a"],
                 "oramPaths": ["private-oram-camel-oram-path-a"],
@@ -1679,6 +1786,8 @@ mod tests {
                 "oldRootHash": "private-oram-camel-old-root-b",
                 "newRootHash": "private-oram-camel-new-root-b",
                 "bucketIds": [9, 10, 11],
+                "bucketSequence": [11, 10, 9],
+                "readBucketSequence": [12, 13],
                 "accessPaths": ["private-oram-camel-access-path-b"],
                 "accessedLeafLabels": ["private-oram-camel-accessed-leaf-b"],
                 "oramPaths": ["private-oram-camel-oram-path-b"],

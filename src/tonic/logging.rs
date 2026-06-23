@@ -204,9 +204,15 @@ mod tests {
              read_bucket_id_sequence=read-bucket-id-sequence-sentinel \
              readBucketIdSequence=read-bucket-id-sequence-camel-sentinel \
              read_bucket_id_sequences=read-bucket-id-sequences-sentinel \
+             read_bucket_sequence=read-bucket-sequence-short-sentinel \
+             readBucketSequence=read-bucket-sequence-short-camel-sentinel \
+             readBucketSequences=read-bucket-sequences-short-camel-sentinel \
              bucket_id_sequence=bucket-id-sequence-snake-sentinel \
              bucketIdSequence=bucket-id-sequence-camel-sentinel \
              bucketIdSequences=bucket-id-sequences-camel-sentinel \
+             bucket_sequence=bucket-sequence-short-snake-sentinel \
+             bucketSequence=bucket-sequence-short-camel-sentinel \
+             bucketSequences=bucket-sequences-short-camel-sentinel \
              root_hash=root-hash-sentinel \
              rootHashes=root-hashes-camel-sentinel \
              oldRootHash=old-root-hash-camel-sentinel \
@@ -242,6 +248,10 @@ mod tests {
              stash=stash-sentinel \
              tokenPositionMap=token-position-map-camel-sentinel \
              updated_bucket=updated-bucket-singular-sentinel \
+             updated_bucket_id=updated-bucket-id-snake-sentinel \
+             updatedBucketId=updated-bucket-id-camel-sentinel \
+             updated_bucket_commitment=updated-bucket-commitment-snake-sentinel \
+             updatedBucketCommitment=updated-bucket-commitment-camel-sentinel \
              updated_buckets=updated-bucket-sentinel \
              updatedBuckets=updated-bucket-camel-sentinel \
              bucket_commitment=bucket-commitment-sentinel \
@@ -274,9 +284,15 @@ mod tests {
         assert!(!rendered.contains("read-bucket-id-sequence-sentinel"));
         assert!(!rendered.contains("read-bucket-id-sequence-camel-sentinel"));
         assert!(!rendered.contains("read-bucket-id-sequences-sentinel"));
+        assert!(!rendered.contains("read-bucket-sequence-short-sentinel"));
+        assert!(!rendered.contains("read-bucket-sequence-short-camel-sentinel"));
+        assert!(!rendered.contains("read-bucket-sequences-short-camel-sentinel"));
         assert!(!rendered.contains("bucket-id-sequence-snake-sentinel"));
         assert!(!rendered.contains("bucket-id-sequence-camel-sentinel"));
         assert!(!rendered.contains("bucket-id-sequences-camel-sentinel"));
+        assert!(!rendered.contains("bucket-sequence-short-snake-sentinel"));
+        assert!(!rendered.contains("bucket-sequence-short-camel-sentinel"));
+        assert!(!rendered.contains("bucket-sequences-short-camel-sentinel"));
         assert!(!rendered.contains("root-hash-sentinel"));
         assert!(!rendered.contains("root-hashes-camel-sentinel"));
         assert!(!rendered.contains("old-root-hash-camel-sentinel"));
@@ -313,6 +329,10 @@ mod tests {
         assert!(!rendered.contains("stash-sentinel"));
         assert!(!rendered.contains("token-position-map-camel-sentinel"));
         assert!(!rendered.contains("updated-bucket-singular-sentinel"));
+        assert!(!rendered.contains("updated-bucket-id-snake-sentinel"));
+        assert!(!rendered.contains("updated-bucket-id-camel-sentinel"));
+        assert!(!rendered.contains("updated-bucket-commitment-snake-sentinel"));
+        assert!(!rendered.contains("updated-bucket-commitment-camel-sentinel"));
         assert!(!rendered.contains("updated-bucket-sentinel"));
         assert!(!rendered.contains("updated-bucket-camel-sentinel"));
         assert!(!rendered.contains("bucket-commitment-sentinel"));
