@@ -2177,6 +2177,7 @@ mod tests {
         assert!(rendered.contains("non-symlink regular file"));
         assert!(!rendered.contains("outside.bucket"), "{rendered}");
         assert!(!rendered.contains("00000000.bucket"), "{rendered}");
+        assert!(!rendered.contains("private_result_oram"), "{rendered}");
     }
 
     #[cfg(unix)]
@@ -2249,6 +2250,30 @@ mod tests {
         assert!(!rendered.contains("private_result_oram"), "{rendered}");
         let outside_mode = fs::metadata(&outside_dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(outside_mode, 0o755);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_directory_group_world_accessible_rejects_without_path_leak() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join(PRIVATE_RESULT_ORAM_DIR);
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        let store = fixture_store(&temp);
+
+        let err = store.ensure_layout().unwrap_err();
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("group/world accessible"));
+        assert!(!rendered.contains("private_result_oram"), "{rendered}");
+        assert!(
+            !store.root_path().join(BUCKETS_DIR).exists(),
+            "weak result ORAM root must fail before creating bucket directory"
+        );
+        let root_mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+        assert_eq!(root_mode, 0o755);
     }
 
     #[cfg(unix)]
@@ -2356,6 +2381,7 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("group/world accessible"));
         assert!(!rendered.contains("00000000.bucket"), "{rendered}");
+        assert!(!rendered.contains("private_result_oram"), "{rendered}");
     }
 
     #[test]
