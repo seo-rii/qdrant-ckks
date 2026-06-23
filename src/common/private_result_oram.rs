@@ -2779,6 +2779,10 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("snapshot requires no active private ORAM upload"));
         assert_private_result_registry_error_redacts_ids(&rendered);
+        assert!(
+            !rendered.contains("collection-private-result-test-suffix"),
+            "{rendered}"
+        );
     }
 
     #[test]

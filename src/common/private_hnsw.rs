@@ -4505,6 +4505,7 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("snapshot requires no active private ORAM upload"));
         assert_private_hnsw_registry_error_redacts_ids(&rendered);
+        assert!(!rendered.contains("collection-uuid-10"), "{rendered}");
         registry.release_upload("collection-uuid-10", "text");
 
         registry
@@ -4516,6 +4517,7 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("snapshot requires no active private ORAM upload"));
         assert_private_hnsw_registry_error_redacts_ids(&rendered);
+        assert!(!rendered.contains("image"), "{rendered}");
     }
 
     #[test]
