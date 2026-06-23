@@ -4431,6 +4431,11 @@ mod tests {
             PrivateHnswClientError::UnsupportedClientStateSnapshotVersion(44).to_string(),
             PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(33).to_string(),
             PrivateHnswClientError::InvalidSearchConfig("search-config-sentinel").to_string(),
+            PrivateHnswClientError::FixedBudgetNotExhausted {
+                completed_steps: 314,
+                fixed_steps: 271,
+            }
+            .to_string(),
             PrivateHnswClientError::BucketOutOfRange {
                 bucket_id: 123,
                 bucket_count: 456,
@@ -4471,7 +4476,7 @@ mod tests {
             }
             for leaked in [
                 "77", "55", "99", "88", "123", "4096", "2048", "66", "777", "44", "33", "456",
-                "42", "43", "22",
+                "42", "43", "22", "314", "271",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
