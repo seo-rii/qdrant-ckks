@@ -2481,6 +2481,7 @@ mod tests {
         assert!(rendered.contains("bucket commitments"));
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
     }
 
     #[test]
@@ -3463,6 +3464,7 @@ mod tests {
         assert!(rendered.contains("bucket commitments"));
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
         assert!(!rendered.contains("text"), "{rendered}");
     }
 

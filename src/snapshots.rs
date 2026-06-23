@@ -714,6 +714,10 @@ mod tests {
             !err.contains(&fixture.encrypted_build.buckets[0].ciphertext),
             "{err}"
         );
+        assert!(
+            !err.contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
+            "{err}"
+        );
         assert!(!err.contains(SIGNING_KEY_ID), "{err}");
     }
 
@@ -1003,6 +1007,10 @@ mod tests {
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR), "{err}");
         assert!(!err.contains(&fixture.manifest.root_hash), "{err}");
         assert!(!err.contains(&fixture.buckets[0].ciphertext), "{err}");
+        assert!(
+            !err.contains(&fixture.buckets[0].bucket_commitment),
+            "{err}"
+        );
         assert!(!err.contains(RESULT_SIGNING_KEY_ID), "{err}");
     }
 
