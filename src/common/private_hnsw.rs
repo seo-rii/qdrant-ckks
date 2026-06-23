@@ -207,7 +207,7 @@ struct PrivateHnswSessionRegistry {
     sessions: HashMap<String, PrivateHnswSession>,
     active_writer_by_index: HashMap<String, String>,
     active_snapshot_by_collection: HashMap<String, usize>,
-    active_upload_by_index: HashSet<String>,
+    active_upload_by_index: HashSet<(String, String)>,
 }
 
 impl PrivateHnswSessionRegistry {
@@ -232,7 +232,8 @@ impl PrivateHnswSessionRegistry {
         }
 
         let index_key = session_index_key(&session.collection_id, &session.vector_name);
-        if self.active_upload_by_index.contains(&index_key) {
+        let upload_key = upload_index_key(&session.collection_id, &session.vector_name);
+        if self.active_upload_by_index.contains(&upload_key) {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM session open requires no active upload for this index",
             ));
@@ -293,10 +294,9 @@ impl PrivateHnswSessionRegistry {
     }
 
     fn has_active_upload_collection(&self, collection_id: &str) -> bool {
-        let prefix = format!("{collection_id}\x1f");
         self.active_upload_by_index
             .iter()
-            .any(|index_key| index_key.starts_with(&prefix))
+            .any(|(active_collection_id, _)| active_collection_id == collection_id)
     }
 
     fn begin_collection_snapshot(
@@ -338,13 +338,13 @@ impl PrivateHnswSessionRegistry {
     ) -> StorageResult<()> {
         ensure_private_hnsw_write_window_in_registry(self, collection_id, vector_name, now_unix)?;
         self.active_upload_by_index
-            .insert(session_index_key(collection_id, vector_name));
+            .insert(upload_index_key(collection_id, vector_name));
         Ok(())
     }
 
     fn release_upload(&mut self, collection_id: &str, vector_name: &str) {
-        let index_key = session_index_key(collection_id, vector_name);
-        self.active_upload_by_index.remove(&index_key);
+        self.active_upload_by_index
+            .remove(&upload_index_key(collection_id, vector_name));
     }
 
     fn with_session_mut<T>(
@@ -1929,7 +1929,7 @@ fn ensure_private_hnsw_write_window_in_registry(
     }
     if registry
         .active_upload_by_index
-        .contains(&session_index_key(collection_id, vector_name))
+        .contains(&upload_index_key(collection_id, vector_name))
     {
         return Err(StorageError::bad_request(
             "private HNSW ORAM upload requires no active upload for this index",
@@ -2018,6 +2018,10 @@ fn new_session_id() -> String {
 
 fn session_index_key(collection_id: &str, vector_name: &str) -> String {
     format!("{collection_id}\x1f{vector_name}")
+}
+
+fn upload_index_key(collection_id: &str, vector_name: &str) -> (String, String) {
+    (collection_id.to_string(), vector_name.to_string())
 }
 
 fn ensure_private_hnsw_read_proof_matches_buckets(
@@ -4398,7 +4402,7 @@ mod private_hnsw_tests {
                 .contains_key("collection-uuid-1")
         );
 
-        let index_key = session_index_key("collection-uuid-1", "text");
+        let index_key = upload_index_key("collection-uuid-1", "text");
         registry.active_upload_by_index.insert(index_key.clone());
         registry.release_upload("collection-uuid-1", "text");
         assert!(!registry.active_upload_by_index.contains(&index_key));
@@ -4487,7 +4491,7 @@ mod private_hnsw_tests {
     }
 
     #[test]
-    fn collection_snapshot_guard_uses_exact_private_hnsw_upload_collection_prefix() {
+    fn collection_snapshot_guard_uses_exact_private_hnsw_upload_collection_marker() {
         let now = 10;
         let mut registry = PrivateHnswSessionRegistry::default();
         registry
