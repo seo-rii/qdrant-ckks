@@ -9188,7 +9188,7 @@ mod tests {
             },
             |leaf| {
                 let bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?;
-                let buckets = bucket_ids
+                let mut buckets = bucket_ids
                     .iter()
                     .map(|bucket_id| {
                         encrypted_store
@@ -9198,6 +9198,13 @@ mod tests {
                             .ok_or(PrivateHnswClientError::PathBucketMismatch)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                // Keep the ciphertext hash valid but make bucket open fail if it runs before proof verification.
+                let mut tampered_raw_ciphertext = BASE64URL_NOPAD
+                    .decode(buckets[0].ciphertext.as_bytes())
+                    .unwrap();
+                *tampered_raw_ciphertext.last_mut().unwrap() ^= 0x01;
+                buckets[0].ciphertext = BASE64URL_NOPAD.encode(&tampered_raw_ciphertext);
+                buckets[0].ciphertext_sha256 = base64url_sha256(&tampered_raw_ciphertext);
                 let mut proof =
                     proof_for_bucket_ids(&bucket_ids, 42, root_hash.clone(), &commitments);
                 proof.leaves[0].leaf_hash = commitment(99);
@@ -9354,7 +9361,7 @@ mod tests {
             |leaf| {
                 read_leaves.borrow_mut().push(leaf);
                 let bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?;
-                let buckets = bucket_ids
+                let mut buckets = bucket_ids
                     .iter()
                     .map(|bucket_id| {
                         encrypted_store
@@ -9364,6 +9371,13 @@ mod tests {
                             .ok_or(PrivateHnswClientError::PathBucketMismatch)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                // Keep the ciphertext hash valid but make bucket open fail if it runs before proof verification.
+                let mut tampered_raw_ciphertext = BASE64URL_NOPAD
+                    .decode(buckets[0].ciphertext.as_bytes())
+                    .unwrap();
+                *tampered_raw_ciphertext.last_mut().unwrap() ^= 0x01;
+                buckets[0].ciphertext = BASE64URL_NOPAD.encode(&tampered_raw_ciphertext);
+                buckets[0].ciphertext_sha256 = base64url_sha256(&tampered_raw_ciphertext);
                 let mut proof =
                     proof_for_bucket_ids(&bucket_ids, 42, root_hash.clone(), &commitments);
                 proof.leaves[0].leaf_hash = commitment(99);
