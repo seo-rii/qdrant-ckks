@@ -583,6 +583,8 @@ mod private_hnsw_grpc_tests {
 
     #[test]
     fn manifest_proto_rejects_unspecified_enums_and_missing_nested_fields() {
+        let unsupported = 987_654;
+
         let mut proto = manifest_to_proto(sample_manifest());
         proto.distance = 0;
         let err = manifest_from_proto(proto).unwrap_err();
@@ -590,10 +592,24 @@ mod private_hnsw_grpc_tests {
         assert!(err.message().contains("distance"));
 
         let mut proto = manifest_to_proto(sample_manifest());
+        proto.distance = unsupported;
+        let err = manifest_from_proto(proto).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("distance"));
+        assert!(!err.message().contains(&unsupported.to_string()));
+
+        let mut proto = manifest_to_proto(sample_manifest());
         proto.result_privacy = 0;
         let err = manifest_from_proto(proto).unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("result_privacy"));
+
+        let mut proto = manifest_to_proto(sample_manifest());
+        proto.result_privacy = unsupported;
+        let err = manifest_from_proto(proto).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("result_privacy"));
+        assert!(!err.message().contains(&unsupported.to_string()));
 
         let mut proto = manifest_to_proto(sample_manifest());
         proto.hnsw = None;
@@ -612,6 +628,13 @@ mod private_hnsw_grpc_tests {
         let err = manifest_from_proto(proto).unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("kind"));
+
+        let mut proto = manifest_to_proto(sample_manifest());
+        proto.oram.as_mut().unwrap().kind = unsupported;
+        let err = manifest_from_proto(proto).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("kind"));
+        assert!(!err.message().contains(&unsupported.to_string()));
 
         let mut proto = manifest_to_proto(sample_manifest());
         proto.fixed_budget = None;

@@ -809,12 +809,21 @@ mod private_result_oram_grpc_tests {
 
     #[test]
     fn manifest_proto_rejects_unspecified_oram_and_missing_nested_fields() {
+        let unsupported = 987_654;
         let fixture = PrivateResultRouteFixture::build();
+
         let mut proto = manifest_to_proto(fixture.manifest.clone());
         proto.oram.as_mut().unwrap().kind = 0;
         let err = manifest_from_proto(proto).unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("kind"));
+
+        let mut proto = manifest_to_proto(fixture.manifest.clone());
+        proto.oram.as_mut().unwrap().kind = unsupported;
+        let err = manifest_from_proto(proto).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("kind"));
+        assert!(!err.message().contains(&unsupported.to_string()));
 
         let mut proto = manifest_to_proto(fixture.manifest);
         proto.oram = None;
