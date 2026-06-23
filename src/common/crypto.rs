@@ -267,7 +267,8 @@ const DIRECT_MATERIAL_RAW_MAX_BYTES: usize = 128;
 const MAX_CLIENT_SIGNATURE_PUBLIC_KEYS: usize = 8;
 // The MVP collection stores persist Merkle nodes as bounded JSON metadata.
 // Keep runtime policy inside that storage envelope until compact Merkle storage lands.
-const PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX: u64 = 20;
+pub(crate) const PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX: u64 = 20;
+pub(crate) const PRIVATE_ORAM_PATH_BATCH_SIZE_MAX: u64 = 1024;
 const PRIVATE_ORAM_BUCKET_CIPHERTEXT_OVERHEAD_BYTES: u64 = 4096;
 const PRIVATE_ORAM_MAX_READ_BATCH_CIPHERTEXT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_REMOTE_WRAPPED_RESOURCE_KEY_BYTES: usize = 16 * 1024;
@@ -4189,7 +4190,7 @@ fn validate_private_result_oram_options(
         PRIVATE_RESULT_ORAM_OPTION,
         "path_batch_size",
         1,
-        1024,
+        PRIVATE_ORAM_PATH_BATCH_SIZE_MAX,
     )?;
     let leaf_count = 1u64
         .checked_shl(u32::try_from(tree_height).map_err(|_| {
@@ -4356,7 +4357,7 @@ fn validate_private_hnsw_oram_options(
         PRIVATE_HNSW_ORAM_OPTION,
         "path_batch_size",
         1,
-        1024,
+        PRIVATE_ORAM_PATH_BATCH_SIZE_MAX,
     )?;
     let leaf_count = 1u64
         .checked_shl(u32::try_from(tree_height).map_err(|_| {

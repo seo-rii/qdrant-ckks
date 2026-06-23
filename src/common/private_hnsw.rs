@@ -35,7 +35,10 @@ use storage::content_manager::errors::{StorageError, StorageResult};
 use storage::content_manager::toc::TableOfContent;
 use storage::rbac::{AccessRequirements, Auth};
 
-use crate::common::crypto::validate_collection_crypto_runtime_with_crypto_id;
+use crate::common::crypto::{
+    PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX, PRIVATE_ORAM_PATH_BATCH_SIZE_MAX,
+    validate_collection_crypto_runtime_with_crypto_id,
+};
 use crate::settings::{CryptoInstanceConfig, Settings};
 
 const SIGNATURE_PUBLIC_KEYS_OPTION: &str = "signature_public_keys";
@@ -55,8 +58,8 @@ const PRIVATE_HNSW_ORAM_ROOT_HASH_B64_LEN: usize = 43;
 const PRIVATE_HNSW_ORAM_SIGNATURE_B64_LEN: usize = 86;
 const PRIVATE_HNSW_ORAM_CLIENT_ID_MAX_LEN: usize = 256;
 const PRIVATE_HNSW_ORAM_SESSION_ID_MAX_LEN: usize = 128;
-const PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX: usize = 1024;
-const PRIVATE_HNSW_ORAM_TREE_HEIGHT_MAX: usize = 20;
+const PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX: usize = PRIVATE_ORAM_PATH_BATCH_SIZE_MAX as usize;
+const PRIVATE_HNSW_ORAM_TREE_HEIGHT_MAX: usize = PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX as usize;
 const PRIVATE_HNSW_ORAM_WRITEBACK_BUCKETS_MAX: usize =
     PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX * (PRIVATE_HNSW_ORAM_TREE_HEIGHT_MAX + 1);
 const PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX: usize =
