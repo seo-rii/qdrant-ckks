@@ -166,7 +166,7 @@ struct PrivateResultOramSessionRegistry {
     sessions: HashMap<String, PrivateResultOramSession>,
     active_writer_by_collection: HashMap<String, String>,
     active_snapshot_by_collection: HashMap<String, usize>,
-    active_upload_by_collection: HashMap<String, usize>,
+    active_upload_by_collection: HashSet<String>,
 }
 
 impl PrivateResultOramSessionRegistry {
@@ -191,7 +191,7 @@ impl PrivateResultOramSessionRegistry {
         }
         if self
             .active_upload_by_collection
-            .contains_key(&session.collection_id)
+            .contains(&session.collection_id)
         {
             return Err(StorageError::bad_request(
                 "private result ORAM session open requires no active upload for this collection",
@@ -243,7 +243,7 @@ impl PrivateResultOramSessionRegistry {
     }
 
     fn has_active_upload_collection(&self, collection_id: &str) -> bool {
-        self.active_upload_by_collection.contains_key(collection_id)
+        self.active_upload_by_collection.contains(collection_id)
     }
 
     fn begin_collection_snapshot(
@@ -279,25 +279,13 @@ impl PrivateResultOramSessionRegistry {
 
     fn begin_upload(&mut self, collection_id: &str, now_unix: u64) -> StorageResult<()> {
         ensure_private_result_oram_write_window_in_registry(self, collection_id, now_unix)?;
-        let count = self
-            .active_upload_by_collection
-            .entry(collection_id.to_string())
-            .or_insert(0);
-        *count = count.checked_add(1).ok_or_else(|| {
-            StorageError::service_error("private result ORAM upload reference count overflowed")
-        })?;
+        self.active_upload_by_collection
+            .insert(collection_id.to_string());
         Ok(())
     }
 
     fn release_upload(&mut self, collection_id: &str) {
-        let Some(count) = self.active_upload_by_collection.get_mut(collection_id) else {
-            return;
-        };
-        if *count <= 1 {
-            self.active_upload_by_collection.remove(collection_id);
-        } else {
-            *count -= 1;
-        }
+        self.active_upload_by_collection.remove(collection_id);
     }
 
     fn with_session_mut<T>(
@@ -1322,10 +1310,7 @@ fn ensure_private_result_oram_write_window_in_registry(
             "private result ORAM upload requires no active session for this collection",
         ));
     }
-    if registry
-        .active_upload_by_collection
-        .contains_key(collection_id)
-    {
+    if registry.active_upload_by_collection.contains(collection_id) {
         return Err(StorageError::bad_request(
             "private result ORAM upload requires no active upload for this collection",
         ));
@@ -2802,12 +2787,12 @@ mod private_result_oram_tests {
 
         registry
             .active_upload_by_collection
-            .insert("collection-private-result-test".to_string(), 0);
+            .insert("collection-private-result-test".to_string());
         registry.release_upload("collection-private-result-test");
         assert!(
             !registry
                 .active_upload_by_collection
-                .contains_key("collection-private-result-test")
+                .contains("collection-private-result-test")
         );
     }
 

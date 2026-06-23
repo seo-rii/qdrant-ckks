@@ -207,7 +207,7 @@ struct PrivateHnswSessionRegistry {
     sessions: HashMap<String, PrivateHnswSession>,
     active_writer_by_index: HashMap<String, String>,
     active_snapshot_by_collection: HashMap<String, usize>,
-    active_upload_by_index: HashMap<String, usize>,
+    active_upload_by_index: HashSet<String>,
 }
 
 impl PrivateHnswSessionRegistry {
@@ -232,7 +232,7 @@ impl PrivateHnswSessionRegistry {
         }
 
         let index_key = session_index_key(&session.collection_id, &session.vector_name);
-        if self.active_upload_by_index.contains_key(&index_key) {
+        if self.active_upload_by_index.contains(&index_key) {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM session open requires no active upload for this index",
             ));
@@ -295,7 +295,7 @@ impl PrivateHnswSessionRegistry {
     fn has_active_upload_collection(&self, collection_id: &str) -> bool {
         let prefix = format!("{collection_id}\x1f");
         self.active_upload_by_index
-            .keys()
+            .iter()
             .any(|index_key| index_key.starts_with(&prefix))
     }
 
@@ -337,26 +337,14 @@ impl PrivateHnswSessionRegistry {
         now_unix: u64,
     ) -> StorageResult<()> {
         ensure_private_hnsw_write_window_in_registry(self, collection_id, vector_name, now_unix)?;
-        let count = self
-            .active_upload_by_index
-            .entry(session_index_key(collection_id, vector_name))
-            .or_insert(0);
-        *count = count.checked_add(1).ok_or_else(|| {
-            StorageError::service_error("private HNSW ORAM upload reference count overflowed")
-        })?;
+        self.active_upload_by_index
+            .insert(session_index_key(collection_id, vector_name));
         Ok(())
     }
 
     fn release_upload(&mut self, collection_id: &str, vector_name: &str) {
         let index_key = session_index_key(collection_id, vector_name);
-        let Some(count) = self.active_upload_by_index.get_mut(&index_key) else {
-            return;
-        };
-        if *count <= 1 {
-            self.active_upload_by_index.remove(&index_key);
-        } else {
-            *count -= 1;
-        }
+        self.active_upload_by_index.remove(&index_key);
     }
 
     fn with_session_mut<T>(
@@ -1941,7 +1929,7 @@ fn ensure_private_hnsw_write_window_in_registry(
     }
     if registry
         .active_upload_by_index
-        .contains_key(&session_index_key(collection_id, vector_name))
+        .contains(&session_index_key(collection_id, vector_name))
     {
         return Err(StorageError::bad_request(
             "private HNSW ORAM upload requires no active upload for this index",
@@ -4411,9 +4399,9 @@ mod private_hnsw_tests {
         );
 
         let index_key = session_index_key("collection-uuid-1", "text");
-        registry.active_upload_by_index.insert(index_key.clone(), 0);
+        registry.active_upload_by_index.insert(index_key.clone());
         registry.release_upload("collection-uuid-1", "text");
-        assert!(!registry.active_upload_by_index.contains_key(&index_key));
+        assert!(!registry.active_upload_by_index.contains(&index_key));
     }
 
     #[test]
