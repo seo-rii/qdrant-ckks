@@ -1685,11 +1685,7 @@ fn validate_upload_bucket_request_shape(
             "private result ORAM bucket upload must contain at least one bucket",
         ));
     }
-    if private_result_oram_upload_bucket_count_exceeds_static_limit(buckets.len()) {
-        return Err(StorageError::bad_request(
-            "private result ORAM bucket upload exceeds maximum bucket batch size",
-        ));
-    }
+    validate_private_result_oram_upload_bucket_count_shape(buckets.len())?;
     let mut seen_bucket_ids = HashSet::with_capacity(buckets.len());
     for bucket in buckets {
         if !seen_bucket_ids.insert(bucket.bucket_id) {
@@ -1703,8 +1699,15 @@ fn validate_upload_bucket_request_shape(
     Ok(())
 }
 
-fn private_result_oram_upload_bucket_count_exceeds_static_limit(bucket_count: usize) -> bool {
-    bucket_count > PRIVATE_RESULT_ORAM_UPLOAD_BUCKETS_MAX
+fn validate_private_result_oram_upload_bucket_count_shape(
+    bucket_count: usize,
+) -> StorageResult<()> {
+    if bucket_count > PRIVATE_RESULT_ORAM_UPLOAD_BUCKETS_MAX {
+        return Err(StorageError::bad_request(
+            "private result ORAM bucket upload exceeds maximum bucket batch size",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_bucket_read_request_budget(
@@ -2480,16 +2483,19 @@ mod private_result_oram_tests {
 
     #[test]
     fn upload_bucket_request_shape_static_limit_matches_max_runtime_tree_height() {
-        assert!(
-            !private_result_oram_upload_bucket_count_exceeds_static_limit(
-                PRIVATE_RESULT_ORAM_UPLOAD_BUCKETS_MAX
-            )
-        );
-        assert!(
-            private_result_oram_upload_bucket_count_exceeds_static_limit(
-                PRIVATE_RESULT_ORAM_UPLOAD_BUCKETS_MAX + 1
-            )
-        );
+        validate_private_result_oram_upload_bucket_count_shape(
+            PRIVATE_RESULT_ORAM_UPLOAD_BUCKETS_MAX,
+        )
+        .unwrap();
+
+        let err = validate_private_result_oram_upload_bucket_count_shape(
+            PRIVATE_RESULT_ORAM_UPLOAD_BUCKETS_MAX + 1,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("maximum bucket batch size"));
+        assert!(!rendered.contains(&(PRIVATE_RESULT_ORAM_UPLOAD_BUCKETS_MAX + 1).to_string()));
+        assert!(!rendered.contains("private_result_oram"));
     }
 
     #[test]

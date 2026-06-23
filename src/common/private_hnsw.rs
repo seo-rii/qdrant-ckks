@@ -2311,11 +2311,7 @@ fn validate_private_hnsw_upload_bucket_request_shape(
             "private HNSW ORAM bucket upload must contain at least one bucket",
         ));
     }
-    if private_hnsw_upload_bucket_count_exceeds_static_limit(buckets.len()) {
-        return Err(StorageError::bad_request(
-            "private HNSW ORAM bucket upload exceeds maximum bucket batch size",
-        ));
-    }
+    validate_private_hnsw_upload_bucket_count_shape(buckets.len())?;
     let mut seen_bucket_ids = HashSet::with_capacity(buckets.len());
     for bucket in buckets {
         if !seen_bucket_ids.insert(bucket.bucket_id) {
@@ -2329,8 +2325,13 @@ fn validate_private_hnsw_upload_bucket_request_shape(
     Ok(())
 }
 
-fn private_hnsw_upload_bucket_count_exceeds_static_limit(bucket_count: usize) -> bool {
-    bucket_count > PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX
+fn validate_private_hnsw_upload_bucket_count_shape(bucket_count: usize) -> StorageResult<()> {
+    if bucket_count > PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM bucket upload exceeds maximum bucket batch size",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_private_hnsw_read_path_labels(paths: &[String], tree_height: u32) -> StorageResult<()> {
@@ -2618,12 +2619,17 @@ mod private_hnsw_tests {
 
     #[test]
     fn upload_bucket_request_shape_static_limit_matches_max_runtime_tree_height() {
-        assert!(!private_hnsw_upload_bucket_count_exceeds_static_limit(
-            PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX
-        ));
-        assert!(private_hnsw_upload_bucket_count_exceeds_static_limit(
-            PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX + 1
-        ));
+        validate_private_hnsw_upload_bucket_count_shape(PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX)
+            .unwrap();
+
+        let err = validate_private_hnsw_upload_bucket_count_shape(
+            PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX + 1,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("maximum bucket batch size"));
+        assert!(!rendered.contains(&(PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX + 1).to_string()));
+        assert!(!rendered.contains("private_hnsw_oram"));
     }
 
     #[test]
