@@ -170,8 +170,54 @@ fn redact_audit_error(error: &str) -> String {
         "wrappedkey",
         "wrappedkeyb64",
         "awssecuritytoken",
+        "accessedleaflabel",
+        "accesspath",
         "xamzsecuritytoken",
         "xapikey",
+        "bucketcommitment",
+        "bucketid",
+        "bucketsequence",
+        "candidateheap",
+        "clientstate",
+        "commitsignature",
+        "entrynodeid",
+        "fetchtoken",
+        "leafcommitment",
+        "leafhash",
+        "leaflabel",
+        "levelmask",
+        "manifestsignature",
+        "merkleproof",
+        "neighborid",
+        "nodeid",
+        "orampath",
+        "orampositionmap",
+        "pathlabel",
+        "payloadbytes",
+        "payloadfetchtoken",
+        "payloadoramleaf",
+        "payloadplaintext",
+        "plaintextbucket",
+        "plaintextpayload",
+        "plaintextvector",
+        "pointtoken",
+        "positionmap",
+        "proof",
+        "readbucket",
+        "readpath",
+        "readsignature",
+        "requestsignature",
+        "resultid",
+        "roothash",
+        "sessionid",
+        "siblinghash",
+        "stash",
+        "tokenpositionmap",
+        "topk",
+        "updatedbucket",
+        "vectorbytes",
+        "vectorplaintext",
+        "visitednode",
     ];
 
     let lower = error.to_ascii_lowercase();
@@ -225,6 +271,28 @@ mod tests {
             "X-Amz-Security-Token rejected: aws-token-sentinel",
             "session_token rejected: session-token-sentinel",
             "sessionToken rejected: session-token-sentinel",
+        ] {
+            let redacted = redact_audit_error(error);
+
+            assert!(redacted.contains("redacted"), "{redacted}");
+            assert!(!redacted.contains("sentinel"), "{redacted}");
+        }
+    }
+
+    #[test]
+    fn audit_error_redaction_hides_private_oram_access_pattern_fields() {
+        for error in [
+            "private HNSW read failed path_label=private-path-label-sentinel",
+            "private HNSW read failed leafHash=private-leaf-hash-sentinel",
+            "private HNSW read failed bucket_ids=[private-bucket-id-sentinel]",
+            "private HNSW read failed root_hash=private-root-hash-sentinel",
+            "private HNSW read failed node_id=private-node-id-sentinel",
+            "private HNSW read failed vector_bytes=private-vector-bytes-sentinel",
+            "private result ORAM read failed payload_fetch_token=private-fetch-token-sentinel",
+            "private result ORAM read failed payload_plaintext=private-payload-sentinel",
+            "private result ORAM read failed tokenPositionMap=private-token-position-sentinel",
+            "private ORAM proof failed sibling_hash=private-sibling-hash-sentinel",
+            "private ORAM commit failed updatedBucket=private-updated-bucket-sentinel",
         ] {
             let redacted = redact_audit_error(error);
 
