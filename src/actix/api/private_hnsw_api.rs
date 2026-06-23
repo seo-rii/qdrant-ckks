@@ -2889,12 +2889,17 @@ mod private_hnsw_rest_tests {
             let stale_current_read_paths = vec![fixture.entry_leaf_label()];
             let stale_current_read_signature =
                 fixture.sign_read_paths(&stale_current_read_paths, 1, true);
+            let stale_current_read_session_id = session_id.clone();
+            let stale_current_read_root_hash = fixture.encrypted_build.root_hash.clone();
+            let stale_current_read_path_label = stale_current_read_paths[0].clone();
+            let stale_current_read_signature_key_id = stale_current_read_signature.key_id.clone();
+            let stale_current_read_signature_sig = stale_current_read_signature.sig.clone();
             let stale_current_read_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
-                    session_id: session_id.clone(),
+                    session_id: stale_current_read_session_id.clone(),
                     index_epoch: BASE_EPOCH,
-                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    root_hash: stale_current_read_root_hash.clone(),
                     paths: stale_current_read_paths,
                     padding: OramReadPadding {
                         requested_paths: 1,
@@ -2910,7 +2915,27 @@ mod private_hnsw_rest_tests {
                 "read_paths current epoch/root does not match active session"
             );
             assert!(
+                !stale_current_read_error.contains(&stale_current_read_root_hash),
+                "{stale_current_read_error}"
+            );
+            assert!(
                 !stale_current_read_error.contains(&stale_current_root),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains(&stale_current_read_session_id),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains(&stale_current_read_path_label),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains(&stale_current_read_signature_key_id),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains(&stale_current_read_signature_sig),
                 "{stale_current_read_error}"
             );
             assert!(
@@ -2925,26 +2950,57 @@ mod private_hnsw_rest_tests {
                 !stale_current_read_error.contains("/tmp"),
                 "{stale_current_read_error}"
             );
+            let stale_current_commit_session_id = session_id.clone();
+            let stale_current_commit_old_root_hash = search_run.commit_plan.old_root_hash.clone();
+            let stale_current_commit_new_root_hash = search_run.commit_plan.new_root_hash.clone();
+            let stale_current_commit_bucket_ciphertext =
+                search_run.updated_buckets[0].ciphertext.clone();
+            let stale_current_commit_signature_key_id = search_run.commit_signature.key_id.clone();
+            let stale_current_commit_signature_sig = search_run.commit_signature.sig.clone();
             let stale_current_commit_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
-                    session_id: session_id.clone(),
+                    session_id: stale_current_commit_session_id.clone(),
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
-                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
-                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    old_root_hash: stale_current_commit_old_root_hash.clone(),
+                    new_root_hash: stale_current_commit_new_root_hash.clone(),
                     updated_buckets: search_run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
                         alg: search_run.commit_signature.alg.clone(),
-                        key_id: search_run.commit_signature.key_id.clone(),
-                        sig: search_run.commit_signature.sig.clone(),
+                        key_id: stale_current_commit_signature_key_id.clone(),
+                        sig: stale_current_commit_signature_sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "commit current epoch/root does not match active session"
             );
             assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_old_root_hash),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_new_root_hash),
+                "{stale_current_commit_error}"
+            );
+            assert!(
                 !stale_current_commit_error.contains(&stale_current_root),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_session_id),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_bucket_ciphertext),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_signature_key_id),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_signature_sig),
                 "{stale_current_commit_error}"
             );
             assert!(
