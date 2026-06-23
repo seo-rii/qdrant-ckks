@@ -960,6 +960,8 @@ mod tests {
             "{err}"
         );
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR), "{err}");
+        assert!(!err.contains("00000000.bucket"), "{err}");
+        assert!(!err.contains("buckets"), "{err}");
         assert!(!err.contains(&fixture.manifest.root_hash), "{err}");
         assert!(!err.contains(&fixture.buckets[0].ciphertext), "{err}");
     }
@@ -1143,6 +1145,38 @@ mod tests {
         assert!(err.contains("private result ORAM snapshot layout validation failed"));
         assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("missing-result-oram-target"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_configured_private_result_oram_symlink() {
+        let fixture = PrivateResultSnapshotFixture::build();
+        let settings = fixture.settings();
+        let collection_dir = TempDir::new().unwrap();
+        let config = recovered_private_result_config();
+        fs::write(
+            collection_dir.path().join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            collection_dir
+                .path()
+                .join("configured-missing-result-oram-target"),
+            collection_dir.path().join(PRIVATE_RESULT_ORAM_DIR),
+        )
+        .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("configured private result ORAM symlink must fail CLI preflight");
+
+        assert!(err.contains("private result ORAM snapshot layout validation failed"));
+        assert!(!err.contains(collection_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("configured-missing-result-oram-target"));
+        assert!(!err.contains(RESULT_SIGNING_KEY_ID));
     }
 
     #[test]
