@@ -661,6 +661,73 @@ mod tests {
     }
 
     #[test]
+    fn cli_snapshot_layout_sanitizers_redact_private_oram_alias_values() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let hnsw_leaked_values = [
+            "cli-hnsw-bucket-id",
+            "cli-hnsw-path-label",
+            "cli-hnsw-leaf-hash",
+            "cli-hnsw-sibling-hash",
+            "cli-hnsw-payload-token",
+            "cli-hnsw-signature",
+        ];
+        let hnsw_detail = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            collection::operations::types::CollectionError::bad_request(format!(
+                "private HNSW ORAM bucket_id {} path_label {} proof leaf_hash {} \
+                 sibling_hash {} payload_fetch_token {} manifest_signature {}",
+                hnsw_leaked_values[0],
+                hnsw_leaked_values[1],
+                hnsw_leaked_values[2],
+                hnsw_leaked_values[3],
+                hnsw_leaked_values[4],
+                hnsw_leaked_values[5],
+            )),
+        );
+
+        assert_eq!(
+            hnsw_detail,
+            "private HNSW ORAM snapshot layout validation failed"
+        );
+        for leaked in hnsw_leaked_values {
+            assert!(!hnsw_detail.contains(leaked));
+        }
+
+        let result_leaked_values = [
+            "cli-result-read-bucket-id",
+            "cli-result-bucket-id",
+            "cli-result-leaf-hash",
+            "cli-result-sibling-hash",
+            "cli-result-payload-token",
+            "cli-result-read-signature",
+            "cli-result-commit-signature",
+        ];
+        let result_detail = sanitize_private_result_oram_snapshot_layout_error(
+            temp_dir.path(),
+            collection::operations::types::CollectionError::bad_request(format!(
+                "private result ORAM read_bucket_id {} bucket_ids {} proof leaf_hash {} \
+                 sibling_hash {} payload_fetch_tokens {} read_signature {} commit_signature {}",
+                result_leaked_values[0],
+                result_leaked_values[1],
+                result_leaked_values[2],
+                result_leaked_values[3],
+                result_leaked_values[4],
+                result_leaked_values[5],
+                result_leaked_values[6],
+            )),
+        );
+
+        assert_eq!(
+            result_detail,
+            "private result ORAM snapshot layout validation failed"
+        );
+        for leaked in result_leaked_values {
+            assert!(!result_detail.contains(leaked));
+        }
+    }
+
+    #[test]
     fn cli_snapshot_crypto_preflight_rejects_missing_runtime_instance() {
         let settings = Settings::new(None).unwrap();
         let params = CollectionParams {
