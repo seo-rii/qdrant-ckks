@@ -1056,6 +1056,19 @@ async fn test_snapshot_private_oram_store_files_are_archived() {
             "snapshot archive contains client-owned private ORAM state marker {forbidden}: {archive_paths:?}",
         );
     }
+    let forbidden_temp_prefixes = [
+        format!("{PRIVATE_RESULT_ORAM_DIR}/temp"),
+        format!("{PRIVATE_HNSW_ORAM_DIR}/{vector_name}/temp"),
+    ];
+    for forbidden_temp_prefix in forbidden_temp_prefixes {
+        assert!(
+            !archive_paths
+                .iter()
+                .any(|path| path == &forbidden_temp_prefix
+                    || path.starts_with(&format!("{forbidden_temp_prefix}/"))),
+            "snapshot archive contains private ORAM temp subtree {forbidden_temp_prefix}: {archive_paths:?}",
+        );
+    }
 
     let recover_dir = Builder::new()
         .prefix("test_private_oram_archive_recover")

@@ -193,9 +193,11 @@ impl Collection {
         {
             let tar = tar.clone();
             tokio::task::spawn_blocking(move || {
-                tar.blocking_append_dir_all(
+                blocking_append_private_oram_snapshot_dir(
+                    &tar,
                     &private_hnsw_oram_path,
                     Path::new(PRIVATE_HNSW_ORAM_DIR),
+                    PRIVATE_HNSW_ORAM_DIR,
                 )
             })
             .await
@@ -207,9 +209,11 @@ impl Collection {
         {
             let tar = tar.clone();
             tokio::task::spawn_blocking(move || {
-                tar.blocking_append_dir_all(
+                blocking_append_private_oram_snapshot_dir(
+                    &tar,
                     &private_result_oram_path,
                     Path::new(PRIVATE_RESULT_ORAM_DIR),
+                    PRIVATE_RESULT_ORAM_DIR,
                 )
             })
             .await
@@ -575,6 +579,76 @@ fn private_oram_snapshot_source_dir(
             "{label} snapshot source cannot be inspected"
         ))),
     }
+}
+
+fn blocking_append_private_oram_snapshot_dir(
+    tar: &BuilderExt,
+    source_dir: &Path,
+    archive_dir: &Path,
+    dir_name: &str,
+) -> CollectionResult<()> {
+    let label = private_oram_label(dir_name);
+    blocking_append_private_oram_snapshot_tree(tar, source_dir, archive_dir, dir_name, 0, label)
+}
+
+fn blocking_append_private_oram_snapshot_tree(
+    tar: &BuilderExt,
+    source_dir: &Path,
+    archive_dir: &Path,
+    dir_name: &str,
+    depth: usize,
+    label: &str,
+) -> CollectionResult<()> {
+    tar.blocking_append_dir(source_dir, archive_dir)
+        .map_err(|_| {
+            CollectionError::service_error(format!("{label} snapshot source cannot be archived"))
+        })?;
+    let entries = std::fs::read_dir(source_dir).map_err(|_| {
+        CollectionError::service_error(format!("{label} snapshot source cannot be read"))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|_| {
+            CollectionError::service_error(format!("{label} snapshot source cannot be read"))
+        })?;
+        let file_name = entry.file_name();
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| {
+            CollectionError::service_error(format!("{label} snapshot source cannot be inspected"))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(CollectionError::service_error(format!(
+                "{label} snapshot source contains a symlink",
+            )));
+        }
+
+        let archive_path = archive_dir.join(Path::new(&file_name));
+        if metadata.file_type().is_dir() {
+            if private_oram_snapshot_entry_is_temp_dir(dir_name, depth, &file_name) {
+                continue;
+            }
+            blocking_append_private_oram_snapshot_tree(
+                tar,
+                &entry.path(),
+                &archive_path,
+                dir_name,
+                depth + 1,
+                label,
+            )?;
+            continue;
+        }
+        if !metadata.file_type().is_file() {
+            return Err(CollectionError::service_error(format!(
+                "{label} snapshot source contains an unsupported file type",
+            )));
+        }
+        tar.blocking_append_file(&entry.path(), &archive_path)
+            .map_err(|_| {
+                CollectionError::service_error(format!(
+                    "{label} snapshot source cannot be archived"
+                ))
+            })?;
+    }
+
+    Ok(())
 }
 
 fn private_oram_label(dir_name: &str) -> &'static str {

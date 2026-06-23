@@ -642,9 +642,10 @@ new-bucket reads rather than serving an inconsistent ORAM view.
 Collection snapshots include private HNSW ORAM bucket files as ciphertext-only
 JSON artifacts after rejecting non-directory or symlinked private ORAM snapshot
 sources, client-owned ORAM state files, and non-empty private ORAM temp write
-directories; snapshot tests seal a plaintext sentinel into a client bucket and
-assert that the raw snapshot archive and restored bucket file do not contain the
-sentinel bytes.
+directories. Empty private ORAM temp directories are omitted from the archive;
+snapshot tests seal a plaintext sentinel into a client bucket and assert that
+the raw snapshot archive and restored bucket file do not contain the sentinel
+bytes.
 Collection and full snapshot creation also fail closed while any active private
 HNSW ORAM or private result ORAM session exists for the collection, because a
 session may be remapping paths and writing back buckets. While a private ORAM

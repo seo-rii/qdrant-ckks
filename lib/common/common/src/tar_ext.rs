@@ -186,6 +186,16 @@ impl<W: Write + Seek> BuilderExt<W> {
     /// # Panics
     ///
     /// This function panics if called within an asynchronous execution context.
+    pub fn blocking_append_dir(&self, src: &Path, dst: &Path) -> io::Result<()> {
+        let dst = join_relative(&self.path, dst)?;
+        self.tar.blocking_lock().tar()?.append_dir(dst, src)
+    }
+
+    /// Append a directory recursively to the tar archive.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if called within an asynchronous execution context.
     pub fn blocking_append_dir_all(&self, src: &Path, dst: &Path) -> io::Result<()> {
         let dst = join_relative(&self.path, dst)?;
         self.tar.blocking_lock().tar()?.append_dir_all(dst, src)
