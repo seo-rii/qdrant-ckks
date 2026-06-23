@@ -112,11 +112,17 @@ const GRPC_ENDPOINT_WHITELIST: &[&str] = &[
 ];
 
 fn canonical_rest_endpoint_label(endpoint: &str) -> Option<&str> {
-    if REST_ENDPOINT_WHITELIST.binary_search(&endpoint).is_ok() {
-        return Some(endpoint);
+    let endpoint_path = endpoint
+        .split_once('?')
+        .map_or(endpoint, |(path, _query)| path);
+    if REST_ENDPOINT_WHITELIST
+        .binary_search(&endpoint_path)
+        .is_ok()
+    {
+        return Some(endpoint_path);
     }
 
-    let segments = endpoint
+    let segments = endpoint_path
         .trim_start_matches('/')
         .split('/')
         .collect::<Vec<_>>();
@@ -139,18 +145,13 @@ fn canonical_rest_endpoint_label(endpoint: &str) -> Option<&str> {
             "read_paths",
             ..,
         ] => Some("/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths"),
-        [
-            "collections",
-            _,
-            "private-hnsw",
-            _,
-            "session",
-            _,
-            "close",
-            ..,
-        ] => Some(
-            "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
-        ),
+        ["collections", _, "private-hnsw", _, "session", tail @ ..]
+            if !tail.is_empty() && tail.last().copied() == Some("close") =>
+        {
+            Some(
+                "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+            )
+        }
         ["collections", _, "private-hnsw", _, "session", ..] => {
             Some("/collections/{collection_name}/private-hnsw/{vector_name}/session")
         }
@@ -181,10 +182,10 @@ fn canonical_rest_endpoint_label(endpoint: &str) -> Option<&str> {
             _,
             "private-result-oram",
             "session",
-            _,
-            "close",
-            ..,
-        ] => Some("/collections/{collection_name}/private-result-oram/session/{session_id}/close"),
+            tail @ ..,
+        ] if !tail.is_empty() && tail.last().copied() == Some("close") => {
+            Some("/collections/{collection_name}/private-result-oram/session/{session_id}/close")
+        }
         ["collections", _, "private-result-oram", "session", ..] => {
             Some("/collections/{collection_name}/private-result-oram/session")
         }
@@ -1593,8 +1594,16 @@ mod tests {
                 "/collections/{collection_name}/private-result-oram/oram/read_buckets",
             ),
             (
+                "/collections/docs/private-result-oram/oram/read_buckets?bucket_ids=result-query-bucket-sentinel",
+                "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+            ),
+            (
                 "/collections/docs/private-result-oram/oram/commit/result-updated-bucket-sentinel",
                 "/collections/{collection_name}/private-result-oram/oram/commit",
+            ),
+            (
+                "/collections/docs/private-result-oram/session/bad/result-session-id-sentinel/close",
+                "/collections/{collection_name}/private-result-oram/session/{session_id}/close",
             ),
         ];
         for (raw, canonical) in rest_cases {
@@ -1956,8 +1965,10 @@ mod tests {
             "GET /collections/docs/private-result-oram/manifest/result-root-hash-sentinel",
             "POST /collections/docs/private-result-oram/oram/commit/result-updated-bucket-sentinel",
             "POST /collections/docs/private-result-oram/oram/read_buckets/result-bucket-id-sentinel",
+            "POST /collections/docs/private-result-oram/oram/read_buckets?bucket_ids=result-query-bucket-sentinel",
             "POST /collections/docs/private-result-oram/session/token-position-map-sentinel",
             "POST /collections/docs/private-result-oram/session/result-session-id-sentinel/close",
+            "POST /collections/docs/private-result-oram/session/bad/result-session-id-sentinel/close",
         ];
         for endpoint in rest_dynamic_endpoints {
             rest_methods.insert(endpoint.to_string(), rest_status_map(1));
@@ -2000,6 +2011,7 @@ mod tests {
             "client-state-sentinel",
             "leaf-label-sentinel",
             "result-bucket-id-sentinel",
+            "result-query-bucket-sentinel",
             "result-root-hash-sentinel",
             "result-session-id-sentinel",
             "result-updated-bucket-sentinel",
