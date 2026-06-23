@@ -59,6 +59,8 @@ const PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX: usize = 1024;
 const PRIVATE_HNSW_ORAM_TREE_HEIGHT_MAX: usize = 20;
 const PRIVATE_HNSW_ORAM_WRITEBACK_BUCKETS_MAX: usize =
     PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX * (PRIVATE_HNSW_ORAM_TREE_HEIGHT_MAX + 1);
+const PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX: usize =
+    (1usize << PRIVATE_HNSW_ORAM_TREE_HEIGHT_MAX) * 2 - 1;
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswManifestRecord {
@@ -2309,6 +2311,11 @@ fn validate_private_hnsw_upload_bucket_request_shape(
             "private HNSW ORAM bucket upload must contain at least one bucket",
         ));
     }
+    if private_hnsw_upload_bucket_count_exceeds_static_limit(buckets.len()) {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM bucket upload exceeds maximum bucket batch size",
+        ));
+    }
     let mut seen_bucket_ids = HashSet::with_capacity(buckets.len());
     for bucket in buckets {
         if !seen_bucket_ids.insert(bucket.bucket_id) {
@@ -2320,6 +2327,10 @@ fn validate_private_hnsw_upload_bucket_request_shape(
         validate_root_hash_string(&bucket.bucket_commitment, "bucket_commitment")?;
     }
     Ok(())
+}
+
+fn private_hnsw_upload_bucket_count_exceeds_static_limit(bucket_count: usize) -> bool {
+    bucket_count > PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX
 }
 
 fn validate_private_hnsw_read_path_labels(paths: &[String], tree_height: u32) -> StorageResult<()> {
@@ -2603,6 +2614,16 @@ mod private_hnsw_tests {
         assert!(rendered.contains("bucket upload must contain"));
         assert!(!rendered.contains("manifest"));
         assert!(!rendered.contains("private_hnsw_oram"));
+    }
+
+    #[test]
+    fn upload_bucket_request_shape_static_limit_matches_max_runtime_tree_height() {
+        assert!(!private_hnsw_upload_bucket_count_exceeds_static_limit(
+            PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX
+        ));
+        assert!(private_hnsw_upload_bucket_count_exceeds_static_limit(
+            PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX + 1
+        ));
     }
 
     #[test]
