@@ -277,8 +277,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "paths"
                         | "access_path"
                         | "access_paths"
+                        | "block_plaintext"
+                        | "block_plaintexts"
                         | "bucket_commitment"
                         | "bucket_commitments"
+                        | "bucket_plaintext"
+                        | "bucket_plaintexts"
                         | "leaf_commitment"
                         | "leaf_commitments"
                         | "merkle_proof"
@@ -331,8 +335,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "entry_node_ids"
                         | "level_mask"
                         | "level_masks"
+                        | "node_block"
+                        | "node_blocks"
                         | "node_id"
                         | "node_ids"
+                        | "node_plaintext"
+                        | "node_plaintexts"
                         | "neighbor"
                         | "neighbor_id"
                         | "neighbors"
@@ -357,16 +365,30 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "point_tokens"
                         | "fetch_token"
                         | "fetch_tokens"
+                        | "payload_bytes"
                         | "payload_fetch_token"
                         | "payload_fetch_tokens"
                         | "payload_oram_leaf"
                         | "payload_oram_leaves"
+                        | "payload_plaintext"
+                        | "payload_plaintexts"
+                        | "plaintext_block"
+                        | "plaintext_blocks"
+                        | "plaintext_bucket"
+                        | "plaintext_buckets"
+                        | "plaintext_payload"
+                        | "plaintext_payloads"
+                        | "plaintext_vector"
+                        | "plaintext_vectors"
                         | "root_hash"
                         | "root_hashes"
                         | "old_root_hash"
                         | "old_root_hashes"
                         | "new_root_hash"
                         | "new_root_hashes"
+                        | "vector_bytes"
+                        | "vector_plaintext"
+                        | "vector_plaintexts"
                         | "visited_node"
                         | "visited_nodes"
                         | "visited_node_id"
@@ -454,8 +476,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "readbuckets"
                         | "accesspath"
                         | "accesspaths"
+                        | "blockplaintext"
+                        | "blockplaintexts"
                         | "bucketcommitment"
                         | "bucketcommitments"
+                        | "bucketplaintext"
+                        | "bucketplaintexts"
                         | "leafcommitment"
                         | "leafcommitments"
                         | "merkleproof"
@@ -505,8 +531,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "entrynodeids"
                         | "levelmask"
                         | "levelmasks"
+                        | "nodeblock"
+                        | "nodeblocks"
                         | "nodeid"
                         | "nodeids"
+                        | "nodeplaintext"
+                        | "nodeplaintexts"
                         | "neighbor"
                         | "neighbors"
                         | "neighborid"
@@ -530,16 +560,30 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "pointtokens"
                         | "fetchtoken"
                         | "fetchtokens"
+                        | "payloadbytes"
                         | "payloadfetchtoken"
                         | "payloadfetchtokens"
                         | "payloadoramleaf"
                         | "payloadoramleaves"
+                        | "payloadplaintext"
+                        | "payloadplaintexts"
+                        | "plaintextblock"
+                        | "plaintextblocks"
+                        | "plaintextbucket"
+                        | "plaintextbuckets"
+                        | "plaintextpayload"
+                        | "plaintextpayloads"
+                        | "plaintextvector"
+                        | "plaintextvectors"
                         | "roothash"
                         | "roothashes"
                         | "oldroothash"
                         | "oldroothashes"
                         | "newroothash"
                         | "newroothashes"
+                        | "vectorbytes"
+                        | "vectorplaintext"
+                        | "vectorplaintexts"
                         | "visitednode"
                         | "visitednodes"
                         | "visitednodeid"
@@ -1142,6 +1186,22 @@ mod tests {
         });
         for (key, field_value) in [
             (
+                "bucket_plaintext",
+                json!("qdrant-sec-private-oram-bucket-plaintext-log-sentinel"),
+            ),
+            (
+                "bucketPlaintext",
+                json!("qdrant-sec-private-oram-camel-bucket-plaintext-log-sentinel"),
+            ),
+            (
+                "plaintext_bucket",
+                json!("qdrant-sec-private-oram-plaintext-bucket-log-sentinel"),
+            ),
+            (
+                "plaintextBucket",
+                json!("qdrant-sec-private-oram-camel-plaintext-bucket-log-sentinel"),
+            ),
+            (
                 "bucket_sequence",
                 json!(["qdrant-sec-private-oram-bucket-sequence-log-sentinel"]),
             ),
@@ -1172,6 +1232,66 @@ mod tests {
                 key,
                 field_value,
             );
+        }
+        for (key, field_value) in [
+            (
+                "node_block",
+                json!("qdrant-sec-private-hnsw-node-block-log-sentinel"),
+            ),
+            (
+                "nodeBlock",
+                json!("qdrant-sec-private-hnsw-camel-node-block-log-sentinel"),
+            ),
+            (
+                "node_plaintext",
+                json!("qdrant-sec-private-hnsw-node-plaintext-log-sentinel"),
+            ),
+            (
+                "nodePlaintext",
+                json!("qdrant-sec-private-hnsw-camel-node-plaintext-log-sentinel"),
+            ),
+            (
+                "block_plaintext",
+                json!("qdrant-sec-private-hnsw-block-plaintext-log-sentinel"),
+            ),
+            (
+                "blockPlaintext",
+                json!("qdrant-sec-private-hnsw-camel-block-plaintext-log-sentinel"),
+            ),
+            (
+                "plaintext_block",
+                json!("qdrant-sec-private-hnsw-plaintext-block-log-sentinel"),
+            ),
+            (
+                "plaintextBlock",
+                json!("qdrant-sec-private-hnsw-camel-plaintext-block-log-sentinel"),
+            ),
+            (
+                "vector_bytes",
+                json!("qdrant-sec-private-hnsw-vector-bytes-log-sentinel"),
+            ),
+            (
+                "vectorBytes",
+                json!("qdrant-sec-private-hnsw-camel-vector-bytes-log-sentinel"),
+            ),
+            (
+                "vector_plaintext",
+                json!("qdrant-sec-private-hnsw-vector-plaintext-log-sentinel"),
+            ),
+            (
+                "vectorPlaintext",
+                json!("qdrant-sec-private-hnsw-camel-vector-plaintext-log-sentinel"),
+            ),
+            (
+                "plaintext_vector",
+                json!("qdrant-sec-private-hnsw-plaintext-vector-log-sentinel"),
+            ),
+            (
+                "plaintextVector",
+                json!("qdrant-sec-private-hnsw-camel-plaintext-vector-log-sentinel"),
+            ),
+        ] {
+            insert_test_json_field(&mut private_hnsw_graph, &["private_hnsw"], key, field_value);
         }
         for (key, field_value) in [
             (
@@ -1268,6 +1388,30 @@ mod tests {
             );
         }
         for (key, field_value) in [
+            (
+                "payload_bytes",
+                json!("qdrant-sec-private-result-payload-bytes-log-sentinel"),
+            ),
+            (
+                "payloadBytes",
+                json!("qdrant-sec-private-result-camel-payload-bytes-log-sentinel"),
+            ),
+            (
+                "payload_plaintext",
+                json!("qdrant-sec-private-result-payload-plaintext-log-sentinel"),
+            ),
+            (
+                "payloadPlaintext",
+                json!("qdrant-sec-private-result-camel-payload-plaintext-log-sentinel"),
+            ),
+            (
+                "plaintext_payload",
+                json!("qdrant-sec-private-result-plaintext-payload-log-sentinel"),
+            ),
+            (
+                "plaintextPayload",
+                json!("qdrant-sec-private-result-camel-plaintext-payload-log-sentinel"),
+            ),
             (
                 "token_position_map_snapshot",
                 json!("qdrant-sec-private-result-token-position-map-snapshot-log-sentinel"),
@@ -1404,6 +1548,10 @@ mod tests {
             "qdrant-sec-private-oram-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-bucket-id-log-sentinel",
             "qdrant-sec-private-oram-camel-single-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-bucket-plaintext-log-sentinel",
+            "qdrant-sec-private-oram-camel-bucket-plaintext-log-sentinel",
+            "qdrant-sec-private-oram-plaintext-bucket-log-sentinel",
+            "qdrant-sec-private-oram-camel-plaintext-bucket-log-sentinel",
             "qdrant-sec-private-oram-bucket-sequence-log-sentinel",
             "qdrant-sec-private-oram-camel-bucket-sequence-log-sentinel",
             "qdrant-sec-private-oram-single-read-bucket-log-sentinel",
@@ -1463,6 +1611,20 @@ mod tests {
             "qdrant-sec-private-hnsw-node-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-single-node-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-node-id-log-sentinel",
+            "qdrant-sec-private-hnsw-node-block-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-node-block-log-sentinel",
+            "qdrant-sec-private-hnsw-node-plaintext-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-node-plaintext-log-sentinel",
+            "qdrant-sec-private-hnsw-block-plaintext-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-block-plaintext-log-sentinel",
+            "qdrant-sec-private-hnsw-plaintext-block-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-plaintext-block-log-sentinel",
+            "qdrant-sec-private-hnsw-vector-bytes-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-vector-bytes-log-sentinel",
+            "qdrant-sec-private-hnsw-vector-plaintext-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-vector-plaintext-log-sentinel",
+            "qdrant-sec-private-hnsw-plaintext-vector-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-plaintext-vector-log-sentinel",
             "qdrant-sec-private-hnsw-entry-node-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-entry-node-id-log-sentinel",
             "qdrant-sec-private-hnsw-level-mask-log-sentinel",
@@ -1544,6 +1706,12 @@ mod tests {
             "qdrant-sec-private-result-camel-proof-sibling-hash-log-sentinel",
             "qdrant-sec-private-result-payload-token-log-sentinel",
             "qdrant-sec-private-result-camel-payload-token-log-sentinel",
+            "qdrant-sec-private-result-payload-bytes-log-sentinel",
+            "qdrant-sec-private-result-camel-payload-bytes-log-sentinel",
+            "qdrant-sec-private-result-payload-plaintext-log-sentinel",
+            "qdrant-sec-private-result-camel-payload-plaintext-log-sentinel",
+            "qdrant-sec-private-result-plaintext-payload-log-sentinel",
+            "qdrant-sec-private-result-camel-plaintext-payload-log-sentinel",
             "qdrant-sec-private-result-fetch-token-log-sentinel",
             "qdrant-sec-private-result-camel-fetch-token-log-sentinel",
             "qdrant-sec-private-result-token-position-map-log-sentinel",
