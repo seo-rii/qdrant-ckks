@@ -7,9 +7,12 @@ use common::budget::ResourceBudget;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     DistanceKind, FixedBudgetParams, OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
-    PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, PrivateHnswOramManifest,
-    PrivateHnswOramSignature, PrivateHnswParams, PrivateResultOramManifest,
+    PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, PrivateHnswBucketAeadBaseContext,
+    PrivateHnswOramBucket, PrivateHnswOramManifest, PrivateHnswOramSignature, PrivateHnswParams,
+    PrivateResultOramBucket, PrivateResultOramBucketCommitmentContext, PrivateResultOramManifest,
     PrivateResultOramSignature, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+    private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
+    private_result_oram_bucket_ciphertext_bytes, private_result_oram_bucket_commitment,
 };
 use segment::types::Distance;
 use sha2::{Digest, Sha256};
@@ -674,6 +677,385 @@ async fn test_snapshot_private_hnsw_missing_bucket_fails_before_archive() {
     assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
     assert!(!err.contains("00000000.bucket"));
     assert!(!err.contains(&manifest.root_hash));
+}
+
+fn snapshot_private_hnsw_bucket(
+    manifest: &PrivateHnswOramManifest,
+    bucket_id: u64,
+) -> PrivateHnswOramBucket {
+    let ciphertext_bytes = vec![
+        0x40u8.wrapping_add(bucket_id as u8);
+        private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap()
+    ];
+    let ciphertext = BASE64URL_NOPAD.encode(&ciphertext_bytes);
+    let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext_bytes).as_ref());
+    let bucket_commitment = private_hnsw_bucket_commitment(
+        PrivateHnswBucketAeadBaseContext {
+            collection_id: &manifest.collection_id,
+            vector_name: &manifest.vector_name,
+            key_id: &manifest.key_id,
+            rk_id: &manifest.rk_id,
+            rk_epoch: manifest.rk_epoch,
+        }
+        .for_bucket(bucket_id, manifest.index_epoch),
+        &ciphertext_sha256,
+    )
+    .unwrap();
+
+    PrivateHnswOramBucket {
+        version: 1,
+        bucket_id,
+        index_epoch: manifest.index_epoch,
+        ciphertext,
+        ciphertext_sha256,
+        bucket_commitment,
+    }
+}
+
+fn snapshot_private_hnsw_leaf_commitments(manifest: &PrivateHnswOramManifest) -> Vec<String> {
+    (0..manifest.bucket_count)
+        .map(|bucket_id| snapshot_private_hnsw_bucket(manifest, bucket_id).bucket_commitment)
+        .collect()
+}
+
+fn snapshot_private_hnsw_manifest(
+    collection_id: String,
+    vector_name: String,
+    key_id: String,
+) -> PrivateHnswOramManifest {
+    let mut manifest = PrivateHnswOramManifest {
+        version: 1,
+        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+        binding: PRIVATE_HNSW_ORAM_BINDING.to_string(),
+        collection_id,
+        vector_name,
+        key_id: key_id.clone(),
+        rk_id: key_id,
+        rk_epoch: 7,
+        dim: 2,
+        distance: DistanceKind::Euclid,
+        hnsw: PrivateHnswParams {
+            m: 2,
+            ef_construction: 4,
+            max_layers: 2,
+            fixed_neighbor_slots: 4,
+        },
+        oram: OramParams {
+            kind: OramKind::PathOram,
+            bucket_size: 2,
+            block_size_bytes: 512,
+            tree_height: 1,
+            path_batch_size: 1,
+        },
+        fixed_budget: FixedBudgetParams {
+            enabled: true,
+            upper_layer_steps: 1,
+            base_layer_steps: 1,
+            paths_per_round: 1,
+            fixed_result_k: 1,
+        },
+        index_epoch: 42,
+        root_hash: String::new(),
+        bucket_count: 3,
+        logical_node_count: 1,
+        dummy_node_count: 2,
+        result_privacy: ResultPrivacyMode::PrivatePayloadOramRequired,
+        owner_signing_key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+        created_at_unix: 1,
+    };
+    let leaf_commitments = snapshot_private_hnsw_leaf_commitments(&manifest);
+    manifest.root_hash =
+        PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+    manifest
+}
+
+fn write_snapshot_private_hnsw_store(
+    collection_dir: &std::path::Path,
+    manifest: &PrivateHnswOramManifest,
+) {
+    let store = PrivateHnswOramStore::new(collection_dir, &manifest.vector_name).unwrap();
+    let signature = PrivateHnswOramSignature {
+        alg: "ed25519".to_string(),
+        key_id: manifest.owner_signing_key_id.clone(),
+        sig: BASE64URL_NOPAD.encode(&[7; 64]),
+    };
+    store.write_manifest(manifest, &signature).unwrap();
+    store
+        .write_initial_epoch(&PrivateHnswOramEpochState {
+            index_epoch: manifest.index_epoch,
+            root_hash: manifest.root_hash.clone(),
+        })
+        .unwrap();
+
+    let leaf_commitments = snapshot_private_hnsw_leaf_commitments(manifest);
+    let expected_ciphertext_bytes =
+        private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap();
+    for bucket_id in 0..manifest.bucket_count {
+        let bucket = snapshot_private_hnsw_bucket(manifest, bucket_id);
+        store
+            .write_bucket(
+                &bucket,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                expected_ciphertext_bytes,
+            )
+            .unwrap();
+    }
+    store
+        .write_merkle_tree_from_commitments(
+            manifest.index_epoch,
+            manifest.root_hash.clone(),
+            leaf_commitments,
+        )
+        .unwrap();
+}
+
+fn snapshot_private_result_bucket(
+    manifest: &PrivateResultOramManifest,
+    bucket_id: u64,
+) -> PrivateResultOramBucket {
+    let ciphertext_bytes = vec![
+        0x60u8.wrapping_add(bucket_id as u8);
+        private_result_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap()
+    ];
+    let ciphertext = BASE64URL_NOPAD.encode(&ciphertext_bytes);
+    let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext_bytes).as_ref());
+    let bucket_commitment = private_result_oram_bucket_commitment(
+        PrivateResultOramBucketCommitmentContext {
+            collection_id: &manifest.collection_id,
+            key_id: &manifest.key_id,
+            rk_id: &manifest.rk_id,
+            rk_epoch: manifest.rk_epoch,
+            bucket_id,
+            index_epoch: manifest.index_epoch,
+        },
+        &ciphertext_sha256,
+    )
+    .unwrap();
+
+    PrivateResultOramBucket {
+        version: 1,
+        bucket_id,
+        index_epoch: manifest.index_epoch,
+        ciphertext,
+        ciphertext_sha256,
+        bucket_commitment,
+    }
+}
+
+fn snapshot_private_result_leaf_commitments(manifest: &PrivateResultOramManifest) -> Vec<String> {
+    (0..manifest.bucket_count)
+        .map(|bucket_id| snapshot_private_result_bucket(manifest, bucket_id).bucket_commitment)
+        .collect()
+}
+
+fn snapshot_private_result_manifest(
+    collection_id: String,
+    key_id: String,
+) -> PrivateResultOramManifest {
+    let mut manifest = PrivateResultOramManifest {
+        version: 1,
+        provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+        binding: PRIVATE_RESULT_ORAM_BINDING.to_string(),
+        collection_id,
+        key_id: key_id.clone(),
+        rk_id: key_id,
+        rk_epoch: 7,
+        oram: OramParams {
+            kind: OramKind::PathOram,
+            bucket_size: 2,
+            block_size_bytes: 128,
+            tree_height: 1,
+            path_batch_size: 1,
+        },
+        index_epoch: 42,
+        root_hash: String::new(),
+        bucket_count: 3,
+        logical_result_count: 1,
+        dummy_result_count: 2,
+        owner_signing_key_id: "tenant-a/private-result-signing-v1".to_string(),
+        created_at_unix: 1,
+    };
+    let leaf_commitments = snapshot_private_result_leaf_commitments(&manifest);
+    manifest.root_hash =
+        PrivateResultOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+    manifest
+}
+
+fn write_snapshot_private_result_store(
+    collection_dir: &std::path::Path,
+    manifest: &PrivateResultOramManifest,
+) {
+    let store = PrivateResultOramStore::new(collection_dir);
+    let signature = PrivateResultOramSignature {
+        alg: "ed25519".to_string(),
+        key_id: manifest.owner_signing_key_id.clone(),
+        sig: BASE64URL_NOPAD.encode(&[9; 64]),
+    };
+    store.write_manifest(manifest, &signature).unwrap();
+    store
+        .write_initial_epoch(&PrivateResultOramEpochState {
+            index_epoch: manifest.index_epoch,
+            root_hash: manifest.root_hash.clone(),
+        })
+        .unwrap();
+
+    let leaf_commitments = snapshot_private_result_leaf_commitments(manifest);
+    let expected_ciphertext_bytes =
+        private_result_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap();
+    for bucket_id in 0..manifest.bucket_count {
+        let bucket = snapshot_private_result_bucket(manifest, bucket_id);
+        store
+            .write_bucket(
+                &bucket,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                expected_ciphertext_bytes,
+            )
+            .unwrap();
+    }
+    store
+        .write_merkle_tree_from_commitments(
+            manifest.index_epoch,
+            manifest.root_hash.clone(),
+            leaf_commitments,
+        )
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_snapshot_private_oram_store_files_are_archived() {
+    init_logger();
+
+    let collection_uuid = Uuid::from_u128(71);
+    let vector_name = "text".to_string();
+    let key_id = "tenant-a/private-oram-rk".to_string();
+    let config = CollectionConfigInternal {
+        params: CollectionParams {
+            vectors: VectorsConfig::Multi(BTreeMap::from([(
+                vector_name.clone(),
+                VectorParamsBuilder::new(2, Distance::Euclid).build(),
+            )])),
+            shard_number: NonZeroU32::new(1).unwrap(),
+            replication_factor: NonZeroU32::new(1).unwrap(),
+            write_consistency_factor: NonZeroU32::new(1).unwrap(),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some(key_id.clone()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "body_private_result_oram".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "docs_private_result_oram_v1".to_string(),
+                        binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "text_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec![vector_name.clone()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        },
+        optimizer_config: TEST_OPTIMIZERS_CONFIG.clone(),
+        wal_config: WalConfig {
+            wal_capacity_mb: 1,
+            wal_segments_ahead: 0,
+            wal_retain_closed: 1,
+        },
+        hnsw_config: Default::default(),
+        quantization_config: Default::default(),
+        strict_mode_config: Default::default(),
+        uuid: Some(collection_uuid),
+        metadata: None,
+    };
+    let snapshots_path = Builder::new()
+        .prefix("test_private_oram_archive_snapshots")
+        .tempdir()
+        .unwrap();
+    let collection_dir = Builder::new()
+        .prefix("test_private_oram_archive_collection")
+        .tempdir()
+        .unwrap();
+    let mut shards = AHashMap::new();
+    shards.insert(0, HashSet::from([1]));
+    let collection = Collection::new(
+        "test_private_oram_archive".to_string(),
+        1,
+        collection_dir.path(),
+        snapshots_path.path(),
+        &config,
+        Arc::new(SharedStorageConfig::default()),
+        CollectionShardDistribution { shards },
+        None,
+        ChannelService::default(),
+        dummy_on_replica_failure(),
+        dummy_request_shard_transfer(),
+        dummy_abort_shard_transfer(),
+        None,
+        None,
+        ResourceBudget::default(),
+        None,
+    )
+    .await
+    .unwrap();
+
+    let result_manifest =
+        snapshot_private_result_manifest(collection_uuid.to_string(), key_id.clone());
+    write_snapshot_private_result_store(collection_dir.path(), &result_manifest);
+    let hnsw_manifest =
+        snapshot_private_hnsw_manifest(collection_uuid.to_string(), vector_name.clone(), key_id);
+    write_snapshot_private_hnsw_store(collection_dir.path(), &hnsw_manifest);
+
+    let snapshots_temp_dir = Builder::new().prefix("temp_dir").tempdir().unwrap();
+    let snapshot_description = collection
+        .create_snapshot(snapshots_temp_dir.path(), 0)
+        .await
+        .unwrap();
+    let snapshot_path = snapshots_path.path().join(&snapshot_description.name);
+    let snapshot_file = std::fs::File::open(snapshot_path).unwrap();
+    let mut archive = tar::Archive::new(snapshot_file);
+    let mut archive_paths = HashSet::new();
+    for entry in archive.entries().unwrap() {
+        let entry = entry.unwrap();
+        archive_paths.insert(entry.path().unwrap().to_string_lossy().replace('\\', "/"));
+    }
+
+    let expected_paths = [
+        format!("{PRIVATE_RESULT_ORAM_DIR}/manifest.json"),
+        format!("{PRIVATE_RESULT_ORAM_DIR}/manifest.sig"),
+        format!("{PRIVATE_RESULT_ORAM_DIR}/epochs/current.json"),
+        format!("{PRIVATE_RESULT_ORAM_DIR}/buckets/00000000.bucket"),
+        format!("{PRIVATE_RESULT_ORAM_DIR}/buckets/00000002.bucket"),
+        format!("{PRIVATE_RESULT_ORAM_DIR}/merkle/nodes.dat"),
+        format!("{PRIVATE_HNSW_ORAM_DIR}/{vector_name}/manifest.json"),
+        format!("{PRIVATE_HNSW_ORAM_DIR}/{vector_name}/manifest.sig"),
+        format!("{PRIVATE_HNSW_ORAM_DIR}/{vector_name}/epochs/current.json"),
+        format!("{PRIVATE_HNSW_ORAM_DIR}/{vector_name}/buckets/00000000.bucket"),
+        format!("{PRIVATE_HNSW_ORAM_DIR}/{vector_name}/buckets/00000002.bucket"),
+        format!("{PRIVATE_HNSW_ORAM_DIR}/{vector_name}/merkle/nodes.dat"),
+    ];
+    for expected_path in expected_paths {
+        assert!(
+            archive_paths.contains(&expected_path),
+            "snapshot archive is missing {expected_path}; archived paths: {archive_paths:?}",
+        );
+    }
+    for forbidden in ["client_state", "position_map", "stash"] {
+        assert!(
+            !archive_paths.iter().any(|path| path.contains(forbidden)),
+            "snapshot archive contains client-owned private ORAM state marker {forbidden}: {archive_paths:?}",
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
