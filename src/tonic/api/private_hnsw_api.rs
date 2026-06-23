@@ -1642,12 +1642,13 @@ mod private_hnsw_grpc_tests {
                 .sig,
                 fixture.manifest_signature.sig,
             );
+            let manifest_only_client_id = "tenant-a/sdk-instance-manifest-only";
             let err = PrivateHnswOram::open_private_hnsw_session(
                 &service,
                 Request::new(grpc::OpenPrivateHnswSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
-                    client_id: "tenant-a/sdk-instance-manifest-only".to_string(),
+                    client_id: manifest_only_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                     result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
@@ -1662,6 +1663,7 @@ mod private_hnsw_grpc_tests {
             );
             assert!(!err.message().contains("private_hnsw_oram"));
             assert!(!err.message().contains("/tmp"));
+            assert!(!err.message().contains(manifest_only_client_id));
 
             std::fs::write(manifest_store.root_path().join("manifest.json"), b"{").unwrap();
             let err = PrivateHnswOram::get_private_hnsw_manifest(
@@ -2081,12 +2083,13 @@ mod private_hnsw_grpc_tests {
             assert_eq!(bucket_epoch.index_epoch, BASE_EPOCH);
 
             std::fs::write(&current_epoch_path, b"{").unwrap();
+            let corrupt_epoch_client_id = "tenant-a/sdk-instance-corrupt-epoch";
             let err = PrivateHnswOram::open_private_hnsw_session(
                 &service,
                 Request::new(grpc::OpenPrivateHnswSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
-                    client_id: "tenant-a/sdk-instance-corrupt-epoch".to_string(),
+                    client_id: corrupt_epoch_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                     result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
@@ -2098,6 +2101,7 @@ mod private_hnsw_grpc_tests {
             assert!(err.message().contains("current epoch validation failed"));
             assert!(!err.message().contains("private_hnsw_oram"));
             assert!(!err.message().contains("/tmp"));
+            assert!(!err.message().contains(corrupt_epoch_client_id));
             std::fs::write(&current_epoch_path, &current_epoch_json).unwrap();
 
             let client_id_sentinel = "session-client-id-sentinel";
