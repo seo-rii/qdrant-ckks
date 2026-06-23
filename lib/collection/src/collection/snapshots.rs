@@ -2561,6 +2561,8 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("private result ORAM file"), "{rendered}");
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR), "{rendered}");
+        assert!(!rendered.contains("buckets"), "{rendered}");
         assert!(
             !rendered.contains(&format!("{missing_bucket_id:08}.bucket")),
             "{rendered}"
@@ -2603,6 +2605,7 @@ mod tests {
         .unwrap();
         write_private_result_snapshot_fixture(snapshot_dir.path(), &manifest);
         fs::remove_file(private_result_snapshot_bucket_path(snapshot_dir.path(), 0)).unwrap();
+        let snapshot_path = snapshot_dir.path().to_string_lossy().into_owned();
 
         let err = Collection::restore_snapshot(
             SnapshotData::Unpacked(snapshot_dir),
@@ -2614,8 +2617,10 @@ mod tests {
         .to_string();
 
         assert!(err.contains("private result ORAM file not found"), "{err}");
+        assert!(!err.contains(&snapshot_path), "{err}");
         assert!(!err.contains(target_dir.path().to_string_lossy().as_ref()));
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("buckets"));
         assert!(!err.contains("00000000.bucket"));
         assert!(!err.contains(&manifest.root_hash));
     }
