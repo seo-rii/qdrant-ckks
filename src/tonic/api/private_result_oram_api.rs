@@ -2324,6 +2324,22 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(&updated_bucket.ciphertext)
             );
+            assert!(!commit_wrong_old_root_err.message().contains(&new_root_hash));
+            assert!(
+                !commit_wrong_old_root_err
+                    .message()
+                    .contains(&session.session_id)
+            );
+            assert!(
+                !commit_wrong_old_root_err
+                    .message()
+                    .contains(&commit_signature.key_id)
+            );
+            assert!(
+                !commit_wrong_old_root_err
+                    .message()
+                    .contains(&commit_signature.sig)
+            );
 
             let commit_old_root_sentinel = "AAAA";
             let malformed_commit_old_root_err =
@@ -2352,6 +2368,31 @@ mod private_result_oram_grpc_tests {
                 !malformed_commit_old_root_err
                     .message()
                     .contains(commit_old_root_sentinel)
+            );
+            assert!(
+                !malformed_commit_old_root_err
+                    .message()
+                    .contains(&new_root_hash)
+            );
+            assert!(
+                !malformed_commit_old_root_err
+                    .message()
+                    .contains(&session.session_id)
+            );
+            assert!(
+                !malformed_commit_old_root_err
+                    .message()
+                    .contains(&commit_signature.key_id)
+            );
+            assert!(
+                !malformed_commit_old_root_err
+                    .message()
+                    .contains(&commit_signature.sig)
+            );
+            assert!(
+                !malformed_commit_old_root_err
+                    .message()
+                    .contains(&updated_bucket.ciphertext)
             );
 
             let commit_wrong_new_root = BASE64URL_NOPAD.encode(&[11; 32]);
@@ -2386,6 +2427,26 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(&commit_signature.sig)
             );
+            assert!(
+                !commit_wrong_new_root_err
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !commit_wrong_new_root_err
+                    .message()
+                    .contains(&session.session_id)
+            );
+            assert!(
+                !commit_wrong_new_root_err
+                    .message()
+                    .contains(&commit_signature.key_id)
+            );
+            assert!(
+                !commit_wrong_new_root_err
+                    .message()
+                    .contains(&updated_bucket.ciphertext)
+            );
 
             let commit_new_root_sentinel = "AAAA";
             let malformed_commit_new_root_err =
@@ -2414,6 +2475,31 @@ mod private_result_oram_grpc_tests {
                 !malformed_commit_new_root_err
                     .message()
                     .contains(commit_new_root_sentinel)
+            );
+            assert!(
+                !malformed_commit_new_root_err
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !malformed_commit_new_root_err
+                    .message()
+                    .contains(&session.session_id)
+            );
+            assert!(
+                !malformed_commit_new_root_err
+                    .message()
+                    .contains(&commit_signature.key_id)
+            );
+            assert!(
+                !malformed_commit_new_root_err
+                    .message()
+                    .contains(&commit_signature.sig)
+            );
+            assert!(
+                !malformed_commit_new_root_err
+                    .message()
+                    .contains(&updated_bucket.ciphertext)
             );
 
             let empty_commit = PrivateResultOram::commit_private_result_oram_buckets(

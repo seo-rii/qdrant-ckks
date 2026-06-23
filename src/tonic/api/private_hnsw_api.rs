@@ -3386,6 +3386,7 @@ mod private_hnsw_grpc_tests {
             }
 
             let commit_wrong_old_root = BASE64URL_NOPAD.encode(&[9; 32]);
+            let commit_wrong_old_root_signature = fixture.client_signature();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -3402,7 +3403,9 @@ mod private_hnsw_grpc_tests {
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(fixture.client_signature())),
+                    commit_signature: Some(signature_to_proto(
+                        commit_wrong_old_root_signature.clone(),
+                    )),
                 }),
             )
             .await
@@ -3417,8 +3420,23 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(!err.message().contains(&session.session_id));
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.new_root_hash)
+            );
+            assert!(
+                !err.message()
+                    .contains(&commit_wrong_old_root_signature.key_id)
+            );
+            assert!(!err.message().contains(&commit_wrong_old_root_signature.sig));
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext)
+            );
 
             let commit_old_root_sentinel = "AAAA";
+            let commit_old_root_shape_signature = fixture.client_signature();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -3435,7 +3453,9 @@ mod private_hnsw_grpc_tests {
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(fixture.client_signature())),
+                    commit_signature: Some(signature_to_proto(
+                        commit_old_root_shape_signature.clone(),
+                    )),
                 }),
             )
             .await
@@ -3446,6 +3466,20 @@ mod private_hnsw_grpc_tests {
                 !err.message().contains(commit_old_root_sentinel),
                 "{}",
                 err.message()
+            );
+            assert!(!err.message().contains(&session.session_id));
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.new_root_hash)
+            );
+            assert!(
+                !err.message()
+                    .contains(&commit_old_root_shape_signature.key_id)
+            );
+            assert!(!err.message().contains(&commit_old_root_shape_signature.sig));
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext)
             );
             assert!(
                 !err.message()
@@ -3483,6 +3517,7 @@ mod private_hnsw_grpc_tests {
 
             let commit_new_root_sentinel = "AAAA";
             let commit_wrong_new_root = BASE64URL_NOPAD.encode(&[17; 32]);
+            let commit_wrong_new_root_signature = fixture.client_signature();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -3499,7 +3534,9 @@ mod private_hnsw_grpc_tests {
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(fixture.client_signature())),
+                    commit_signature: Some(signature_to_proto(
+                        commit_wrong_new_root_signature.clone(),
+                    )),
                 }),
             )
             .await
@@ -3512,7 +3549,22 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(!err.message().contains(&session.session_id));
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.old_root_hash)
+            );
+            assert!(
+                !err.message()
+                    .contains(&commit_wrong_new_root_signature.key_id)
+            );
+            assert!(!err.message().contains(&commit_wrong_new_root_signature.sig));
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext)
+            );
 
+            let commit_new_root_shape_signature = fixture.client_signature();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -3529,7 +3581,9 @@ mod private_hnsw_grpc_tests {
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(fixture.client_signature())),
+                    commit_signature: Some(signature_to_proto(
+                        commit_new_root_shape_signature.clone(),
+                    )),
                 }),
             )
             .await
@@ -3540,6 +3594,20 @@ mod private_hnsw_grpc_tests {
                 !err.message().contains(commit_new_root_sentinel),
                 "{}",
                 err.message()
+            );
+            assert!(!err.message().contains(&session.session_id));
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.old_root_hash)
+            );
+            assert!(
+                !err.message()
+                    .contains(&commit_new_root_shape_signature.key_id)
+            );
+            assert!(!err.message().contains(&commit_new_root_shape_signature.sig));
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext)
             );
 
             let err = PrivateHnswOram::commit_private_hnsw_paths(

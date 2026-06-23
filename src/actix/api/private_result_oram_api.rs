@@ -2105,6 +2105,10 @@ mod private_result_oram_rest_tests {
             );
             assert!(!commit_wrong_old_root_error.contains(&commit_wrong_old_root));
             assert!(!commit_wrong_old_root_error.contains(&updated_bucket.ciphertext));
+            assert!(!commit_wrong_old_root_error.contains(&new_root_hash));
+            assert!(!commit_wrong_old_root_error.contains(&session_id));
+            assert!(!commit_wrong_old_root_error.contains(&commit_signature.key_id));
+            assert!(!commit_wrong_old_root_error.contains(&commit_signature.sig));
 
             let commit_old_root_sentinel = "AAAA";
             let malformed_commit_old_root_error = post_json_error_contains!(
@@ -2122,6 +2126,11 @@ mod private_result_oram_rest_tests {
                 "old_root_hash must be a base64url sha256 value"
             );
             assert!(!malformed_commit_old_root_error.contains(commit_old_root_sentinel));
+            assert!(!malformed_commit_old_root_error.contains(&new_root_hash));
+            assert!(!malformed_commit_old_root_error.contains(&session_id));
+            assert!(!malformed_commit_old_root_error.contains(&commit_signature.key_id));
+            assert!(!malformed_commit_old_root_error.contains(&commit_signature.sig));
+            assert!(!malformed_commit_old_root_error.contains(&updated_bucket.ciphertext));
 
             let commit_wrong_new_root = BASE64URL_NOPAD.encode(&[11; 32]);
             let commit_wrong_new_root_error = post_json_error_contains!(
@@ -2140,6 +2149,10 @@ mod private_result_oram_rest_tests {
             );
             assert!(!commit_wrong_new_root_error.contains(&commit_wrong_new_root));
             assert!(!commit_wrong_new_root_error.contains(&commit_signature.sig));
+            assert!(!commit_wrong_new_root_error.contains(&fixture.manifest.root_hash));
+            assert!(!commit_wrong_new_root_error.contains(&session_id));
+            assert!(!commit_wrong_new_root_error.contains(&commit_signature.key_id));
+            assert!(!commit_wrong_new_root_error.contains(&updated_bucket.ciphertext));
 
             let commit_new_root_sentinel = "AAAA";
             let malformed_commit_new_root_error = post_json_error_contains!(
@@ -2157,6 +2170,11 @@ mod private_result_oram_rest_tests {
                 "new_root_hash must be a base64url sha256 value"
             );
             assert!(!malformed_commit_new_root_error.contains(commit_new_root_sentinel));
+            assert!(!malformed_commit_new_root_error.contains(&fixture.manifest.root_hash));
+            assert!(!malformed_commit_new_root_error.contains(&session_id));
+            assert!(!malformed_commit_new_root_error.contains(&commit_signature.key_id));
+            assert!(!malformed_commit_new_root_error.contains(&commit_signature.sig));
+            assert!(!malformed_commit_new_root_error.contains(&updated_bucket.ciphertext));
 
             let empty_commit_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",

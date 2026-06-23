@@ -3110,6 +3110,7 @@ mod private_hnsw_rest_tests {
             }
 
             let commit_wrong_old_root = data_encoding::BASE64URL_NOPAD.encode(&[9; 32]);
+            let commit_wrong_old_root_signature = fixture.client_signature();
             let commit_old_root_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -3120,9 +3121,9 @@ mod private_hnsw_rest_tests {
                     new_root_hash: search_run.commit_plan.new_root_hash.clone(),
                     updated_buckets: search_run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
-                        alg: "ed25519".to_string(),
-                        key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        alg: commit_wrong_old_root_signature.alg.clone(),
+                        key_id: commit_wrong_old_root_signature.key_id.clone(),
+                        sig: commit_wrong_old_root_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -3132,8 +3133,26 @@ mod private_hnsw_rest_tests {
                 !commit_old_root_error.contains(&commit_wrong_old_root),
                 "{commit_old_root_error}"
             );
+            assert!(!commit_old_root_error.contains(&session_id));
+            assert!(
+                !commit_old_root_error.contains(&search_run.commit_plan.new_root_hash),
+                "{commit_old_root_error}"
+            );
+            assert!(
+                !commit_old_root_error.contains(&commit_wrong_old_root_signature.key_id),
+                "{commit_old_root_error}"
+            );
+            assert!(
+                !commit_old_root_error.contains(&commit_wrong_old_root_signature.sig),
+                "{commit_old_root_error}"
+            );
+            assert!(
+                !commit_old_root_error.contains(&search_run.updated_buckets[0].ciphertext),
+                "{commit_old_root_error}"
+            );
 
             let commit_old_root_sentinel = "AAAA";
+            let commit_old_root_shape_signature = fixture.client_signature();
             let commit_old_root_shape_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -3144,9 +3163,9 @@ mod private_hnsw_rest_tests {
                     new_root_hash: search_run.commit_plan.new_root_hash.clone(),
                     updated_buckets: search_run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
-                        alg: "ed25519".to_string(),
-                        key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        alg: commit_old_root_shape_signature.alg.clone(),
+                        key_id: commit_old_root_shape_signature.key_id.clone(),
+                        sig: commit_old_root_shape_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -3159,6 +3178,23 @@ mod private_hnsw_rest_tests {
             assert!(
                 !commit_old_root_shape_error
                     .contains("commit old epoch/root does not match active session"),
+                "{commit_old_root_shape_error}"
+            );
+            assert!(!commit_old_root_shape_error.contains(&session_id));
+            assert!(
+                !commit_old_root_shape_error.contains(&search_run.commit_plan.new_root_hash),
+                "{commit_old_root_shape_error}"
+            );
+            assert!(
+                !commit_old_root_shape_error.contains(&commit_old_root_shape_signature.key_id),
+                "{commit_old_root_shape_error}"
+            );
+            assert!(
+                !commit_old_root_shape_error.contains(&commit_old_root_shape_signature.sig),
+                "{commit_old_root_shape_error}"
+            );
+            assert!(
+                !commit_old_root_shape_error.contains(&search_run.updated_buckets[0].ciphertext),
                 "{commit_old_root_shape_error}"
             );
 
@@ -3182,6 +3218,7 @@ mod private_hnsw_rest_tests {
             );
             let commit_new_root_sentinel = "AAAA";
             let commit_wrong_new_root = data_encoding::BASE64URL_NOPAD.encode(&[17; 32]);
+            let commit_wrong_new_root_signature = fixture.client_signature();
             let commit_new_root_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -3192,9 +3229,9 @@ mod private_hnsw_rest_tests {
                     new_root_hash: commit_wrong_new_root.clone(),
                     updated_buckets: search_run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
-                        alg: "ed25519".to_string(),
-                        key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        alg: commit_wrong_new_root_signature.alg.clone(),
+                        key_id: commit_wrong_new_root_signature.key_id.clone(),
+                        sig: commit_wrong_new_root_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -3205,7 +3242,25 @@ mod private_hnsw_rest_tests {
                 !commit_new_root_error.contains(&commit_wrong_new_root),
                 "{commit_new_root_error}"
             );
+            assert!(!commit_new_root_error.contains(&session_id));
+            assert!(
+                !commit_new_root_error.contains(&search_run.commit_plan.old_root_hash),
+                "{commit_new_root_error}"
+            );
+            assert!(
+                !commit_new_root_error.contains(&commit_wrong_new_root_signature.key_id),
+                "{commit_new_root_error}"
+            );
+            assert!(
+                !commit_new_root_error.contains(&commit_wrong_new_root_signature.sig),
+                "{commit_new_root_error}"
+            );
+            assert!(
+                !commit_new_root_error.contains(&search_run.updated_buckets[0].ciphertext),
+                "{commit_new_root_error}"
+            );
 
+            let commit_new_root_shape_signature = fixture.client_signature();
             let commit_new_root_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -3216,9 +3271,9 @@ mod private_hnsw_rest_tests {
                     new_root_hash: commit_new_root_sentinel.to_string(),
                     updated_buckets: search_run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
-                        alg: "ed25519".to_string(),
-                        key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        alg: commit_new_root_shape_signature.alg.clone(),
+                        key_id: commit_new_root_shape_signature.key_id.clone(),
+                        sig: commit_new_root_shape_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -3226,6 +3281,23 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !commit_new_root_error.contains(commit_new_root_sentinel),
+                "{commit_new_root_error}"
+            );
+            assert!(!commit_new_root_error.contains(&session_id));
+            assert!(
+                !commit_new_root_error.contains(&search_run.commit_plan.old_root_hash),
+                "{commit_new_root_error}"
+            );
+            assert!(
+                !commit_new_root_error.contains(&commit_new_root_shape_signature.key_id),
+                "{commit_new_root_error}"
+            );
+            assert!(
+                !commit_new_root_error.contains(&commit_new_root_shape_signature.sig),
+                "{commit_new_root_error}"
+            );
+            assert!(
+                !commit_new_root_error.contains(&search_run.updated_buckets[0].ciphertext),
                 "{commit_new_root_error}"
             );
             post_json_error_contains!(
