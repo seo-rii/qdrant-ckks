@@ -2622,6 +2622,30 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn session_registry_rejects_full_registry_without_reflecting_values() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        for index in 0..MAX_SESSION_COUNT {
+            let mut session = fixture_session(&format!("capacity-session-{index}"), 20);
+            session.collection_id = format!("capacity-collection-{index}");
+            session.manifest.collection_id = session.collection_id.clone();
+            registry.open(session, now).unwrap();
+        }
+
+        let mut overflow = fixture_session("capacity-overflow-session-sentinel", 20);
+        overflow.collection_id = "capacity-overflow-collection-sentinel".to_string();
+        overflow.manifest.collection_id = overflow.collection_id.clone();
+        let rendered = registry.open(overflow, now).unwrap_err().to_string();
+        assert!(rendered.contains("session registry is full"));
+        for sentinel in [
+            "capacity-overflow-session-sentinel",
+            "capacity-overflow-collection-sentinel",
+        ] {
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
+    }
+
+    #[test]
     fn session_registry_keeps_writer_lock_after_failed_action() {
         let now = 10;
         let mut registry = PrivateResultOramSessionRegistry::default();

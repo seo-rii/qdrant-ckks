@@ -4234,6 +4234,35 @@ mod private_hnsw_tests {
     }
 
     #[test]
+    fn session_registry_rejects_full_registry_without_reflecting_values() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        for index in 0..MAX_SESSION_COUNT {
+            let mut session = fixture_session(&format!("capacity-session-{index}"), 20);
+            session.collection_id = format!("capacity-collection-{index}");
+            session.manifest.collection_id = session.collection_id.clone();
+            session.vector_name = format!("capacity-vector-{index}");
+            session.manifest.vector_name = session.vector_name.clone();
+            registry.open(session, now).unwrap();
+        }
+
+        let mut overflow = fixture_session("capacity-overflow-session-sentinel", 20);
+        overflow.collection_id = "capacity-overflow-collection-sentinel".to_string();
+        overflow.manifest.collection_id = overflow.collection_id.clone();
+        overflow.vector_name = "capacity-overflow-vector-sentinel".to_string();
+        overflow.manifest.vector_name = overflow.vector_name.clone();
+        let rendered = registry.open(overflow, now).unwrap_err().to_string();
+        assert!(rendered.contains("session registry is full"));
+        for sentinel in [
+            "capacity-overflow-session-sentinel",
+            "capacity-overflow-collection-sentinel",
+            "capacity-overflow-vector-sentinel",
+        ] {
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
+    }
+
+    #[test]
     fn session_registry_keeps_writer_lock_after_failed_action() {
         let now = 10;
         let mut registry = PrivateHnswSessionRegistry::default();
