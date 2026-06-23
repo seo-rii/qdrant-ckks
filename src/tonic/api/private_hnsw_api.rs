@@ -1219,10 +1219,24 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("/tmp"));
             std::fs::remove_file(manifest_store.root_path()).unwrap();
 
+            macro_rules! assert_manifest_mismatch_error_redacts {
+                ($message:expr, $signature_sig:expr) => {{
+                    assert!(
+                        !$message.contains(&fixture.encrypted_build.root_hash),
+                        "{}",
+                        $message
+                    );
+                    assert!(!$message.contains($signature_sig), "{}", $message);
+                    assert!(!$message.contains("private_hnsw_oram"), "{}", $message);
+                }};
+            }
+
             let mut mismatched_collection_manifest = fixture.manifest.clone();
-            mismatched_collection_manifest.collection_id = "other-collection".to_string();
+            let mismatched_collection_id = "other-collection";
+            mismatched_collection_manifest.collection_id = mismatched_collection_id.to_string();
             let mismatched_collection_signature =
                 fixture.sign_manifest(&mismatched_collection_manifest);
+            let mismatched_collection_signature_sig = mismatched_collection_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -1236,10 +1250,17 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("request validation failed"));
+            assert_manifest_mismatch_error_redacts!(
+                err.message(),
+                &mismatched_collection_signature_sig
+            );
+            assert!(!err.message().contains(mismatched_collection_id));
 
             let mut mismatched_vector_manifest = fixture.manifest.clone();
-            mismatched_vector_manifest.vector_name = "title".to_string();
+            let mismatched_vector_name = "title";
+            mismatched_vector_manifest.vector_name = mismatched_vector_name.to_string();
             let mismatched_vector_signature = fixture.sign_manifest(&mismatched_vector_manifest);
+            let mismatched_vector_signature_sig = mismatched_vector_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -1253,10 +1274,17 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("request validation failed"));
+            assert_manifest_mismatch_error_redacts!(
+                err.message(),
+                &mismatched_vector_signature_sig
+            );
+            assert!(!err.message().contains(mismatched_vector_name));
 
             let mut mismatched_key_manifest = fixture.manifest.clone();
-            mismatched_key_manifest.key_id = "tenant-b/vector-private-rk".to_string();
+            let mismatched_key_id = "tenant-b/vector-private-rk";
+            mismatched_key_manifest.key_id = mismatched_key_id.to_string();
             let mismatched_key_signature = fixture.sign_manifest(&mismatched_key_manifest);
+            let mismatched_key_signature_sig = mismatched_key_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -1270,6 +1298,8 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("request validation failed"));
+            assert_manifest_mismatch_error_redacts!(err.message(), &mismatched_key_signature_sig);
+            assert!(!err.message().contains(mismatched_key_id));
 
             let mut mismatched_epoch_manifest = fixture.manifest.clone();
             mismatched_epoch_manifest.rk_epoch += 1;

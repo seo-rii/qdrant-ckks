@@ -1281,11 +1281,21 @@ mod private_hnsw_rest_tests {
             );
             std::fs::remove_file(manifest_store.root_path()).unwrap();
 
+            macro_rules! assert_manifest_mismatch_error_redacts {
+                ($body:expr, $signature_sig:expr) => {{
+                    assert!(!$body.contains(&fixture.manifest.root_hash), "{}", $body);
+                    assert!(!$body.contains($signature_sig), "{}", $body);
+                    assert!(!$body.contains("private_hnsw_oram"), "{}", $body);
+                }};
+            }
+
             let mut mismatched_collection_manifest = fixture.manifest.clone();
-            mismatched_collection_manifest.collection_id = "other-collection".to_string();
+            let mismatched_collection_id = "other-collection";
+            mismatched_collection_manifest.collection_id = mismatched_collection_id.to_string();
             let mismatched_collection_signature =
                 fixture.sign_manifest(&mismatched_collection_manifest);
-            post_json_error_contains!(
+            let mismatched_collection_signature_sig = mismatched_collection_signature.sig.clone();
+            let mismatched_collection_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_collection_manifest,
@@ -1294,11 +1304,21 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "request validation failed"
             );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_collection_error,
+                &mismatched_collection_signature_sig
+            );
+            assert!(
+                !mismatched_collection_error.contains(mismatched_collection_id),
+                "{mismatched_collection_error}"
+            );
 
             let mut mismatched_vector_manifest = fixture.manifest.clone();
-            mismatched_vector_manifest.vector_name = "title".to_string();
+            let mismatched_vector_name = "title";
+            mismatched_vector_manifest.vector_name = mismatched_vector_name.to_string();
             let mismatched_vector_signature = fixture.sign_manifest(&mismatched_vector_manifest);
-            post_json_error_contains!(
+            let mismatched_vector_signature_sig = mismatched_vector_signature.sig.clone();
+            let mismatched_vector_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_vector_manifest,
@@ -1307,11 +1327,21 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "request validation failed"
             );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_vector_error,
+                &mismatched_vector_signature_sig
+            );
+            assert!(
+                !mismatched_vector_error.contains(mismatched_vector_name),
+                "{mismatched_vector_error}"
+            );
 
             let mut mismatched_key_manifest = fixture.manifest.clone();
-            mismatched_key_manifest.key_id = "tenant-b/vector-private-rk".to_string();
+            let mismatched_key_id = "tenant-b/vector-private-rk";
+            mismatched_key_manifest.key_id = mismatched_key_id.to_string();
             let mismatched_key_signature = fixture.sign_manifest(&mismatched_key_manifest);
-            post_json_error_contains!(
+            let mismatched_key_signature_sig = mismatched_key_signature.sig.clone();
+            let mismatched_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_key_manifest,
@@ -1320,11 +1350,20 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "request validation failed"
             );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_key_error,
+                &mismatched_key_signature_sig
+            );
+            assert!(
+                !mismatched_key_error.contains(mismatched_key_id),
+                "{mismatched_key_error}"
+            );
 
             let mut mismatched_epoch_manifest = fixture.manifest.clone();
             mismatched_epoch_manifest.rk_epoch += 1;
             let mismatched_epoch_signature = fixture.sign_manifest(&mismatched_epoch_manifest);
-            post_json_error_contains!(
+            let mismatched_epoch_signature_sig = mismatched_epoch_signature.sig.clone();
+            let mismatched_epoch_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_epoch_manifest,
@@ -1333,11 +1372,16 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "request validation failed"
             );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_epoch_error,
+                &mismatched_epoch_signature_sig
+            );
 
             let mut mismatched_dim_manifest = fixture.manifest.clone();
             mismatched_dim_manifest.dim += 1;
             let mismatched_dim_signature = fixture.sign_manifest(&mismatched_dim_manifest);
-            post_json_error_contains!(
+            let mismatched_dim_signature_sig = mismatched_dim_signature.sig.clone();
+            let mismatched_dim_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_dim_manifest,
@@ -1346,11 +1390,16 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "request validation failed"
             );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_dim_error,
+                &mismatched_dim_signature_sig
+            );
 
             let mut mismatched_distance_manifest = fixture.manifest.clone();
             mismatched_distance_manifest.distance = qdrant_sec::DistanceKind::Cosine;
             let mismatched_distance_signature =
                 fixture.sign_manifest(&mismatched_distance_manifest);
+            let mismatched_distance_signature_sig = mismatched_distance_signature.sig.clone();
             let mismatched_distance_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
@@ -1365,10 +1414,15 @@ mod private_hnsw_rest_tests {
                     && !mismatched_distance_error.contains("cosine"),
                 "{mismatched_distance_error}"
             );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_distance_error,
+                &mismatched_distance_signature_sig
+            );
 
             let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
             mismatched_bucket_count_manifest.bucket_count -= 1;
-            post_json_error_contains!(
+            let mismatched_bucket_count_signature_sig = fixture.manifest_signature.sig.clone();
+            let mismatched_bucket_count_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_bucket_count_manifest,
@@ -1377,12 +1431,17 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "request validation failed"
             );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_bucket_count_error,
+                &mismatched_bucket_count_signature_sig
+            );
 
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
             mismatched_privacy_manifest.result_privacy =
                 qdrant_sec::ResultPrivacyMode::PrivatePayloadOramRequired;
             let mismatched_privacy_signature = fixture.sign_manifest(&mismatched_privacy_manifest);
-            post_json_error_contains!(
+            let mismatched_privacy_signature_sig = mismatched_privacy_signature.sig.clone();
+            let mismatched_privacy_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_privacy_manifest,
@@ -1391,11 +1450,16 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "manifest result_privacy does not match runtime instance"
             );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_privacy_error,
+                &mismatched_privacy_signature_sig
+            );
 
             let mut mismatched_hnsw_manifest = fixture.manifest.clone();
             mismatched_hnsw_manifest.hnsw.m = 3;
             let mismatched_hnsw_signature = fixture.sign_manifest(&mismatched_hnsw_manifest);
-            post_json_error_contains!(
+            let mismatched_hnsw_signature_sig = mismatched_hnsw_signature.sig.clone();
+            let mismatched_hnsw_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_hnsw_manifest,
@@ -1404,11 +1468,16 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "manifest hnsw does not match runtime instance"
             );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_hnsw_error,
+                &mismatched_hnsw_signature_sig
+            );
 
             let mut mismatched_oram_manifest = fixture.manifest.clone();
             mismatched_oram_manifest.oram.bucket_size = 4;
             let mismatched_oram_signature = fixture.sign_manifest(&mismatched_oram_manifest);
-            post_json_error_contains!(
+            let mismatched_oram_signature_sig = mismatched_oram_signature.sig.clone();
+            let mismatched_oram_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_oram_manifest,
@@ -1417,12 +1486,18 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "manifest oram does not match runtime instance"
             );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_oram_error,
+                &mismatched_oram_signature_sig
+            );
 
             let mut mismatched_fixed_budget_manifest = fixture.manifest.clone();
             mismatched_fixed_budget_manifest.fixed_budget.fixed_result_k = 2;
             let mismatched_fixed_budget_signature =
                 fixture.sign_manifest(&mismatched_fixed_budget_manifest);
-            post_json_error_contains!(
+            let mismatched_fixed_budget_signature_sig =
+                mismatched_fixed_budget_signature.sig.clone();
+            let mismatched_fixed_budget_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: mismatched_fixed_budget_manifest,
@@ -1430,6 +1505,10 @@ mod private_hnsw_rest_tests {
                 },
                 StatusCode::BAD_REQUEST,
                 "manifest fixed_budget does not match runtime instance"
+            );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_fixed_budget_error,
+                &mismatched_fixed_budget_signature_sig
             );
 
             let signature_key_id_sentinel = "signature-key-id-sentinel";
