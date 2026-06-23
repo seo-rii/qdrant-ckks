@@ -10055,6 +10055,78 @@ mod tests {
     }
 
     #[test]
+    fn validate_crypto_settings_rejects_private_hnsw_policy_values_without_value_leakage() {
+        fn private_hnsw_settings() -> CryptoSettings {
+            CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "docs_private_hnsw_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_hnsw_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            }
+        }
+
+        let result_privacy_sentinel = "qdrant-sec-private-hnsw-result-privacy-sentinel";
+        let mut settings = private_hnsw_settings();
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["result_privacy"] = json!(result_privacy_sentinel);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private HNSW ORAM must reject unsupported result_privacy values");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "result_privacy"
+                    && reason.contains("ids_visible")
+                    && reason.contains("private_payload_oram_required")),
+            "unexpected error: {err:?}",
+        );
+        assert!(!format!("{err:?}").contains(result_privacy_sentinel));
+
+        let distance_sentinel = "qdrant-sec-private-hnsw-distance-sentinel";
+        let mut settings = private_hnsw_settings();
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["distance"] = json!(distance_sentinel);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private HNSW ORAM must reject unsupported distance values");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "distance"
+                    && reason.contains("cosine")
+                    && reason.contains("euclid")),
+            "unexpected error: {err:?}",
+        );
+        assert!(!format!("{err:?}").contains(distance_sentinel));
+
+        let oram_kind_sentinel = "qdrant-sec-private-hnsw-oram-kind-sentinel";
+        let mut settings = private_hnsw_settings();
+        settings
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["oram"]["kind"] = json!(oram_kind_sentinel);
+        let err = validate_crypto_settings(&settings)
+            .expect_err("private HNSW ORAM must reject unsupported ORAM kinds");
+        assert!(
+            matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
+                if option == "oram.kind" && reason.contains("path_oram")),
+            "unexpected error: {err:?}",
+        );
+        assert!(!format!("{err:?}").contains(oram_kind_sentinel));
+    }
+
+    #[test]
     fn validate_crypto_settings_rejects_private_hnsw_impossible_path_budget() {
         let mut settings = CryptoSettings {
             zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
