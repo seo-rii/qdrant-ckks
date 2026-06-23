@@ -2050,6 +2050,7 @@ mod private_result_oram_grpc_tests {
             );
 
             let deduped_bucket_ids = vec![0, 1, 3, 4];
+            let deduped_path_signature = fixture.read_signature(&deduped_bucket_ids);
             let deduped_path_read = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::ReadPrivateResultOramBucketsRequest {
@@ -2058,9 +2059,7 @@ mod private_result_oram_grpc_tests {
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.manifest.root_hash.clone(),
                     bucket_ids: deduped_bucket_ids.clone(),
-                    read_signature: Some(signature_to_proto(
-                        fixture.read_signature(&deduped_bucket_ids),
-                    )),
+                    read_signature: Some(signature_to_proto(deduped_path_signature.clone())),
                 }),
             )
             .await
@@ -2072,8 +2071,25 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
             );
+            assert!(
+                !deduped_path_read
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(!deduped_path_read.message().contains(&session.session_id));
+            assert!(
+                !deduped_path_read
+                    .message()
+                    .contains(&deduped_path_signature.key_id)
+            );
+            assert!(
+                !deduped_path_read
+                    .message()
+                    .contains(&deduped_path_signature.sig)
+            );
 
             let under_budget_bucket_ids = vec![0, 1, 3];
+            let under_budget_signature = fixture.read_signature(&under_budget_bucket_ids);
             let under_budget_read = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::ReadPrivateResultOramBucketsRequest {
@@ -2082,9 +2098,7 @@ mod private_result_oram_grpc_tests {
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.manifest.root_hash.clone(),
                     bucket_ids: under_budget_bucket_ids.clone(),
-                    read_signature: Some(signature_to_proto(
-                        fixture.read_signature(&under_budget_bucket_ids),
-                    )),
+                    read_signature: Some(signature_to_proto(under_budget_signature.clone())),
                 }),
             )
             .await
@@ -2095,6 +2109,22 @@ mod private_result_oram_grpc_tests {
                 !under_budget_read
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !under_budget_read
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(!under_budget_read.message().contains(&session.session_id));
+            assert!(
+                !under_budget_read
+                    .message()
+                    .contains(&under_budget_signature.key_id)
+            );
+            assert!(
+                !under_budget_read
+                    .message()
+                    .contains(&under_budget_signature.sig)
             );
 
             let malformed_path_bucket_ids = vec![0, 2, 3, 0, 1, 4];

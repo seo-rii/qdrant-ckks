@@ -4923,6 +4923,7 @@ mod private_hnsw_rest_tests {
 
             let duplicate_path = fixture.entry_leaf_label();
             let duplicate_paths = vec![duplicate_path.clone(), duplicate_path.clone()];
+            let invalid_duplicate_signature_sig = fixture.client_signature().sig;
             let invalid_duplicate_request = actix_test::TestRequest::post()
                 .uri("/collections/docs/private-hnsw/text/oram/read_paths")
                 .set_json(OramReadPathsRequest {
@@ -4937,7 +4938,7 @@ mod private_hnsw_rest_tests {
                     client_signature: PrivateHnswClientSignature {
                         alg: "ed25519".to_string(),
                         key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        sig: invalid_duplicate_signature_sig.clone(),
                     },
                 })
                 .to_request();
@@ -4952,8 +4953,26 @@ mod private_hnsw_rest_tests {
                 !invalid_duplicate_body.contains(&duplicate_path),
                 "{invalid_duplicate_body}"
             );
+            assert!(
+                !invalid_duplicate_body.contains(&session_id),
+                "{invalid_duplicate_body}"
+            );
+            assert!(
+                !invalid_duplicate_body.contains(&fixture.encrypted_build.root_hash),
+                "{invalid_duplicate_body}"
+            );
+            assert!(
+                !invalid_duplicate_body.contains(SIGNING_KEY_ID),
+                "{invalid_duplicate_body}"
+            );
+            assert!(
+                !invalid_duplicate_body.contains(&invalid_duplicate_signature_sig),
+                "{invalid_duplicate_body}"
+            );
 
             let duplicate_signature = fixture.sign_read_paths(&duplicate_paths, 2, true);
+            let duplicate_signature_key_id = duplicate_signature.key_id.clone();
+            let duplicate_signature_sig = duplicate_signature.sig.clone();
             let duplicate_request = actix_test::TestRequest::post()
                 .uri("/collections/docs/private-hnsw/text/oram/read_paths")
                 .set_json(OramReadPathsRequest {
@@ -4979,6 +4998,19 @@ mod private_hnsw_rest_tests {
             assert!(duplicate_body.contains("duplicate path label"));
             assert!(
                 !duplicate_body.contains(&duplicate_path),
+                "{duplicate_body}"
+            );
+            assert!(!duplicate_body.contains(&session_id), "{duplicate_body}");
+            assert!(
+                !duplicate_body.contains(&fixture.encrypted_build.root_hash),
+                "{duplicate_body}"
+            );
+            assert!(
+                !duplicate_body.contains(&duplicate_signature_key_id),
+                "{duplicate_body}"
+            );
+            assert!(
+                !duplicate_body.contains(&duplicate_signature_sig),
                 "{duplicate_body}"
             );
 

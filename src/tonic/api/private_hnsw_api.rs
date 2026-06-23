@@ -4718,6 +4718,7 @@ mod private_hnsw_grpc_tests {
 
             let duplicate_path = fixture.entry_leaf_label();
             let duplicate_paths = vec![duplicate_path.clone(), duplicate_path.clone()];
+            let invalid_duplicate_signature_sig = fixture.client_signature().sig;
             let invalid_duplicate_err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -4734,7 +4735,7 @@ mod private_hnsw_grpc_tests {
                     client_signature: Some(signature_to_proto(PrivateHnswOramSignature {
                         alg: "ed25519".to_string(),
                         key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        sig: invalid_duplicate_signature_sig.clone(),
                     })),
                 }),
             )
@@ -4752,8 +4753,26 @@ mod private_hnsw_grpc_tests {
                     .contains("duplicate path label")
             );
             assert!(!invalid_duplicate_err.message().contains(&duplicate_path));
+            assert!(
+                !invalid_duplicate_err
+                    .message()
+                    .contains(&session.session_id)
+            );
+            assert!(
+                !invalid_duplicate_err
+                    .message()
+                    .contains(&fixture.encrypted_build.root_hash)
+            );
+            assert!(!invalid_duplicate_err.message().contains(SIGNING_KEY_ID));
+            assert!(
+                !invalid_duplicate_err
+                    .message()
+                    .contains(&invalid_duplicate_signature_sig)
+            );
 
             let duplicate_signature = fixture.sign_read_paths(&duplicate_paths, 2, true);
+            let duplicate_signature_key_id = duplicate_signature.key_id.clone();
+            let duplicate_signature_sig = duplicate_signature.sig.clone();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -4775,6 +4794,10 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("duplicate path label"));
             assert!(!err.message().contains(&duplicate_path));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(!err.message().contains(&duplicate_signature_key_id));
+            assert!(!err.message().contains(&duplicate_signature_sig));
 
             let closed = PrivateHnswOram::close_private_hnsw_session(
                 &service,

@@ -1945,6 +1945,7 @@ mod private_result_oram_rest_tests {
             );
 
             let deduped_bucket_ids = vec![0, 1, 3, 4];
+            let deduped_path_signature = fixture.read_signature(&deduped_bucket_ids);
             let deduped_path_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
@@ -1952,14 +1953,19 @@ mod private_result_oram_rest_tests {
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
                     bucket_ids: deduped_bucket_ids.clone(),
-                    read_signature: fixture.read_signature(&deduped_bucket_ids),
+                    read_signature: deduped_path_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
                 "whole ORAM paths"
             );
             assert!(!deduped_path_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!deduped_path_error.contains(&fixture.manifest.root_hash));
+            assert!(!deduped_path_error.contains(&session_id));
+            assert!(!deduped_path_error.contains(&deduped_path_signature.key_id));
+            assert!(!deduped_path_error.contains(&deduped_path_signature.sig));
 
             let under_budget_bucket_ids = vec![0, 1, 3];
+            let under_budget_signature = fixture.read_signature(&under_budget_bucket_ids);
             let under_budget_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
@@ -1967,12 +1973,16 @@ mod private_result_oram_rest_tests {
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
                     bucket_ids: under_budget_bucket_ids.clone(),
-                    read_signature: fixture.read_signature(&under_budget_bucket_ids),
+                    read_signature: under_budget_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
                 "fixed path budget"
             );
             assert!(!under_budget_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!under_budget_error.contains(&fixture.manifest.root_hash));
+            assert!(!under_budget_error.contains(&session_id));
+            assert!(!under_budget_error.contains(&under_budget_signature.key_id));
+            assert!(!under_budget_error.contains(&under_budget_signature.sig));
 
             let malformed_path_bucket_ids = vec![0, 2, 3, 0, 1, 4];
             let malformed_path_signature = fixture.read_signature(&malformed_path_bucket_ids);
