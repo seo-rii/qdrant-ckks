@@ -2444,9 +2444,12 @@ mod private_hnsw_rest_tests {
                 !read_error.contains(&fixture.encrypted_build.buckets[0].ciphertext),
                 "{read_error}"
             );
-            let wrong_budget_paths = vec![fixture.entry_leaf_label()];
+            let wrong_budget_path = fixture.entry_leaf_label();
+            let wrong_budget_paths = vec![wrong_budget_path.clone()];
             let wrong_budget_signature = fixture.client_signature();
-            post_json_error_contains!(
+            let wrong_budget_signature_key_id = wrong_budget_signature.key_id.clone();
+            let wrong_budget_signature_body = wrong_budget_signature.sig.clone();
+            let wrong_budget_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
@@ -2466,10 +2469,22 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "fixed path budget"
             );
+            for leaked in [
+                session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                wrong_budget_path.as_str(),
+                wrong_budget_signature_key_id.as_str(),
+                wrong_budget_signature_body.as_str(),
+            ] {
+                assert!(!wrong_budget_error.contains(leaked), "{wrong_budget_error}");
+            }
 
-            let missing_dummy_paths = vec![fixture.entry_leaf_label()];
+            let missing_dummy_path = fixture.entry_leaf_label();
+            let missing_dummy_paths = vec![missing_dummy_path.clone()];
             let missing_dummy_signature = fixture.client_signature();
-            post_json_error_contains!(
+            let missing_dummy_signature_key_id = missing_dummy_signature.key_id.clone();
+            let missing_dummy_signature_body = missing_dummy_signature.sig.clone();
+            let missing_dummy_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
@@ -2489,6 +2504,18 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "fixed path budget"
             );
+            for leaked in [
+                session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                missing_dummy_path.as_str(),
+                missing_dummy_signature_key_id.as_str(),
+                missing_dummy_signature_body.as_str(),
+            ] {
+                assert!(
+                    !missing_dummy_error.contains(leaked),
+                    "{missing_dummy_error}"
+                );
+            }
 
             let invalid_signature_paths = vec![fixture.entry_leaf_label()];
             post_json_error_contains!(
