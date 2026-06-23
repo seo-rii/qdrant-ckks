@@ -3058,6 +3058,8 @@ mod private_hnsw_grpc_tests {
             );
             assert!(!err.message().contains("private_hnsw_oram"));
             assert!(!err.message().contains("/tmp"));
+            let empty_commit_signature = fixture.client_signature();
+            let duplicate_epoch_signature = fixture.client_signature();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -3504,7 +3506,7 @@ mod private_hnsw_grpc_tests {
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(fixture.client_signature())),
+                    commit_signature: Some(signature_to_proto(duplicate_epoch_signature.clone())),
                 }),
             )
             .await
@@ -3513,6 +3515,21 @@ mod private_hnsw_grpc_tests {
             assert!(
                 err.message()
                     .contains("new_epoch must be greater than old_epoch")
+            );
+            assert!(!err.message().contains(&session.session_id));
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.old_root_hash)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.new_root_hash)
+            );
+            assert!(!err.message().contains(&duplicate_epoch_signature.key_id));
+            assert!(!err.message().contains(&duplicate_epoch_signature.sig));
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext)
             );
 
             let commit_new_root_sentinel = "AAAA";
@@ -3621,13 +3638,24 @@ mod private_hnsw_grpc_tests {
                     old_root_hash: search_run.commit_plan.old_root_hash.clone(),
                     new_root_hash: search_run.commit_plan.new_root_hash.clone(),
                     updated_buckets: Vec::new(),
-                    commit_signature: Some(signature_to_proto(fixture.client_signature())),
+                    commit_signature: Some(signature_to_proto(empty_commit_signature.clone())),
                 }),
             )
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("updated_buckets must contain"));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.old_root_hash)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.new_root_hash)
+            );
+            assert!(!err.message().contains(&empty_commit_signature.key_id));
+            assert!(!err.message().contains(&empty_commit_signature.sig));
 
             let commit_hash_sentinel = "AAAA";
             let mut malformed_hash_buckets = search_run.updated_buckets.clone();
@@ -3749,6 +3777,7 @@ mod private_hnsw_grpc_tests {
             );
 
             let duplicate_commit_bucket = search_run.updated_buckets[0].clone();
+            let duplicate_commit_ciphertext = duplicate_commit_bucket.ciphertext.clone();
             let duplicate_commit_buckets = vec![
                 duplicate_commit_bucket.clone(),
                 duplicate_commit_bucket.clone(),
@@ -3768,6 +3797,10 @@ mod private_hnsw_grpc_tests {
                     .collect(),
             };
             let duplicate_commit_signature = fixture.sign_commit_unchecked(&duplicate_commit_plan);
+            let duplicate_commit_old_root = duplicate_commit_plan.old_root_hash.clone();
+            let duplicate_commit_new_root = duplicate_commit_plan.new_root_hash.clone();
+            let duplicate_commit_signature_key_id = duplicate_commit_signature.key_id.clone();
+            let duplicate_commit_signature_sig = duplicate_commit_signature.sig.clone();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -3776,8 +3809,8 @@ mod private_hnsw_grpc_tests {
                     session_id: session.session_id.clone(),
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
-                    old_root_hash: duplicate_commit_plan.old_root_hash,
-                    new_root_hash: duplicate_commit_plan.new_root_hash,
+                    old_root_hash: duplicate_commit_old_root.clone(),
+                    new_root_hash: duplicate_commit_new_root.clone(),
                     updated_buckets: duplicate_commit_buckets
                         .clone()
                         .into_iter()
@@ -3791,7 +3824,14 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("request validation failed"));
             assert!(!err.message().contains("duplicate bucket id"));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&duplicate_commit_old_root));
+            assert!(!err.message().contains(&duplicate_commit_new_root));
+            assert!(!err.message().contains(&duplicate_commit_signature_key_id));
+            assert!(!err.message().contains(&duplicate_commit_signature_sig));
+            assert!(!err.message().contains(&duplicate_commit_ciphertext));
 
+            let invalid_signature_duplicate_signature = fixture.client_signature();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -3806,7 +3846,9 @@ mod private_hnsw_grpc_tests {
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(fixture.client_signature())),
+                    commit_signature: Some(signature_to_proto(
+                        invalid_signature_duplicate_signature.clone(),
+                    )),
                 }),
             )
             .await
@@ -3814,11 +3856,29 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("request validation failed"));
             assert!(!err.message().contains("duplicate bucket id"));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.old_root_hash)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.new_root_hash)
+            );
+            assert!(
+                !err.message()
+                    .contains(&invalid_signature_duplicate_signature.key_id)
+            );
+            assert!(
+                !err.message()
+                    .contains(&invalid_signature_duplicate_signature.sig)
+            );
 
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
             while oversized_writeback_buckets.len() <= 3 {
                 oversized_writeback_buckets.push(search_run.updated_buckets[0].clone());
             }
+            let oversized_commit_signature = fixture.client_signature();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -3833,13 +3893,28 @@ mod private_hnsw_grpc_tests {
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(fixture.client_signature())),
+                    commit_signature: Some(signature_to_proto(oversized_commit_signature.clone())),
                 }),
             )
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("updated_buckets must contain"));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.old_root_hash)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.commit_plan.new_root_hash)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext)
+            );
+            assert!(!err.message().contains(&oversized_commit_signature.key_id));
+            assert!(!err.message().contains(&oversized_commit_signature.sig));
 
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,

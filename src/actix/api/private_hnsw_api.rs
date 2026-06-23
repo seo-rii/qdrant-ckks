@@ -3198,6 +3198,7 @@ mod private_hnsw_rest_tests {
                 "{commit_old_root_shape_error}"
             );
 
+            let duplicate_epoch_signature = fixture.client_signature();
             let duplicate_commit_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -3208,13 +3209,28 @@ mod private_hnsw_rest_tests {
                     new_root_hash: search_run.commit_plan.new_root_hash.clone(),
                     updated_buckets: search_run.updated_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
-                        alg: "ed25519".to_string(),
-                        key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        alg: duplicate_epoch_signature.alg.clone(),
+                        key_id: duplicate_epoch_signature.key_id.clone(),
+                        sig: duplicate_epoch_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "new_epoch must be greater than old_epoch"
+            );
+            assert!(!duplicate_commit_error.contains(&session_id));
+            assert!(
+                !duplicate_commit_error.contains(&search_run.commit_plan.old_root_hash),
+                "{duplicate_commit_error}"
+            );
+            assert!(
+                !duplicate_commit_error.contains(&search_run.commit_plan.new_root_hash),
+                "{duplicate_commit_error}"
+            );
+            assert!(!duplicate_commit_error.contains(&duplicate_epoch_signature.key_id));
+            assert!(!duplicate_commit_error.contains(&duplicate_epoch_signature.sig));
+            assert!(
+                !duplicate_commit_error.contains(&search_run.updated_buckets[0].ciphertext),
+                "{duplicate_commit_error}"
             );
             let commit_new_root_sentinel = "AAAA";
             let commit_wrong_new_root = data_encoding::BASE64URL_NOPAD.encode(&[17; 32]);
@@ -3300,7 +3316,8 @@ mod private_hnsw_rest_tests {
                 !commit_new_root_error.contains(&search_run.updated_buckets[0].ciphertext),
                 "{commit_new_root_error}"
             );
-            post_json_error_contains!(
+            let empty_commit_signature = fixture.client_signature();
+            let empty_commit_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
                     session_id: session_id.clone(),
@@ -3310,14 +3327,25 @@ mod private_hnsw_rest_tests {
                     new_root_hash: search_run.commit_plan.new_root_hash.clone(),
                     updated_buckets: Vec::new(),
                     commit_signature: PrivateHnswClientSignature {
-                        alg: "ed25519".to_string(),
-                        key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        alg: empty_commit_signature.alg.clone(),
+                        key_id: empty_commit_signature.key_id.clone(),
+                        sig: empty_commit_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "updated_buckets must contain"
             );
+            assert!(!empty_commit_error.contains(&session_id));
+            assert!(
+                !empty_commit_error.contains(&search_run.commit_plan.old_root_hash),
+                "{empty_commit_error}"
+            );
+            assert!(
+                !empty_commit_error.contains(&search_run.commit_plan.new_root_hash),
+                "{empty_commit_error}"
+            );
+            assert!(!empty_commit_error.contains(&empty_commit_signature.key_id));
+            assert!(!empty_commit_error.contains(&empty_commit_signature.sig));
             let commit_hash_sentinel = "AAAA";
             let mut malformed_hash_buckets = search_run.updated_buckets.clone();
             malformed_hash_buckets[0].ciphertext_sha256 = commit_hash_sentinel.to_string();
@@ -3410,6 +3438,7 @@ mod private_hnsw_rest_tests {
                 "{commit_commitment_error}"
             );
             let duplicate_commit_bucket = search_run.updated_buckets[0].clone();
+            let duplicate_commit_ciphertext = duplicate_commit_bucket.ciphertext.clone();
             let duplicate_commit_buckets = vec![
                 duplicate_commit_bucket.clone(),
                 duplicate_commit_bucket.clone(),
@@ -3429,25 +3458,36 @@ mod private_hnsw_rest_tests {
                     .collect(),
             };
             let duplicate_commit_signature = fixture.sign_commit_unchecked(&duplicate_commit_plan);
-            post_json_error_contains!(
+            let duplicate_commit_old_root = duplicate_commit_plan.old_root_hash.clone();
+            let duplicate_commit_new_root = duplicate_commit_plan.new_root_hash.clone();
+            let duplicate_commit_signature_key_id = duplicate_commit_signature.key_id.clone();
+            let duplicate_commit_signature_sig = duplicate_commit_signature.sig.clone();
+            let duplicate_bucket_commit_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
                     session_id: session_id.clone(),
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
-                    old_root_hash: duplicate_commit_plan.old_root_hash,
-                    new_root_hash: duplicate_commit_plan.new_root_hash,
+                    old_root_hash: duplicate_commit_old_root.clone(),
+                    new_root_hash: duplicate_commit_new_root.clone(),
                     updated_buckets: duplicate_commit_buckets.clone(),
                     commit_signature: PrivateHnswClientSignature {
                         alg: duplicate_commit_signature.alg,
-                        key_id: duplicate_commit_signature.key_id,
-                        sig: duplicate_commit_signature.sig,
+                        key_id: duplicate_commit_signature_key_id.clone(),
+                        sig: duplicate_commit_signature_sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "request validation failed"
             );
-            assert!(!duplicate_commit_error.contains("duplicate bucket id"));
+            assert!(!duplicate_bucket_commit_error.contains("duplicate bucket id"));
+            assert!(!duplicate_bucket_commit_error.contains(&session_id));
+            assert!(!duplicate_bucket_commit_error.contains(&duplicate_commit_old_root));
+            assert!(!duplicate_bucket_commit_error.contains(&duplicate_commit_new_root));
+            assert!(!duplicate_bucket_commit_error.contains(&duplicate_commit_signature_key_id));
+            assert!(!duplicate_bucket_commit_error.contains(&duplicate_commit_signature_sig));
+            assert!(!duplicate_bucket_commit_error.contains(&duplicate_commit_ciphertext));
+            let invalid_signature_duplicate_signature = fixture.client_signature();
             let invalid_signature_duplicate_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -3458,20 +3498,38 @@ mod private_hnsw_rest_tests {
                     new_root_hash: search_run.commit_plan.new_root_hash.clone(),
                     updated_buckets: duplicate_commit_buckets,
                     commit_signature: PrivateHnswClientSignature {
-                        alg: "ed25519".to_string(),
-                        key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        alg: invalid_signature_duplicate_signature.alg.clone(),
+                        key_id: invalid_signature_duplicate_signature.key_id.clone(),
+                        sig: invalid_signature_duplicate_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "request validation failed"
             );
             assert!(!invalid_signature_duplicate_error.contains("duplicate bucket id"));
+            assert!(!invalid_signature_duplicate_error.contains(&session_id));
+            assert!(
+                !invalid_signature_duplicate_error.contains(&search_run.commit_plan.old_root_hash),
+                "{invalid_signature_duplicate_error}"
+            );
+            assert!(
+                !invalid_signature_duplicate_error.contains(&search_run.commit_plan.new_root_hash),
+                "{invalid_signature_duplicate_error}"
+            );
+            assert!(
+                !invalid_signature_duplicate_error
+                    .contains(&invalid_signature_duplicate_signature.key_id)
+            );
+            assert!(
+                !invalid_signature_duplicate_error
+                    .contains(&invalid_signature_duplicate_signature.sig)
+            );
             let mut oversized_writeback_buckets = search_run.updated_buckets.clone();
             while oversized_writeback_buckets.len() <= 3 {
                 oversized_writeback_buckets.push(search_run.updated_buckets[0].clone());
             }
-            post_json_error_contains!(
+            let oversized_commit_signature = fixture.client_signature();
+            let oversized_commit_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
                     session_id: session_id.clone(),
@@ -3481,14 +3539,29 @@ mod private_hnsw_rest_tests {
                     new_root_hash: search_run.commit_plan.new_root_hash.clone(),
                     updated_buckets: oversized_writeback_buckets,
                     commit_signature: PrivateHnswClientSignature {
-                        alg: "ed25519".to_string(),
-                        key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        alg: oversized_commit_signature.alg.clone(),
+                        key_id: oversized_commit_signature.key_id.clone(),
+                        sig: oversized_commit_signature.sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
                 "updated_buckets must contain"
             );
+            assert!(!oversized_commit_error.contains(&session_id));
+            assert!(
+                !oversized_commit_error.contains(&search_run.commit_plan.old_root_hash),
+                "{oversized_commit_error}"
+            );
+            assert!(
+                !oversized_commit_error.contains(&search_run.commit_plan.new_root_hash),
+                "{oversized_commit_error}"
+            );
+            assert!(
+                !oversized_commit_error.contains(&search_run.updated_buckets[0].ciphertext),
+                "{oversized_commit_error}"
+            );
+            assert!(!oversized_commit_error.contains(&oversized_commit_signature.key_id));
+            assert!(!oversized_commit_error.contains(&oversized_commit_signature.sig));
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {

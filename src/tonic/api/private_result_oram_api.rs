@@ -2524,6 +2524,10 @@ mod private_result_oram_grpc_tests {
                     .contains("commit updated_buckets must contain")
             );
             assert!(!empty_commit.message().contains(&commit_signature.sig));
+            assert!(!empty_commit.message().contains(&fixture.manifest.root_hash));
+            assert!(!empty_commit.message().contains(&new_root_hash));
+            assert!(!empty_commit.message().contains(&session.session_id));
+            assert!(!empty_commit.message().contains(&commit_signature.key_id));
 
             let commit_hash_sentinel = "AAAA";
             let mut malformed_hash_commit_buckets = vec![updated_bucket.clone()];
@@ -2566,7 +2570,17 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !malformed_hash_commit
                     .message()
+                    .contains(&session.session_id)
+            );
+            assert!(
+                !malformed_hash_commit
+                    .message()
                     .contains(&updated_bucket.ciphertext)
+            );
+            assert!(
+                !malformed_hash_commit
+                    .message()
+                    .contains(&commit_signature.key_id)
             );
             assert!(
                 !malformed_hash_commit
@@ -2631,6 +2645,16 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !malformed_commitment_commit
                     .message()
+                    .contains(&session.session_id)
+            );
+            assert!(
+                !malformed_commitment_commit
+                    .message()
+                    .contains(&commit_signature.key_id)
+            );
+            assert!(
+                !malformed_commitment_commit
+                    .message()
                     .contains(&commit_signature.sig)
             );
             assert!(
@@ -2666,6 +2690,19 @@ mod private_result_oram_grpc_tests {
                     .contains(&updated_bucket.ciphertext)
             );
             assert!(!oversized_commit.message().contains("duplicate bucket id"));
+            assert!(
+                !oversized_commit
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(!oversized_commit.message().contains(&new_root_hash));
+            assert!(!oversized_commit.message().contains(&session.session_id));
+            assert!(
+                !oversized_commit
+                    .message()
+                    .contains(&commit_signature.key_id)
+            );
+            assert!(!oversized_commit.message().contains(&commit_signature.sig));
 
             let wrong_commit_signature = fixture.signature.clone();
             let invalid_commit_signature = PrivateResultOram::commit_private_result_oram_buckets(
@@ -2715,6 +2752,10 @@ mod private_result_oram_grpc_tests {
                     .collect(),
             };
             let duplicate_commit_signature = fixture.sign_commit_unchecked(&duplicate_commit_plan);
+            let duplicate_commit_old_root = duplicate_commit_plan.old_root_hash.clone();
+            let duplicate_commit_new_root = duplicate_commit_plan.new_root_hash.clone();
+            let duplicate_commit_signature_key_id = duplicate_commit_signature.key_id.clone();
+            let duplicate_commit_signature_sig = duplicate_commit_signature.sig.clone();
             let duplicate_commit = PrivateResultOram::commit_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::CommitPrivateResultOramBucketsRequest {
@@ -2722,14 +2763,14 @@ mod private_result_oram_grpc_tests {
                     session_id: session.session_id.clone(),
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
-                    old_root_hash: duplicate_commit_plan.old_root_hash,
-                    new_root_hash: duplicate_commit_plan.new_root_hash,
+                    old_root_hash: duplicate_commit_old_root.clone(),
+                    new_root_hash: duplicate_commit_new_root.clone(),
                     updated_buckets: duplicate_commit_buckets
                         .clone()
                         .into_iter()
                         .map(bucket_to_proto)
                         .collect(),
-                    commit_signature: Some(signature_to_proto(duplicate_commit_signature)),
+                    commit_signature: Some(signature_to_proto(duplicate_commit_signature.clone())),
                 }),
             )
             .await
@@ -2741,6 +2782,32 @@ mod private_result_oram_grpc_tests {
                     .contains("commit signature verification failed")
             );
             assert!(!duplicate_commit.message().contains("duplicate bucket id"));
+            assert!(
+                !duplicate_commit
+                    .message()
+                    .contains(&duplicate_commit_old_root)
+            );
+            assert!(
+                !duplicate_commit
+                    .message()
+                    .contains(&duplicate_commit_new_root)
+            );
+            assert!(!duplicate_commit.message().contains(&session.session_id));
+            assert!(
+                !duplicate_commit
+                    .message()
+                    .contains(&duplicate_commit_signature_key_id)
+            );
+            assert!(
+                !duplicate_commit
+                    .message()
+                    .contains(&duplicate_commit_signature_sig)
+            );
+            assert!(
+                !duplicate_commit
+                    .message()
+                    .contains(&updated_bucket.ciphertext)
+            );
 
             let invalid_signature_duplicate_bucket =
                 PrivateResultOram::commit_private_result_oram_buckets(
@@ -2774,6 +2841,36 @@ mod private_result_oram_grpc_tests {
                 !invalid_signature_duplicate_bucket
                     .message()
                     .contains("duplicate bucket id")
+            );
+            assert!(
+                !invalid_signature_duplicate_bucket
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(
+                !invalid_signature_duplicate_bucket
+                    .message()
+                    .contains(&new_root_hash)
+            );
+            assert!(
+                !invalid_signature_duplicate_bucket
+                    .message()
+                    .contains(&session.session_id)
+            );
+            assert!(
+                !invalid_signature_duplicate_bucket
+                    .message()
+                    .contains(&wrong_commit_signature.key_id)
+            );
+            assert!(
+                !invalid_signature_duplicate_bucket
+                    .message()
+                    .contains(&wrong_commit_signature.sig)
+            );
+            assert!(
+                !invalid_signature_duplicate_bucket
+                    .message()
+                    .contains(&updated_bucket.ciphertext)
             );
 
             let unconfigured_commit_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
