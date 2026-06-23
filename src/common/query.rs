@@ -12436,14 +12436,22 @@ mod tests {
     }
 
     #[test]
-    fn private_result_oram_raw_payload_read_errors_redact_path_for_recommend_paths() {
+    fn private_result_oram_raw_payload_read_errors_redact_path_for_collection_read_operations() {
         for operation in [
+            "search",
+            "search grouped results",
+            "search group lookup",
             "search results",
             "recommend results",
             "recommend grouped results",
             "recommend group lookup",
             "discover results",
             "context results",
+            "retrieve",
+            "scroll",
+            "query",
+            "query grouped results",
+            "query group lookup",
         ] {
             let message =
                 private_result_oram_raw_payload_read_error(operation, "document.body").to_string();
