@@ -558,11 +558,13 @@ fn private_oram_layout_error_contains_sensitive_detail(
         || rendered.contains(private_oram_dir)
         || rendered
             .split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')))
-            .any(|token| token.ends_with(".bucket") || looks_like_base64url_sha256_token(token))
+            .any(|token| {
+                token.ends_with(".bucket") || looks_like_base64url_private_oram_token(token)
+            })
 }
 
-fn looks_like_base64url_sha256_token(token: &str) -> bool {
-    token.len() == 43
+fn looks_like_base64url_private_oram_token(token: &str) -> bool {
+    token.len() >= 43
         && token
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
@@ -710,6 +712,17 @@ mod tests {
         assert!(rendered.contains("private HNSW ORAM snapshot layout validation failed"));
         assert!(!rendered.contains(&leaked_root));
 
+        let leaked_signature = "B".repeat(86);
+        let err = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private HNSW ORAM manifest signature {leaked_signature}",
+            )),
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("private HNSW ORAM snapshot layout validation failed"));
+        assert!(!rendered.contains(&leaked_signature));
+
         let safe = sanitize_private_hnsw_snapshot_layout_error(
             temp_dir.path(),
             CollectionError::bad_request(
@@ -758,6 +771,17 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("private result ORAM snapshot layout validation failed"));
         assert!(!rendered.contains(&leaked_root));
+
+        let leaked_ciphertext = "C".repeat(128);
+        let err = sanitize_private_result_oram_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private result ORAM bucket ciphertext {leaked_ciphertext}",
+            )),
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("private result ORAM snapshot layout validation failed"));
+        assert!(!rendered.contains(&leaked_ciphertext));
 
         let safe = sanitize_private_result_oram_snapshot_layout_error(
             temp_dir.path(),

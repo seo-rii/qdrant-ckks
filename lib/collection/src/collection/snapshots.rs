@@ -988,9 +988,11 @@ fn sanitize_private_hnsw_snapshot_layout_error(
     err: CollectionError,
 ) -> CollectionError {
     let rendered = err.to_string();
-    if rendered.contains(collection_dir.to_string_lossy().as_ref())
-        || rendered.contains(PRIVATE_HNSW_ORAM_DIR)
-    {
+    if private_oram_snapshot_layout_error_contains_sensitive_detail(
+        &rendered,
+        collection_dir,
+        PRIVATE_HNSW_ORAM_DIR,
+    ) {
         return CollectionError::bad_request("private HNSW ORAM snapshot layout validation failed");
     }
     err
@@ -1001,14 +1003,38 @@ fn sanitize_private_result_oram_snapshot_layout_error(
     err: CollectionError,
 ) -> CollectionError {
     let rendered = err.to_string();
-    if rendered.contains(collection_dir.to_string_lossy().as_ref())
-        || rendered.contains(PRIVATE_RESULT_ORAM_DIR)
-    {
+    if private_oram_snapshot_layout_error_contains_sensitive_detail(
+        &rendered,
+        collection_dir,
+        PRIVATE_RESULT_ORAM_DIR,
+    ) {
         return CollectionError::bad_request(
             "private result ORAM snapshot layout validation failed",
         );
     }
     err
+}
+
+fn private_oram_snapshot_layout_error_contains_sensitive_detail(
+    rendered: &str,
+    collection_dir: &Path,
+    private_oram_dir: &str,
+) -> bool {
+    let collection_dir = collection_dir.to_string_lossy();
+    rendered.contains(collection_dir.as_ref())
+        || rendered.contains(private_oram_dir)
+        || rendered
+            .split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')))
+            .any(|token| {
+                token.ends_with(".bucket") || looks_like_base64url_private_oram_token(token)
+            })
+}
+
+fn looks_like_base64url_private_oram_token(token: &str) -> bool {
+    token.len() >= 43
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 fn validate_private_hnsw_oram_restore_manifest(
@@ -1719,6 +1745,53 @@ mod tests {
 
         assert!(rendered.contains("snapshot bucket ciphertext size is invalid"));
         assert!(!rendered.contains("oram.bucket_size"), "{rendered}");
+    }
+
+    #[test]
+    fn private_oram_snapshot_layout_sanitizer_redacts_bucket_and_base64url_tokens() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-token-redact")
+            .tempdir()
+            .unwrap();
+
+        let leaked_signature = BASE64URL_NOPAD.encode(&[5; 64]);
+        let hnsw = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private HNSW ORAM manifest signature {leaked_signature}",
+            )),
+        )
+        .to_string();
+        assert!(hnsw.contains("private HNSW ORAM snapshot layout validation failed"));
+        assert!(!hnsw.contains(&leaked_signature), "{hnsw}");
+
+        let hnsw_bucket = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::not_found("private HNSW ORAM bucket 00000002.bucket"),
+        )
+        .to_string();
+        assert!(hnsw_bucket.contains("private HNSW ORAM snapshot layout validation failed"));
+        assert!(!hnsw_bucket.contains("00000002.bucket"), "{hnsw_bucket}");
+
+        let leaked_ciphertext = BASE64URL_NOPAD.encode(&[7; 96]);
+        let result = sanitize_private_result_oram_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private result ORAM bucket ciphertext {leaked_ciphertext}",
+            )),
+        )
+        .to_string();
+        assert!(result.contains("private result ORAM snapshot layout validation failed"));
+        assert!(!result.contains(&leaked_ciphertext), "{result}");
+
+        let safe = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(
+                "private HNSW ORAM snapshot contains an unconfigured vector store",
+            ),
+        )
+        .to_string();
+        assert!(safe.contains("unconfigured vector store"), "{safe}");
     }
 
     #[test]
