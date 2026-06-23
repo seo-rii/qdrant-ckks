@@ -40,6 +40,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
+use crate::common::crypto::PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX;
 use crate::settings::{CryptoInstanceConfig, CryptoSettings, Settings};
 
 pub(crate) const COLLECTION_NAME: &str = "docs";
@@ -383,7 +384,7 @@ impl PrivateHnswRouteWireFixture {
                         "kind": "path_oram",
                         "bucket_size": 4,
                         "block_size_bytes": 8192,
-                        "tree_height": 20,
+                        "tree_height": PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX,
                         "path_batch_size": self.manifest.fixed_budget.fixed_result_k
                     },
                     "integrity": {
