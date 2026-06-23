@@ -2243,12 +2243,13 @@ mod private_hnsw_grpc_tests {
                 )
                 .unwrap()
                 .unwrap();
+            let active_snapshot_client_id = "tenant-a/sdk-instance-active-snapshot";
             let err = PrivateHnswOram::open_private_hnsw_session(
                 &service,
                 Request::new(grpc::OpenPrivateHnswSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
-                    client_id: "tenant-a/sdk-instance-active-snapshot".to_string(),
+                    client_id: active_snapshot_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                     result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
@@ -2260,6 +2261,7 @@ mod private_hnsw_grpc_tests {
             assert!(err.message().contains("active collection snapshot"));
             assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
             assert!(!err.message().contains("private_hnsw_oram"));
+            assert!(!err.message().contains(active_snapshot_client_id));
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {

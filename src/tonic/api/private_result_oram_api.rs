@@ -1450,11 +1450,12 @@ mod private_result_oram_grpc_tests {
                 )
                 .unwrap()
                 .unwrap();
+            let active_snapshot_client_id = "tenant-a/sdk-instance-active-snapshot";
             let err = PrivateResultOram::open_private_result_oram_session(
                 &service,
                 Request::new(grpc::OpenPrivateResultOramSessionRequest {
                     collection_name: COLLECTION_NAME.to_string(),
-                    client_id: "tenant-a/sdk-instance-active-snapshot".to_string(),
+                    client_id: active_snapshot_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                 }),
@@ -1465,6 +1466,7 @@ mod private_result_oram_grpc_tests {
             assert!(err.message().contains("active collection snapshot"));
             assert!(!err.message().contains(&fixture.manifest.root_hash));
             assert!(!err.message().contains("private_result_oram"));
+            assert!(!err.message().contains(active_snapshot_client_id));
             let err = PrivateResultOram::upload_private_result_oram_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateResultOramManifestRequest {
