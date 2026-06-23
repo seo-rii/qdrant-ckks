@@ -576,6 +576,13 @@ mod private_result_oram_grpc_tests {
             (updated_bucket, commit_signature, new_root_hash)
         }
 
+        fn sign_manifest(
+            &self,
+            manifest: &PrivateResultOramManifest,
+        ) -> qdrant_sec::PrivateResultOramSignature {
+            sign_private_result_oram_manifest(&self.signing_key, manifest).unwrap()
+        }
+
         fn commit_signature_with_alt_key(
             &self,
             updated_bucket: &PrivateResultOramBucket,
@@ -1196,6 +1203,121 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains("not configured")
             );
+
+            macro_rules! assert_manifest_mismatch_error_redacts {
+                ($message:expr, $signature_sig:expr) => {{
+                    assert!(
+                        !$message.contains(&fixture.manifest.root_hash),
+                        "{}",
+                        $message
+                    );
+                    assert!(!$message.contains($signature_sig), "{}", $message);
+                    assert!(!$message.contains("private_result_oram"), "{}", $message);
+                }};
+            }
+
+            let mut mismatched_collection_manifest = fixture.manifest.clone();
+            let mismatched_collection_id = "other-result-collection";
+            mismatched_collection_manifest.collection_id = mismatched_collection_id.to_string();
+            let mismatched_collection_signature =
+                fixture.sign_manifest(&mismatched_collection_manifest);
+            let mismatched_collection_signature_sig = mismatched_collection_signature.sig.clone();
+            let err = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_collection_manifest)),
+                    signature: Some(signature_to_proto(mismatched_collection_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("request validation failed"));
+            assert_manifest_mismatch_error_redacts!(
+                err.message(),
+                &mismatched_collection_signature_sig
+            );
+            assert!(!err.message().contains(mismatched_collection_id));
+
+            let mut mismatched_key_manifest = fixture.manifest.clone();
+            let mismatched_key_id = "tenant-b/result-private-rk";
+            mismatched_key_manifest.key_id = mismatched_key_id.to_string();
+            let mismatched_key_signature = fixture.sign_manifest(&mismatched_key_manifest);
+            let mismatched_key_signature_sig = mismatched_key_signature.sig.clone();
+            let err = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_key_manifest)),
+                    signature: Some(signature_to_proto(mismatched_key_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("request validation failed"));
+            assert_manifest_mismatch_error_redacts!(err.message(), &mismatched_key_signature_sig);
+            assert!(!err.message().contains(mismatched_key_id));
+
+            let mut mismatched_epoch_manifest = fixture.manifest.clone();
+            mismatched_epoch_manifest.rk_epoch += 1;
+            let mismatched_epoch_signature = fixture.sign_manifest(&mismatched_epoch_manifest);
+            let mismatched_epoch_signature_sig = mismatched_epoch_signature.sig.clone();
+            let err = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_epoch_manifest)),
+                    signature: Some(signature_to_proto(mismatched_epoch_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("request validation failed"));
+            assert_manifest_mismatch_error_redacts!(err.message(), &mismatched_epoch_signature_sig);
+
+            let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
+            mismatched_bucket_count_manifest.bucket_count -= 1;
+            let mismatched_bucket_count_signature_sig = fixture.signature.sig.clone();
+            let err = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_bucket_count_manifest)),
+                    signature: Some(signature_to_proto(fixture.signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("request validation failed"));
+            assert_manifest_mismatch_error_redacts!(
+                err.message(),
+                &mismatched_bucket_count_signature_sig
+            );
+
+            let mut mismatched_oram_manifest = fixture.manifest.clone();
+            mismatched_oram_manifest.oram.bucket_size = 4;
+            let mismatched_oram_signature = fixture.sign_manifest(&mismatched_oram_manifest);
+            let mismatched_oram_signature_sig = mismatched_oram_signature.sig.clone();
+            let err = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(mismatched_oram_manifest)),
+                    signature: Some(signature_to_proto(mismatched_oram_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("manifest oram does not match runtime instance")
+            );
+            assert_manifest_mismatch_error_redacts!(err.message(), &mismatched_oram_signature_sig);
 
             let manifest_epoch = PrivateResultOram::upload_private_result_oram_manifest(
                 &service,

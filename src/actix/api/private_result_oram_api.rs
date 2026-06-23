@@ -562,6 +562,13 @@ mod private_result_oram_rest_tests {
             (updated_bucket, commit_signature, new_root_hash)
         }
 
+        fn sign_manifest(
+            &self,
+            manifest: &PrivateResultOramManifest,
+        ) -> qdrant_sec::PrivateResultOramSignature {
+            sign_private_result_oram_manifest(&self.signing_key, manifest).unwrap()
+        }
+
         fn commit_signature_with_alt_key(
             &self,
             updated_bucket: &PrivateResultOramBucket,
@@ -1381,6 +1388,114 @@ mod private_result_oram_rest_tests {
             );
             assert!(!unconfigured_manifest_key_error.contains(UNCONFIGURED_SIGNING_KEY_ID));
             assert!(!unconfigured_manifest_key_error.contains("not configured"));
+
+            macro_rules! assert_manifest_mismatch_error_redacts {
+                ($body:expr, $signature_sig:expr) => {{
+                    assert!(!$body.contains(&fixture.manifest.root_hash), "{}", $body);
+                    assert!(!$body.contains($signature_sig), "{}", $body);
+                    assert!(!$body.contains("private_result_oram"), "{}", $body);
+                }};
+            }
+
+            let mut mismatched_collection_manifest = fixture.manifest.clone();
+            let mismatched_collection_id = "other-result-collection";
+            mismatched_collection_manifest.collection_id = mismatched_collection_id.to_string();
+            let mismatched_collection_signature =
+                fixture.sign_manifest(&mismatched_collection_manifest);
+            let mismatched_collection_signature_sig = mismatched_collection_signature.sig.clone();
+            let mismatched_collection_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: mismatched_collection_manifest,
+                    signature: mismatched_collection_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "request validation failed"
+            );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_collection_error,
+                &mismatched_collection_signature_sig
+            );
+            assert!(
+                !mismatched_collection_error.contains(mismatched_collection_id),
+                "{mismatched_collection_error}"
+            );
+
+            let mut mismatched_key_manifest = fixture.manifest.clone();
+            let mismatched_key_id = "tenant-b/result-private-rk";
+            mismatched_key_manifest.key_id = mismatched_key_id.to_string();
+            let mismatched_key_signature = fixture.sign_manifest(&mismatched_key_manifest);
+            let mismatched_key_signature_sig = mismatched_key_signature.sig.clone();
+            let mismatched_key_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: mismatched_key_manifest,
+                    signature: mismatched_key_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "request validation failed"
+            );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_key_error,
+                &mismatched_key_signature_sig
+            );
+            assert!(
+                !mismatched_key_error.contains(mismatched_key_id),
+                "{mismatched_key_error}"
+            );
+
+            let mut mismatched_epoch_manifest = fixture.manifest.clone();
+            mismatched_epoch_manifest.rk_epoch += 1;
+            let mismatched_epoch_signature = fixture.sign_manifest(&mismatched_epoch_manifest);
+            let mismatched_epoch_signature_sig = mismatched_epoch_signature.sig.clone();
+            let mismatched_epoch_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: mismatched_epoch_manifest,
+                    signature: mismatched_epoch_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "request validation failed"
+            );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_epoch_error,
+                &mismatched_epoch_signature_sig
+            );
+
+            let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
+            mismatched_bucket_count_manifest.bucket_count -= 1;
+            let mismatched_bucket_count_signature_sig = fixture.signature.sig.clone();
+            let mismatched_bucket_count_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: mismatched_bucket_count_manifest,
+                    signature: fixture.signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "request validation failed"
+            );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_bucket_count_error,
+                &mismatched_bucket_count_signature_sig
+            );
+
+            let mut mismatched_oram_manifest = fixture.manifest.clone();
+            mismatched_oram_manifest.oram.bucket_size = 4;
+            let mismatched_oram_signature = fixture.sign_manifest(&mismatched_oram_manifest);
+            let mismatched_oram_signature_sig = mismatched_oram_signature.sig.clone();
+            let mismatched_oram_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: mismatched_oram_manifest,
+                    signature: mismatched_oram_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest oram does not match runtime instance"
+            );
+            assert_manifest_mismatch_error_redacts!(
+                mismatched_oram_error,
+                &mismatched_oram_signature_sig
+            );
 
             let manifest_result = post_json_ok!(
                 "/collections/docs/private-result-oram/manifest",
