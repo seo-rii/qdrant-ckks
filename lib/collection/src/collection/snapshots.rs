@@ -2333,6 +2333,35 @@ mod tests {
     }
 
     #[test]
+    fn private_result_oram_restore_preflight_rejects_manifest_key_id_mismatch() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-bad-key-id")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let mut manifest = private_result_manifest(uuid.to_string());
+        manifest.key_id = "tenant-a/result-private-rk-v2".to_string();
+        refresh_private_result_snapshot_manifest_root(&mut manifest);
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("manifest key_id mismatch"));
+        assert!(!rendered.contains(&manifest.key_id), "{rendered}");
+        assert!(
+            !rendered.contains("tenant-a/result-private-rk"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn private_result_oram_restore_preflight_rejects_manifest_rk_id_mismatch() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-restore-bad-rk-id")
