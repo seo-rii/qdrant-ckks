@@ -7283,18 +7283,19 @@ mod tests {
         let mut state = build.state;
         let read_leaves = RefCell::new(Vec::new());
         let mut remaps = [3, 3].into_iter();
+        let params = PrivateHnswSearchParams {
+            entry_node_id: entry.node_id,
+            k: 1,
+            ef: 2,
+            fixed_steps: 2,
+            distance: DistanceKind::Euclid,
+            padding_node_id: Some(padding.node_id),
+        };
         let result = search_private_hnsw_oram_plaintext_with_cache(
             &mut state,
             config,
             &[1.0, 0.0],
-            PrivateHnswSearchParams {
-                entry_node_id: entry.node_id,
-                k: 1,
-                ef: 2,
-                fixed_steps: 2,
-                distance: DistanceKind::Euclid,
-                padding_node_id: Some(padding.node_id),
-            },
+            params,
             &cache,
             |leaf| {
                 read_leaves.borrow_mut().push(leaf);
@@ -7324,6 +7325,22 @@ mod tests {
         assert_eq!(result.hits[0].node_id, near.node_id);
         assert_eq!(result.completed_steps, 2);
         assert_eq!(*read_leaves.borrow(), vec![2, 1]);
+        assert_eq!(
+            result.access_metrics(&params),
+            PrivateHnswSearchAccessMetrics {
+                path_accesses: 2,
+                unique_leaf_labels: 2,
+                fixed_steps: 2,
+                exhausted_fixed_budget: true,
+            }
+        );
+        assert_eq!(
+            result.accessed_leaf_labels,
+            vec![
+                encode_private_hnsw_oram_leaf_label(2, config.tree_height).unwrap(),
+                encode_private_hnsw_oram_leaf_label(1, config.tree_height).unwrap(),
+            ]
+        );
     }
 
     #[test]
