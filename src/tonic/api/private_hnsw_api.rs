@@ -2649,8 +2649,11 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
-            let wrong_budget_paths = vec![fixture.entry_leaf_label()];
+            let wrong_budget_path = fixture.entry_leaf_label();
+            let wrong_budget_paths = vec![wrong_budget_path.clone()];
             let wrong_budget_signature = fixture.client_signature();
+            let wrong_budget_signature_key_id = wrong_budget_signature.key_id.clone();
+            let wrong_budget_signature_sig = wrong_budget_signature.sig.clone();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -2671,9 +2674,21 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("fixed path budget"));
+            assert!(!err.message().contains(&wrong_budget_path));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext)
+            );
+            assert!(!err.message().contains(&wrong_budget_signature_key_id));
+            assert!(!err.message().contains(&wrong_budget_signature_sig));
 
-            let missing_dummy_paths = vec![fixture.entry_leaf_label()];
+            let missing_dummy_path = fixture.entry_leaf_label();
+            let missing_dummy_paths = vec![missing_dummy_path.clone()];
             let missing_dummy_signature = fixture.client_signature();
+            let missing_dummy_signature_key_id = missing_dummy_signature.key_id.clone();
+            let missing_dummy_signature_sig = missing_dummy_signature.sig.clone();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -2694,6 +2709,15 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("fixed path budget"));
+            assert!(!err.message().contains(&missing_dummy_path));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext)
+            );
+            assert!(!err.message().contains(&missing_dummy_signature_key_id));
+            assert!(!err.message().contains(&missing_dummy_signature_sig));
 
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
