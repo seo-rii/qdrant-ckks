@@ -1513,10 +1513,11 @@ mod private_result_oram_rest_tests {
                 )
                 .unwrap()
                 .unwrap();
+            let active_snapshot_client_id = "tenant-a/sdk-instance-active-snapshot";
             let active_snapshot_session_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/session",
                 OpenPrivateResultOramSessionRequest {
-                    client_id: "tenant-a/sdk-instance-active-snapshot".to_string(),
+                    client_id: active_snapshot_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                 },
@@ -1529,6 +1530,10 @@ mod private_result_oram_rest_tests {
             );
             assert!(
                 !active_snapshot_session_error.contains("private_result_oram"),
+                "{active_snapshot_session_error}"
+            );
+            assert!(
+                !active_snapshot_session_error.contains(active_snapshot_client_id),
                 "{active_snapshot_session_error}"
             );
             let active_snapshot_manifest_upload_error = post_json_error_contains!(

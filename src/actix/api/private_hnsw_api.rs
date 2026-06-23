@@ -1586,10 +1586,11 @@ mod private_hnsw_rest_tests {
                 manifest_read["signature"]["sig"].as_str().unwrap(),
                 fixture.manifest_signature.sig.as_str(),
             );
+            let manifest_only_client_id = "tenant-a/sdk-instance-manifest-only";
             let manifest_only_session_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
-                    client_id: "tenant-a/sdk-instance-manifest-only".to_string(),
+                    client_id: manifest_only_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                     result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
@@ -1603,6 +1604,10 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !manifest_only_session_error.contains("/tmp"),
+                "{manifest_only_session_error}"
+            );
+            assert!(
+                !manifest_only_session_error.contains(manifest_only_client_id),
                 "{manifest_only_session_error}"
             );
 
@@ -1910,10 +1915,11 @@ mod private_hnsw_rest_tests {
             assert_eq!(bucket_result["index_epoch"], BASE_EPOCH);
 
             std::fs::write(&current_epoch_path, b"{").unwrap();
+            let corrupt_epoch_client_id = "tenant-a/sdk-instance-corrupt-epoch";
             let malformed_session_epoch_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
-                    client_id: "tenant-a/sdk-instance-corrupt-epoch".to_string(),
+                    client_id: corrupt_epoch_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                     result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
@@ -1927,6 +1933,10 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !malformed_session_epoch_error.contains("/tmp"),
+                "{malformed_session_epoch_error}"
+            );
+            assert!(
+                !malformed_session_epoch_error.contains(corrupt_epoch_client_id),
                 "{malformed_session_epoch_error}"
             );
             std::fs::write(&current_epoch_path, &current_epoch_json).unwrap();
@@ -2041,10 +2051,11 @@ mod private_hnsw_rest_tests {
                 )
                 .unwrap()
                 .unwrap();
+            let active_snapshot_client_id = "tenant-a/sdk-instance-active-snapshot";
             let active_snapshot_session_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
-                    client_id: "tenant-a/sdk-instance-active-snapshot".to_string(),
+                    client_id: active_snapshot_client_id.to_string(),
                     desired_epoch: BASE_EPOCH,
                     fixed_budget: true,
                     result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
@@ -2058,6 +2069,10 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !active_snapshot_session_error.contains("private_hnsw_oram"),
+                "{active_snapshot_session_error}"
+            );
+            assert!(
+                !active_snapshot_session_error.contains(active_snapshot_client_id),
                 "{active_snapshot_session_error}"
             );
             let active_snapshot_manifest_upload_error = post_json_error_contains!(
