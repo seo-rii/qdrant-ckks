@@ -227,8 +227,8 @@ impl PrivateResultOramSessionRegistry {
                     .is_some_and(|active| active == session_id)
                 {
                     self.active_writer_by_collection.remove(collection_id);
+                    return true;
                 }
-                return true;
             }
             self.sessions.insert(session_id.to_string(), session);
         }
@@ -2723,6 +2723,39 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("writer lock is missing or stale"));
         assert_private_result_registry_error_redacts_ids(&rendered);
+    }
+
+    #[test]
+    fn session_registry_close_requires_matching_writer_lock() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
+
+        registry.active_writer_by_collection.insert(
+            "collection-private-result-test".to_string(),
+            "session-2".to_string(),
+        );
+        assert!(!registry.close("collection-private-result-test", "session-1", now));
+        assert!(registry.sessions.contains_key("session-1"));
+        assert_eq!(
+            registry
+                .active_writer_by_collection
+                .get("collection-private-result-test"),
+            Some(&"session-2".to_string())
+        );
+
+        registry
+            .active_writer_by_collection
+            .remove("collection-private-result-test");
+        assert!(!registry.close("collection-private-result-test", "session-1", now));
+        assert!(registry.sessions.contains_key("session-1"));
+        assert!(
+            !registry
+                .active_writer_by_collection
+                .contains_key("collection-private-result-test")
+        );
     }
 
     #[test]

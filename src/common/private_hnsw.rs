@@ -271,8 +271,8 @@ impl PrivateHnswSessionRegistry {
                     .is_some_and(|active| active == session_id)
                 {
                     self.active_writer_by_index.remove(&index_key);
+                    return true;
                 }
-                return true;
             }
             self.sessions.insert(session_id.to_string(), session);
         }
@@ -4352,6 +4352,31 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("writer lock is missing or stale"));
         assert_private_hnsw_registry_error_redacts_ids(&rendered);
+    }
+
+    #[test]
+    fn session_registry_close_requires_matching_writer_lock() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
+        let index_key = private_hnsw_index_key("collection-uuid-1", "text");
+
+        registry
+            .active_writer_by_index
+            .insert(index_key.clone(), "session-2".to_string());
+        assert!(!registry.close("collection-uuid-1", "text", "session-1", now));
+        assert!(registry.sessions.contains_key("session-1"));
+        assert_eq!(
+            registry.active_writer_by_index.get(&index_key),
+            Some(&"session-2".to_string())
+        );
+
+        registry.active_writer_by_index.remove(&index_key);
+        assert!(!registry.close("collection-uuid-1", "text", "session-1", now));
+        assert!(registry.sessions.contains_key("session-1"));
+        assert!(!registry.active_writer_by_index.contains_key(&index_key));
     }
 
     #[test]
