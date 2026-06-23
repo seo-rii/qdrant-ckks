@@ -396,6 +396,9 @@ mod private_result_oram_grpc_tests {
     };
     use collection::operations::types::VectorsConfig;
     use collection::operations::vector_params_builder::VectorParamsBuilder;
+    use collection::private_result_oram_store::{
+        PrivateResultOramEpochState, PrivateResultOramStore,
+    };
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
         PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
@@ -1747,6 +1750,154 @@ mod private_result_oram_grpc_tests {
             .into_inner();
             assert_eq!(session.collection_id, COLLECTION_ID);
             assert_eq!(session.index_epoch, BASE_EPOCH);
+
+            let uploaded_store = PrivateResultOramStore::new(collection.path());
+            let current_epoch_path = uploaded_store
+                .root_path()
+                .join("epochs")
+                .join("current.json");
+            let original_current_epoch_bytes = std::fs::read(&current_epoch_path).unwrap();
+            let stale_current_root = BASE64URL_NOPAD.encode(&[88; 32]);
+            std::fs::write(
+                &current_epoch_path,
+                serde_json::to_vec_pretty(&PrivateResultOramEpochState {
+                    index_epoch: BASE_EPOCH,
+                    root_hash: stale_current_root.clone(),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+
+            let stale_current_read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            let stale_current_read_signature =
+                fixture.read_signature(&stale_current_read_bucket_ids);
+            let stale_current_read_session_id = session.session_id.clone();
+            let stale_current_read_root_hash = fixture.manifest.root_hash.clone();
+            let stale_current_read_signature_key_id = stale_current_read_signature.key_id.clone();
+            let stale_current_read_signature_sig = stale_current_read_signature.sig.clone();
+            let err = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: stale_current_read_session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: stale_current_read_root_hash.clone(),
+                    bucket_ids: stale_current_read_bucket_ids,
+                    read_signature: Some(signature_to_proto(stale_current_read_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("read_buckets current epoch/root does not match active session")
+            );
+            assert!(
+                !err.message().contains(&stale_current_read_root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_root),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_read_session_id),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_read_signature_key_id),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_read_signature_sig),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&fixture.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("private_result_oram"));
+            assert!(!err.message().contains("/tmp"));
+
+            let (
+                stale_current_updated_bucket,
+                stale_current_commit_signature,
+                stale_current_new_root,
+            ) = fixture.commit_bucket();
+            let stale_current_commit_session_id = session.session_id.clone();
+            let stale_current_commit_old_root_hash = fixture.manifest.root_hash.clone();
+            let stale_current_commit_signature_key_id =
+                stale_current_commit_signature.key_id.clone();
+            let stale_current_commit_signature_sig = stale_current_commit_signature.sig.clone();
+            let stale_current_commit_bucket_ciphertext =
+                stale_current_updated_bucket.ciphertext.clone();
+            let err = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: stale_current_commit_session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: stale_current_commit_old_root_hash.clone(),
+                    new_root_hash: stale_current_new_root.clone(),
+                    updated_buckets: vec![bucket_to_proto(stale_current_updated_bucket)],
+                    commit_signature: Some(signature_to_proto(stale_current_commit_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("commit current epoch/root does not match active session")
+            );
+            assert!(
+                !err.message().contains(&stale_current_commit_old_root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_new_root),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_root),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_commit_session_id),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&stale_current_commit_signature_key_id),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_commit_signature_sig),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&stale_current_commit_bucket_ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("private_result_oram"));
+            assert!(!err.message().contains("/tmp"));
+            std::fs::write(&current_epoch_path, original_current_epoch_bytes).unwrap();
 
             let duplicate_session_client_id = "tenant-a/sdk-instance-2";
             let duplicate_session = PrivateResultOram::open_private_result_oram_session(
