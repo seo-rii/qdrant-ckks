@@ -363,6 +363,16 @@ impl PrivateHnswSessionRegistry {
                 "private HNSW ORAM session does not match collection/vector",
             ));
         }
+        let index_key = private_hnsw_index_key(collection_id, vector_name);
+        if !self
+            .active_writer_by_index
+            .get(&index_key)
+            .is_some_and(|active| active == session_id)
+        {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM session writer lock is missing or stale",
+            ));
+        }
         if session.lease_expires_unix <= now_unix {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM session lease expired",
@@ -4298,6 +4308,50 @@ mod private_hnsw_tests {
         registry
             .open(fixture_session("session-2", 20), now)
             .unwrap();
+    }
+
+    #[test]
+    fn session_registry_requires_writer_lock_for_session_action() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
+        let index_key = private_hnsw_index_key("collection-uuid-1", "text");
+
+        registry
+            .active_writer_by_index
+            .insert(index_key.clone(), "session-2".to_string());
+        let err = registry
+            .with_session_mut(
+                "collection-uuid-1",
+                "text",
+                "session-1",
+                now,
+                |_| -> StorageResult<()> {
+                    panic!("private HNSW action must not run without the writer lock")
+                },
+            )
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("writer lock is missing or stale"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
+
+        registry.active_writer_by_index.remove(&index_key);
+        let err = registry
+            .with_session_mut(
+                "collection-uuid-1",
+                "text",
+                "session-1",
+                now,
+                |_| -> StorageResult<()> {
+                    panic!("private HNSW action must not run with a missing writer lock")
+                },
+            )
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("writer lock is missing or stale"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
     }
 
     #[test]

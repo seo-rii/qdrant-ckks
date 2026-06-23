@@ -304,6 +304,15 @@ impl PrivateResultOramSessionRegistry {
                 "private result ORAM session does not match collection",
             ));
         }
+        if !self
+            .active_writer_by_collection
+            .get(collection_id)
+            .is_some_and(|active| active == session_id)
+        {
+            return Err(StorageError::bad_request(
+                "private result ORAM session writer lock is missing or stale",
+            ));
+        }
         if session.lease_expires_unix <= now_unix {
             return Err(StorageError::bad_request(
                 "private result ORAM session lease expired",
@@ -2670,6 +2679,50 @@ mod private_result_oram_tests {
         registry
             .open(fixture_session("session-2", 20), now)
             .unwrap();
+    }
+
+    #[test]
+    fn session_registry_requires_writer_lock_for_session_action() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
+
+        registry.active_writer_by_collection.insert(
+            "collection-private-result-test".to_string(),
+            "session-2".to_string(),
+        );
+        let err = registry
+            .with_session_mut(
+                "collection-private-result-test",
+                "session-1",
+                now,
+                |_| -> StorageResult<()> {
+                    panic!("private result ORAM action must not run without the writer lock")
+                },
+            )
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("writer lock is missing or stale"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
+
+        registry
+            .active_writer_by_collection
+            .remove("collection-private-result-test");
+        let err = registry
+            .with_session_mut(
+                "collection-private-result-test",
+                "session-1",
+                now,
+                |_| -> StorageResult<()> {
+                    panic!("private result ORAM action must not run with a missing writer lock")
+                },
+            )
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("writer lock is missing or stale"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
     }
 
     #[test]
