@@ -2761,6 +2761,27 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn collection_snapshot_guard_uses_exact_private_result_upload_collection() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .begin_upload("collection-private-result-test-suffix", now)
+            .unwrap();
+
+        registry
+            .begin_collection_snapshot("collection-private-result-test", now)
+            .unwrap();
+        registry.release_collection_snapshot("collection-private-result-test");
+
+        let err = registry
+            .begin_collection_snapshot("collection-private-result-test-suffix", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("snapshot requires no active private ORAM upload"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
+    }
+
+    #[test]
     fn session_registry_reference_counts_fail_closed_and_cleanup_zero() {
         let now = 10;
         let mut registry = PrivateResultOramSessionRegistry::default();
