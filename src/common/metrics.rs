@@ -1574,6 +1574,10 @@ mod tests {
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
             ),
             (
+                "/collections/docs/private-hnsw/text/oram/read_paths?paths=hnsw-query-leaf-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+            ),
+            (
                 "/collections/docs/private-hnsw/text/oram/commit/updated-bucket-sentinel",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit",
             ),
@@ -1583,6 +1587,10 @@ mod tests {
             ),
             (
                 "/collections/docs/private-hnsw/text/session/session-id-sentinel/close",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+            ),
+            (
+                "/collections/docs/private-hnsw/text/session/bad/hnsw-session-id-sentinel/close",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
             ),
             (
@@ -1959,8 +1967,10 @@ mod tests {
             "GET /collections/docs/private-hnsw/text/manifest/root-hash-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/commit/updated-bucket-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths/leaf-label-sentinel",
+            "POST /collections/docs/private-hnsw/text/oram/read_paths?paths=hnsw-query-leaf-sentinel",
             "POST /collections/docs/private-hnsw/text/session/client-state-sentinel",
             "POST /collections/docs/private-hnsw/text/session/session-id-sentinel/close",
+            "POST /collections/docs/private-hnsw/text/session/bad/hnsw-session-id-sentinel/close",
             "POST /collections/docs/private-result-oram/buckets/result-bucket-id-sentinel",
             "GET /collections/docs/private-result-oram/manifest/result-root-hash-sentinel",
             "POST /collections/docs/private-result-oram/oram/commit/result-updated-bucket-sentinel",
@@ -2009,6 +2019,8 @@ mod tests {
         let redacted_sentinels = [
             "bucket-id-sentinel",
             "client-state-sentinel",
+            "hnsw-query-leaf-sentinel",
+            "hnsw-session-id-sentinel",
             "leaf-label-sentinel",
             "result-bucket-id-sentinel",
             "result-query-bucket-sentinel",
