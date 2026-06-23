@@ -4453,6 +4453,15 @@ mod tests {
         assert_eq!(opened.len(), 1);
         assert_eq!(opened[0].blocks[0], Some(payload_block(8)));
 
+        let mut unopened_tampered_bucket = bucket0.clone();
+        let mut raw_ciphertext = BASE64URL_NOPAD
+            .decode(unopened_tampered_bucket.ciphertext.as_bytes())
+            .unwrap();
+        *raw_ciphertext.last_mut().unwrap() ^= 0x01;
+        unopened_tampered_bucket.ciphertext = BASE64URL_NOPAD.encode(&raw_ciphertext);
+        unopened_tampered_bucket.ciphertext_sha256 = base64url_sha256(&raw_ciphertext);
+        // Keep the old commitment so opening this bucket would fail if proof checks moved later.
+
         let tampered_proof = PrivateResultOramMerkleProof {
             root_hash: BASE64URL_NOPAD.encode(&[99; 32]),
             ..proof
@@ -4466,7 +4475,7 @@ mod tests {
                 &root,
                 2,
                 &serde_json::to_string(&tampered_proof).unwrap(),
-                &[bucket0],
+                std::slice::from_ref(&unopened_tampered_bucket),
             ),
             Err(PrivateResultOramError::MerkleProofMismatch)
         );
