@@ -205,7 +205,7 @@ impl Debug for PrivateHnswSession {
 #[derive(Default)]
 struct PrivateHnswSessionRegistry {
     sessions: HashMap<String, PrivateHnswSession>,
-    active_writer_by_index: HashMap<String, String>,
+    active_writer_by_index: HashMap<(String, String), String>,
     active_snapshot_by_collection: HashMap<String, usize>,
     active_upload_by_index: HashSet<(String, String)>,
 }
@@ -231,9 +231,8 @@ impl PrivateHnswSessionRegistry {
             ));
         }
 
-        let index_key = session_index_key(&session.collection_id, &session.vector_name);
-        let upload_key = upload_index_key(&session.collection_id, &session.vector_name);
-        if self.active_upload_by_index.contains(&upload_key) {
+        let index_key = private_hnsw_index_key(&session.collection_id, &session.vector_name);
+        if self.active_upload_by_index.contains(&index_key) {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM session open requires no active upload for this index",
             ));
@@ -265,7 +264,7 @@ impl PrivateHnswSessionRegistry {
         let removed = self.sessions.remove(session_id);
         if let Some(session) = removed {
             if session.collection_id == collection_id && session.vector_name == vector_name {
-                let index_key = session_index_key(collection_id, vector_name);
+                let index_key = private_hnsw_index_key(collection_id, vector_name);
                 if self
                     .active_writer_by_index
                     .get(&index_key)
@@ -290,7 +289,7 @@ impl PrivateHnswSessionRegistry {
     fn has_active_index(&mut self, collection_id: &str, vector_name: &str, now_unix: u64) -> bool {
         self.expire(now_unix);
         self.active_writer_by_index
-            .contains_key(&session_index_key(collection_id, vector_name))
+            .contains_key(&private_hnsw_index_key(collection_id, vector_name))
     }
 
     fn has_active_upload_collection(&self, collection_id: &str) -> bool {
@@ -338,13 +337,13 @@ impl PrivateHnswSessionRegistry {
     ) -> StorageResult<()> {
         ensure_private_hnsw_write_window_in_registry(self, collection_id, vector_name, now_unix)?;
         self.active_upload_by_index
-            .insert(upload_index_key(collection_id, vector_name));
+            .insert(private_hnsw_index_key(collection_id, vector_name));
         Ok(())
     }
 
     fn release_upload(&mut self, collection_id: &str, vector_name: &str) {
         self.active_upload_by_index
-            .remove(&upload_index_key(collection_id, vector_name));
+            .remove(&private_hnsw_index_key(collection_id, vector_name));
     }
 
     fn with_session_mut<T>(
@@ -382,7 +381,8 @@ impl PrivateHnswSessionRegistry {
             .collect::<Vec<_>>();
         for session_id in expired {
             if let Some(session) = self.sessions.remove(&session_id) {
-                let index_key = session_index_key(&session.collection_id, &session.vector_name);
+                let index_key =
+                    private_hnsw_index_key(&session.collection_id, &session.vector_name);
                 if self
                     .active_writer_by_index
                     .get(&index_key)
@@ -1929,7 +1929,7 @@ fn ensure_private_hnsw_write_window_in_registry(
     }
     if registry
         .active_upload_by_index
-        .contains(&upload_index_key(collection_id, vector_name))
+        .contains(&private_hnsw_index_key(collection_id, vector_name))
     {
         return Err(StorageError::bad_request(
             "private HNSW ORAM upload requires no active upload for this index",
@@ -2016,11 +2016,7 @@ fn new_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-fn session_index_key(collection_id: &str, vector_name: &str) -> String {
-    format!("{collection_id}\x1f{vector_name}")
-}
-
-fn upload_index_key(collection_id: &str, vector_name: &str) -> (String, String) {
+fn private_hnsw_index_key(collection_id: &str, vector_name: &str) -> (String, String) {
     (collection_id.to_string(), vector_name.to_string())
 }
 
@@ -4402,7 +4398,7 @@ mod private_hnsw_tests {
                 .contains_key("collection-uuid-1")
         );
 
-        let index_key = upload_index_key("collection-uuid-1", "text");
+        let index_key = private_hnsw_index_key("collection-uuid-1", "text");
         registry.active_upload_by_index.insert(index_key.clone());
         registry.release_upload("collection-uuid-1", "text");
         assert!(!registry.active_upload_by_index.contains(&index_key));
