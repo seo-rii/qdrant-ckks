@@ -567,7 +567,7 @@ fn private_oram_snapshot_source_dir(
             )))
         }
         Ok(_) => {
-            validate_private_oram_snapshot_source_tree(&source_dir, label)?;
+            validate_private_oram_snapshot_source_tree(&source_dir, label, dir_name, 0)?;
             Ok(Some(source_dir))
         }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
@@ -588,6 +588,8 @@ fn private_oram_label(dir_name: &str) -> &'static str {
 fn validate_private_oram_snapshot_source_tree(
     source_dir: &Path,
     label: &str,
+    dir_name: &str,
+    depth: usize,
 ) -> CollectionResult<()> {
     let entries = std::fs::read_dir(source_dir).map_err(|_| {
         CollectionError::service_error(format!("{label} snapshot source cannot be read"))
@@ -610,7 +612,18 @@ fn validate_private_oram_snapshot_source_tree(
             )));
         }
         if metadata.file_type().is_dir() {
-            validate_private_oram_snapshot_source_tree(&entry.path(), label)?;
+            if private_oram_snapshot_entry_is_temp_dir(dir_name, depth, &entry.file_name())
+                && private_oram_snapshot_dir_has_entries(&entry.path()).map_err(|_| {
+                    CollectionError::service_error(format!(
+                        "{label} snapshot source cannot be inspected"
+                    ))
+                })?
+            {
+                return Err(CollectionError::service_error(format!(
+                    "{label} snapshot source contains incomplete private ORAM write state",
+                )));
+            }
+            validate_private_oram_snapshot_source_tree(&entry.path(), label, dir_name, depth + 1)?;
         }
     }
     Ok(())
@@ -623,6 +636,25 @@ fn private_oram_snapshot_source_entry_is_client_owned_state(name: &std::ffi::OsS
     let name = name.to_ascii_lowercase();
     let stem = name.split_once('.').map_or(name.as_str(), |(stem, _)| stem);
     matches!(stem, "client_state" | "position_map" | "stash")
+}
+
+fn private_oram_snapshot_entry_is_temp_dir(
+    dir_name: &str,
+    depth: usize,
+    name: &std::ffi::OsStr,
+) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    match dir_name {
+        PRIVATE_RESULT_ORAM_DIR => depth == 0 && name == "temp",
+        PRIVATE_HNSW_ORAM_DIR => depth == 1 && name == "temp",
+        _ => false,
+    }
+}
+
+fn private_oram_snapshot_dir_has_entries(path: &Path) -> std::io::Result<bool> {
+    Ok(std::fs::read_dir(path)?.next().is_some())
 }
 
 fn ensure_snapshot_crypto_migration_state_allows_snapshot(
@@ -678,6 +710,8 @@ fn validate_private_result_oram_snapshot_store_matches_config(
     validate_private_oram_snapshot_restore_tree_has_no_client_owned_state(
         &private_result_oram_path,
         "private result ORAM",
+        PRIVATE_RESULT_ORAM_DIR,
+        0,
     )?;
 
     Ok(())
@@ -963,6 +997,8 @@ fn validate_private_hnsw_oram_snapshot_store_matches_config(
     validate_private_oram_snapshot_restore_tree_has_no_client_owned_state(
         &private_hnsw_root,
         "private HNSW ORAM",
+        PRIVATE_HNSW_ORAM_DIR,
+        0,
     )?;
 
     let entries = std::fs::read_dir(&private_hnsw_root).map_err(|_| {
@@ -1008,6 +1044,8 @@ fn validate_private_hnsw_oram_snapshot_store_matches_config(
 fn validate_private_oram_snapshot_restore_tree_has_no_client_owned_state(
     root: &Path,
     label: &str,
+    dir_name: &str,
+    depth: usize,
 ) -> CollectionResult<()> {
     let entries = std::fs::read_dir(root).map_err(|_| {
         CollectionError::bad_request(format!("{label} snapshot store cannot be read"))
@@ -1025,9 +1063,22 @@ fn validate_private_oram_snapshot_restore_tree_has_no_client_owned_state(
             CollectionError::bad_request(format!("{label} snapshot store cannot be inspected"))
         })?;
         if metadata.file_type().is_dir() {
+            if private_oram_snapshot_entry_is_temp_dir(dir_name, depth, &entry.file_name())
+                && private_oram_snapshot_dir_has_entries(&entry.path()).map_err(|_| {
+                    CollectionError::bad_request(format!(
+                        "{label} snapshot store cannot be inspected"
+                    ))
+                })?
+            {
+                return Err(CollectionError::bad_request(format!(
+                    "{label} snapshot store contains incomplete private ORAM write state",
+                )));
+            }
             validate_private_oram_snapshot_restore_tree_has_no_client_owned_state(
                 &entry.path(),
                 label,
+                dir_name,
+                depth + 1,
             )?;
         }
     }
@@ -2009,6 +2060,58 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_snapshot_source_dir_rejects_non_empty_temp_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-source-non-empty-temp")
+            .tempdir()
+            .unwrap();
+
+        let hnsw_temp_file = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("temp")
+            .join("stale-write.tmp");
+        fs::create_dir_all(hnsw_temp_file.parent().unwrap()).unwrap();
+        fs::write(&hnsw_temp_file, b"stale HNSW temp sentinel").unwrap();
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(
+                "private HNSW ORAM snapshot source contains incomplete private ORAM write state"
+            ),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("text"));
+        assert!(!rendered.contains("stale-write"));
+        assert!(!rendered.contains("sentinel"));
+
+        let result_temp_file = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("temp")
+            .join("stale-result-write.tmp");
+        fs::create_dir_all(result_temp_file.parent().unwrap()).unwrap();
+        fs::write(&result_temp_file, b"stale result temp sentinel").unwrap();
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(
+                "private result ORAM snapshot source contains incomplete private ORAM write state"
+            ),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!rendered.contains("stale-result-write"));
+        assert!(!rendered.contains("sentinel"));
+    }
+
+    #[test]
     fn private_hnsw_oram_shard_snapshot_operations_fail_closed_until_bucket_parity_supported() {
         let empty_params = CollectionParams::empty();
         validate_private_oram_shard_snapshot_operation(
@@ -2226,6 +2329,41 @@ mod tests {
         assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
         assert!(!err.contains("position_map"));
+        assert!(!err.contains("sentinel"));
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_non_empty_temp_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-non-empty-temp")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("temp")
+                .join("stale-result-write.tmp"),
+            b"stale result temp sentinel",
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("incomplete private ORAM write state"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("stale-result-write"));
         assert!(!err.contains("sentinel"));
     }
 
@@ -3164,6 +3302,43 @@ mod tests {
         assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!err.contains("text"));
         assert!(!err.contains("stash"));
+        assert!(!err.contains("sentinel"));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_non_empty_temp_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-non-empty-temp")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join("temp")
+                .join("stale-hnsw-write.tmp"),
+            b"stale HNSW temp sentinel",
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("incomplete private ORAM write state"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains("text"));
+        assert!(!err.contains("stale-hnsw-write"));
         assert!(!err.contains("sentinel"));
     }
 
