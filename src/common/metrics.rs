@@ -1636,6 +1636,10 @@ mod tests {
                 "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths",
             ),
             (
+                "/qdrant.PrivateHnswOram/ClosePrivateHnswSession/session-id-sentinel",
+                "/qdrant.PrivateHnswOram/ClosePrivateHnswSession",
+            ),
+            (
                 "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets/result-updated-bucket-sentinel",
                 "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets",
             ),
