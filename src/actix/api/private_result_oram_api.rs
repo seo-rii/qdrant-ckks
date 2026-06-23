@@ -762,6 +762,11 @@ mod private_result_oram_rest_tests {
             manifest: fixture.manifest.clone(),
             signature: fixture.signature.clone(),
         };
+        let open_request = OpenPrivateResultOramSessionRequest {
+            client_id: "private-result-rest-client-id-sentinel".to_string(),
+            desired_epoch: fixture.manifest.index_epoch,
+            fixed_budget: true,
+        };
         let session_response = PrivateResultOramSessionResponse {
             session_id: SESSION_ID.to_string(),
             collection_id: COLLECTION_ID.to_string(),
@@ -810,6 +815,7 @@ mod private_result_oram_rest_tests {
 
         let rendered = [
             format!("{manifest_request:?}"),
+            format!("{open_request:?}"),
             format!("{session_response:?}"),
             format!("{read_request:?}"),
             format!("{commit_request:?}"),
@@ -826,6 +832,7 @@ mod private_result_oram_rest_tests {
             commit_signature.sig,
             "987654".to_string(),
             "RESULT-REST-PROOF-SENTINEL".to_string(),
+            "private-result-rest-client-id-sentinel".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }

@@ -557,6 +557,12 @@ mod private_hnsw_rest_tests {
             manifest: fixture.manifest.clone(),
             signature: fixture.manifest_signature.clone(),
         };
+        let open_request = OpenPrivateHnswSessionRequest {
+            client_id: "private-hnsw-rest-client-id-sentinel".to_string(),
+            desired_epoch: fixture.manifest.index_epoch,
+            fixed_budget: true,
+            result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+        };
         let session_response = PrivateHnswSessionResponse {
             session_id: SESSION_ID.to_string(),
             collection_id: COLLECTION_ID.to_string(),
@@ -613,6 +619,7 @@ mod private_hnsw_rest_tests {
 
         let rendered = [
             format!("{manifest_request:?}"),
+            format!("{open_request:?}"),
             format!("{session_response:?}"),
             format!("{read_request:?}"),
             format!("{commit_request:?}"),
@@ -628,6 +635,7 @@ mod private_hnsw_rest_tests {
             commit_signature.sig,
             entry_leaf_label,
             "HNSW-REST-PROOF-SENTINEL".to_string(),
+            "private-hnsw-rest-client-id-sentinel".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }
