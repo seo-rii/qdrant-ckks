@@ -556,11 +556,50 @@ fn private_oram_layout_error_contains_sensitive_detail(
     let collection_path = collection_path.to_string_lossy();
     rendered.contains(collection_path.as_ref())
         || rendered.contains(private_oram_dir)
+        || private_oram_layout_error_contains_sensitive_marker(rendered)
         || rendered
             .split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')))
             .any(|token| {
                 token.ends_with(".bucket") || looks_like_base64url_private_oram_token(token)
             })
+}
+
+fn private_oram_layout_error_contains_sensitive_marker(rendered: &str) -> bool {
+    const SENSITIVE_MARKERS: &[&str] = &[
+        "accessed_leaf_labels",
+        "bucket id",
+        "bucket_id",
+        "bucket_ids",
+        "ciphertext",
+        "client_signature",
+        "commit_signature",
+        "entry_node_id",
+        "leaf hash",
+        "leaf_hash",
+        "leaf_label",
+        "manifest_signature",
+        "new_root_hash",
+        "node_id",
+        "old_root_hash",
+        "path_label",
+        "payload_fetch_token",
+        "payload_fetch_tokens",
+        "point_token",
+        "proof",
+        "read_bucket_id",
+        "read_bucket_ids",
+        "read_signature",
+        "root_hash",
+        "sibling hash",
+        "sibling_hash",
+        "signature",
+        "visited_node_ids",
+    ];
+
+    let rendered = rendered.to_ascii_lowercase();
+    SENSITIVE_MARKERS
+        .iter()
+        .any(|marker| rendered.contains(marker))
 }
 
 fn looks_like_base64url_private_oram_token(token: &str) -> bool {
@@ -723,6 +762,40 @@ mod tests {
         assert!(rendered.contains("private HNSW ORAM snapshot layout validation failed"));
         assert!(!rendered.contains(&leaked_signature));
 
+        let leaked_short_values = [
+            "hnsw-short-bucket-id",
+            "hnsw-short-path-label",
+            "hnsw-short-leaf-label",
+            "hnsw-short-node-id",
+            "hnsw-short-entry-node-id",
+            "hnsw-short-point-token",
+            "hnsw-short-payload-token",
+            "hnsw-short-proof-leaf",
+            "hnsw-short-proof-sibling",
+        ];
+        let err = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private HNSW ORAM bucket_id {} path_label {} leaf_label {} node_id {} \
+                 entry_node_id {} point_token {} payload_fetch_token {} proof leaf_hash {} \
+                 sibling_hash {}",
+                leaked_short_values[0],
+                leaked_short_values[1],
+                leaked_short_values[2],
+                leaked_short_values[3],
+                leaked_short_values[4],
+                leaked_short_values[5],
+                leaked_short_values[6],
+                leaked_short_values[7],
+                leaked_short_values[8],
+            )),
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("private HNSW ORAM snapshot layout validation failed"));
+        for leaked in leaked_short_values {
+            assert!(!rendered.contains(leaked));
+        }
+
         let safe = sanitize_private_hnsw_snapshot_layout_error(
             temp_dir.path(),
             CollectionError::bad_request(
@@ -782,6 +855,35 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("private result ORAM snapshot layout validation failed"));
         assert!(!rendered.contains(&leaked_ciphertext));
+
+        let leaked_short_values = [
+            "result-short-read-bucket-id",
+            "result-short-bucket-id",
+            "result-short-proof-leaf",
+            "result-short-proof-sibling",
+            "result-short-payload-token",
+            "result-short-read-signature",
+            "result-short-commit-signature",
+        ];
+        let err = sanitize_private_result_oram_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private result ORAM read_bucket_id {} bucket_ids [{}] proof leaf_hash {} \
+                 sibling_hash {} payload_fetch_tokens {} read_signature {} commit_signature {}",
+                leaked_short_values[0],
+                leaked_short_values[1],
+                leaked_short_values[2],
+                leaked_short_values[3],
+                leaked_short_values[4],
+                leaked_short_values[5],
+                leaked_short_values[6],
+            )),
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("private result ORAM snapshot layout validation failed"));
+        for leaked in leaked_short_values {
+            assert!(!rendered.contains(leaked));
+        }
 
         let safe = sanitize_private_result_oram_snapshot_layout_error(
             temp_dir.path(),
