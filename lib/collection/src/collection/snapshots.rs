@@ -596,6 +596,11 @@ fn validate_private_oram_snapshot_source_tree(
         let entry = entry.map_err(|_| {
             CollectionError::service_error(format!("{label} snapshot source cannot be read"))
         })?;
+        if private_oram_snapshot_source_entry_is_client_owned_state(&entry.file_name()) {
+            return Err(CollectionError::service_error(format!(
+                "{label} snapshot source contains client-owned ORAM state",
+            )));
+        }
         let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| {
             CollectionError::service_error(format!("{label} snapshot source cannot be inspected"))
         })?;
@@ -609,6 +614,15 @@ fn validate_private_oram_snapshot_source_tree(
         }
     }
     Ok(())
+}
+
+fn private_oram_snapshot_source_entry_is_client_owned_state(name: &std::ffi::OsStr) -> bool {
+    let Some(name) = name.to_str() else {
+        return false;
+    };
+    let name = name.to_ascii_lowercase();
+    let stem = name.split_once('.').map_or(name.as_str(), |(stem, _)| stem);
+    matches!(stem, "client_state" | "position_map" | "stash")
 }
 
 fn ensure_snapshot_crypto_migration_state_allows_snapshot(
@@ -1893,6 +1907,67 @@ mod tests {
             assert!(!rendered.contains("nul"), "{rendered}");
             assert!(!rendered.contains(dir_name), "{rendered}");
         }
+    }
+
+    #[test]
+    fn private_oram_snapshot_source_dir_rejects_client_owned_state_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-source-client-state")
+            .tempdir()
+            .unwrap();
+
+        let hnsw_client_state = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("client_state.json");
+        fs::create_dir_all(hnsw_client_state.parent().unwrap()).unwrap();
+        fs::write(&hnsw_client_state, b"client state sentinel").unwrap();
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("private HNSW ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("text"));
+        assert!(!rendered.contains("client_state"));
+        assert!(!rendered.contains("sentinel"));
+
+        let result_position_map = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("position_map.bin");
+        fs::create_dir_all(result_position_map.parent().unwrap()).unwrap();
+        fs::write(&result_position_map, b"position map sentinel").unwrap();
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered
+                .contains("private result ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!rendered.contains("position_map"));
+        assert!(!rendered.contains("sentinel"));
+
+        fs::remove_file(&result_position_map).unwrap();
+        fs::write(
+            temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR).join("stash"),
+            b"stash sentinel",
+        )
+        .unwrap();
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered
+                .contains("private result ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains("stash"));
+        assert!(!rendered.contains("sentinel"));
     }
 
     #[test]
