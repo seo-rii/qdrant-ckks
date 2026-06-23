@@ -675,6 +675,10 @@ fn validate_private_result_oram_snapshot_store_matches_config(
             "private result ORAM snapshot store is present without a matching collection encryption rule",
         ));
     }
+    validate_private_oram_snapshot_restore_tree_has_no_client_owned_state(
+        &private_result_oram_path,
+        "private result ORAM",
+    )?;
 
     Ok(())
 }
@@ -956,6 +960,10 @@ fn validate_private_hnsw_oram_snapshot_store_matches_config(
             "private HNSW ORAM snapshot store is present without a matching collection encryption rule",
         ));
     }
+    validate_private_oram_snapshot_restore_tree_has_no_client_owned_state(
+        &private_hnsw_root,
+        "private HNSW ORAM",
+    )?;
 
     let entries = std::fs::read_dir(&private_hnsw_root).map_err(|_| {
         CollectionError::bad_request("private HNSW ORAM snapshot store root cannot be read")
@@ -992,6 +1000,36 @@ fn validate_private_hnsw_oram_snapshot_store_matches_config(
         return Err(CollectionError::bad_request(
             "private HNSW ORAM snapshot is missing a configured vector store",
         ));
+    }
+
+    Ok(())
+}
+
+fn validate_private_oram_snapshot_restore_tree_has_no_client_owned_state(
+    root: &Path,
+    label: &str,
+) -> CollectionResult<()> {
+    let entries = std::fs::read_dir(root).map_err(|_| {
+        CollectionError::bad_request(format!("{label} snapshot store cannot be read"))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|_| {
+            CollectionError::bad_request(format!("{label} snapshot store cannot be read"))
+        })?;
+        if private_oram_snapshot_source_entry_is_client_owned_state(&entry.file_name()) {
+            return Err(CollectionError::bad_request(format!(
+                "{label} snapshot store contains client-owned ORAM state",
+            )));
+        }
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| {
+            CollectionError::bad_request(format!("{label} snapshot store cannot be inspected"))
+        })?;
+        if metadata.file_type().is_dir() {
+            validate_private_oram_snapshot_restore_tree_has_no_client_owned_state(
+                &entry.path(),
+                label,
+            )?;
+        }
     }
 
     Ok(())
@@ -2157,6 +2195,41 @@ mod tests {
     }
 
     #[test]
+    fn private_result_oram_restore_preflight_rejects_client_owned_state_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-client-state")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("buckets")
+                .join("position_map.bin"),
+            b"position map sentinel",
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("client-owned ORAM state"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("position_map"));
+        assert!(!err.contains("sentinel"));
+    }
+
+    #[test]
     fn private_result_oram_restore_preflight_rejects_wrong_selector_without_rule_id() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-restore-wrong-selector")
@@ -3056,6 +3129,42 @@ mod tests {
 
         assert!(err.to_string().contains("unconfigured vector store"));
         assert!(!err.to_string().contains(PRIVATE_HNSW_ORAM_DIR));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_client_owned_state_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-client-state")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join("stash.bin"),
+            b"stash sentinel",
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("client-owned ORAM state"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains("text"));
+        assert!(!err.contains("stash"));
+        assert!(!err.contains("sentinel"));
     }
 
     #[cfg(unix)]
