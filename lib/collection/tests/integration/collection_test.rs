@@ -268,15 +268,24 @@ fn private_hnsw_vector_encryption_config() -> CollectionEncryptionConfig {
 }
 
 fn assert_private_hnsw_session_api_error(err: CollectionError) {
-    assert!(matches!(
-        err,
-        CollectionError::BadInput { description }
-            if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                && description.contains("client-led private ORAM sessions")
-                && description.contains("/private-hnsw/")
-                && description.contains("/session")
-                && !description.contains("runtime CKKS")
-    ));
+    assert_private_hnsw_session_api_error_without(err, &[]);
+}
+
+fn assert_private_hnsw_session_api_error_without(err: CollectionError, forbidden: &[&str]) {
+    let CollectionError::BadInput { description } = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert!(
+        description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+            && description.contains("client-led private ORAM sessions")
+            && description.contains("/private-hnsw/")
+            && description.contains("/session")
+            && !description.contains("runtime CKKS"),
+        "unexpected error: {description}",
+    );
+    for value in forbidden {
+        assert!(!description.contains(value), "{description}");
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -8539,10 +8548,11 @@ async fn private_hnsw_vector_rejects_direct_search_paths_with_session_api_messag
     )
     .await;
 
+    let query_vector_sentinel = vec![12345.125_f32, -23456.25, 34567.5, -45678.75];
     let err = collection
         .search(
             SearchRequestInternal {
-                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                vector: query_vector_sentinel.clone().into(),
                 with_payload: None,
                 with_vector: None,
                 filter: None,
@@ -8559,7 +8569,10 @@ async fn private_hnsw_vector_rejects_direct_search_paths_with_session_api_messag
         )
         .await
         .unwrap_err();
-    assert_private_hnsw_session_api_error(err);
+    assert_private_hnsw_session_api_error_without(
+        err,
+        &["12345.125", "-23456.25", "34567.5", "-45678.75"],
+    );
 
     let err = collection
         .query_batch(
