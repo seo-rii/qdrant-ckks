@@ -8503,6 +8503,7 @@ esac
         assert!(err.contains("private result ORAM payload field path is invalid"));
         assert!(!err.contains(secret_path), "{err}");
         assert!(!err.contains("private-result-update-secret"), "{err}");
+        assert!(!err.contains("JsonPath"), "{err}");
 
         let upsert = PointInsertOperations::PointsList(api::rest::schema::PointsList {
             points: Vec::new(),
@@ -8516,6 +8517,7 @@ esac
         assert!(err.contains("private result ORAM payload field path is invalid"));
         assert!(!err.contains(secret_path), "{err}");
         assert!(!err.contains("private-result-update-secret"), "{err}");
+        assert!(!err.contains("JsonPath"), "{err}");
     }
 
     #[test]

@@ -12432,6 +12432,7 @@ mod tests {
         assert!(err.contains("private result ORAM payload field path is invalid"));
         assert!(!err.contains(secret_path), "{err}");
         assert!(!err.contains("private-result-query-secret"), "{err}");
+        assert!(!err.contains("JsonPath"), "{err}");
     }
 
     #[test]
