@@ -1022,7 +1022,7 @@ async fn test_snapshot_private_oram_store_files_are_archived() {
         .await
         .unwrap();
     let snapshot_path = snapshots_path.path().join(&snapshot_description.name);
-    let snapshot_file = std::fs::File::open(snapshot_path).unwrap();
+    let snapshot_file = std::fs::File::open(&snapshot_path).unwrap();
     let mut archive = tar::Archive::new(snapshot_file);
     let mut archive_paths = HashSet::new();
     for entry in archive.entries().unwrap() {
@@ -1056,6 +1056,28 @@ async fn test_snapshot_private_oram_store_files_are_archived() {
             "snapshot archive contains client-owned private ORAM state marker {forbidden}: {archive_paths:?}",
         );
     }
+
+    let recover_dir = Builder::new()
+        .prefix("test_private_oram_archive_recover")
+        .tempdir()
+        .unwrap();
+    let snapshot_data = SnapshotData::new_packed_persistent(snapshot_path);
+    Collection::restore_snapshot(snapshot_data, recover_dir.path(), 0, false).unwrap();
+    assert!(
+        recover_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("manifest.json")
+            .exists()
+    );
+    assert!(
+        recover_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join(vector_name)
+            .join("manifest.json")
+            .exists()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
