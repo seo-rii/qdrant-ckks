@@ -1846,6 +1846,29 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_snapshot_source_dir_rejects_regular_file_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-source-file")
+            .tempdir()
+            .unwrap();
+
+        fs::write(
+            temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR),
+            b"not-a-directory",
+        )
+        .unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("private HNSW ORAM snapshot source"));
+        assert!(rendered.contains("non-symlink directory"));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
     fn private_hnsw_oram_shard_snapshot_operations_fail_closed_until_bucket_parity_supported() {
         let empty_params = CollectionParams::empty();
         validate_private_oram_shard_snapshot_operation(
