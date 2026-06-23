@@ -3099,20 +3099,27 @@ mod private_hnsw_grpc_tests {
             let stale_current_read_paths = vec![fixture.entry_leaf_label()];
             let stale_current_read_signature =
                 fixture.sign_read_paths(&stale_current_read_paths, 1, true);
+            let stale_current_read_session_id = session.session_id.clone();
+            let stale_current_read_root_hash = fixture.encrypted_build.root_hash.clone();
+            let stale_current_read_path_label = stale_current_read_paths[0].clone();
+            let stale_current_read_signature_key_id = stale_current_read_signature.key_id.clone();
+            let stale_current_read_signature_sig = stale_current_read_signature.sig.clone();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
-                    session_id: session.session_id.clone(),
+                    session_id: stale_current_read_session_id.clone(),
                     index_epoch: BASE_EPOCH,
-                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    root_hash: stale_current_read_root_hash.clone(),
                     paths: stale_current_read_paths,
                     padding: Some(grpc::OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     }),
-                    client_signature: Some(signature_to_proto(stale_current_read_signature)),
+                    client_signature: Some(signature_to_proto(
+                        stale_current_read_signature.clone(),
+                    )),
                 }),
             )
             .await
@@ -3123,7 +3130,32 @@ mod private_hnsw_grpc_tests {
                     .contains("read_paths current epoch/root does not match active session")
             );
             assert!(
+                !err.message().contains(&stale_current_read_root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
                 !err.message().contains(&stale_current_root),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_read_session_id),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_read_path_label),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_read_signature_key_id),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_read_signature_sig),
                 "{}",
                 err.message()
             );
@@ -3137,16 +3169,23 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("/tmp"));
             let empty_commit_signature = fixture.client_signature();
             let duplicate_epoch_signature = fixture.client_signature();
+            let stale_current_commit_session_id = session.session_id.clone();
+            let stale_current_commit_old_root_hash = search_run.commit_plan.old_root_hash.clone();
+            let stale_current_commit_new_root_hash = search_run.commit_plan.new_root_hash.clone();
+            let stale_current_commit_bucket_ciphertext =
+                search_run.updated_buckets[0].ciphertext.clone();
+            let stale_current_commit_signature_key_id = search_run.commit_signature.key_id.clone();
+            let stale_current_commit_signature_sig = search_run.commit_signature.sig.clone();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
-                    session_id: session.session_id.clone(),
+                    session_id: stale_current_commit_session_id.clone(),
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
-                    old_root_hash: search_run.commit_plan.old_root_hash.clone(),
-                    new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    old_root_hash: stale_current_commit_old_root_hash.clone(),
+                    new_root_hash: stale_current_commit_new_root_hash.clone(),
                     updated_buckets: search_run
                         .updated_buckets
                         .clone()
@@ -3164,7 +3203,39 @@ mod private_hnsw_grpc_tests {
                     .contains("commit current epoch/root does not match active session")
             );
             assert!(
+                !err.message().contains(&stale_current_commit_old_root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_commit_new_root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
                 !err.message().contains(&stale_current_root),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_commit_session_id),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&stale_current_commit_bucket_ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&stale_current_commit_signature_key_id),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&stale_current_commit_signature_sig),
                 "{}",
                 err.message()
             );
