@@ -1598,6 +1598,14 @@ mod tests {
                 "/collections/{collection_name}/private-result-oram/session",
             ),
             (
+                "/collections/docs/private-result-oram/buckets/result-bucket-id-sentinel",
+                "/collections/{collection_name}/private-result-oram/buckets",
+            ),
+            (
+                "/collections/docs/private-result-oram/manifest/result-root-hash-sentinel",
+                "/collections/{collection_name}/private-result-oram/manifest",
+            ),
+            (
                 "/collections/docs/private-result-oram/oram/read_buckets/result-bucket-id-sentinel",
                 "/collections/{collection_name}/private-result-oram/oram/read_buckets",
             ),
@@ -1642,6 +1650,22 @@ mod tests {
             (
                 "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets/result-updated-bucket-sentinel",
                 "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets",
+            ),
+            (
+                "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/token-position-map-sentinel",
+                "/qdrant.PrivateResultOram/OpenPrivateResultOramSession",
+            ),
+            (
+                "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets/result-bucket-id-sentinel",
+                "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets",
+            ),
+            (
+                "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets/result-bucket-id-sentinel",
+                "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets",
+            ),
+            (
+                "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest/result-root-hash-sentinel",
+                "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest",
             ),
             (
                 "/qdrant.PrivateResultOram/ClosePrivateResultOramSession/result-session-id-sentinel",
