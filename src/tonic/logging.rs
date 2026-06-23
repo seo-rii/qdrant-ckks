@@ -271,6 +271,16 @@ mod tests {
              leaf_commitments=leaf-commitment-snake-sentinel \
              leafCommitment=single-leaf-commitment-camel-sentinel \
              leafCommitments=leaf-commitment-camel-sentinel \
+             leaf_hash=leaf-hash-sentinel \
+             leafHash=leaf-hash-camel-sentinel \
+             merkle_proof=merkle-proof-sentinel \
+             merkleProof=merkle-proof-camel-sentinel \
+             proof=proof-sentinel \
+             proofs=proofs-sentinel \
+             sibling=sibling-sentinel \
+             siblings=siblings-sentinel \
+             sibling_hash=sibling-hash-sentinel \
+             siblingHash=sibling-hash-camel-sentinel \
              bucket_ids=bucket-id-snake-sentinel \
              bucketIds=bucket-id-camel-sentinel \
              unknown_field=unknown-field-snake-sentinel \
@@ -362,6 +372,16 @@ mod tests {
         assert!(!rendered.contains("leaf-commitment-snake-sentinel"));
         assert!(!rendered.contains("single-leaf-commitment-camel-sentinel"));
         assert!(!rendered.contains("leaf-commitment-camel-sentinel"));
+        assert!(!rendered.contains("leaf-hash-sentinel"));
+        assert!(!rendered.contains("leaf-hash-camel-sentinel"));
+        assert!(!rendered.contains("merkle-proof-sentinel"));
+        assert!(!rendered.contains("merkle-proof-camel-sentinel"));
+        assert!(!rendered.contains("proof-sentinel"));
+        assert!(!rendered.contains("proofs-sentinel"));
+        assert!(!rendered.contains("sibling-sentinel"));
+        assert!(!rendered.contains("siblings-sentinel"));
+        assert!(!rendered.contains("sibling-hash-sentinel"));
+        assert!(!rendered.contains("sibling-hash-camel-sentinel"));
         assert!(!rendered.contains("bucket-id-snake-sentinel"));
         assert!(!rendered.contains("bucket-id-camel-sentinel"));
         assert!(!rendered.contains("unknown-field-snake-sentinel"));
