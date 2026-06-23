@@ -3182,10 +3182,8 @@ fn private_result_oram_payload_upsert_violation<'a>(
             continue;
         };
         for payload_path in paths {
-            let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
-                StorageError::bad_input(format!(
-                    "private result ORAM payload field path is invalid: {err:?}",
-                ))
+            let protected_path = payload_path.parse::<JsonPath>().map_err(|_| {
+                StorageError::bad_input("private result ORAM payload field path is invalid")
             })?;
             if upsert_touches_payload_path(operation, &protected_path) {
                 return Ok(Some((payload_path.as_str(), "upsert points")));
@@ -3209,10 +3207,8 @@ fn private_result_oram_payload_update_violation<'a>(
             continue;
         };
         for payload_path in paths {
-            let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
-                StorageError::bad_input(format!(
-                    "private result ORAM payload field path is invalid: {err:?}",
-                ))
+            let protected_path = payload_path.parse::<JsonPath>().map_err(|_| {
+                StorageError::bad_input("private result ORAM payload field path is invalid")
             })?;
             if payload_touches_path(&operation.payload, operation.key.as_ref(), &protected_path) {
                 return Ok(Some(payload_path.as_str()));
@@ -8467,6 +8463,46 @@ esac
             )
             .unwrap()
         );
+    }
+
+    #[test]
+    fn private_result_oram_payload_update_invalid_path_error_is_sanitized() {
+        let secret_path = "document.body[private-result-update-secret";
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:result-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "private_result_payload".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec![secret_path.to_string()],
+                },
+                instance: "docs_private_result_oram_v1".to_string(),
+                binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
+            }],
+        };
+        let operation = SetPayload {
+            payload: segment::types::Payload(
+                json!({ "document": { "body": "ordinary write secret" } })
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+            points: Some(vec![1.into()]),
+            filter: None,
+            shard_key: None,
+            key: None,
+        };
+
+        let err = private_result_oram_payload_update_violation(&encryption, &operation)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("private result ORAM payload field path is invalid"));
+        assert!(!err.contains(secret_path), "{err}");
+        assert!(!err.contains("private-result-update-secret"), "{err}");
     }
 
     #[test]

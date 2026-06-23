@@ -6080,10 +6080,8 @@ fn private_result_oram_raw_payload_read_violation<'a>(
             continue;
         };
         for payload_path in paths {
-            let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
-                StorageError::bad_input(format!(
-                    "private result ORAM payload field path is invalid: {err:?}",
-                ))
+            let protected_path = payload_path.parse::<JsonPath>().map_err(|_| {
+                StorageError::bad_input("private result ORAM payload field path is invalid")
             })?;
             if private_result_oram_with_payload_touches_path(with_payload, &protected_path) {
                 return Ok(Some(payload_path.as_str()));
@@ -12403,6 +12401,37 @@ mod tests {
 
             assert_eq!(violation, None);
         }
+    }
+
+    #[test]
+    fn private_result_oram_raw_payload_read_invalid_path_error_is_sanitized() {
+        let secret_path = "document.body[private-result-query-secret";
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:result-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "private_result_payload".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec![secret_path.to_string()],
+                },
+                instance: "docs_private_result_oram_v1".to_string(),
+                binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
+            }],
+        };
+
+        let err = private_result_oram_raw_payload_read_violation(
+            &WithPayloadInterface::Bool(true),
+            &encryption,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("private result ORAM payload field path is invalid"));
+        assert!(!err.contains(secret_path), "{err}");
+        assert!(!err.contains("private-result-query-secret"), "{err}");
     }
 
     #[test]

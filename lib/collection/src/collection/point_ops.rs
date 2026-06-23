@@ -262,10 +262,8 @@ fn private_result_oram_payload_operation_violation<'a>(
             continue;
         };
         for payload_path in paths {
-            let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
-                CollectionError::bad_input(format!(
-                    "private result ORAM payload field path is invalid: {err:?}",
-                ))
+            let protected_path = payload_path.parse::<JsonPath>().map_err(|_| {
+                CollectionError::bad_input("private result ORAM payload field path is invalid")
             })?;
             if let Some(operation_kind) =
                 private_result_oram_payload_operation_kind(operation, &protected_path)
@@ -352,10 +350,8 @@ fn private_result_oram_raw_payload_read_violation<'a>(
             continue;
         };
         for payload_path in paths {
-            let protected_path = payload_path.parse::<JsonPath>().map_err(|err| {
-                CollectionError::bad_input(format!(
-                    "private result ORAM payload field path is invalid: {err:?}",
-                ))
+            let protected_path = payload_path.parse::<JsonPath>().map_err(|_| {
+                CollectionError::bad_input("private result ORAM payload field path is invalid")
             })?;
             if private_result_oram_with_payload_touches_path(with_payload, &protected_path) {
                 return Ok(Some(payload_path.as_str()));
@@ -4793,6 +4789,32 @@ mod tests {
                 private_result_oram_raw_payload_read_violation(&with_payload, &encryption).unwrap();
             assert_eq!(violation, None);
         }
+    }
+
+    #[test]
+    fn private_result_oram_invalid_payload_path_errors_are_sanitized() {
+        let secret_path = "document.body[private-result-secret";
+        let encryption = private_result_oram_encryption(secret_path);
+
+        let err = private_result_oram_raw_payload_read_violation(
+            &WithPayloadInterface::Bool(true),
+            &encryption,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("private result ORAM payload field path is invalid"));
+        assert!(!err.contains(secret_path), "{err}");
+        assert!(!err.contains("private-result-secret"), "{err}");
+
+        let update = CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints {
+            ids: vec![1.into()],
+        });
+        let err = private_result_oram_payload_operation_violation(&update, &encryption)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("private result ORAM payload field path is invalid"));
+        assert!(!err.contains(secret_path), "{err}");
+        assert!(!err.contains("private-result-secret"), "{err}");
     }
 
     #[test]
