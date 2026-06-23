@@ -3143,15 +3143,20 @@ mod private_result_oram_grpc_tests {
             assert_eq!(committed.index_epoch, NEXT_EPOCH);
             assert_eq!(committed.root_hash, new_root_hash);
 
+            let stale_commit_new_root = new_root_hash.clone();
+            let stale_commit_session_id = session.session_id.clone();
+            let stale_commit_signature_key_id = commit_signature.key_id.clone();
+            let stale_commit_signature_sig = commit_signature.sig.clone();
+            let stale_commit_bucket_ciphertext = updated_bucket.ciphertext.clone();
             let stale_commit = PrivateResultOram::commit_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::CommitPrivateResultOramBucketsRequest {
                     collection_name: COLLECTION_NAME.to_string(),
-                    session_id: session.session_id.clone(),
+                    session_id: stale_commit_session_id.clone(),
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: fixture.manifest.root_hash.clone(),
-                    new_root_hash,
+                    new_root_hash: stale_commit_new_root.clone(),
                     updated_buckets: vec![bucket_to_proto(updated_bucket)],
                     commit_signature: Some(signature_to_proto(commit_signature)),
                 }),
@@ -3160,10 +3165,19 @@ mod private_result_oram_grpc_tests {
             .unwrap_err();
             assert_eq!(stale_commit.code(), Code::InvalidArgument);
             assert!(stale_commit.message().contains("old epoch/root"));
+            assert!(!stale_commit.message().contains(&fixture.manifest.root_hash));
+            assert!(!stale_commit.message().contains(&stale_commit_new_root));
+            assert!(!stale_commit.message().contains(&stale_commit_session_id));
             assert!(
                 !stale_commit
                     .message()
-                    .contains(&fixture.buckets[0].ciphertext)
+                    .contains(&stale_commit_signature_key_id)
+            );
+            assert!(!stale_commit.message().contains(&stale_commit_signature_sig));
+            assert!(
+                !stale_commit
+                    .message()
+                    .contains(&stale_commit_bucket_ciphertext)
             );
 
             let closed = PrivateResultOram::close_private_result_oram_session(
