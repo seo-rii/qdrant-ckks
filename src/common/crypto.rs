@@ -10189,8 +10189,10 @@ mod tests {
             .expect_err("tree_height must fit the current Merkle metadata storage envelope");
         assert!(
             matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
-                if option == "oram.tree_height"
-                    && reason.contains("1..=20")),
+            if option == "oram.tree_height"
+                && reason.contains(&format!(
+                    "1..={PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX}"
+                ))),
             "unexpected error: {err:?}",
         );
 
@@ -10200,8 +10202,8 @@ mod tests {
             .unwrap()
             .options;
         options["oram"]["tree_height"] = json!(PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX);
-        options["oram"]["path_batch_size"] = json!(1024);
-        options["fixed_budget"]["paths_per_round"] = json!(1024);
+        options["oram"]["path_batch_size"] = json!(PRIVATE_ORAM_PATH_BATCH_SIZE_MAX);
+        options["fixed_budget"]["paths_per_round"] = json!(PRIVATE_ORAM_PATH_BATCH_SIZE_MAX);
         let err = validate_crypto_settings(&settings)
             .expect_err("private HNSW ORAM read batch must fit the runtime response cap");
         assert!(
@@ -10926,7 +10928,10 @@ mod tests {
             .expect_err("private result ORAM tree_height must fit the Merkle metadata cap");
         assert!(
             matches!(err, CryptoSetupError::InvalidInstanceOption { ref option, ref reason, .. }
-                if option == "oram.tree_height" && reason.contains("1..=20")),
+            if option == "oram.tree_height"
+                && reason.contains(&format!(
+                    "1..={PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX}"
+                ))),
             "unexpected error: {err:?}",
         );
 
@@ -10936,7 +10941,7 @@ mod tests {
             .unwrap()
             .options;
         options["oram"]["tree_height"] = json!(PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX);
-        options["oram"]["path_batch_size"] = json!(1024);
+        options["oram"]["path_batch_size"] = json!(PRIVATE_ORAM_PATH_BATCH_SIZE_MAX);
         let err = validate_crypto_settings(&settings)
             .expect_err("private result ORAM read batch must fit the runtime response cap");
         assert!(
