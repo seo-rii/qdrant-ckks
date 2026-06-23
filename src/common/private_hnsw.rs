@@ -4260,6 +4260,20 @@ mod private_hnsw_tests {
         ] {
             assert!(!rendered.contains(sentinel), "{rendered}");
         }
+
+        let mut replacement = fixture_session("capacity-replacement-session", 30);
+        replacement.collection_id = "capacity-replacement-collection".to_string();
+        replacement.manifest.collection_id = replacement.collection_id.clone();
+        replacement.vector_name = "capacity-replacement-vector".to_string();
+        replacement.manifest.vector_name = replacement.vector_name.clone();
+        registry.open(replacement, 20).unwrap();
+        assert_eq!(registry.sessions.len(), 1);
+        assert_eq!(registry.active_writer_by_index.len(), 1);
+        assert!(registry.has_active_index(
+            "capacity-replacement-collection",
+            "capacity-replacement-vector",
+            20
+        ));
     }
 
     #[test]

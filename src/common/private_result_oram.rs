@@ -2643,6 +2643,14 @@ mod private_result_oram_tests {
         ] {
             assert!(!rendered.contains(sentinel), "{rendered}");
         }
+
+        let mut replacement = fixture_session("capacity-replacement-session", 30);
+        replacement.collection_id = "capacity-replacement-collection".to_string();
+        replacement.manifest.collection_id = replacement.collection_id.clone();
+        registry.open(replacement, 20).unwrap();
+        assert_eq!(registry.sessions.len(), 1);
+        assert_eq!(registry.active_writer_by_collection.len(), 1);
+        assert!(registry.has_active_collection("capacity-replacement-collection", 20));
     }
 
     #[test]
