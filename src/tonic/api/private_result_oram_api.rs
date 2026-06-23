@@ -3570,6 +3570,7 @@ mod private_result_oram_grpc_tests {
             assert!(!err.message().contains("tree_height"));
             assert!(!err.message().contains(&fixture.manifest.root_hash));
             assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&read_signature.key_id));
             assert!(!err.message().contains(&read_signature.sig));
 
             let closed = PrivateResultOram::close_private_result_oram_session(
@@ -3673,6 +3674,7 @@ mod private_result_oram_grpc_tests {
             assert!(!err.message().contains(&fixture.manifest.root_hash));
             assert!(!err.message().contains(&new_root_hash));
             assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&commit_signature.key_id));
             assert!(!err.message().contains(&commit_signature.sig));
             assert!(!err.message().contains(&updated_bucket.ciphertext));
 

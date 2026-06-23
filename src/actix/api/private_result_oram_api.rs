@@ -2995,6 +2995,10 @@ mod private_result_oram_rest_tests {
                 "{drift_error}"
             );
             assert!(!drift_error.contains(&session_id), "{drift_error}");
+            assert!(
+                !drift_error.contains(&read_signature.key_id),
+                "{drift_error}"
+            );
             assert!(!drift_error.contains(&read_signature.sig), "{drift_error}");
 
             let close_uri =
@@ -3124,6 +3128,10 @@ mod private_result_oram_rest_tests {
             );
             assert!(!drift_error.contains(&new_root_hash), "{drift_error}");
             assert!(!drift_error.contains(&session_id), "{drift_error}");
+            assert!(
+                !drift_error.contains(&commit_signature.key_id),
+                "{drift_error}"
+            );
             assert!(
                 !drift_error.contains(&commit_signature.sig),
                 "{drift_error}"
