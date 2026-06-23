@@ -2506,7 +2506,13 @@ mod private_result_oram_rest_tests {
                 "{malformed_commitment_commit_error}"
             );
 
-            let oversized_commit_buckets = vec![updated_bucket.clone(); 8];
+            let oversized_commit_buckets = (0_u64..8)
+                .map(|bucket_id| {
+                    let mut bucket = updated_bucket.clone();
+                    bucket.bucket_id = bucket_id;
+                    bucket
+                })
+                .collect();
             let oversized_commit_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",
                 CommitPrivateResultOramBucketsRequest {
@@ -2582,10 +2588,10 @@ mod private_result_oram_rest_tests {
                     commit_signature: duplicate_commit_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
-                "commit signature verification failed"
+                "commit updated_buckets contains duplicate bucket"
             );
             assert!(
-                !duplicate_commit_error.contains("duplicate bucket id"),
+                !duplicate_commit_error.contains("commit signature verification failed"),
                 "{duplicate_commit_error}"
             );
             assert!(!duplicate_commit_error.contains(&duplicate_commit_old_root));
@@ -2607,10 +2613,11 @@ mod private_result_oram_rest_tests {
                     commit_signature: wrong_commit_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
-                "commit signature verification failed"
+                "commit updated_buckets contains duplicate bucket"
             );
             assert!(
-                !invalid_signature_duplicate_commit_error.contains("duplicate bucket id"),
+                !invalid_signature_duplicate_commit_error
+                    .contains("commit signature verification failed"),
                 "{invalid_signature_duplicate_commit_error}"
             );
             assert!(

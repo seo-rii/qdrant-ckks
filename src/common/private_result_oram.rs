@@ -391,6 +391,26 @@ impl ResolvedPrivateResultOramContext {
         &self,
         manifest: &PrivateResultOramManifest,
     ) -> StorageResult<()> {
+        if manifest.collection_id != self.collection_crypto_id {
+            return Err(StorageError::bad_request(
+                "private result ORAM manifest collection_id does not match runtime context",
+            ));
+        }
+        if manifest.key_id != self.expected_key_id {
+            return Err(StorageError::bad_request(
+                "private result ORAM manifest key_id does not match runtime instance",
+            ));
+        }
+        if manifest.rk_id != self.expected_rk_id {
+            return Err(StorageError::bad_request(
+                "private result ORAM manifest rk_id does not match runtime instance",
+            ));
+        }
+        if manifest.rk_epoch < self.min_rk_epoch || manifest.rk_epoch > self.max_rk_epoch {
+            return Err(StorageError::bad_request(
+                "private result ORAM manifest rk_epoch does not match runtime instance",
+            ));
+        }
         if manifest.oram != self.expected_oram {
             return Err(StorageError::bad_request(
                 "private result ORAM manifest oram does not match runtime instance",
@@ -2313,6 +2333,46 @@ mod private_result_oram_tests {
         fixture_runtime_context(&manifest)
             .validate_manifest_runtime_policy(&manifest)
             .unwrap();
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.collection_crypto_id = "other-private-result-collection".to_string();
+        let rendered = context
+            .validate_manifest_runtime_policy(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest collection_id does not match runtime context"));
+        assert!(!rendered.contains("other-private-result-collection"));
+        assert!(!rendered.contains(&manifest.collection_id));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_key_id = "tenant-a/private-result-rk-next".to_string();
+        let rendered = context
+            .validate_manifest_runtime_policy(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest key_id does not match runtime instance"));
+        assert!(!rendered.contains("private-result-rk-next"));
+        assert!(!rendered.contains(&manifest.key_id));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.expected_rk_id = "tenant-a/private-result-rk-next".to_string();
+        let rendered = context
+            .validate_manifest_runtime_policy(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest rk_id does not match runtime instance"));
+        assert!(!rendered.contains("private-result-rk-next"));
+        assert!(!rendered.contains(&manifest.rk_id));
+
+        let mut context = fixture_runtime_context(&manifest);
+        context.min_rk_epoch = manifest.rk_epoch + 1;
+        context.max_rk_epoch = manifest.rk_epoch + 1;
+        let rendered = context
+            .validate_manifest_runtime_policy(&manifest)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest rk_epoch does not match runtime instance"));
+        assert!(!rendered.contains(&(manifest.rk_epoch + 1).to_string()));
 
         let mut context = fixture_runtime_context(&manifest);
         context.expected_oram.bucket_size = 99;

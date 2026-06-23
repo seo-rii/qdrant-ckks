@@ -2954,7 +2954,13 @@ mod private_result_oram_grpc_tests {
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: fixture.manifest.root_hash.clone(),
                     new_root_hash: new_root_hash.clone(),
-                    updated_buckets: vec![bucket_to_proto(updated_bucket.clone()); 8],
+                    updated_buckets: (0_u64..8)
+                        .map(|bucket_id| {
+                            let mut bucket = updated_bucket.clone();
+                            bucket.bucket_id = bucket_id;
+                            bucket_to_proto(bucket)
+                        })
+                        .collect(),
                     commit_signature: Some(signature_to_proto(commit_signature.clone())),
                 }),
             )
@@ -3061,9 +3067,13 @@ mod private_result_oram_grpc_tests {
             assert!(
                 duplicate_commit
                     .message()
+                    .contains("commit updated_buckets contains duplicate bucket")
+            );
+            assert!(
+                !duplicate_commit
+                    .message()
                     .contains("commit signature verification failed")
             );
-            assert!(!duplicate_commit.message().contains("duplicate bucket id"));
             assert!(
                 !duplicate_commit
                     .message()
@@ -3117,12 +3127,12 @@ mod private_result_oram_grpc_tests {
             assert!(
                 invalid_signature_duplicate_bucket
                     .message()
-                    .contains("commit signature verification failed")
+                    .contains("commit updated_buckets contains duplicate bucket")
             );
             assert!(
                 !invalid_signature_duplicate_bucket
                     .message()
-                    .contains("duplicate bucket id")
+                    .contains("commit signature verification failed")
             );
             assert!(
                 !invalid_signature_duplicate_bucket
