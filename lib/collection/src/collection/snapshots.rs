@@ -571,8 +571,8 @@ fn private_oram_snapshot_source_dir(
             Ok(Some(source_dir))
         }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(CollectionError::service_error(format!(
-            "failed to inspect {label} snapshot source: {err}"
+        Err(_) => Err(CollectionError::service_error(format!(
+            "{label} snapshot source cannot be inspected"
         ))),
     }
 }
@@ -1866,6 +1866,33 @@ mod tests {
         assert!(rendered.contains("non-symlink directory"));
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn private_oram_snapshot_source_dir_sanitizes_inspection_errors() {
+        let collection_path = std::path::Path::new("private-oram-source-inspect\0sentinel");
+
+        for (dir_name, label) in [
+            (PRIVATE_HNSW_ORAM_DIR, "private HNSW ORAM snapshot source"),
+            (
+                PRIVATE_RESULT_ORAM_DIR,
+                "private result ORAM snapshot source",
+            ),
+        ] {
+            let err = private_oram_snapshot_source_dir(collection_path, dir_name).unwrap_err();
+            let rendered = err.to_string();
+
+            assert!(rendered.contains(label), "{rendered}");
+            assert!(rendered.contains("cannot be inspected"), "{rendered}");
+            assert!(
+                !rendered.contains("private-oram-source-inspect"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("sentinel"), "{rendered}");
+            assert!(!rendered.contains("NUL"), "{rendered}");
+            assert!(!rendered.contains("nul"), "{rendered}");
+            assert!(!rendered.contains(dir_name), "{rendered}");
+        }
     }
 
     #[test]
