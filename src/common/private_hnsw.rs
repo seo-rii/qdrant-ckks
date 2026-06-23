@@ -56,6 +56,9 @@ const PRIVATE_HNSW_ORAM_SIGNATURE_B64_LEN: usize = 86;
 const PRIVATE_HNSW_ORAM_CLIENT_ID_MAX_LEN: usize = 256;
 const PRIVATE_HNSW_ORAM_SESSION_ID_MAX_LEN: usize = 128;
 const PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX: usize = 1024;
+const PRIVATE_HNSW_ORAM_TREE_HEIGHT_MAX: usize = 20;
+const PRIVATE_HNSW_ORAM_WRITEBACK_BUCKETS_MAX: usize =
+    PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX * (PRIVATE_HNSW_ORAM_TREE_HEIGHT_MAX + 1);
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswManifestRecord {
@@ -2280,6 +2283,11 @@ fn validate_private_hnsw_commit_request_shape(
             "private HNSW ORAM commit updated_buckets must contain at least one bucket",
         ));
     }
+    if updated_buckets.len() > PRIVATE_HNSW_ORAM_WRITEBACK_BUCKETS_MAX {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM commit updated_buckets exceeds maximum writeback bucket batch size",
+        ));
+    }
     let mut seen_bucket_ids = HashSet::with_capacity(updated_buckets.len());
     for bucket in updated_buckets {
         if !seen_bucket_ids.insert(bucket.bucket_id) {
@@ -2515,6 +2523,23 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("updated_buckets must contain"));
         assert!(!rendered.contains("session is missing or expired"));
+    }
+
+    #[test]
+    fn commit_request_shape_rejects_oversized_writeback_before_session_lookup() {
+        let buckets = (0..=PRIVATE_HNSW_ORAM_WRITEBACK_BUCKETS_MAX)
+            .map(|bucket_id| fixture_bucket(bucket_id as u64, 43))
+            .collect::<Vec<_>>();
+
+        let err = validate_private_hnsw_commit_request_shape(&buckets).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("maximum writeback bucket batch size"));
+        assert!(
+            !rendered.contains("session is missing or expired"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&buckets[0].ciphertext), "{rendered}");
+        assert!(!rendered.contains(&buckets.len().to_string()), "{rendered}");
     }
 
     #[test]

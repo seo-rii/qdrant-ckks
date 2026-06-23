@@ -1657,6 +1657,11 @@ fn validate_commit_bucket_request_shape(
             "private result ORAM commit updated_buckets must contain at least one bucket",
         ));
     }
+    if updated_buckets.len() > PRIVATE_RESULT_ORAM_READ_BUCKET_IDS_MAX {
+        return Err(StorageError::bad_request(
+            "private result ORAM commit updated_buckets exceeds maximum writeback bucket batch size",
+        ));
+    }
     let mut seen_bucket_ids = HashSet::with_capacity(updated_buckets.len());
     for bucket in updated_buckets {
         if !seen_bucket_ids.insert(bucket.bucket_id) {
@@ -2387,6 +2392,21 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("commit updated_buckets must contain"));
         assert!(!rendered.contains("session is missing or expired"));
+    }
+
+    #[test]
+    fn commit_bucket_request_shape_rejects_oversized_writeback_before_session_lookup() {
+        let commitment = BASE64URL_NOPAD.encode(&[8; 32]);
+        let buckets = (0..=PRIVATE_RESULT_ORAM_READ_BUCKET_IDS_MAX)
+            .map(|bucket_id| fixture_readable_bucket(bucket_id as u64, 43, 7, &commitment))
+            .collect::<Vec<_>>();
+
+        let err = validate_commit_bucket_request_shape(&buckets).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("maximum writeback bucket batch size"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains(&buckets[0].ciphertext), "{rendered}");
+        assert!(!rendered.contains(&buckets.len().to_string()), "{rendered}");
     }
 
     #[test]
