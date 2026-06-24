@@ -709,7 +709,30 @@ fn private_oram_snapshot_source_entry_is_client_owned_state(name: &std::ffi::OsS
     };
     let name = name.to_ascii_lowercase();
     let stem = name.split_once('.').map_or(name.as_str(), |(stem, _)| stem);
-    matches!(stem, "client_state" | "position_map" | "stash")
+    let compact_stem = stem.replace(['_', '-'], "");
+    matches!(
+        compact_stem.as_str(),
+        "clientstate"
+            | "clientstatesnapshot"
+            | "clientstatesnapshots"
+            | "encryptedclientstatesnapshot"
+            | "encryptedclientstatesnapshots"
+            | "positionmap"
+            | "positionmaps"
+            | "positionmapsnapshot"
+            | "positionmapsnapshots"
+            | "orampositionmap"
+            | "orampositionmaps"
+            | "orampositionmapsnapshot"
+            | "orampositionmapsnapshots"
+            | "tokenpositionmap"
+            | "tokenpositionmaps"
+            | "tokenpositionmapsnapshot"
+            | "tokenpositionmapsnapshots"
+            | "stash"
+            | "stashsnapshot"
+            | "stashsnapshots"
+    )
 }
 
 fn private_oram_snapshot_entry_is_temp_dir(
@@ -2078,6 +2101,56 @@ mod tests {
             assert!(!rendered.contains("NUL"), "{rendered}");
             assert!(!rendered.contains("nul"), "{rendered}");
             assert!(!rendered.contains(dir_name), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn private_oram_snapshot_client_owned_state_detection_covers_aliases() {
+        for protected_name in [
+            "client_state.json",
+            "clientState.json",
+            "client-state.json",
+            "client_state_snapshot.bin",
+            "clientStateSnapshots.json",
+            "encrypted_client_state_snapshot.bin",
+            "encryptedClientStateSnapshots.json",
+            "position_map.bin",
+            "positionMap.json",
+            "position-maps.json",
+            "position_map_snapshot.bin",
+            "positionMapSnapshots.json",
+            "oram_position_map.bin",
+            "oramPositionMapSnapshot.json",
+            "token_position_map.bin",
+            "tokenPositionMapSnapshots.json",
+            "stash",
+            "stash_snapshot.bin",
+            "stashSnapshots.json",
+        ] {
+            assert!(
+                private_oram_snapshot_source_entry_is_client_owned_state(std::ffi::OsStr::new(
+                    protected_name
+                )),
+                "{protected_name} must be treated as client-owned ORAM state",
+            );
+        }
+
+        for allowed_name in [
+            "manifest.json",
+            "manifest.sig",
+            "buckets",
+            "epochs",
+            "current.json",
+            "nodes.dat",
+            "bucket_commitments.json",
+            "position_metadata.json",
+        ] {
+            assert!(
+                !private_oram_snapshot_source_entry_is_client_owned_state(std::ffi::OsStr::new(
+                    allowed_name
+                )),
+                "{allowed_name} must remain valid server-owned snapshot metadata",
+            );
         }
     }
 
