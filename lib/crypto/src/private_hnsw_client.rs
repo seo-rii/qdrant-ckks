@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Debug, Formatter};
 
@@ -2771,8 +2772,8 @@ pub fn search_private_hnsw_oram_plaintext<ReadPath, WriteBack, NextLeaf>(
     config: PrivateHnswOramClientConfig,
     query: &[f32],
     params: PrivateHnswSearchParams,
-    read_path: ReadPath,
-    writeback: WriteBack,
+    mut read_path: ReadPath,
+    mut writeback: WriteBack,
     next_remap_leaf: NextLeaf,
 ) -> Result<PrivateHnswSearchResult, PrivateHnswClientError>
 where
@@ -2781,16 +2782,31 @@ where
     NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
 {
     let mut working_state = state.clone();
+    let pending_writebacks = RefCell::new(BTreeMap::new());
     let result = search_private_hnsw_oram_plaintext_inner(
         &mut working_state,
         config,
         query,
         params,
         None,
-        read_path,
-        writeback,
+        |leaf| {
+            let mut buckets = read_path(leaf)?;
+            apply_private_hnsw_pending_writebacks(&mut buckets, &pending_writebacks.borrow());
+            Ok(buckets)
+        },
+        |writeback_buckets| {
+            record_private_hnsw_pending_writebacks(
+                &mut pending_writebacks.borrow_mut(),
+                writeback_buckets,
+            );
+            Ok(())
+        },
         next_remap_leaf,
     )?;
+    let updated_buckets = private_hnsw_pending_writeback_values(pending_writebacks.into_inner());
+    if !updated_buckets.is_empty() {
+        writeback(&updated_buckets)?;
+    }
     *state = working_state;
     Ok(result)
 }
@@ -2801,8 +2817,8 @@ pub fn search_private_hnsw_oram_plaintext_with_cache<ReadPath, WriteBack, NextLe
     query: &[f32],
     params: PrivateHnswSearchParams,
     node_cache: &PrivateHnswClientNodeCache,
-    read_path: ReadPath,
-    writeback: WriteBack,
+    mut read_path: ReadPath,
+    mut writeback: WriteBack,
     next_remap_leaf: NextLeaf,
 ) -> Result<PrivateHnswSearchResult, PrivateHnswClientError>
 where
@@ -2811,18 +2827,59 @@ where
     NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
 {
     let mut working_state = state.clone();
+    let pending_writebacks = RefCell::new(BTreeMap::new());
     let result = search_private_hnsw_oram_plaintext_inner(
         &mut working_state,
         config,
         query,
         params,
         Some(node_cache),
-        read_path,
-        writeback,
+        |leaf| {
+            let mut buckets = read_path(leaf)?;
+            apply_private_hnsw_pending_writebacks(&mut buckets, &pending_writebacks.borrow());
+            Ok(buckets)
+        },
+        |writeback_buckets| {
+            record_private_hnsw_pending_writebacks(
+                &mut pending_writebacks.borrow_mut(),
+                writeback_buckets,
+            );
+            Ok(())
+        },
         next_remap_leaf,
     )?;
+    let updated_buckets = private_hnsw_pending_writeback_values(pending_writebacks.into_inner());
+    if !updated_buckets.is_empty() {
+        writeback(&updated_buckets)?;
+    }
     *state = working_state;
     Ok(result)
+}
+
+fn apply_private_hnsw_pending_writebacks(
+    buckets: &mut [PrivateHnswOramPlaintextBucket],
+    pending_writebacks: &BTreeMap<u64, PrivateHnswOramPlaintextBucket>,
+) {
+    for bucket in buckets {
+        if let Some(pending_bucket) = pending_writebacks.get(&bucket.bucket_id) {
+            *bucket = pending_bucket.clone();
+        }
+    }
+}
+
+fn record_private_hnsw_pending_writebacks(
+    pending_writebacks: &mut BTreeMap<u64, PrivateHnswOramPlaintextBucket>,
+    writeback_buckets: &[PrivateHnswOramPlaintextBucket],
+) {
+    for bucket in writeback_buckets {
+        pending_writebacks.insert(bucket.bucket_id, bucket.clone());
+    }
+}
+
+fn private_hnsw_pending_writeback_values(
+    pending_writebacks: BTreeMap<u64, PrivateHnswOramPlaintextBucket>,
+) -> Vec<PrivateHnswOramPlaintextBucket> {
+    pending_writebacks.into_values().collect()
 }
 
 fn search_private_hnsw_oram_plaintext_inner<ReadPath, WriteBack, NextLeaf>(
@@ -9378,7 +9435,7 @@ mod tests {
 
         assert_eq!(err, PrivateHnswClientError::MerkleProofMismatch);
         assert_eq!(*partial_failure_reads.borrow(), 2);
-        assert_eq!(*partial_failure_writebacks.borrow(), 1);
+        assert_eq!(*partial_failure_writebacks.borrow(), 0);
         assert_eq!(partial_failure_state, original_partial_failure_state);
 
         let mut bad_state = state.clone();
@@ -9623,11 +9680,14 @@ mod tests {
 
     #[test]
     fn plaintext_oram_hnsw_search_rejects_bad_vector_shapes() {
+        use std::cell::RefCell;
+
         let config = oram_config();
         let mut state =
             PrivateHnswOramClientState::with_position_map([([1; 32], 0)], config.tree_height)
                 .unwrap();
         let original_state = state.clone();
+        let writeback_called = RefCell::new(false);
         let bad_vector = PrivateHnswNodeBlockPlaintext {
             version: NODE_BLOCK_VERSION,
             node_id: [1; 32],
@@ -9663,12 +9723,16 @@ mod tests {
                 padding_node_id: None,
             },
             |_| Ok(path.to_vec()),
-            |_| Ok(()),
+            |_| {
+                *writeback_called.borrow_mut() = true;
+                Ok(())
+            },
             || Ok(0),
         )
         .unwrap_err();
         assert_eq!(err, PrivateHnswClientError::InvalidF32VectorLength);
         assert_eq!(state, original_state);
+        assert!(!*writeback_called.borrow());
     }
 
     #[test]
