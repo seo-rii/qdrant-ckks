@@ -354,14 +354,21 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "candidate_id"
                         | "candidate_ids"
                         | "candidate_heap"
+                        | "candidate_heaps"
                         | "candidate_node"
                         | "candidate_nodes"
                         | "client_signature"
+                        | "client_signatures"
                         | "commit_signature"
+                        | "commit_signatures"
                         | "manifest_signature"
+                        | "manifest_signatures"
                         | "read_signature"
+                        | "read_signatures"
                         | "request_signature"
+                        | "request_signatures"
                         | "top_k"
+                        | "top_ks"
                         | "topk"
                         | "result_id"
                         | "result_ids"
@@ -555,14 +562,21 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "candidateid"
                         | "candidateids"
                         | "candidateheap"
+                        | "candidateheaps"
                         | "candidatenode"
                         | "candidatenodes"
                         | "clientsignature"
+                        | "clientsignatures"
                         | "commitsignature"
+                        | "commitsignatures"
                         | "manifestsignature"
+                        | "manifestsignatures"
                         | "readsignature"
+                        | "readsignatures"
                         | "requestsignature"
+                        | "requestsignatures"
                         | "topk"
+                        | "topks"
                         | "resultid"
                         | "resultids"
                         | "pointtoken"
@@ -1861,6 +1875,44 @@ mod tests {
             "qdrant-sec-private-oram-stash-alias-log-sentinel",
         ] {
             assert!(!position_map_aliases_serialized.contains(leaked));
+        }
+
+        let mut plural_sensitive_aliases = json!({
+            "candidate_heaps": ["qdrant-sec-private-oram-candidate-heaps-alias-log-sentinel"],
+            "candidateHeaps": ["qdrant-sec-private-oram-camel-candidate-heaps-alias-log-sentinel"],
+            "client_signatures": ["qdrant-sec-private-oram-client-signatures-alias-log-sentinel"],
+            "clientSignatures": ["qdrant-sec-private-oram-camel-client-signatures-alias-log-sentinel"],
+            "commit_signatures": ["qdrant-sec-private-oram-commit-signatures-alias-log-sentinel"],
+            "commitSignatures": ["qdrant-sec-private-oram-camel-commit-signatures-alias-log-sentinel"],
+            "manifest_signatures": ["qdrant-sec-private-oram-manifest-signatures-alias-log-sentinel"],
+            "manifestSignatures": ["qdrant-sec-private-oram-camel-manifest-signatures-alias-log-sentinel"],
+            "read_signatures": ["qdrant-sec-private-oram-read-signatures-alias-log-sentinel"],
+            "readSignatures": ["qdrant-sec-private-oram-camel-read-signatures-alias-log-sentinel"],
+            "request_signatures": ["qdrant-sec-private-oram-request-signatures-alias-log-sentinel"],
+            "requestSignatures": ["qdrant-sec-private-oram-camel-request-signatures-alias-log-sentinel"],
+            "top_ks": ["qdrant-sec-private-oram-top-ks-alias-log-sentinel"],
+            "topKs": ["qdrant-sec-private-oram-camel-top-ks-alias-log-sentinel"]
+        });
+        redact_sensitive_log_fields(&mut plural_sensitive_aliases);
+        let plural_sensitive_aliases_serialized =
+            serde_json::to_string(&plural_sensitive_aliases).unwrap();
+        for leaked in [
+            "qdrant-sec-private-oram-candidate-heaps-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-candidate-heaps-alias-log-sentinel",
+            "qdrant-sec-private-oram-client-signatures-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-client-signatures-alias-log-sentinel",
+            "qdrant-sec-private-oram-commit-signatures-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-commit-signatures-alias-log-sentinel",
+            "qdrant-sec-private-oram-manifest-signatures-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-manifest-signatures-alias-log-sentinel",
+            "qdrant-sec-private-oram-read-signatures-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-read-signatures-alias-log-sentinel",
+            "qdrant-sec-private-oram-request-signatures-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-request-signatures-alias-log-sentinel",
+            "qdrant-sec-private-oram-top-ks-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-top-ks-alias-log-sentinel",
+        ] {
+            assert!(!plural_sensitive_aliases_serialized.contains(leaked));
         }
 
         let mut first = json!({
