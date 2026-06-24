@@ -478,26 +478,7 @@ pub fn validate_private_hnsw_oram_read_paths_signature(
         input.key_id,
         input.rk_id,
     )?;
-    decode_base64url_32(input.root_hash, "root_hash")?;
-    let requested_paths_len: usize = input
-        .requested_paths
-        .try_into()
-        .map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)?;
-    if input.paths.is_empty()
-        || input.requested_paths == 0
-        || u32::try_from(input.paths.len()).is_err()
-        || requested_paths_len != input.paths.len()
-        || !input.dummy_paths_included
-    {
-        return Err(PrivateHnswOramError::InvalidReadPathsSignature);
-    }
-    let mut seen_paths = BTreeSet::new();
-    for path in input.paths {
-        decode_base64url_8(path).map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)?;
-        if !seen_paths.insert(*path) {
-            return Err(PrivateHnswOramError::InvalidReadPathsSignature);
-        }
-    }
+    validate_private_hnsw_oram_read_paths_signature_shape(input)?;
     let signature_bytes = decode_base64url_64(signature)?;
     let message = try_private_hnsw_oram_read_paths_signature_message(input)?;
     UnparsedPublicKey::new(&ED25519, verification.public_key)
@@ -586,6 +567,7 @@ pub fn try_private_hnsw_oram_read_paths_signature_message(
         input.key_id,
         input.rk_id,
     )?;
+    validate_private_hnsw_oram_read_paths_signature_shape(input)?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -626,6 +608,32 @@ pub fn try_private_hnsw_oram_read_paths_signature_message(
         PrivateHnswOramError::InvalidReadPathsSignature
     })?;
     Ok(message)
+}
+
+fn validate_private_hnsw_oram_read_paths_signature_shape(
+    input: PrivateHnswOramReadPathsSignatureInput<'_>,
+) -> Result<(), PrivateHnswOramError> {
+    decode_base64url_32(input.root_hash, "root_hash")?;
+    let requested_paths_len: usize = input
+        .requested_paths
+        .try_into()
+        .map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)?;
+    if input.paths.is_empty()
+        || input.requested_paths == 0
+        || u32::try_from(input.paths.len()).is_err()
+        || requested_paths_len != input.paths.len()
+        || !input.dummy_paths_included
+    {
+        return Err(PrivateHnswOramError::InvalidReadPathsSignature);
+    }
+    let mut seen_paths = BTreeSet::new();
+    for path in input.paths {
+        decode_base64url_8(path).map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)?;
+        if !seen_paths.insert(*path) {
+            return Err(PrivateHnswOramError::InvalidReadPathsSignature);
+        }
+    }
+    Ok(())
 }
 
 pub fn try_private_hnsw_oram_commit_signature_message(
@@ -1208,6 +1216,58 @@ mod tests {
         try_private_hnsw_oram_read_paths_signature_message(input).unwrap()
     }
 
+    fn unchecked_read_paths_signature_message(
+        input: PrivateHnswOramReadPathsSignatureInput<'_>,
+    ) -> Vec<u8> {
+        let mut message = Vec::new();
+        try_push_domain(
+            &mut message,
+            PRIVATE_HNSW_ORAM_READ_PATHS_SIGNATURE_DOMAIN.as_bytes(),
+            || PrivateHnswOramError::InvalidReadPathsSignature,
+        )
+        .unwrap();
+        try_push_str(&mut message, input.collection_id, || {
+            PrivateHnswOramError::InvalidReadPathsSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.vector_name, || {
+            PrivateHnswOramError::InvalidReadPathsSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.key_id, || {
+            PrivateHnswOramError::InvalidReadPathsSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.rk_id, || {
+            PrivateHnswOramError::InvalidReadPathsSignature
+        })
+        .unwrap();
+        push_u64(&mut message, input.rk_epoch);
+        push_u64(&mut message, input.index_epoch);
+        try_push_str(&mut message, input.root_hash, || {
+            PrivateHnswOramError::InvalidReadPathsSignature
+        })
+        .unwrap();
+        push_u32(&mut message, u32::try_from(input.paths.len()).unwrap());
+        for path in input.paths {
+            try_push_str(&mut message, path, || {
+                PrivateHnswOramError::InvalidReadPathsSignature
+            })
+            .unwrap();
+        }
+        push_u32(&mut message, input.requested_paths);
+        push_bool(&mut message, input.dummy_paths_included);
+        try_push_str(&mut message, input.signature_alg, || {
+            PrivateHnswOramError::InvalidReadPathsSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.signature_key_id, || {
+            PrivateHnswOramError::InvalidReadPathsSignature
+        })
+        .unwrap();
+        message
+    }
+
     #[test]
     fn manifest_signature_message_is_stable() {
         let manifest = fixture_manifest();
@@ -1626,9 +1686,13 @@ mod tests {
             requested_paths: 2,
             ..input
         };
+        assert_eq!(
+            try_private_hnsw_oram_read_paths_signature_message(duplicate_path_input),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
         let duplicate_path_signature = sign_b64(
             &key_pair,
-            &checked_read_paths_signature_message(duplicate_path_input),
+            &unchecked_read_paths_signature_message(duplicate_path_input),
         );
         assert_eq!(
             validate_private_hnsw_oram_read_paths_signature(
@@ -1660,9 +1724,13 @@ mod tests {
             ),
             Err(PrivateHnswOramError::InvalidReadPathsSignature)
         );
+        assert_eq!(
+            try_private_hnsw_oram_read_paths_signature_message(tampered_padding),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
         let tampered_padding_signature = sign_b64(
             &key_pair,
-            &checked_read_paths_signature_message(tampered_padding),
+            &unchecked_read_paths_signature_message(tampered_padding),
         );
         assert_eq!(
             validate_private_hnsw_oram_read_paths_signature(
@@ -1677,8 +1745,14 @@ mod tests {
             requested_paths: 2,
             ..input
         };
-        let mismatched_signature =
-            sign_b64(&key_pair, &checked_read_paths_signature_message(mismatched));
+        assert_eq!(
+            try_private_hnsw_oram_read_paths_signature_message(mismatched),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
+        let mismatched_signature = sign_b64(
+            &key_pair,
+            &unchecked_read_paths_signature_message(mismatched),
+        );
         assert_eq!(
             validate_private_hnsw_oram_read_paths_signature(
                 mismatched,
