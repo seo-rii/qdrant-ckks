@@ -859,6 +859,7 @@ fn validate_vector_name(value: &str) -> Result<(), PrivateHnswOramError> {
         || value.len() > 128
         || value == "."
         || value == ".."
+        || vector_name_is_client_owned_oram_state_alias(value)
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
@@ -866,6 +867,44 @@ fn validate_vector_name(value: &str) -> Result<(), PrivateHnswOramError> {
         return Err(PrivateHnswOramError::InvalidManifestField("vector_name"));
     }
     Ok(())
+}
+
+fn vector_name_is_client_owned_oram_state_alias(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    let compact_value = value.replace(['_', '-', '.'], "");
+    if compact_vector_name_is_client_owned_oram_state_alias(&compact_value) {
+        return true;
+    }
+    let Some((stem, _extension)) = value.rsplit_once('.') else {
+        return false;
+    };
+    compact_vector_name_is_client_owned_oram_state_alias(&stem.replace(['_', '-', '.'], ""))
+}
+
+fn compact_vector_name_is_client_owned_oram_state_alias(value: &str) -> bool {
+    matches!(
+        value,
+        "clientstate"
+            | "clientstatesnapshot"
+            | "clientstatesnapshots"
+            | "encryptedclientstatesnapshot"
+            | "encryptedclientstatesnapshots"
+            | "positionmap"
+            | "positionmaps"
+            | "positionmapsnapshot"
+            | "positionmapsnapshots"
+            | "orampositionmap"
+            | "orampositionmaps"
+            | "orampositionmapsnapshot"
+            | "orampositionmapsnapshots"
+            | "tokenpositionmap"
+            | "tokenpositionmaps"
+            | "tokenpositionmapsnapshot"
+            | "tokenpositionmapsnapshots"
+            | "stash"
+            | "stashsnapshot"
+            | "stashsnapshots"
+    )
 }
 
 fn validate_resource_id(value: &str) -> Result<(), PrivateHnswOramError> {
@@ -1272,6 +1311,19 @@ mod tests {
             Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
         );
 
+        let client_state_alias_context = PrivateHnswOramReadPathsSignatureInput {
+            vector_name: "client.state",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                client_state_alias_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
+        );
+
         let malformed_root = PrivateHnswOramReadPathsSignatureInput {
             root_hash: "AAAA",
             ..input
@@ -1464,24 +1516,27 @@ mod tests {
 
     #[test]
     fn manifest_shape_rejects_vector_name_not_safe_for_store_path() {
-        let mut manifest = fixture_manifest();
-        manifest.vector_name = "text/private".to_string();
-        assert_eq!(
-            validate_private_hnsw_oram_manifest_shape(&manifest),
-            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
-        );
-
-        manifest.vector_name = "text:private".to_string();
-        assert_eq!(
-            validate_private_hnsw_oram_manifest_shape(&manifest),
-            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
-        );
-
-        manifest.vector_name = ".".to_string();
-        assert_eq!(
-            validate_private_hnsw_oram_manifest_shape(&manifest),
-            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
-        );
+        for vector_name in [
+            "text/private",
+            "text:private",
+            ".",
+            "stash",
+            "stash.snapshot",
+            "client.state",
+            "client_state.json",
+            "position-map",
+            "position.map",
+            "oram.position.map",
+            "token.position-map",
+        ] {
+            let mut manifest = fixture_manifest();
+            manifest.vector_name = vector_name.to_string();
+            assert_eq!(
+                validate_private_hnsw_oram_manifest_shape(&manifest),
+                Err(PrivateHnswOramError::InvalidManifestField("vector_name")),
+                "vector_name {vector_name:?} should be rejected",
+            );
+        }
     }
 
     #[test]
@@ -1618,6 +1673,19 @@ mod tests {
         assert_eq!(
             validate_private_hnsw_oram_commit_signature(
                 invalid_vector_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
+        );
+
+        let client_state_alias_context = PrivateHnswOramCommitSignatureInput {
+            vector_name: "client.state",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_commit_signature(
+                client_state_alias_context,
                 "malformed-signature",
                 verification,
             ),
