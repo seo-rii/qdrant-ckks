@@ -1370,8 +1370,9 @@ neighbor path labels from the client position map, deduplicating real candidate
 leaves and filling the remaining request slots with unique dummy leaves before
 the SDK calls `read_paths`. This keeps SDK-generated batches compatible with
 the server-side duplicate path-label guard while still preserving a fixed path
-count; runtime and manifest validation reject path budgets larger than the
-available unique ORAM leaves. `plan_private_hnsw_oram_neighbor_clustered_leaves` provides a
+count; the leaf-label bucket-path helper also rejects duplicate labels before
+producing a request bucket sequence. Runtime and manifest validation reject path
+budgets larger than the available unique ORAM leaves. `plan_private_hnsw_oram_neighbor_clustered_leaves` provides a
 deterministic graph-order leaf assignment helper for bulk builds, so SDK
 experiments can place entry-near neighbor chains on adjacent ORAM leaves before
 calling `build_private_hnsw_oram_plaintext_index_from_blocks`; the helper

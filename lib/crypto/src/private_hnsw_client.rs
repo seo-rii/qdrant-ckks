@@ -1625,8 +1625,12 @@ pub fn private_hnsw_oram_bucket_ids_for_leaf_labels<'a>(
         return Err(PrivateHnswClientError::BucketCountMismatch);
     }
     let mut bucket_ids = Vec::new();
+    let mut seen_leaf_labels = BTreeSet::new();
     for label in leaf_labels {
         let leaf = decode_private_hnsw_oram_leaf_label(label, tree_height)?;
+        if !seen_leaf_labels.insert(label) {
+            return Err(PrivateHnswClientError::InvalidSearchConfig("leaf_labels"));
+        }
         bucket_ids.extend(private_hnsw_oram_bucket_ids_for_leaf(leaf, tree_height)?);
     }
     if bucket_ids.is_empty() {
@@ -4788,6 +4792,15 @@ mod tests {
         );
         assert_eq!(
             private_hnsw_oram_bucket_ids_for_leaf_labels([], 3, 15),
+            Err(PrivateHnswClientError::InvalidSearchConfig("leaf_labels"))
+        );
+        let duplicate_label = BASE64URL_NOPAD.encode(&7u64.to_be_bytes());
+        assert_eq!(
+            private_hnsw_oram_bucket_ids_for_leaf_labels(
+                [duplicate_label.as_str(), duplicate_label.as_str()],
+                3,
+                15,
+            ),
             Err(PrivateHnswClientError::InvalidSearchConfig("leaf_labels"))
         );
         let out_of_range_label = BASE64URL_NOPAD.encode(&8u64.to_be_bytes());
