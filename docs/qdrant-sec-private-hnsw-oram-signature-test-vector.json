@@ -1,0 +1,37 @@
+{
+  "provider": "vector/private-hnsw-oram@v1",
+  "binding": "private-hnsw-oram/v1",
+  "deterministic_seed_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+  "cases": [
+    {
+      "name": "manifest",
+      "domain": "qdrant-sec/private-hnsw-oram-manifest-signature/v1",
+      "signature_alg": "ed25519",
+      "signature_key_id": "tenant-a/private-hnsw-signing-v1",
+      "signature_message_len": 418,
+      "signature_message_sha256_b64": "1hzG6sGJ3RkYa_N_fB91X83CT5gF19sXnVxGdo2hiOQ",
+      "signature_message_b64": "AAAAMnFkcmFudC1zZWMvcHJpdmF0ZS1obnN3LW9yYW0tbWFuaWZlc3Qtc2lnbmF0dXJlL3YxAAEAAAAAAAAAG3ZlY3Rvci9wcml2YXRlLWhuc3ctb3JhbUB2MQAAAAAAAAAUcHJpdmF0ZS1obnN3LW9yYW0vdjEAAAAAAAAAEWNvbGxlY3Rpb24tdXVpZC0xAAAAAAAAAAR0ZXh0AAAAAAAAABp0ZW5hbnQtYS92ZWN0b3ItcHJpdmF0ZS1yawAAAAAAAAAadGVuYW50LWEvdmVjdG9yLXByaXZhdGUtcmsAAAAAAAAABwAABgAAAAAAAAAABmNvc2luZQAAACAAAACAAAAAEAAAAEAAAAAAAAAACXBhdGhfb3JhbQAAAAQAAEAAAAAAGAAAAAgBAAAAIAAAAQAAAAAIAAAACgAAAAAAAAAqAAAAAAAAACtLaW9xS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW9xS2lvAAAAAAH___8AAAAAAAehIAAAAAAAAF7gAAAAAAAAAAtpZHNfdmlzaWJsZQ",
+      "signature_b64": "L9Q5eSm8eDGxINlvhFUYSsBiRrhqkc0eEcqbyqv9rnsAuqYCEv9k4ZWUL0RiWi-ft49oq-JBu9yX_xrtkXG_Bw"
+    },
+    {
+      "name": "commit",
+      "domain": "qdrant-sec/private-hnsw-oram-commit-signature/v1",
+      "signature_alg": "ed25519",
+      "signature_key_id": "tenant-a/private-hnsw-signing-v1",
+      "signature_message_len": 460,
+      "signature_message_sha256_b64": "K7D-QZtqOp7EBdqB0idlNYPSzjPMcg_Uripj067shYQ",
+      "signature_message_b64": "AAAAMHFkcmFudC1zZWMvcHJpdmF0ZS1obnN3LW9yYW0tY29tbWl0LXNpZ25hdHVyZS92MQAAAAAAAAARY29sbGVjdGlvbi11dWlkLTEAAAAAAAAABHRleHQAAAAAAAAAGnRlbmFudC1hL3ZlY3Rvci1wcml2YXRlLXJrAAAAAAAAABp0ZW5hbnQtYS92ZWN0b3ItcHJpdmF0ZS1yawAAAAAAAAAHAAAAAAAAACoAAAAAAAAAKwAAAAAAAAArS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW9xS2lvcUtpbwAAAAAAAAArS3lzckt5c3JLeXNyS3lzckt5c3JLeXNyS3lzckt5c3JLeXNyS3lzckt5cwAAAAIAAAAAAAAACQAAAAAAAAArQ1FrSkNRa0pDUWtKQ1FrSkNRa0pDUWtKQ1FrSkNRa0pDUWtKQ1FrSkNRawAAAAAAAAAbAAAAAAAAACtHeHNiR3hzYkd4c2JHeHNiR3hzYkd4c2JHeHNiR3hzYkd4c2JHeHNiR3hzAAAAAAAAAAdlZDI1NTE5AAAAAAAAACB0ZW5hbnQtYS9wcml2YXRlLWhuc3ctc2lnbmluZy12MQ",
+      "signature_b64": "wRomyqNMlHx22E4hNCitBRnqk06QhZ2Y_SwWnCrKhteedbtrxIslkFfUTiPWgl03hfFiKWJbzhi8jZVVb9u_Ag"
+    },
+    {
+      "name": "read_paths",
+      "domain": "qdrant-sec/private-hnsw-oram-read-paths-signature/v1",
+      "signature_alg": "ed25519",
+      "signature_key_id": "tenant-a/private-hnsw-signing-v1",
+      "signature_message_len": 330,
+      "signature_message_sha256_b64": "n_ChN7eT7j4hxnccWt9L4u65CYHUnOMr5K3f80SJTaA",
+      "signature_message_b64": "AAAANHFkcmFudC1zZWMvcHJpdmF0ZS1obnN3LW9yYW0tcmVhZC1wYXRocy1zaWduYXR1cmUvdjEAAAAAAAAAEWNvbGxlY3Rpb24tdXVpZC0xAAAAAAAAAAR0ZXh0AAAAAAAAABp0ZW5hbnQtYS92ZWN0b3ItcHJpdmF0ZS1yawAAAAAAAAAadGVuYW50LWEvdmVjdG9yLXByaXZhdGUtcmsAAAAAAAAABwAAAAAAAAAqAAAAAAAAACtLaW9xS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW9xS2lvAAAAAgAAAAAAAAALQUFBQUFBQUFBQUEAAAAAAAAAC0FBQUFBQUFBQUFFAAAAAgEAAAAAAAAAB2VkMjU1MTkAAAAAAAAAIHRlbmFudC1hL3ByaXZhdGUtaG5zdy1zaWduaW5nLXYx",
+      "signature_b64": "xoxnYq-yulLq8ufkyv_wLANeEpsC2lYdbwWPr8KvjRgPc-3st2HrbKDwE_wQZTPiByEp_W5F3lVS84TWgbVcCw"
+    }
+  ]
+}

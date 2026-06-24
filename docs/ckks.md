@@ -789,7 +789,9 @@ use the checked `try_private_hnsw_oram_*_signature_message` builders, so
 oversized canonical domain, string, path-count, or bucket-count fields fail
 closed instead of truncating length prefixes. The older infallible HNSW ORAM
 message-builder wrappers are not part of the public contract; callers must use
-the checked builders.
+the checked builders. `docs/qdrant-sec-private-hnsw-oram-signature-test-vector.json`
+freezes manifest, `read_paths`, and `commit` canonical messages, SHA-256
+digests, and deterministic Ed25519 signatures for SDK interoperability.
 The `read_paths` and `commit` client signatures use the same key-id shape check
 before verifier lookup; invalid key ids are rejected without echoing the
 submitted value. For active sessions, the request key id must match the session
@@ -1060,7 +1062,10 @@ The crypto crate defines the payload/result ORAM manifest shape through
 `try_private_result_oram_*_signature_message` builders. The older infallible
 message-builder wrappers are not part of the public contract; production signing
 and verification use the checked builders so canonical field-length or
-bucket-count overflow fails closed before Ed25519 verification/signing. It can
+bucket-count overflow fails closed before Ed25519 verification/signing.
+`docs/qdrant-sec-private-result-oram-signature-test-vector.json` freezes
+manifest, `read_buckets`, and `commit` canonical messages, SHA-256 digests, and
+deterministic Ed25519 signatures for SDK interoperability. It can
 validate manifest shape, including
 canonical Path ORAM tree_height/bucket_count consistency,
 logical plus dummy count against ORAM bucket capacity, Ed25519 signatures,

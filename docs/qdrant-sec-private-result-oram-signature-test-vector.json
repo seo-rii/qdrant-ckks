@@ -1,0 +1,37 @@
+{
+  "provider": "payload/private-result-oram@v1",
+  "binding": "private-result-oram/v1",
+  "deterministic_seed_hex": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+  "cases": [
+    {
+      "name": "manifest",
+      "domain": "qdrant-sec/private-result-oram-manifest-signature/v1",
+      "signature_alg": "ed25519",
+      "signature_key_id": "tenant-a/private-result-signing-v1",
+      "signature_message_len": 387,
+      "signature_message_sha256_b64": "mOy8vej616osyutILgm6MwoTDwZhq7tau_9wyHgaYGA",
+      "signature_message_b64": "AAAANHFkcmFudC1zZWMvcHJpdmF0ZS1yZXN1bHQtb3JhbS1tYW5pZmVzdC1zaWduYXR1cmUvdjEAAQAAAAAAAAAecGF5bG9hZC9wcml2YXRlLXJlc3VsdC1vcmFtQHYxAAAAAAAAABZwcml2YXRlLXJlc3VsdC1vcmFtL3YxAAAAAAAAABFjb2xsZWN0aW9uLXV1aWQtMQAAAAAAAAAbdGVuYW50LWEvcGF5bG9hZC1wcml2YXRlLXJrAAAAAAAAABt0ZW5hbnQtYS9wYXlsb2FkLXByaXZhdGUtcmsAAAAAAAAABwAAAAAAAAAJcGF0aF9vcmFtAAAABAAAIAAAAAAYAAAACAAAAAAAAAAqAAAAAAAAACtLaW9xS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW9xS2lvAAAAAAH___8AAAAAAAACvAAAAAAAAAFEAAAAAAAAACJ0ZW5hbnQtYS9wcml2YXRlLXJlc3VsdC1zaWduaW5nLXYx",
+      "signature_b64": "GKetv5HZkKN_7nAWL13DeBewxPe58jh9FOqAU0zawMUpY2QtJQ7HEVdBAm93jK3VzacU1EHFJ2msAzZMlBaDDQ"
+    },
+    {
+      "name": "commit",
+      "domain": "qdrant-sec/private-result-oram-commit-signature/v1",
+      "signature_alg": "ed25519",
+      "signature_key_id": "tenant-a/private-result-signing-v1",
+      "signature_message_len": 454,
+      "signature_message_sha256_b64": "Dsso6H8kYZbPZHYG49vdmgVaLa02M2fP47VCQH4wPtM",
+      "signature_message_b64": "AAAAMnFkcmFudC1zZWMvcHJpdmF0ZS1yZXN1bHQtb3JhbS1jb21taXQtc2lnbmF0dXJlL3YxAAAAAAAAABFjb2xsZWN0aW9uLXV1aWQtMQAAAAAAAAAbdGVuYW50LWEvcGF5bG9hZC1wcml2YXRlLXJrAAAAAAAAABt0ZW5hbnQtYS9wYXlsb2FkLXByaXZhdGUtcmsAAAAAAAAABwAAAAAAAAAqAAAAAAAAACsAAAAAAAAAK0tpb3FLaW9xS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW8AAAAAAAAAK0t5c3JLeXNyS3lzckt5c3JLeXNyS3lzckt5c3JLeXNyS3lzckt5c3JLeXMAAAACAAAAAAAAAAkAAAAAAAAAK0NRa0pDUWtKQ1FrSkNRa0pDUWtKQ1FrSkNRa0pDUWtKQ1FrSkNRa0pDUWsAAAAAAAAAGwAAAAAAAAArR3hzYkd4c2JHeHNiR3hzYkd4c2JHeHNiR3hzYkd4c2JHeHNiR3hzYkd4cwAAAAAAAAAHZWQyNTUxOQAAAAAAAAAidGVuYW50LWEvcHJpdmF0ZS1yZXN1bHQtc2lnbmluZy12MQ",
+      "signature_b64": "6obLb5HsEc1T-PpKlm3_yQJATe-dKP7I-wQ0UcaVBTuJz_IPbWyy6VoLeZ87pbZRUonloDrDsIByfFj8YD7fBQ"
+    },
+    {
+      "name": "read_buckets",
+      "domain": "qdrant-sec/private-result-oram-read-buckets-signature/v1",
+      "signature_alg": "ed25519",
+      "signature_key_id": "tenant-a/private-result-signing-v1",
+      "signature_message_len": 339,
+      "signature_message_sha256_b64": "lgqPWza4bMJhkNB3N3ceznqz8moFXvgbm-Ov3i6TkYQ",
+      "signature_message_b64": "AAAAOHFkcmFudC1zZWMvcHJpdmF0ZS1yZXN1bHQtb3JhbS1yZWFkLWJ1Y2tldHMtc2lnbmF0dXJlL3YxAAAAAAAAABFjb2xsZWN0aW9uLXV1aWQtMQAAAAAAAAAbdGVuYW50LWEvcGF5bG9hZC1wcml2YXRlLXJrAAAAAAAAABt0ZW5hbnQtYS9wYXlsb2FkLXByaXZhdGUtcmsAAAAAAAAABwAAAAAAAAAqAAAAAAAAACtLaW9xS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW9xS2lvcUtpb3FLaW9xS2lvAAAAAAAAAAcAAAAGAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAADAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAEAAAAAAAAAAdlZDI1NTE5AAAAAAAAACJ0ZW5hbnQtYS9wcml2YXRlLXJlc3VsdC1zaWduaW5nLXYx",
+      "signature_b64": "ddffysc8cqOCF7Lp2gVTLIBrVPlEy9xBK1vCOby4mUNoONW5Roa7fgJ_rm8es8XvAYRP224MCZLvWBZlkNQXAA"
+    }
+  ]
+}

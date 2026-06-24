@@ -1332,6 +1332,109 @@ mod tests {
         );
     }
 
+    fn assert_signature_fixture(
+        fixture: &serde_json::Value,
+        case_name: &str,
+        message: &[u8],
+        signature: &str,
+    ) {
+        let case = fixture["cases"]
+            .as_array()
+            .and_then(|cases| {
+                cases
+                    .iter()
+                    .find(|case| case["name"].as_str() == Some(case_name))
+            })
+            .unwrap_or_else(|| panic!("test vector case {case_name} must exist"));
+        let get = |key: &str| {
+            case[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("test vector case {case_name} must define {key}"))
+        };
+
+        assert_eq!(get("signature_alg"), "ed25519");
+        assert_eq!(
+            message.len() as u64,
+            case["signature_message_len"]
+                .as_u64()
+                .unwrap_or_else(|| panic!("test vector case {case_name} must define message len"))
+        );
+        assert_eq!(
+            BASE64URL_NOPAD.encode(message),
+            get("signature_message_b64")
+        );
+        assert_eq!(
+            BASE64URL_NOPAD.encode(Sha256::digest(message).as_ref()),
+            get("signature_message_sha256_b64")
+        );
+        assert_eq!(signature, get("signature_b64"));
+    }
+
+    #[test]
+    fn signature_messages_match_sdk_test_vector() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../docs/qdrant-sec-private-hnsw-oram-signature-test-vector.json"
+        ))
+        .expect("private HNSW ORAM signature test vector must be valid JSON");
+        assert_eq!(
+            fixture["provider"].as_str(),
+            Some(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+        );
+        assert_eq!(fixture["binding"].as_str(), Some(PRIVATE_HNSW_ORAM_BINDING));
+
+        let key_pair = deterministic_key_pair();
+        let manifest_message = checked_manifest_signature_message(&fixture_manifest());
+        let manifest_signature = sign_b64(&key_pair, &manifest_message);
+        assert_signature_fixture(&fixture, "manifest", &manifest_message, &manifest_signature);
+
+        let buckets = [
+            PrivateHnswOramCommitBucketRef {
+                bucket_id: 9,
+                ciphertext_sha256: &BASE64URL_NOPAD.encode(&[9; 32]),
+            },
+            PrivateHnswOramCommitBucketRef {
+                bucket_id: 27,
+                ciphertext_sha256: &BASE64URL_NOPAD.encode(&[27; 32]),
+            },
+        ];
+        let commit_input = PrivateHnswOramCommitSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            new_root_hash: &BASE64URL_NOPAD.encode(&[43; 32]),
+            updated_buckets: &buckets,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+        let commit_message = checked_commit_signature_message(commit_input);
+        let commit_signature = sign_b64(&key_pair, &commit_message);
+        assert_signature_fixture(&fixture, "commit", &commit_message, &commit_signature);
+
+        let paths = ["AAAAAAAAAAA", "AAAAAAAAAAE"];
+        let read_input = PrivateHnswOramReadPathsSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            paths: &paths,
+            requested_paths: 2,
+            dummy_paths_included: true,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+        let read_message = checked_read_paths_signature_message(read_input);
+        let read_signature = sign_b64(&key_pair, &read_message);
+        assert_signature_fixture(&fixture, "read_paths", &read_message, &read_signature);
+    }
+
     #[test]
     fn signature_message_builders_reject_client_state_vector_aliases() {
         let mut manifest = fixture_manifest();
