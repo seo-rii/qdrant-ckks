@@ -641,10 +641,11 @@ recovery continues to report the old current epoch and rejects mixed old-root /
 new-bucket reads rather than serving an inconsistent ORAM view.
 Collection snapshots include private HNSW ORAM bucket files as ciphertext-only
 JSON artifacts after rejecting non-directory or symlinked private ORAM snapshot
-sources, client-owned ORAM state files, and non-empty private ORAM temp write
-directories. Client-owned state detection covers snake_case, camelCase, and
-kebab-case aliases for client state, encrypted client state snapshots, position
-maps, ORAM/token position maps, and stashes. Empty private ORAM temp
+sources, unsupported source file types, client-owned ORAM state files, and
+non-empty private ORAM temp write directories. Client-owned state detection
+covers snake_case, camelCase, and kebab-case aliases for client state,
+encrypted client state snapshots, position maps, ORAM/token position maps, and
+stashes. Empty private ORAM temp
 directories are omitted from the archive;
 snapshot tests seal a plaintext sentinel into a client bucket and assert that
 the raw snapshot archive and restored bucket file do not contain the sentinel
