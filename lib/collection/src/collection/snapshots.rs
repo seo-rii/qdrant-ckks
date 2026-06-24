@@ -38,7 +38,10 @@ use crate::config::{
 };
 use crate::operations::snapshot_ops::SnapshotDescription;
 use crate::operations::types::{CollectionError, CollectionResult, NodeType};
-use crate::private_hnsw_oram_store::{PRIVATE_HNSW_ORAM_DIR, PrivateHnswOramStore};
+use crate::private_hnsw_oram_store::{
+    PRIVATE_HNSW_ORAM_DIR, PrivateHnswOramStore,
+    private_hnsw_oram_vector_name_is_safe_store_component,
+};
 use crate::private_result_oram_store::{PRIVATE_RESULT_ORAM_DIR, PrivateResultOramStore};
 use crate::shards::local_shard::LocalShard;
 use crate::shards::remote_shard::RemoteShard;
@@ -826,6 +829,12 @@ fn private_oram_snapshot_hnsw_entry_matches_layout(
     components: &[&str],
     file_type: &std::fs::FileType,
 ) -> bool {
+    let Some(vector_name) = components.first() else {
+        return false;
+    };
+    if !private_hnsw_oram_vector_name_is_safe_store_component(vector_name) {
+        return false;
+    }
     match components {
         [_vector_name] => file_type.is_dir(),
         [_vector_name, "manifest.json"] | [_vector_name, "manifest.sig"] => file_type.is_file(),
@@ -2531,6 +2540,32 @@ mod tests {
         assert!(rendered.contains("unexpected file"), "{rendered}");
         assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
         assert!(!rendered.contains("latest.json"));
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn private_hnsw_snapshot_source_dir_rejects_unsafe_vector_store_name_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-snapshot-source-unsafe-vector")
+            .tempdir()
+            .unwrap();
+
+        let unsafe_manifest = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("private vector secret")
+            .join("manifest.json");
+        fs::create_dir_all(unsafe_manifest.parent().unwrap()).unwrap();
+        fs::write(&unsafe_manifest, b"private HNSW unsafe vector sentinel").unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("unexpected file"), "{rendered}");
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("private vector secret"));
         assert!(!rendered.contains("sentinel"));
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
     }
