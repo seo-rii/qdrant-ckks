@@ -223,6 +223,8 @@ mod tests {
              candidateNodes=candidate-node-camel-sentinel \
              candidateScores=candidate-scores-camel-sentinel \
              candidate_distance=candidate-distance-sentinel \
+             score=score-sentinel scores=scores-sentinel \
+             distance=distance-sentinel distances=distances-sentinel \
              distanceScores=distance-scores-camel-sentinel \
              nodeScores=node-scores-camel-sentinel \
              nodeDistances=node-distances-camel-sentinel \
@@ -332,6 +334,10 @@ mod tests {
         assert!(!rendered.contains("candidate-node-camel-sentinel"));
         assert!(!rendered.contains("candidate-scores-camel-sentinel"));
         assert!(!rendered.contains("candidate-distance-sentinel"));
+        assert!(!rendered.contains("score-sentinel"));
+        assert!(!rendered.contains("scores-sentinel"));
+        assert!(!rendered.contains("distance-sentinel"));
+        assert!(!rendered.contains("distances-sentinel"));
         assert!(!rendered.contains("distance-scores-camel-sentinel"));
         assert!(!rendered.contains("node-scores-camel-sentinel"));
         assert!(!rendered.contains("node-distances-camel-sentinel"));

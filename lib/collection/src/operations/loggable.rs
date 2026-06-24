@@ -180,6 +180,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "Mmr"
                         | "score"
                         | "scores"
+                        | "distance"
+                        | "distances"
                         | "candidate_score"
                         | "candidate_scores"
                         | "candidate_distance"
@@ -455,6 +457,10 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "queryembeddings"
                         | "queryplaintext"
                         | "queryplaintexts"
+                        | "score"
+                        | "scores"
+                        | "distance"
+                        | "distances"
                         | "candidatescore"
                         | "candidatescores"
                         | "candidatedistance"
@@ -1954,6 +1960,10 @@ mod tests {
             "queryEmbeddings": ["qdrant-sec-private-oram-camel-query-embeddings-alias-log-sentinel"],
             "query_plaintext": "qdrant-sec-private-oram-query-plaintext-alias-log-sentinel",
             "queryPlaintext": "qdrant-sec-private-oram-camel-query-plaintext-alias-log-sentinel",
+            "score": "qdrant-sec-private-oram-score-alias-log-sentinel",
+            "scores": ["qdrant-sec-private-oram-scores-alias-log-sentinel"],
+            "distance": "qdrant-sec-private-oram-distance-alias-log-sentinel",
+            "distances": ["qdrant-sec-private-oram-distances-alias-log-sentinel"],
             "candidate_score": "qdrant-sec-private-oram-candidate-score-alias-log-sentinel",
             "candidateScores": ["qdrant-sec-private-oram-camel-candidate-scores-alias-log-sentinel"],
             "candidate_distance": "qdrant-sec-private-oram-candidate-distance-alias-log-sentinel",
@@ -1975,6 +1985,10 @@ mod tests {
             "qdrant-sec-private-oram-camel-query-embeddings-alias-log-sentinel",
             "qdrant-sec-private-oram-query-plaintext-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-query-plaintext-alias-log-sentinel",
+            "qdrant-sec-private-oram-score-alias-log-sentinel",
+            "qdrant-sec-private-oram-scores-alias-log-sentinel",
+            "qdrant-sec-private-oram-distance-alias-log-sentinel",
+            "qdrant-sec-private-oram-distances-alias-log-sentinel",
             "qdrant-sec-private-oram-candidate-score-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-candidate-scores-alias-log-sentinel",
             "qdrant-sec-private-oram-candidate-distance-alias-log-sentinel",
