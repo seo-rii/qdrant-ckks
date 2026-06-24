@@ -2528,6 +2528,45 @@ mod tests {
         assert!(!err.contains("sentinel"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_fifo_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-fifo")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        let fifo_path = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("buckets")
+            .join("fifo-sentinel");
+        nix::unistd::mkfifo(
+            &fifo_path,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(
+            err.contains("private result ORAM snapshot store contains an unsupported file type")
+        );
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("buckets"));
+        assert!(!err.contains("fifo-sentinel"));
+    }
+
     #[test]
     fn private_result_oram_restore_preflight_rejects_non_empty_temp_without_path_leak() {
         let temp_dir = tempfile::Builder::new()
@@ -3541,6 +3580,45 @@ mod tests {
         assert!(!err.contains("extra-link"));
         assert!(!err.contains("outside-private-hnsw-target"));
         assert!(!err.contains("sentinel"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_fifo_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-fifo")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        let fifo_path = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("buckets")
+            .join("fifo-sentinel");
+        nix::unistd::mkfifo(
+            &fifo_path,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("private HNSW ORAM snapshot store contains an unsupported file type"));
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains("text"));
+        assert!(!err.contains("buckets"));
+        assert!(!err.contains("fifo-sentinel"));
     }
 
     #[test]
