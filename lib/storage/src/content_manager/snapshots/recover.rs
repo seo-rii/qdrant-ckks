@@ -7,7 +7,10 @@ use collection::collection::payload_index_schema::{
     PayloadIndexSchema, validate_payload_index_paths_for_encrypted_paths,
 };
 use collection::common::sha_256::hashes_equal;
-use collection::config::{CollectionConfigInternal, CollectionParams};
+use collection::config::{
+    CollectionConfigInternal, CollectionParams, PRIVATE_HNSW_ORAM_BINDING,
+    PRIVATE_RESULT_ORAM_BINDING,
+};
 use collection::operations::snapshot_ops::{SnapshotPriority, SnapshotRecover};
 use collection::operations::types::CollectionError;
 use collection::operations::verification::new_unchecked_verification_pass;
@@ -454,6 +457,10 @@ async fn _do_recover_from_snapshot(
                 }
 
                 SnapshotPriority::Replica => {
+                    reject_private_oram_replica_priority_snapshot_recovery_until_supported(
+                        collection_pass.name(),
+                        &state.config.params,
+                    )?;
                     // Replica is the source of truth, we need to sync recovered data with this replica
                     let Some((replica_peer_id, _state)) = other_active_replicas.into_iter().next()
                     else {
@@ -516,6 +523,33 @@ fn validate_private_oram_snapshot_restore_layouts(
     )
     .map_err(|err| sanitize_private_result_oram_snapshot_layout_error(collection_path, err))?;
     Ok(())
+}
+
+fn reject_private_oram_replica_priority_snapshot_recovery_until_supported(
+    collection_name: &str,
+    params: &CollectionParams,
+) -> Result<(), StorageError> {
+    if !collection_params_use_private_oram_bucket_store(params) {
+        return Ok(());
+    }
+
+    Err(StorageError::bad_request(format!(
+        "replica-priority snapshot recovery for private ORAM collection {collection_name} \
+         is disabled until encrypted ORAM bucket transfer and consensus-backed epoch/root \
+         ownership are implemented; use snapshot priority or no-sync recovery with collection \
+         snapshot restore preflight",
+    )))
+}
+
+fn collection_params_use_private_oram_bucket_store(params: &CollectionParams) -> bool {
+    params.encryption.as_ref().is_some_and(|encryption| {
+        encryption.rules.iter().any(|rule| {
+            matches!(
+                rule.binding.as_deref(),
+                Some(PRIVATE_HNSW_ORAM_BINDING) | Some(PRIVATE_RESULT_ORAM_BINDING)
+            )
+        })
+    })
 }
 
 fn sanitize_private_hnsw_snapshot_layout_error(
@@ -661,7 +695,8 @@ fn validate_existing_collection_crypto_identity(
 mod tests {
     use collection::config::{
         CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams,
-        CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, WalConfig,
+        CryptoMigrationState, EncryptionRuleRef, EncryptionSelector, PRIVATE_HNSW_ORAM_BINDING,
+        PRIVATE_RESULT_ORAM_BINDING, WalConfig,
     };
     use collection::operations::types::CollectionError;
     use collection::optimizers_builder::OptimizersConfig;
@@ -670,6 +705,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
+        reject_private_oram_replica_priority_snapshot_recovery_until_supported,
         sanitize_private_hnsw_snapshot_layout_error,
         sanitize_private_result_oram_snapshot_layout_error,
         validate_existing_collection_crypto_identity,
@@ -922,6 +958,58 @@ mod tests {
         assert!(err.contains("without a matching collection encryption rule"));
         assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+    }
+
+    #[test]
+    fn private_oram_replica_priority_snapshot_recovery_fails_closed_until_transfer_exists() {
+        reject_private_oram_replica_priority_snapshot_recovery_until_supported(
+            "docs",
+            &encrypted_params(),
+        )
+        .unwrap();
+
+        for (binding, selector) in [
+            (
+                PRIVATE_HNSW_ORAM_BINDING,
+                EncryptionSelector::VectorNames {
+                    names: vec!["text".to_string()],
+                },
+            ),
+            (
+                PRIVATE_RESULT_ORAM_BINDING,
+                EncryptionSelector::PayloadPaths {
+                    paths: vec!["document.body".to_string()],
+                },
+            ),
+        ] {
+            let params = CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a/private-rk".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "private_oram_rule".to_string(),
+                        selector,
+                        instance: "docs_private_oram_v1".to_string(),
+                        binding: Some(binding.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            };
+
+            let err = reject_private_oram_replica_priority_snapshot_recovery_until_supported(
+                "docs", &params,
+            )
+            .expect_err("private ORAM replica-priority recovery must fail closed")
+            .to_string();
+
+            assert!(err.contains("private ORAM collection docs"));
+            assert!(err.contains("encrypted ORAM bucket transfer"));
+            assert!(!err.contains(PRIVATE_HNSW_ORAM_BINDING));
+            assert!(!err.contains(PRIVATE_RESULT_ORAM_BINDING));
+        }
     }
 
     #[test]
