@@ -221,6 +221,15 @@ mod tests {
              newRootHashes=new-root-hashes-camel-sentinel \
              path_label=leaf-sentinel candidate_heap=candidate-sentinel \
              candidateNodes=candidate-node-camel-sentinel \
+             candidateScores=candidate-scores-camel-sentinel \
+             candidate_distance=candidate-distance-sentinel \
+             distanceScores=distance-scores-camel-sentinel \
+             nodeScores=node-scores-camel-sentinel \
+             nodeDistances=node-distances-camel-sentinel \
+             query_vector=query-vector-sentinel \
+             queryVector=query-vector-camel-sentinel \
+             query_embeddings=query-embeddings-sentinel \
+             queryPlaintext=query-plaintext-camel-sentinel \
              pathLabels=leaf-camel-sentinel \
              readPathLabels=read-path-labels-camel-sentinel \
              oramPaths=oram-path-camel-sentinel \
@@ -321,6 +330,15 @@ mod tests {
         assert!(!rendered.contains("new-root-hashes-camel-sentinel"));
         assert!(!rendered.contains("leaf-sentinel"));
         assert!(!rendered.contains("candidate-node-camel-sentinel"));
+        assert!(!rendered.contains("candidate-scores-camel-sentinel"));
+        assert!(!rendered.contains("candidate-distance-sentinel"));
+        assert!(!rendered.contains("distance-scores-camel-sentinel"));
+        assert!(!rendered.contains("node-scores-camel-sentinel"));
+        assert!(!rendered.contains("node-distances-camel-sentinel"));
+        assert!(!rendered.contains("query-vector-sentinel"));
+        assert!(!rendered.contains("query-vector-camel-sentinel"));
+        assert!(!rendered.contains("query-embeddings-sentinel"));
+        assert!(!rendered.contains("query-plaintext-camel-sentinel"));
         assert!(!rendered.contains("leaf-camel-sentinel"));
         assert!(!rendered.contains("read-path-labels-camel-sentinel"));
         assert!(!rendered.contains("oram-path-camel-sentinel"));

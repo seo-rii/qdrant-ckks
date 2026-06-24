@@ -163,6 +163,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "payloads"
                         | "vector"
                         | "vectors"
+                        | "query_vector"
+                        | "query_vectors"
+                        | "query_embedding"
+                        | "query_embeddings"
+                        | "query_plaintext"
+                        | "query_plaintexts"
                         | "value"
                         | "values"
                         | "match"
@@ -174,6 +180,16 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "Mmr"
                         | "score"
                         | "scores"
+                        | "candidate_score"
+                        | "candidate_scores"
+                        | "candidate_distance"
+                        | "candidate_distances"
+                        | "distance_score"
+                        | "distance_scores"
+                        | "node_score"
+                        | "node_scores"
+                        | "node_distance"
+                        | "node_distances"
                         | "plaintext_score"
                         | "plaintext_scores"
                         | "score_plaintext"
@@ -433,6 +449,22 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "publickeyb64"
                         | "signaturepublickeys"
                         | "signaturepublickeyb64"
+                        | "queryvector"
+                        | "queryvectors"
+                        | "queryembedding"
+                        | "queryembeddings"
+                        | "queryplaintext"
+                        | "queryplaintexts"
+                        | "candidatescore"
+                        | "candidatescores"
+                        | "candidatedistance"
+                        | "candidatedistances"
+                        | "distancescore"
+                        | "distancescores"
+                        | "nodescore"
+                        | "nodescores"
+                        | "nodedistance"
+                        | "nodedistances"
                         | "plaintextscore"
                         | "plaintextscores"
                         | "scoreplaintext"
@@ -1913,6 +1945,48 @@ mod tests {
             "qdrant-sec-private-oram-camel-top-ks-alias-log-sentinel",
         ] {
             assert!(!plural_sensitive_aliases_serialized.contains(leaked));
+        }
+
+        let mut query_and_score_aliases = json!({
+            "query_vector": ["qdrant-sec-private-oram-query-vector-alias-log-sentinel"],
+            "queryVector": ["qdrant-sec-private-oram-camel-query-vector-alias-log-sentinel"],
+            "query_embedding": ["qdrant-sec-private-oram-query-embedding-alias-log-sentinel"],
+            "queryEmbeddings": ["qdrant-sec-private-oram-camel-query-embeddings-alias-log-sentinel"],
+            "query_plaintext": "qdrant-sec-private-oram-query-plaintext-alias-log-sentinel",
+            "queryPlaintext": "qdrant-sec-private-oram-camel-query-plaintext-alias-log-sentinel",
+            "candidate_score": "qdrant-sec-private-oram-candidate-score-alias-log-sentinel",
+            "candidateScores": ["qdrant-sec-private-oram-camel-candidate-scores-alias-log-sentinel"],
+            "candidate_distance": "qdrant-sec-private-oram-candidate-distance-alias-log-sentinel",
+            "candidateDistances": ["qdrant-sec-private-oram-camel-candidate-distances-alias-log-sentinel"],
+            "distance_score": "qdrant-sec-private-oram-distance-score-alias-log-sentinel",
+            "distanceScores": ["qdrant-sec-private-oram-camel-distance-scores-alias-log-sentinel"],
+            "node_score": "qdrant-sec-private-oram-node-score-alias-log-sentinel",
+            "nodeScores": ["qdrant-sec-private-oram-camel-node-scores-alias-log-sentinel"],
+            "node_distance": "qdrant-sec-private-oram-node-distance-alias-log-sentinel",
+            "nodeDistances": ["qdrant-sec-private-oram-camel-node-distances-alias-log-sentinel"]
+        });
+        redact_sensitive_log_fields(&mut query_and_score_aliases);
+        let query_and_score_aliases_serialized =
+            serde_json::to_string(&query_and_score_aliases).unwrap();
+        for leaked in [
+            "qdrant-sec-private-oram-query-vector-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-query-vector-alias-log-sentinel",
+            "qdrant-sec-private-oram-query-embedding-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-query-embeddings-alias-log-sentinel",
+            "qdrant-sec-private-oram-query-plaintext-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-query-plaintext-alias-log-sentinel",
+            "qdrant-sec-private-oram-candidate-score-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-candidate-scores-alias-log-sentinel",
+            "qdrant-sec-private-oram-candidate-distance-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-candidate-distances-alias-log-sentinel",
+            "qdrant-sec-private-oram-distance-score-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-distance-scores-alias-log-sentinel",
+            "qdrant-sec-private-oram-node-score-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-node-scores-alias-log-sentinel",
+            "qdrant-sec-private-oram-node-distance-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-node-distances-alias-log-sentinel",
+        ] {
+            assert!(!query_and_score_aliases_serialized.contains(leaked));
         }
 
         let mut first = json!({

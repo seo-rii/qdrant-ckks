@@ -1929,12 +1929,14 @@ audit paths template-redact private ORAM session ids and redact private ORAM
 query strings and unexpected private ORAM endpoint tail segments. Slow request
 logs and request hashes use redacted request values, including private HNSW ORAM
 path/read/access traversal labels, entry and visited node ids, level masks,
-neighbor/candidate aliases, candidate heaps, request/commit/read/manifest
+neighbor/candidate aliases, query vector/embedding/plaintext aliases, candidate
+heaps, candidate and node score/distance aliases, request/commit/read/manifest
 signatures, private result ORAM bucket ids, session ids, bucket commitments,
 leaf commitments, read bucket ids, bucket id sequences, updated bucket
 writebacks, client-state fields, and payload/result tokens; snake_case and
 camelCase singular/plural aliases are covered for private ORAM access-pattern,
-bucket, commitment, signature, candidate, client-state, and token fields.
+bucket, commitment, signature, query, candidate, score/distance, client-state,
+and token fields.
 Collection telemetry has sentinel coverage so decrypted plaintext is not
 intentionally emitted there. Audit events never include request bodies; denied
 audit errors also redact qdrant-sec envelope markers and secret-like crypto
