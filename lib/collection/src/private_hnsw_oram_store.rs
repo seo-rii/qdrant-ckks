@@ -1643,8 +1643,9 @@ fn unique_temp_path(temp_dir: &Path) -> PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     temp_dir.join(format!(
-        "private-hnsw-oram-{}-{timestamp}.tmp",
+        "private-hnsw-oram-{}-{timestamp}-{}.tmp",
         std::process::id(),
+        uuid::Uuid::new_v4(),
     ))
 }
 
@@ -1739,6 +1740,24 @@ mod tests {
         ] {
             assert!(!rendered.contains(leaked), "{rendered}");
         }
+    }
+
+    #[test]
+    fn private_hnsw_temp_paths_include_random_suffix() {
+        let temp = TempDir::new().unwrap();
+        let first = unique_temp_path(temp.path());
+        let second = unique_temp_path(temp.path());
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(temp.path()));
+        assert_eq!(second.parent(), Some(temp.path()));
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("private-hnsw-oram-")
+        );
     }
 
     #[test]
