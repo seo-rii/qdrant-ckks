@@ -1629,6 +1629,19 @@ mod tests {
             canonical_rest_endpoint_label("/collections/docs/points/search/not-whitelisted"),
             None,
         );
+        for raw in [
+            "/collections/docs/private-hnsw?leaf=hnsw-query-leaf-sentinel",
+            "/collections/docs/private-result-oram?token=result-query-token-sentinel",
+            "/collections/docs/not-private-hnsw/text/session/session-id-sentinel",
+            "/collections/docs/private-result-oramish/session/result-session-id-sentinel",
+            "/collections/private-hnsw/points/search?leaf=hnsw-query-leaf-sentinel",
+        ] {
+            assert_eq!(
+                canonical_rest_endpoint_label(raw),
+                None,
+                "malformed or lookalike private ORAM path must not become a fixed metrics label: {raw}"
+            );
+        }
 
         let grpc_cases = [
             (
@@ -1679,6 +1692,21 @@ mod tests {
             canonical_grpc_endpoint_label("/qdrant.Points/Search/vector-name-sentinel"),
             None,
         );
+    }
+
+    fn is_private_oram_openapi_path(path: &str) -> bool {
+        let segments = path.split('/').collect::<Vec<_>>();
+        matches!(
+            segments.as_slice(),
+            ["", "collections", "{collection_name}", "private-hnsw", ..]
+                | [
+                    "",
+                    "collections",
+                    "{collection_name}",
+                    "private-result-oram",
+                    ..
+                ]
+        )
     }
 
     #[test]
@@ -1779,7 +1807,7 @@ mod tests {
 
         let private_oram_path_count = paths
             .keys()
-            .filter(|path| path.contains("/private-hnsw/") || path.contains("/private-result-oram"))
+            .filter(|path| is_private_oram_openapi_path(path))
             .count();
         assert_eq!(
             private_oram_path_count, 12,
@@ -1788,9 +1816,7 @@ mod tests {
 
         let private_oram_method_count = paths
             .iter()
-            .filter(|(path, _)| {
-                path.contains("/private-hnsw/") || path.contains("/private-result-oram")
-            })
+            .filter(|(path, _)| is_private_oram_openapi_path(path))
             .map(|(_, path_item)| {
                 path_item
                     .as_object()
