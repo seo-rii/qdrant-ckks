@@ -895,7 +895,10 @@ body parsing.
 For `commit`, after the bounded request-size and epoch checks, the server first
 bounds `old_root_hash` and `new_root_hash` to canonical 32-byte base64url
 strings, then verifies the Ed25519 request signature before preparing
-Merkle/writeback metadata.
+Merkle/writeback metadata. The commit signature message builders and validators
+also reject empty commits, non-advancing epochs, malformed roots, duplicate
+bucket refs, and malformed updated bucket ciphertext hashes before signature
+acceptance.
 Malformed client signature shape errors for `read_paths` and `commit` are also
 sanitized so submitted signature bodies and unsupported algorithm values are not
 echoed.

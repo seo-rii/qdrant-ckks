@@ -441,24 +441,7 @@ pub fn validate_private_hnsw_oram_commit_signature(
         input.key_id,
         input.rk_id,
     )?;
-    if input.updated_buckets.is_empty() {
-        return Err(PrivateHnswOramError::EmptyCommit);
-    }
-    if u32::try_from(input.updated_buckets.len()).is_err() {
-        return Err(PrivateHnswOramError::InvalidCommitSignature);
-    }
-    if input.new_epoch <= input.old_epoch {
-        return Err(PrivateHnswOramError::InvalidManifestField("new_epoch"));
-    }
-    decode_base64url_32(input.old_root_hash, "old_root_hash")?;
-    decode_base64url_32(input.new_root_hash, "new_root_hash")?;
-    let mut seen_bucket_ids = BTreeSet::new();
-    for bucket in input.updated_buckets {
-        if !seen_bucket_ids.insert(bucket.bucket_id) {
-            return Err(PrivateHnswOramError::InvalidCommitSignature);
-        }
-        decode_base64url_32(bucket.ciphertext_sha256, "ciphertext_sha256")?;
-    }
+    validate_private_hnsw_oram_commit_signature_shape(input)?;
     let signature_bytes = decode_base64url_64(signature)?;
     let message = try_private_hnsw_oram_commit_signature_message(input)?;
     UnparsedPublicKey::new(&ED25519, verification.public_key)
@@ -645,6 +628,7 @@ pub fn try_private_hnsw_oram_commit_signature_message(
         input.key_id,
         input.rk_id,
     )?;
+    validate_private_hnsw_oram_commit_signature_shape(input)?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -688,6 +672,30 @@ pub fn try_private_hnsw_oram_commit_signature_message(
         PrivateHnswOramError::InvalidCommitSignature
     })?;
     Ok(message)
+}
+
+fn validate_private_hnsw_oram_commit_signature_shape(
+    input: PrivateHnswOramCommitSignatureInput<'_>,
+) -> Result<(), PrivateHnswOramError> {
+    if input.updated_buckets.is_empty() {
+        return Err(PrivateHnswOramError::EmptyCommit);
+    }
+    if u32::try_from(input.updated_buckets.len()).is_err() {
+        return Err(PrivateHnswOramError::InvalidCommitSignature);
+    }
+    if input.new_epoch <= input.old_epoch {
+        return Err(PrivateHnswOramError::InvalidManifestField("new_epoch"));
+    }
+    decode_base64url_32(input.old_root_hash, "old_root_hash")?;
+    decode_base64url_32(input.new_root_hash, "new_root_hash")?;
+    let mut seen_bucket_ids = BTreeSet::new();
+    for bucket in input.updated_buckets {
+        if !seen_bucket_ids.insert(bucket.bucket_id) {
+            return Err(PrivateHnswOramError::InvalidCommitSignature);
+        }
+        decode_base64url_32(bucket.ciphertext_sha256, "ciphertext_sha256")?;
+    }
+    Ok(())
 }
 
 fn validate_manifest_shape(manifest: &PrivateHnswOramManifest) -> Result<(), PrivateHnswOramError> {
@@ -1208,6 +1216,65 @@ mod tests {
 
     fn checked_commit_signature_message(input: PrivateHnswOramCommitSignatureInput<'_>) -> Vec<u8> {
         try_private_hnsw_oram_commit_signature_message(input).unwrap()
+    }
+
+    fn unchecked_commit_signature_message(
+        input: PrivateHnswOramCommitSignatureInput<'_>,
+    ) -> Vec<u8> {
+        let mut message = Vec::new();
+        try_push_domain(
+            &mut message,
+            PRIVATE_HNSW_ORAM_COMMIT_SIGNATURE_DOMAIN.as_bytes(),
+            || PrivateHnswOramError::InvalidCommitSignature,
+        )
+        .unwrap();
+        try_push_str(&mut message, input.collection_id, || {
+            PrivateHnswOramError::InvalidCommitSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.vector_name, || {
+            PrivateHnswOramError::InvalidCommitSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.key_id, || {
+            PrivateHnswOramError::InvalidCommitSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.rk_id, || {
+            PrivateHnswOramError::InvalidCommitSignature
+        })
+        .unwrap();
+        push_u64(&mut message, input.rk_epoch);
+        push_u64(&mut message, input.old_epoch);
+        push_u64(&mut message, input.new_epoch);
+        try_push_str(&mut message, input.old_root_hash, || {
+            PrivateHnswOramError::InvalidCommitSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.new_root_hash, || {
+            PrivateHnswOramError::InvalidCommitSignature
+        })
+        .unwrap();
+        push_u32(
+            &mut message,
+            u32::try_from(input.updated_buckets.len()).unwrap(),
+        );
+        for bucket in input.updated_buckets {
+            push_u64(&mut message, bucket.bucket_id);
+            try_push_str(&mut message, bucket.ciphertext_sha256, || {
+                PrivateHnswOramError::InvalidCommitSignature
+            })
+            .unwrap();
+        }
+        try_push_str(&mut message, input.signature_alg, || {
+            PrivateHnswOramError::InvalidCommitSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.signature_key_id, || {
+            PrivateHnswOramError::InvalidCommitSignature
+        })
+        .unwrap();
+        message
     }
 
     fn checked_read_paths_signature_message(
@@ -2113,9 +2180,13 @@ mod tests {
             updated_buckets: &duplicate_buckets,
             ..input
         };
+        assert_eq!(
+            try_private_hnsw_oram_commit_signature_message(duplicate_input),
+            Err(PrivateHnswOramError::InvalidCommitSignature)
+        );
         let duplicate_signature = sign_b64(
             &key_pair,
-            &checked_commit_signature_message(duplicate_input),
+            &unchecked_commit_signature_message(duplicate_input),
         );
         assert_eq!(
             validate_private_hnsw_oram_commit_signature(
