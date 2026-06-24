@@ -513,6 +513,7 @@ pub fn private_hnsw_min_f32_node_block_bytes(dim: u32, fixed_neighbor_slots: u32
 pub fn try_private_hnsw_oram_manifest_signature_message(
     manifest: &PrivateHnswOramManifest,
 ) -> Result<Vec<u8>, PrivateHnswOramError> {
+    validate_manifest_shape(manifest)?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -575,6 +576,12 @@ pub fn try_private_hnsw_oram_manifest_signature_message(
 pub fn try_private_hnsw_oram_read_paths_signature_message(
     input: PrivateHnswOramReadPathsSignatureInput<'_>,
 ) -> Result<Vec<u8>, PrivateHnswOramError> {
+    validate_signature_input_context(
+        input.collection_id,
+        Some(input.vector_name),
+        input.key_id,
+        input.rk_id,
+    )?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -620,6 +627,12 @@ pub fn try_private_hnsw_oram_read_paths_signature_message(
 pub fn try_private_hnsw_oram_commit_signature_message(
     input: PrivateHnswOramCommitSignatureInput<'_>,
 ) -> Result<Vec<u8>, PrivateHnswOramError> {
+    validate_signature_input_context(
+        input.collection_id,
+        Some(input.vector_name),
+        input.key_id,
+        input.rk_id,
+    )?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -1257,6 +1270,59 @@ mod tests {
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
             "n_ChN7eT7j4hxnccWt9L4u65CYHUnOMr5K3f80SJTaA"
+        );
+    }
+
+    #[test]
+    fn signature_message_builders_reject_client_state_vector_aliases() {
+        let mut manifest = fixture_manifest();
+        manifest.vector_name = "client.state".to_string();
+        assert_eq!(
+            try_private_hnsw_oram_manifest_signature_message(&manifest),
+            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
+        );
+
+        let paths = ["AAAAAAAAAAA"];
+        let read_paths_input = PrivateHnswOramReadPathsSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "client.state",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            paths: &paths,
+            requested_paths: 1,
+            dummy_paths_included: true,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+        assert_eq!(
+            try_private_hnsw_oram_read_paths_signature_message(read_paths_input),
+            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
+        );
+
+        let buckets = [PrivateHnswOramCommitBucketRef {
+            bucket_id: 9,
+            ciphertext_sha256: &BASE64URL_NOPAD.encode(&[9; 32]),
+        }];
+        let commit_input = PrivateHnswOramCommitSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "client.state",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            new_root_hash: &BASE64URL_NOPAD.encode(&[43; 32]),
+            updated_buckets: &buckets,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+        assert_eq!(
+            try_private_hnsw_oram_commit_signature_message(commit_input),
+            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
         );
     }
 
