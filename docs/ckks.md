@@ -1929,20 +1929,22 @@ audit paths template-redact private ORAM session ids and redact private ORAM
 query strings and unexpected private ORAM endpoint tail segments. Slow request
 logs and request hashes use redacted request values, including private HNSW ORAM
 path/read/access traversal labels, entry and visited node ids, level masks,
-neighbor/candidate aliases, private result ORAM bucket ids, session ids, bucket
-commitments, leaf commitments, read bucket ids, bucket id sequences, updated
-bucket writebacks, client-state fields, and payload/result tokens; snake_case
-and camelCase singular/plural aliases are covered for private ORAM
-access-pattern, bucket, commitment, and token fields.
-Collection
-telemetry has sentinel coverage so decrypted plaintext is not intentionally emitted there. Audit events
-never include request bodies; denied audit errors also redact qdrant-sec
-envelope markers and secret-like crypto fields before serialization.
+neighbor/candidate aliases, candidate heaps, request/commit/read/manifest
+signatures, private result ORAM bucket ids, session ids, bucket commitments,
+leaf commitments, read bucket ids, bucket id sequences, updated bucket
+writebacks, client-state fields, and payload/result tokens; snake_case and
+camelCase singular/plural aliases are covered for private ORAM access-pattern,
+bucket, commitment, signature, candidate, client-state, and token fields.
+Collection telemetry has sentinel coverage so decrypted plaintext is not
+intentionally emitted there. Audit events never include request bodies; denied
+audit errors also redact qdrant-sec envelope markers and secret-like crypto
+fields before serialization.
 Prometheus request metrics may include fixed REST/gRPC endpoint labels and the
 collection label for private ORAM manifest, session, read, and commit APIs, but
 they do not include path labels, bucket ids, session ids, ciphertext bodies, or
 client-state fields. The OpenAPI and gRPC consistency gates pin the private
-ORAM REST method/path/operation ids and generated gRPC method paths so these
+ORAM REST method/path/operation ids and generated gRPC method paths using
+segment-aware matching, with malformed/lookalike path negatives, so these
 metrics labels cannot silently drift away from the published API surface.
 Client-side-only envelope collections must use `raw` or `redacted`; requesting
 `decrypted` fails closed because Qdrant has no client data key.
