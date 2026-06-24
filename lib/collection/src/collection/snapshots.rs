@@ -22,6 +22,7 @@ use qdrant_sec::{
 };
 use segment::types::SnapshotFormat;
 use segment::utils::fs::move_all;
+use serde::Deserialize;
 use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
 use shard::snapshots::snapshot_data::SnapshotData;
 use shard::snapshots::snapshot_manifest::{RecoveryType, SnapshotManifest};
@@ -47,6 +48,15 @@ use crate::shards::shard_config::{self, ShardConfig};
 use crate::shards::shard_holder::shard_mapping::ShardKeyMapping;
 use crate::shards::shard_holder::{SHARD_KEY_MAPPING_FILE, ShardHolder, shard_not_found_error};
 use crate::shards::shard_path;
+
+const PRIVATE_ORAM_SNAPSHOT_MAX_EPOCH_BYTES: u64 = 16 * 1024;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateOramSnapshotEpochFile {
+    index_epoch: u64,
+    root_hash: String,
+}
 
 impl Collection {
     pub fn get_snapshots_storage_manager(&self) -> CollectionResult<SnapshotStorageManager> {
@@ -1089,6 +1099,35 @@ fn validate_private_oram_snapshot_epochs_dir(
         if file_name != format!("{epoch:08}.commit") {
             return Err(private_oram_snapshot_unexpected_store_file_error(label));
         }
+        validate_private_oram_snapshot_epoch_commit_file(&entry.path(), epoch, label)?;
+    }
+
+    Ok(())
+}
+
+fn validate_private_oram_snapshot_epoch_commit_file(
+    path: &Path,
+    expected_epoch: u64,
+    label: &str,
+) -> CollectionResult<()> {
+    let metadata = std::fs::metadata(path).map_err(|_| {
+        CollectionError::bad_request(format!("{label} snapshot epoch store cannot be inspected"))
+    })?;
+    if metadata.len() > PRIVATE_ORAM_SNAPSHOT_MAX_EPOCH_BYTES {
+        return Err(private_oram_snapshot_unexpected_store_file_error(label));
+    }
+    let bytes = std::fs::read(path).map_err(|_| {
+        CollectionError::bad_request(format!("{label} snapshot epoch store cannot be read"))
+    })?;
+    if bytes.len() as u64 > PRIVATE_ORAM_SNAPSHOT_MAX_EPOCH_BYTES {
+        return Err(private_oram_snapshot_unexpected_store_file_error(label));
+    }
+    let epoch: PrivateOramSnapshotEpochFile = serde_json::from_slice(&bytes)
+        .map_err(|_| private_oram_snapshot_unexpected_store_file_error(label))?;
+    if epoch.index_epoch != expected_epoch
+        || !private_oram_snapshot_root_hash_is_canonical(&epoch.root_hash)
+    {
+        return Err(private_oram_snapshot_unexpected_store_file_error(label));
     }
 
     Ok(())
@@ -1157,6 +1196,12 @@ fn private_oram_snapshot_commit_file_epoch(file_name: &str) -> Option<u64> {
         return None;
     }
     epoch.parse().ok()
+}
+
+fn private_oram_snapshot_root_hash_is_canonical(root_hash: &str) -> bool {
+    BASE64URL_NOPAD
+        .decode(root_hash.as_bytes())
+        .is_ok_and(|bytes| bytes.len() == 32)
 }
 
 fn private_result_oram_configured(params: &CollectionParams) -> CollectionResult<bool> {
@@ -2904,6 +2949,73 @@ mod tests {
         ] {
             assert_private_result_oram_restore_preflight_rejects_extra_layout_file(relative_path);
         }
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_accepts_canonical_epoch_commit_file() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-commit-file")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("epochs")
+                .join("00000042.commit"),
+            format!(
+                r#"{{"index_epoch":{},"root_hash":"{}"}}"#,
+                manifest.index_epoch, manifest.root_hash
+            ),
+        )
+        .unwrap();
+
+        Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_malformed_epoch_commit_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-bad-commit-file")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("epochs")
+                .join("00000042.commit"),
+            r#"{"index_epoch":43,"root_hash":"malformed-result-epoch-sentinel"}"#,
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("unexpected file"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("00000042.commit"));
+        assert!(!err.contains("sentinel"));
+        assert!(!err.contains(&manifest.root_hash), "{err}");
     }
 
     #[test]
@@ -4731,6 +4843,75 @@ mod tests {
         ] {
             assert_private_hnsw_oram_restore_preflight_rejects_extra_layout_file(relative_path);
         }
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_accepts_canonical_epoch_commit_file() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-commit-file")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join("epochs")
+                .join("00000042.commit"),
+            format!(
+                r#"{{"index_epoch":{},"root_hash":"{}"}}"#,
+                manifest.index_epoch, manifest.root_hash
+            ),
+        )
+        .unwrap();
+
+        Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_malformed_epoch_commit_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-bad-commit-file")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join("epochs")
+                .join("00000042.commit"),
+            r#"{"index_epoch":43,"root_hash":"malformed-hnsw-epoch-sentinel"}"#,
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("unexpected file"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains("00000042.commit"));
+        assert!(!err.contains("sentinel"));
+        assert!(!err.contains(&manifest.root_hash), "{err}");
     }
 
     #[test]
