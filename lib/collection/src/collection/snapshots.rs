@@ -884,8 +884,10 @@ fn private_oram_snapshot_source_entry_is_client_owned_state(name: &std::ffi::OsS
         return false;
     };
     let name = name.to_ascii_lowercase();
-    let stem = name.split_once('.').map_or(name.as_str(), |(stem, _)| stem);
-    let compact_stem = stem.replace(['_', '-'], "");
+    let stem = name
+        .rsplit_once('.')
+        .map_or(name.as_str(), |(stem, _)| stem);
+    let compact_stem = stem.replace(['_', '-', '.'], "");
     matches!(
         compact_stem.as_str(),
         "clientstate"
@@ -2706,21 +2708,29 @@ mod tests {
             "client_state.json",
             "clientState.json",
             "client-state.json",
+            "client.state.json",
             "client_state_snapshot.bin",
+            "client.state.snapshot.bin",
             "clientStateSnapshots.json",
             "encrypted_client_state_snapshot.bin",
+            "encrypted.client.state.snapshot.bin",
             "encryptedClientStateSnapshots.json",
             "position_map.bin",
             "positionMap.json",
+            "position.map.json",
             "position-maps.json",
             "position_map_snapshot.bin",
+            "position.map.snapshot.bin",
             "positionMapSnapshots.json",
             "oram_position_map.bin",
+            "oram.position.map.bin",
             "oramPositionMapSnapshot.json",
             "token_position_map.bin",
+            "token.position.map.snapshot.bin",
             "tokenPositionMapSnapshots.json",
             "stash",
             "stash_snapshot.bin",
+            "stash.snapshot.bin",
             "stashSnapshots.json",
         ] {
             assert!(
