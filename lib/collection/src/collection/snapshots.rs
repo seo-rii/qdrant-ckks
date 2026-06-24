@@ -630,6 +630,11 @@ fn blocking_append_private_oram_snapshot_tree(
             CollectionError::service_error(format!("{label} snapshot source cannot be read"))
         })?;
         let file_name = entry.file_name();
+        if private_oram_snapshot_source_entry_is_client_owned_state(&file_name) {
+            return Err(CollectionError::service_error(format!(
+                "{label} snapshot source contains client-owned ORAM state",
+            )));
+        }
         let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| {
             CollectionError::service_error(format!("{label} snapshot source cannot be inspected"))
         })?;
@@ -2875,6 +2880,65 @@ mod tests {
                 .contains("private result ORAM snapshot source contains client-owned ORAM state")
         );
         assert!(!rendered.contains("stash"));
+        assert!(!rendered.contains("sentinel"));
+    }
+
+    #[test]
+    fn private_oram_snapshot_archive_append_rejects_client_owned_state_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-append-client-state")
+            .tempdir()
+            .unwrap();
+
+        let hnsw_client_state = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("client.state");
+        fs::create_dir_all(hnsw_client_state.parent().unwrap()).unwrap();
+        fs::write(&hnsw_client_state, b"append HNSW client state sentinel").unwrap();
+
+        let archive = tempfile::NamedTempFile::new().unwrap();
+        let tar = BuilderExt::new_seekable_owned(File::create(archive.path()).unwrap());
+        let err = blocking_append_private_oram_snapshot_dir(
+            &tar,
+            &temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR),
+            Path::new(PRIVATE_HNSW_ORAM_DIR),
+            PRIVATE_HNSW_ORAM_DIR,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("private HNSW ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("text"));
+        assert!(!rendered.contains("client.state"));
+        assert!(!rendered.contains("sentinel"));
+
+        let result_position_map = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("position.map");
+        fs::create_dir_all(result_position_map.parent().unwrap()).unwrap();
+        fs::write(&result_position_map, b"append result position map sentinel").unwrap();
+
+        let archive = tempfile::NamedTempFile::new().unwrap();
+        let tar = BuilderExt::new_seekable_owned(File::create(archive.path()).unwrap());
+        let err = blocking_append_private_oram_snapshot_dir(
+            &tar,
+            &temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR),
+            Path::new(PRIVATE_RESULT_ORAM_DIR),
+            PRIVATE_RESULT_ORAM_DIR,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered
+                .contains("private result ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!rendered.contains("position.map"));
         assert!(!rendered.contains("sentinel"));
     }
 
