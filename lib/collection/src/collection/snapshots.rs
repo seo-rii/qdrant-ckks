@@ -3678,6 +3678,54 @@ mod tests {
     }
 
     #[test]
+    fn private_result_oram_storage_restore_sanitizes_unexpected_layout_file() {
+        let snapshot_dir = tempfile::Builder::new()
+            .prefix("private-result-storage-restore-extra-layout")
+            .tempdir()
+            .unwrap();
+        let target_dir = tempfile::Builder::new()
+            .prefix("private-result-storage-restore-target")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        fs::write(
+            snapshot_dir.path().join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+        write_private_result_snapshot_fixture(snapshot_dir.path(), &manifest);
+        fs::write(
+            snapshot_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("epochs")
+                .join("latest.json"),
+            b"private result storage restore layout sentinel",
+        )
+        .unwrap();
+        let snapshot_path = snapshot_dir.path().to_string_lossy().into_owned();
+
+        let err = Collection::restore_snapshot(
+            SnapshotData::Unpacked(snapshot_dir),
+            target_dir.path(),
+            0,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("unexpected file"), "{err}");
+        assert!(!err.contains(&snapshot_path), "{err}");
+        assert!(!err.contains(target_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("latest.json"));
+        assert!(!err.contains("sentinel"));
+        assert!(!err.contains(&manifest.root_hash));
+    }
+
+    #[test]
     fn private_hnsw_oram_restore_preflight_accepts_manifest_epoch_and_bucket() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-hnsw-restore-ok")
@@ -5014,6 +5062,55 @@ mod tests {
         assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!err.contains("buckets"));
         assert!(!err.contains("00000000.bucket"));
+        assert!(!err.contains(&manifest.root_hash));
+    }
+
+    #[test]
+    fn private_hnsw_oram_storage_restore_sanitizes_unexpected_layout_file() {
+        let snapshot_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-storage-restore-extra-layout")
+            .tempdir()
+            .unwrap();
+        let target_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-storage-restore-target")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        fs::write(
+            snapshot_dir.path().join(COLLECTION_CONFIG_FILE),
+            config.to_bytes().unwrap(),
+        )
+        .unwrap();
+        write_private_hnsw_snapshot_fixture(snapshot_dir.path(), &manifest);
+        fs::write(
+            snapshot_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join("epochs")
+                .join("latest.json"),
+            b"private HNSW storage restore layout sentinel",
+        )
+        .unwrap();
+        let snapshot_path = snapshot_dir.path().to_string_lossy().into_owned();
+
+        let err = Collection::restore_snapshot(
+            SnapshotData::Unpacked(snapshot_dir),
+            target_dir.path(),
+            0,
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("unexpected file"), "{err}");
+        assert!(!err.contains(&snapshot_path));
+        assert!(!err.contains(target_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains("latest.json"));
+        assert!(!err.contains("sentinel"));
         assert!(!err.contains(&manifest.root_hash));
     }
 
