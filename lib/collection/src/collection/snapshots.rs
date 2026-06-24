@@ -648,7 +648,7 @@ fn blocking_append_private_oram_snapshot_tree(
             &archive_path,
             &metadata.file_type(),
         )?;
-        validate_private_oram_snapshot_source_epoch_commit_file(
+        validate_private_oram_snapshot_source_epoch_file(
             &entry.path(),
             label,
             dir_name,
@@ -726,7 +726,7 @@ fn validate_private_oram_snapshot_source_tree(
             &archive_path,
             &metadata.file_type(),
         )?;
-        validate_private_oram_snapshot_source_epoch_commit_file(
+        validate_private_oram_snapshot_source_epoch_file(
             &entry.path(),
             label,
             dir_name,
@@ -845,27 +845,27 @@ fn private_oram_snapshot_hnsw_entry_matches_layout(
     }
 }
 
-fn validate_private_oram_snapshot_source_epoch_commit_file(
+fn validate_private_oram_snapshot_source_epoch_file(
     source_path: &Path,
     label: &str,
     dir_name: &str,
     archive_path: &Path,
 ) -> CollectionResult<()> {
-    let Some(epoch) = private_oram_snapshot_archive_epoch_commit_file(dir_name, archive_path)
+    let Some(expected_epoch) = private_oram_snapshot_archive_epoch_file(dir_name, archive_path)
     else {
         return Ok(());
     };
-    validate_private_oram_snapshot_epoch_commit_file(source_path, epoch, label).map_err(|_| {
+    validate_private_oram_snapshot_epoch_file(source_path, expected_epoch, label).map_err(|_| {
         CollectionError::service_error(format!(
             "{label} snapshot source contains an unexpected file",
         ))
     })
 }
 
-fn private_oram_snapshot_archive_epoch_commit_file(
+fn private_oram_snapshot_archive_epoch_file(
     dir_name: &str,
     archive_path: &Path,
-) -> Option<u64> {
+) -> Option<Option<u64>> {
     let relative = archive_path.strip_prefix(Path::new(dir_name)).ok()?;
     let components = private_oram_snapshot_archive_components(relative)?;
     let file_name = match (dir_name, components.as_slice()) {
@@ -873,7 +873,10 @@ fn private_oram_snapshot_archive_epoch_commit_file(
         (PRIVATE_HNSW_ORAM_DIR, [_vector_name, "epochs", file_name]) => *file_name,
         _ => return None,
     };
-    private_oram_snapshot_commit_file_epoch(file_name)
+    if file_name == "current.json" {
+        return Some(None);
+    }
+    private_oram_snapshot_commit_file_epoch(file_name).map(Some)
 }
 
 fn private_oram_snapshot_source_entry_is_client_owned_state(name: &std::ffi::OsStr) -> bool {
@@ -1258,15 +1261,15 @@ fn validate_private_oram_snapshot_epochs_dir(
         if file_name != format!("{epoch:08}.commit") {
             return Err(private_oram_snapshot_unexpected_store_file_error(label));
         }
-        validate_private_oram_snapshot_epoch_commit_file(&entry.path(), epoch, label)?;
+        validate_private_oram_snapshot_epoch_file(&entry.path(), Some(epoch), label)?;
     }
 
     Ok(())
 }
 
-fn validate_private_oram_snapshot_epoch_commit_file(
+fn validate_private_oram_snapshot_epoch_file(
     path: &Path,
-    expected_epoch: u64,
+    expected_epoch: Option<u64>,
     label: &str,
 ) -> CollectionResult<()> {
     let metadata = std::fs::metadata(path).map_err(|_| {
@@ -1283,7 +1286,7 @@ fn validate_private_oram_snapshot_epoch_commit_file(
     }
     let epoch: PrivateOramSnapshotEpochFile = serde_json::from_slice(&bytes)
         .map_err(|_| private_oram_snapshot_unexpected_store_file_error(label))?;
-    if epoch.index_epoch != expected_epoch
+    if expected_epoch.is_some_and(|expected_epoch| epoch.index_epoch != expected_epoch)
         || !private_oram_snapshot_root_hash_is_canonical(&epoch.root_hash)
     {
         return Err(private_oram_snapshot_unexpected_store_file_error(label));
@@ -2570,6 +2573,58 @@ mod tests {
         assert!(rendered.contains("unexpected file"), "{rendered}");
         assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
         assert!(!rendered.contains("00000042.commit"));
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn private_oram_snapshot_source_dir_rejects_malformed_current_epoch_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-source-bad-current")
+            .tempdir()
+            .unwrap();
+
+        let hnsw_current = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("epochs")
+            .join("current.json");
+        fs::create_dir_all(hnsw_current.parent().unwrap()).unwrap();
+        fs::write(
+            &hnsw_current,
+            r#"{"index_epoch":42,"root_hash":"private-hnsw-current-sentinel"}"#,
+        )
+        .unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("unexpected file"), "{rendered}");
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("current.json"));
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+
+        fs::remove_dir_all(temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR)).unwrap();
+        let result_current = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("epochs")
+            .join("current.json");
+        fs::create_dir_all(result_current.parent().unwrap()).unwrap();
+        fs::write(
+            &result_current,
+            r#"{"index_epoch":42,"root_hash":"private-result-current-sentinel"}"#,
+        )
+        .unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("unexpected file"), "{rendered}");
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!rendered.contains("current.json"));
         assert!(!rendered.contains("sentinel"));
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
     }
