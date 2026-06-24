@@ -8923,6 +8923,53 @@ mod tests {
     }
 
     #[test]
+    fn plaintext_oram_hnsw_search_keeps_state_when_final_writeback_fails() {
+        let config = PrivateHnswOramClientConfig {
+            bucket_size: 2,
+            ..oram_config()
+        };
+        let entry = node_block_with_vector(1, &[1.0, 0.0], vec![]);
+        let mut state =
+            PrivateHnswOramClientState::with_position_map([(entry.node_id, 0)], config.tree_height)
+                .unwrap();
+        let original_state = state.clone();
+        let mut entry_bucket = empty_private_hnsw_oram_plaintext_bucket(3, config).unwrap();
+        entry_bucket.blocks[0] = Some(entry);
+        let path = vec![
+            empty_private_hnsw_oram_plaintext_bucket(0, config).unwrap(),
+            empty_private_hnsw_oram_plaintext_bucket(1, config).unwrap(),
+            entry_bucket,
+        ];
+
+        let err = search_private_hnsw_oram_plaintext(
+            &mut state,
+            config,
+            &[1.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: [1; 32],
+                k: 1,
+                ef: 1,
+                fixed_steps: 1,
+                distance: DistanceKind::Euclid,
+                padding_node_id: None,
+            },
+            |_| Ok(path.clone()),
+            |writeback_buckets| {
+                assert!(!writeback_buckets.is_empty());
+                Err(PrivateHnswClientError::InvalidSearchConfig("writeback"))
+            },
+            || Ok(2),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            PrivateHnswClientError::InvalidSearchConfig("writeback")
+        );
+        assert_eq!(state, original_state);
+    }
+
+    #[test]
     fn plaintext_oram_hnsw_search_pads_to_fixed_steps_with_dummy_node() {
         use std::cell::RefCell;
 
