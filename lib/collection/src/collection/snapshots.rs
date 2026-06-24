@@ -1136,6 +1136,11 @@ fn validate_private_oram_snapshot_restore_tree_has_no_client_owned_state(
         let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| {
             CollectionError::bad_request(format!("{label} snapshot store cannot be inspected"))
         })?;
+        if metadata.file_type().is_symlink() {
+            return Err(CollectionError::bad_request(format!(
+                "{label} snapshot store contains a symlink",
+            )));
+        }
         if metadata.file_type().is_dir() {
             if private_oram_snapshot_entry_is_temp_dir(dir_name, depth, &entry.file_name())
                 && private_oram_snapshot_dir_has_entries(&entry.path()).map_err(|_| {
@@ -1154,6 +1159,10 @@ fn validate_private_oram_snapshot_restore_tree_has_no_client_owned_state(
                 dir_name,
                 depth + 1,
             )?;
+        } else if !metadata.file_type().is_file() {
+            return Err(CollectionError::bad_request(format!(
+                "{label} snapshot store contains an unsupported file type",
+            )));
         }
     }
 
@@ -2406,6 +2415,46 @@ mod tests {
         assert!(!err.contains("sentinel"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_nested_symlink_without_target_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-nested-symlink")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        let outside = temp_dir.path().join("outside-private-result-target");
+        fs::write(&outside, b"private result symlink target sentinel").unwrap();
+        std::os::unix::fs::symlink(
+            &outside,
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("buckets")
+                .join("extra-link"),
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("private result ORAM snapshot store contains a symlink"));
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("buckets"));
+        assert!(!err.contains("extra-link"));
+        assert!(!err.contains("outside-private-result-target"));
+        assert!(!err.contains("sentinel"));
+    }
+
     #[test]
     fn private_result_oram_restore_preflight_rejects_non_empty_temp_without_path_leak() {
         let temp_dir = tempfile::Builder::new()
@@ -3376,6 +3425,48 @@ mod tests {
         assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!err.contains("text"));
         assert!(!err.contains("stash"));
+        assert!(!err.contains("sentinel"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_nested_symlink_without_target_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-nested-symlink")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        let outside = temp_dir.path().join("outside-private-hnsw-target");
+        fs::write(&outside, b"private HNSW symlink target sentinel").unwrap();
+        std::os::unix::fs::symlink(
+            &outside,
+            temp_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join("buckets")
+                .join("extra-link"),
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("private HNSW ORAM snapshot store contains a symlink"));
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains("text"));
+        assert!(!err.contains("buckets"));
+        assert!(!err.contains("extra-link"));
+        assert!(!err.contains("outside-private-hnsw-target"));
         assert!(!err.contains("sentinel"));
     }
 
