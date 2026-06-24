@@ -6815,6 +6815,26 @@ mod tests {
 
     #[test]
     fn private_result_fetch_plan_pads_hit_tokens_to_fixed_result_k() {
+        let empty_result = PrivateHnswSearchResult {
+            hits: vec![],
+            accessed_leaf_labels: vec![],
+            completed_steps: 2,
+        };
+        let empty_plan = plan_private_hnsw_private_result_fetch_tokens(
+            ResultPrivacyMode::PrivatePayloadOramRequired,
+            &empty_result,
+            3,
+            &[[97; 32], [98; 32], [99; 32]],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(empty_plan.real_result_count, 0);
+        assert_eq!(empty_plan.fixed_result_k, 3);
+        assert_eq!(
+            empty_plan.payload_fetch_tokens,
+            vec![[97; 32], [98; 32], [99; 32]]
+        );
+
         let result = PrivateHnswSearchResult {
             hits: vec![
                 PrivateHnswSearchHit {
