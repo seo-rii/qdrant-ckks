@@ -1112,6 +1112,24 @@ mod tests {
         }
     }
 
+    fn assert_private_oram_consensus_guard_redacts_config(rendered: &str) {
+        for sentinel in [
+            "tenant-a/vector-private-rk",
+            "text_private_hnsw",
+            "docs_private_hnsw_v1",
+            PRIVATE_HNSW_ORAM_BINDING,
+            "tenant-a/result-private-rk",
+            "body_private_result_oram",
+            "docs_private_result_oram_v1",
+            PRIVATE_RESULT_ORAM_BINDING,
+        ] {
+            assert!(
+                !rendered.contains(sentinel),
+                "private ORAM consensus guard leaked config sentinel `{sentinel}`: {rendered}",
+            );
+        }
+    }
+
     #[test]
     fn encrypted_collection_requires_transfer_parity_enforcement() {
         assert!(!collection_params_require_crypto_runtime_transfer_parity(
@@ -1201,6 +1219,7 @@ mod tests {
                         .contains("consensus-backed epoch/root ownership"),
                 "unexpected error for {operation:?}: {err}",
             );
+            assert_private_oram_consensus_guard_redacts_config(&err.to_string());
         }
 
         reject_private_oram_shard_transfer_until_supported(
@@ -1274,6 +1293,7 @@ mod tests {
                         .contains("consensus-backed epoch/root ownership"),
                 "unexpected error for {operation:?}: {err}",
             );
+            assert_private_oram_consensus_guard_redacts_config(&err.to_string());
         }
 
         reject_private_oram_shard_transfer_until_supported(
@@ -1352,6 +1372,7 @@ mod tests {
                         && err.to_string().contains("encrypted ORAM bucket migration"),
                     "unexpected {label} resharding error for {operation:?}: {err}",
                 );
+                assert_private_oram_consensus_guard_redacts_config(&err.to_string());
             }
 
             reject_private_oram_resharding_until_supported(
@@ -1380,6 +1401,7 @@ mod tests {
                     && err.to_string().contains("encrypted ORAM bucket migration"),
                 "unexpected {label} replica-state error: {err}",
             );
+            assert_private_oram_consensus_guard_redacts_config(&err.to_string());
         }
 
         reject_private_oram_resharding_until_supported(
@@ -1457,6 +1479,7 @@ mod tests {
                             .contains("consensus-backed epoch/root ownership"),
                     "unexpected {label} {operation} error: {err}",
                 );
+                assert_private_oram_consensus_guard_redacts_config(&err.to_string());
             }
         }
 
@@ -1528,6 +1551,7 @@ mod tests {
                         .contains("consensus-backed epoch/root ownership"),
                 "unexpected {label} replica removal error: {err}",
             );
+            assert_private_oram_consensus_guard_redacts_config(&err.to_string());
         }
 
         reject_private_oram_replica_remove_until_supported(
