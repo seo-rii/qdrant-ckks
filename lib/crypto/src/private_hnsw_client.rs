@@ -9814,6 +9814,87 @@ mod tests {
         assert_eq!(bad_state.position(&entry.node_id), Some(0));
         assert_eq!(bad_state.position(&near.node_id), Some(1));
         assert_eq!(bad_state.position(&padding.node_id), Some(2));
+
+        let mut state = build.state.clone();
+        let read_leaves = RefCell::new(Vec::new());
+        let writebacks = RefCell::new(Vec::new());
+        let mut remaps = [3, 3].into_iter();
+        let params = PrivateHnswSearchParams {
+            entry_node_id: entry.node_id,
+            k: 1,
+            ef: 2,
+            fixed_steps: 2,
+            distance: DistanceKind::Euclid,
+            padding_node_id: Some(padding.node_id),
+        };
+        let result = search_private_hnsw_oram_encrypted_verified_with_cache(
+            &keys,
+            base_context,
+            42,
+            &root_hash,
+            bucket_count,
+            43,
+            &mut state,
+            config,
+            &[1.0, 0.0],
+            params,
+            &cache,
+            |leaf| {
+                read_leaves.borrow_mut().push(leaf);
+                let bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?;
+                let buckets = bucket_ids
+                    .iter()
+                    .map(|bucket_id| {
+                        encrypted_store
+                            .borrow()
+                            .get(bucket_id)
+                            .cloned()
+                            .ok_or(PrivateHnswClientError::PathBucketMismatch)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let proof = proof_for_bucket_ids(&bucket_ids, 42, root_hash.clone(), &commitments);
+                Ok(PrivateHnswEncryptedPathBatch {
+                    index_epoch: 42,
+                    root_hash: root_hash.clone(),
+                    bucket_count,
+                    proof_value: serde_json::to_string(&proof).unwrap(),
+                    buckets,
+                })
+            },
+            |writeback_buckets| {
+                writebacks.borrow_mut().extend_from_slice(writeback_buckets);
+                Ok(())
+            },
+            || remaps.next().ok_or(PrivateHnswClientError::LeafOutOfRange),
+        )
+        .unwrap();
+
+        assert_eq!(result.hits.len(), 1);
+        assert_eq!(result.hits[0].node_id, near.node_id);
+        assert_eq!(result.completed_steps, 2);
+        assert_eq!(*read_leaves.borrow(), vec![2, 1]);
+        assert_eq!(
+            result.accessed_leaf_labels,
+            vec![
+                encode_private_hnsw_oram_leaf_label(2, config.tree_height).unwrap(),
+                encode_private_hnsw_oram_leaf_label(1, config.tree_height).unwrap(),
+            ]
+        );
+        assert_eq!(
+            result.access_metrics(&params),
+            PrivateHnswSearchAccessMetrics {
+                path_accesses: 2,
+                unique_leaf_labels: 2,
+                fixed_steps: 2,
+                exhausted_fixed_budget: true,
+            }
+        );
+        assert!(
+            writebacks
+                .borrow()
+                .iter()
+                .all(|bucket| bucket.index_epoch == 43)
+        );
     }
 
     #[test]
