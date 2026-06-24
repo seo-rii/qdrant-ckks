@@ -5430,10 +5430,32 @@ mod tests {
             Err(PrivateResultOramError::InvalidClientStateSnapshot)
         );
 
-        let mut bad_stash = decoded;
+        let mut bad_leaf_label = decoded.clone();
+        bad_leaf_label.positions[0].leaf_label = "AAAA".to_string();
+        assert_eq!(
+            PrivateResultOramClientState::from_snapshot(&bad_leaf_label),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
+        );
+
+        let mut duplicate_position = decoded.clone();
+        duplicate_position
+            .positions
+            .push(duplicate_position.positions[0].clone());
+        assert_eq!(
+            PrivateResultOramClientState::from_snapshot(&duplicate_position),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
+        );
+
+        let mut bad_stash = decoded.clone();
         bad_stash.stash[0].payload_fetch_token = [99; 32];
         assert_eq!(
             PrivateResultOramClientState::from_snapshot(&bad_stash),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
+        );
+        let mut duplicate_stash = decoded;
+        duplicate_stash.stash.push(stash);
+        assert_eq!(
+            PrivateResultOramClientState::from_snapshot(&duplicate_stash),
             Err(PrivateResultOramError::InvalidClientStateSnapshot)
         );
         assert_eq!(

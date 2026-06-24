@@ -1398,8 +1398,9 @@ backup and restore it with `PrivateHnswOramClientState::from_snapshot` before
 opening sessions against a pinned epoch/root. For encrypted local backups,
 `seal_private_hnsw_oram_client_state_snapshot` uses the RK-derived
 position-map subkey, rejects malformed position map/stash snapshots before
-producing ciphertext, and binds the ciphertext to collection id, vector name,
-RK id/epoch, index epoch, and root hash;
+producing ciphertext, rejects duplicate position/stash entries and malformed
+leaf labels at snapshot import, and binds the ciphertext to collection id,
+vector name, RK id/epoch, index epoch, and root hash;
 `open_private_hnsw_oram_client_state_snapshot` bounds the encoded ciphertext
 length and validates the ciphertext hash shape before decode, then rejects hash
 tamper or epoch/root context mismatch before returning the snapshot. The

@@ -1401,8 +1401,8 @@ impl PrivateHnswOramClientState {
         let mut position_map = BTreeMap::new();
         for entry in &snapshot.positions {
             let node_id = decode_client_state_snapshot_node_id(&entry.node_id)?;
-            let leaf =
-                decode_private_hnsw_oram_leaf_label(&entry.leaf_label, snapshot.tree_height)?;
+            let leaf = decode_private_hnsw_oram_leaf_label(&entry.leaf_label, snapshot.tree_height)
+                .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)?;
             if position_map.insert(node_id, leaf).is_some() {
                 return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
             }
@@ -8407,10 +8407,32 @@ mod tests {
             Err(PrivateHnswClientError::InvalidClientStateSnapshot)
         );
 
+        let mut bad_leaf_label = decoded.clone();
+        bad_leaf_label.positions[0].leaf_label = "AAAA".to_string();
+        assert_eq!(
+            PrivateHnswOramClientState::from_snapshot(&bad_leaf_label),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+
+        let mut duplicate_position = decoded.clone();
+        duplicate_position
+            .positions
+            .push(duplicate_position.positions[0].clone());
+        assert_eq!(
+            PrivateHnswOramClientState::from_snapshot(&duplicate_position),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+
         let mut bad_stash = decoded;
         bad_stash.stash[0].node_id = [9; 32];
         assert_eq!(
             PrivateHnswOramClientState::from_snapshot(&bad_stash),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+        let mut duplicate_stash = snapshot.clone();
+        duplicate_stash.stash.push(stash);
+        assert_eq!(
+            PrivateHnswOramClientState::from_snapshot(&duplicate_stash),
             Err(PrivateHnswClientError::InvalidClientStateSnapshot)
         );
         assert_eq!(
