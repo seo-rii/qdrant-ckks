@@ -3656,6 +3656,40 @@ mod tests {
         assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
     }
 
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_duplicate_binding_before_store_read() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-duplicate-binding")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let mut config = private_result_config(uuid);
+        let encryption = config.params.encryption.as_mut().unwrap();
+        let mut duplicate_rule = encryption.rules[0].clone();
+        duplicate_rule.id = "docs_body_private_result_duplicate_secret".to_string();
+        duplicate_rule.selector = EncryptionSelector::PayloadPaths {
+            paths: vec!["body.duplicate.secret".to_string()],
+        };
+        encryption.rules.push(duplicate_rule);
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("one configured binding in v1"));
+        assert!(
+            !rendered.contains("docs_body_private_result_duplicate_secret"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("body.duplicate.secret"), "{rendered}");
+        assert!(!rendered.contains("missing for configured binding"));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+    }
+
     #[cfg(unix)]
     #[test]
     fn private_result_oram_restore_preflight_rejects_root_symlink() {
