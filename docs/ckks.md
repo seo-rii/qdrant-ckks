@@ -792,6 +792,9 @@ message-builder wrappers are not part of the public contract; callers must use
 the checked builders. `docs/qdrant-sec-private-hnsw-oram-signature-test-vector.json`
 freezes manifest, `read_paths`, and `commit` canonical messages, SHA-256
 digests, and deterministic Ed25519 signatures for SDK interoperability.
+The checked `read_paths` and `commit` message builders also reject unsupported
+request signature algorithms and malformed signature key ids before canonical
+message construction.
 The `read_paths` and `commit` client signatures use the same key-id shape check
 before verifier lookup; invalid key ids are rejected without echoing the
 submitted value. For active sessions, the request key id must match the session
@@ -1170,7 +1173,9 @@ malformed read batches stay on the generic signature-failure path. The crypto
 read-buckets message builder, signer, and validator also derive the Path ORAM
 tree height from the signed `bucket_count` and reject non-canonical tree sizes,
 partial paths, and invalid root-to-leaf bucket sequences before signature
-acceptance.
+acceptance. The `read_buckets` and `commit` message builders also reject
+unsupported request signature algorithms and malformed signature key ids before
+canonical message construction.
 Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
 `merkle_path_batch/v1` proof DTO; the REST/gRPC `read_buckets` API returns these

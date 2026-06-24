@@ -551,6 +551,7 @@ pub fn try_private_hnsw_oram_read_paths_signature_message(
         input.rk_id,
     )?;
     validate_private_hnsw_oram_read_paths_signature_shape(input)?;
+    validate_signature_message_header_shape(input.signature_alg, input.signature_key_id)?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -629,6 +630,7 @@ pub fn try_private_hnsw_oram_commit_signature_message(
         input.rk_id,
     )?;
     validate_private_hnsw_oram_commit_signature_shape(input)?;
+    validate_signature_message_header_shape(input.signature_alg, input.signature_key_id)?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -845,12 +847,7 @@ fn validate_signature_fields(
     key_id: &str,
     verification: PrivateHnswSignatureVerification<'_>,
 ) -> Result<(), PrivateHnswOramError> {
-    if alg != PRIVATE_HNSW_ORAM_SIGNATURE_ALGORITHM {
-        return Err(PrivateHnswOramError::UnsupportedSignatureAlgorithm(
-            alg.to_string(),
-        ));
-    }
-    validate_resource_id(key_id)?;
+    validate_signature_message_header_shape(alg, key_id)?;
     if key_id != verification.expected_key_id {
         return Err(PrivateHnswOramError::SignatureKeyIdMismatch);
     }
@@ -858,6 +855,18 @@ fn validate_signature_fields(
         return Err(PrivateHnswOramError::MalformedSignature);
     }
     Ok(())
+}
+
+fn validate_signature_message_header_shape(
+    alg: &str,
+    key_id: &str,
+) -> Result<(), PrivateHnswOramError> {
+    if alg != PRIVATE_HNSW_ORAM_SIGNATURE_ALGORITHM {
+        return Err(PrivateHnswOramError::UnsupportedSignatureAlgorithm(
+            alg.to_string(),
+        ));
+    }
+    validate_resource_id(key_id)
 }
 
 fn validate_signature_input_context(
@@ -1640,6 +1649,52 @@ mod tests {
         assert_eq!(
             try_private_hnsw_oram_commit_signature_message(commit_input),
             Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
+        );
+
+        let valid_read_input = PrivateHnswOramReadPathsSignatureInput {
+            vector_name: "text",
+            ..read_paths_input
+        };
+        let unsupported_read_alg = PrivateHnswOramReadPathsSignatureInput {
+            signature_alg: "rsa-pss-sentinel",
+            ..valid_read_input
+        };
+        assert_eq!(
+            try_private_hnsw_oram_read_paths_signature_message(unsupported_read_alg),
+            Err(PrivateHnswOramError::UnsupportedSignatureAlgorithm(
+                "rsa-pss-sentinel".to_string()
+            ))
+        );
+        let malformed_read_key = PrivateHnswOramReadPathsSignatureInput {
+            signature_key_id: "bad key id",
+            ..valid_read_input
+        };
+        assert_eq!(
+            try_private_hnsw_oram_read_paths_signature_message(malformed_read_key),
+            Err(PrivateHnswOramError::InvalidResourceKeyId)
+        );
+
+        let valid_commit_input = PrivateHnswOramCommitSignatureInput {
+            vector_name: "text",
+            ..commit_input
+        };
+        let unsupported_commit_alg = PrivateHnswOramCommitSignatureInput {
+            signature_alg: "rsa-pss-sentinel",
+            ..valid_commit_input
+        };
+        assert_eq!(
+            try_private_hnsw_oram_commit_signature_message(unsupported_commit_alg),
+            Err(PrivateHnswOramError::UnsupportedSignatureAlgorithm(
+                "rsa-pss-sentinel".to_string()
+            ))
+        );
+        let malformed_commit_key = PrivateHnswOramCommitSignatureInput {
+            signature_key_id: "bad key id",
+            ..valid_commit_input
+        };
+        assert_eq!(
+            try_private_hnsw_oram_commit_signature_message(malformed_commit_key),
+            Err(PrivateHnswOramError::InvalidResourceKeyId)
         );
     }
 

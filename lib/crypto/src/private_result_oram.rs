@@ -2670,6 +2670,7 @@ pub fn try_private_result_oram_commit_signature_message(
 ) -> Result<Vec<u8>, PrivateResultOramError> {
     validate_signature_input_context(input.collection_id, input.key_id, input.rk_id)?;
     validate_private_result_oram_commit_signature_shape(input)?;
+    validate_signature_message_header_shape(input.signature_alg, input.signature_key_id)?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -2743,6 +2744,7 @@ pub fn try_private_result_oram_read_buckets_signature_message(
     validate_signature_input_context(input.collection_id, input.key_id, input.rk_id)?;
     decode_base64url_32(input.root_hash, "root_hash")?;
     validate_private_result_oram_read_bucket_sequence_shape(input.bucket_count, input.bucket_ids)?;
+    validate_signature_message_header_shape(input.signature_alg, input.signature_key_id)?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -3225,16 +3227,23 @@ fn validate_signature_fields(
     key_id: &str,
     verification: PrivateResultOramSignatureVerification<'_>,
 ) -> Result<(), PrivateResultOramError> {
+    validate_signature_message_header_shape(alg, key_id)?;
+    if key_id != verification.expected_key_id {
+        return Err(PrivateResultOramError::SignatureKeyIdMismatch);
+    }
+    Ok(())
+}
+
+fn validate_signature_message_header_shape(
+    alg: &str,
+    key_id: &str,
+) -> Result<(), PrivateResultOramError> {
     if alg != PRIVATE_RESULT_ORAM_SIGNATURE_ALGORITHM {
         return Err(PrivateResultOramError::UnsupportedSignatureAlgorithm(
             alg.to_string(),
         ));
     }
-    validate_resource_id(key_id)?;
-    if key_id != verification.expected_key_id {
-        return Err(PrivateResultOramError::SignatureKeyIdMismatch);
-    }
-    Ok(())
+    validate_resource_id(key_id)
 }
 
 fn validate_signature_input_context(
@@ -6285,6 +6294,54 @@ mod tests {
             Err(PrivateResultOramError::InvalidManifestField(
                 "collection_id"
             ))
+        );
+
+        let valid_commit_input = PrivateResultOramCommitSignatureInput {
+            collection_id: "collection-uuid-1",
+            ..commit_input
+        };
+        let unsupported_commit_alg = PrivateResultOramCommitSignatureInput {
+            signature_alg: "rsa-pss-sentinel",
+            ..valid_commit_input
+        };
+        assert_eq!(
+            try_private_result_oram_commit_signature_message(unsupported_commit_alg),
+            Err(PrivateResultOramError::UnsupportedSignatureAlgorithm(
+                "rsa-pss-sentinel".to_string()
+            ))
+        );
+        let malformed_commit_key = PrivateResultOramCommitSignatureInput {
+            signature_key_id: "bad key id",
+            ..valid_commit_input
+        };
+        assert_eq!(
+            try_private_result_oram_commit_signature_message(malformed_commit_key),
+            Err(PrivateResultOramError::InvalidResourceKeyId)
+        );
+
+        let valid_read_bucket_ids = [0, 1, 3];
+        let valid_read_input = PrivateResultOramReadBucketsSignatureInput {
+            collection_id: "collection-uuid-1",
+            bucket_ids: &valid_read_bucket_ids,
+            ..read_input
+        };
+        let unsupported_read_alg = PrivateResultOramReadBucketsSignatureInput {
+            signature_alg: "rsa-pss-sentinel",
+            ..valid_read_input
+        };
+        assert_eq!(
+            try_private_result_oram_read_buckets_signature_message(unsupported_read_alg),
+            Err(PrivateResultOramError::UnsupportedSignatureAlgorithm(
+                "rsa-pss-sentinel".to_string()
+            ))
+        );
+        let malformed_read_key = PrivateResultOramReadBucketsSignatureInput {
+            signature_key_id: "bad key id",
+            ..valid_read_input
+        };
+        assert_eq!(
+            try_private_result_oram_read_buckets_signature_message(malformed_read_key),
+            Err(PrivateResultOramError::InvalidResourceKeyId)
         );
     }
 
