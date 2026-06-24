@@ -284,6 +284,10 @@ mod tests {
         let inline_secret = "qdrant-sec-telemetry-inline-key-sentinel";
         let wrapped_secret = "qdrant-sec-telemetry-wrapped-key-sentinel";
         let signature_public_key = "qdrant-sec-telemetry-signature-public-key-sentinel";
+        let private_hnsw_signature_public_key =
+            "qdrant-sec-telemetry-private-hnsw-signature-public-key-sentinel";
+        let private_result_signature_public_key =
+            "qdrant-sec-telemetry-private-result-signature-public-key-sentinel";
         let mut settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: None,
@@ -295,23 +299,102 @@ mod tests {
                 ckks_query_nonce_replay_cache_max_entries:
                     crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
                 allow_inline_key_material: true,
-                instances: HashMap::from([(
-                    "docs_payload_client_v1".to_string(),
-                    CryptoInstanceConfig {
-                        provider: "payload/client-aead@v1".to_string(),
-                        materials: HashMap::new(),
-                        backend_ref: None,
-                        options: json!({
-                            "key_id": "tenant-a/client-rk-v1",
-                            "key_id_required": true,
-                            "expected_rk_id": "tenant-a/client-rk-v1",
-                            "min_rk_epoch": 3,
-                            "max_rk_epoch": 3,
-                            "signature_public_key_b64": signature_public_key,
-                            "signature_key_id": "tenant-a/client-signing-v1",
-                        }),
-                    },
-                )]),
+                instances: HashMap::from([
+                    (
+                        "docs_payload_client_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: "payload/client-aead@v1".to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: json!({
+                                "key_id": "tenant-a/client-rk-v1",
+                                "key_id_required": true,
+                                "expected_rk_id": "tenant-a/client-rk-v1",
+                                "min_rk_epoch": 3,
+                                "max_rk_epoch": 3,
+                                "signature_public_key_b64": signature_public_key,
+                                "signature_key_id": "tenant-a/client-signing-v1",
+                            }),
+                        },
+                    ),
+                    (
+                        "docs_private_hnsw_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: "vector/private-hnsw-oram@v1".to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: json!({
+                                "key_id": "tenant-a/vector-private-rk",
+                                "expected_rk_id": "tenant-a/vector-private-rk",
+                                "min_rk_epoch": 7,
+                                "max_rk_epoch": 7,
+                                "search_execution": "client_led",
+                                "search_mode": "private_hnsw_oram",
+                                "result_privacy": "ids_visible",
+                                "distance": "cosine",
+                                "dim": 1536,
+                                "hnsw": {
+                                    "m": 32,
+                                    "ef_construction": 128,
+                                    "max_layers": 16,
+                                    "fixed_neighbor_slots": 64,
+                                },
+                                "oram": {
+                                    "kind": "path_oram",
+                                    "bucket_size": 4,
+                                    "block_size_bytes": 8192,
+                                    "tree_height": 24,
+                                    "path_batch_size": 8,
+                                },
+                                "fixed_budget": {
+                                    "enabled": true,
+                                    "upper_layer_steps": 32,
+                                    "base_layer_steps": 256,
+                                    "paths_per_round": 8,
+                                    "fixed_result_k": 10,
+                                },
+                                "integrity": {
+                                    "manifest_signature_required": true,
+                                    "commit_signature_required": true,
+                                    "merkle_root_required": true,
+                                },
+                                "signature_public_keys": {
+                                    "tenant-a/private-hnsw-signing-v1": private_hnsw_signature_public_key,
+                                },
+                            }),
+                        },
+                    ),
+                    (
+                        "docs_private_result_oram_v1".to_string(),
+                        CryptoInstanceConfig {
+                            provider: "payload/private-result-oram@v1".to_string(),
+                            materials: HashMap::new(),
+                            backend_ref: None,
+                            options: json!({
+                                "key_id": "tenant-a/result-private-rk",
+                                "expected_rk_id": "tenant-a/result-private-rk",
+                                "min_rk_epoch": 7,
+                                "max_rk_epoch": 7,
+                                "result_privacy": "private_payload_oram_required",
+                                "oram": {
+                                    "kind": "path_oram",
+                                    "bucket_size": 4,
+                                    "block_size_bytes": 8192,
+                                    "tree_height": 24,
+                                    "path_batch_size": 8,
+                                },
+                                "integrity": {
+                                    "manifest_signature_required": true,
+                                    "commit_signature_required": true,
+                                    "merkle_root_required": true,
+                                },
+                                "signature_public_keys": {
+                                    "tenant-a/private-result-signing-v1": private_result_signature_public_key,
+                                },
+                            }),
+                        },
+                    ),
+                ]),
                 materials: HashMap::from([(
                     "tenant-a/payload-rk-v1".to_string(),
                     CryptoMaterialConfig {
@@ -341,7 +424,13 @@ mod tests {
         let serialized = serde_json::to_string(&telemetry).unwrap();
 
         assert!(telemetry.crypto_runtime_capability_fingerprint.is_some());
-        for sentinel in [inline_secret, wrapped_secret, signature_public_key] {
+        for sentinel in [
+            inline_secret,
+            wrapped_secret,
+            signature_public_key,
+            private_hnsw_signature_public_key,
+            private_result_signature_public_key,
+        ] {
             assert!(
                 !serialized.contains(sentinel),
                 "app telemetry leaked crypto material sentinel {sentinel}",
