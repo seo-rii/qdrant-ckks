@@ -700,6 +700,7 @@ mod tests {
     };
     use collection::operations::types::CollectionError;
     use collection::optimizers_builder::OptimizersConfig;
+    use collection::private_hnsw_oram_store::PRIVATE_HNSW_ORAM_DIR;
     use collection::private_result_oram_store::PRIVATE_RESULT_ORAM_DIR;
     use segment::types::HnswConfig;
     use uuid::Uuid;
@@ -931,6 +932,33 @@ mod tests {
             safe.to_string()
                 .contains("without a matching collection encryption rule")
         );
+    }
+
+    #[test]
+    fn private_oram_snapshot_recovery_layouts_reject_hnsw_store_without_binding() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-storage-recover-layout")
+            .tempdir()
+            .unwrap();
+        std::fs::create_dir(temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR)).unwrap();
+        let config = CollectionConfigInternal {
+            params: CollectionParams::empty(),
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: test_optimizers_config(),
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: None,
+            metadata: None,
+        };
+
+        let err = validate_private_oram_snapshot_restore_layouts("docs", &config, temp_dir.path())
+            .expect_err("orphan private HNSW ORAM snapshot store must fail closed")
+            .to_string();
+
+        assert!(err.contains("without a matching collection encryption rule"));
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
     }
 
     #[test]
