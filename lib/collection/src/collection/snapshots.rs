@@ -664,6 +664,15 @@ fn blocking_append_private_oram_snapshot_tree(
         )?;
         if metadata.file_type().is_dir() {
             if private_oram_snapshot_entry_is_temp_dir(dir_name, depth, &file_name) {
+                if private_oram_snapshot_dir_has_entries(&entry.path()).map_err(|_| {
+                    CollectionError::service_error(format!(
+                        "{label} snapshot source cannot be inspected"
+                    ))
+                })? {
+                    return Err(CollectionError::service_error(format!(
+                        "{label} snapshot source contains incomplete private ORAM write state",
+                    )));
+                }
                 continue;
             }
             blocking_append_private_oram_snapshot_tree(
@@ -2939,6 +2948,72 @@ mod tests {
         );
         assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
         assert!(!rendered.contains("position.map"));
+        assert!(!rendered.contains("sentinel"));
+    }
+
+    #[test]
+    fn private_oram_snapshot_archive_append_rejects_non_empty_temp_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-append-non-empty-temp")
+            .tempdir()
+            .unwrap();
+
+        let hnsw_temp_file = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("temp")
+            .join("stale-write.tmp");
+        fs::create_dir_all(hnsw_temp_file.parent().unwrap()).unwrap();
+        fs::write(&hnsw_temp_file, b"append HNSW temp sentinel").unwrap();
+
+        let archive = tempfile::NamedTempFile::new().unwrap();
+        let tar = BuilderExt::new_seekable_owned(File::create(archive.path()).unwrap());
+        let err = blocking_append_private_oram_snapshot_dir(
+            &tar,
+            &temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR),
+            Path::new(PRIVATE_HNSW_ORAM_DIR),
+            PRIVATE_HNSW_ORAM_DIR,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(
+                "private HNSW ORAM snapshot source contains incomplete private ORAM write state"
+            ),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("text"));
+        assert!(!rendered.contains("stale-write"));
+        assert!(!rendered.contains("sentinel"));
+
+        let result_temp_file = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("temp")
+            .join("stale-write.tmp");
+        fs::create_dir_all(result_temp_file.parent().unwrap()).unwrap();
+        fs::write(&result_temp_file, b"append result temp sentinel").unwrap();
+
+        let archive = tempfile::NamedTempFile::new().unwrap();
+        let tar = BuilderExt::new_seekable_owned(File::create(archive.path()).unwrap());
+        let err = blocking_append_private_oram_snapshot_dir(
+            &tar,
+            &temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR),
+            Path::new(PRIVATE_RESULT_ORAM_DIR),
+            PRIVATE_RESULT_ORAM_DIR,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains(
+                "private result ORAM snapshot source contains incomplete private ORAM write state"
+            ),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!rendered.contains("stale-write"));
         assert!(!rendered.contains("sentinel"));
     }
 
