@@ -810,7 +810,8 @@ Manifest-store layout failures during upload are sanitized without exposing
 collection-local `private_hnsw_oram` filesystem paths.
 Path ORAM manifests must also bind `bucket_count` to the canonical full binary
 tree size implied by `tree_height`, so malformed layouts are rejected before a
-session can reach `read_paths`.
+session can reach `read_paths`. The SDK Path ORAM helpers reject `tree_height =
+0` as a degenerate tree shape, matching manifest/runtime validation.
 Runtime validation currently caps private HNSW and private result ORAM
 `tree_height` at 20 because the MVP stores Merkle metadata as bounded JSON;
 larger trees require the future compact/proof-oriented Merkle store before they

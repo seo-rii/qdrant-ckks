@@ -1295,7 +1295,7 @@ fn path_oram_tree_height_from_bucket_count(bucket_count: u64) -> Option<u32> {
 }
 
 pub fn private_result_oram_leaf_count(tree_height: u32) -> Result<u64, PrivateResultOramError> {
-    if tree_height >= 63 {
+    if tree_height == 0 || tree_height >= 63 {
         return Err(PrivateResultOramError::InvalidFetchPlanField("tree_height"));
     }
     Ok(1u64 << tree_height)
@@ -5735,6 +5735,14 @@ mod tests {
         let manifest = small_fetch_manifest();
         assert_eq!(private_result_oram_leaf_count(3).unwrap(), 8);
         assert_eq!(private_result_oram_bucket_count(3).unwrap(), 15);
+        assert_eq!(
+            private_result_oram_leaf_count(0),
+            Err(PrivateResultOramError::InvalidFetchPlanField("tree_height"))
+        );
+        assert_eq!(
+            private_result_oram_bucket_count(0),
+            Err(PrivateResultOramError::InvalidFetchPlanField("tree_height"))
+        );
         assert_eq!(
             private_result_oram_bucket_ids_for_leaf(5, 3).unwrap(),
             vec![0, 2, 5, 12]

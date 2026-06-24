@@ -1531,7 +1531,7 @@ pub fn open_private_hnsw_oram_client_state_snapshot(
 }
 
 pub fn private_hnsw_oram_leaf_count(tree_height: u32) -> Result<u64, PrivateHnswClientError> {
-    if tree_height >= 63 {
+    if tree_height == 0 || tree_height >= 63 {
         return Err(PrivateHnswClientError::InvalidTreeHeight);
     }
     Ok(1u64 << tree_height)
@@ -4769,6 +4769,10 @@ mod tests {
 
     #[test]
     fn path_oram_helpers_reject_invalid_tree_and_leaf_labels() {
+        assert_eq!(
+            private_hnsw_oram_leaf_count(0),
+            Err(PrivateHnswClientError::InvalidTreeHeight)
+        );
         assert_eq!(
             private_hnsw_oram_leaf_count(63),
             Err(PrivateHnswClientError::InvalidTreeHeight)
