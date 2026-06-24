@@ -2618,6 +2618,7 @@ pub fn sign_private_result_oram_manifest_refresh(
 pub fn try_private_result_oram_manifest_signature_message(
     manifest: &PrivateResultOramManifest,
 ) -> Result<Vec<u8>, PrivateResultOramError> {
+    validate_private_result_oram_manifest_shape(manifest)?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -2664,6 +2665,7 @@ pub fn try_private_result_oram_manifest_signature_message(
 pub fn try_private_result_oram_commit_signature_message(
     input: PrivateResultOramCommitSignatureInput<'_>,
 ) -> Result<Vec<u8>, PrivateResultOramError> {
+    validate_signature_input_context(input.collection_id, input.key_id, input.rk_id)?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -2709,6 +2711,7 @@ pub fn try_private_result_oram_commit_signature_message(
 pub fn try_private_result_oram_read_buckets_signature_message(
     input: PrivateResultOramReadBucketsSignatureInput<'_>,
 ) -> Result<Vec<u8>, PrivateResultOramError> {
+    validate_signature_input_context(input.collection_id, input.key_id, input.rk_id)?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -5878,6 +5881,62 @@ mod tests {
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
             "lgqPWza4bMJhkNB3N3ceznqz8moFXvgbm-Ov3i6TkYQ"
+        );
+    }
+
+    #[test]
+    fn signature_message_builders_reject_invalid_context() {
+        let mut manifest = fixture_manifest();
+        manifest.collection_id = "collection id sentinel".to_string();
+        assert_eq!(
+            try_private_result_oram_manifest_signature_message(&manifest),
+            Err(PrivateResultOramError::InvalidManifestField(
+                "collection_id"
+            ))
+        );
+
+        let buckets = [PrivateResultOramCommitBucketRef {
+            bucket_id: 9,
+            ciphertext_sha256: &BASE64URL_NOPAD.encode(&[9; 32]),
+        }];
+        let commit_input = PrivateResultOramCommitSignatureInput {
+            collection_id: "collection id sentinel",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            new_root_hash: &BASE64URL_NOPAD.encode(&[43; 32]),
+            updated_buckets: &buckets,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-result-signing-v1",
+        };
+        assert_eq!(
+            try_private_result_oram_commit_signature_message(commit_input),
+            Err(PrivateResultOramError::InvalidManifestField(
+                "collection_id"
+            ))
+        );
+
+        let bucket_ids = [0];
+        let read_input = PrivateResultOramReadBucketsSignatureInput {
+            collection_id: "collection id sentinel",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            bucket_count: 7,
+            bucket_ids: &bucket_ids,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-result-signing-v1",
+        };
+        assert_eq!(
+            try_private_result_oram_read_buckets_signature_message(read_input),
+            Err(PrivateResultOramError::InvalidManifestField(
+                "collection_id"
+            ))
         );
     }
 
