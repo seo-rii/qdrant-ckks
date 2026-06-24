@@ -1163,9 +1163,10 @@ algorithm value.
 The `read_buckets` handler verifies the canonical signed bucket-id sequence
 before returning detailed path-shape or bucket-range errors, so unauthenticated
 malformed read batches stay on the generic signature-failure path. The crypto
-read-buckets signer and validator also derive the Path ORAM tree height from
-the signed `bucket_count` and reject non-canonical tree sizes, partial paths,
-and invalid root-to-leaf bucket sequences before signature acceptance.
+read-buckets message builder, signer, and validator also derive the Path ORAM
+tree height from the signed `bucket_count` and reject non-canonical tree sizes,
+partial paths, and invalid root-to-leaf bucket sequences before signature
+acceptance.
 Directory hardening also checks symlink/type before chmod. It also exposes
 `read_merkle_path_batch` with the canonical qdrant-sec
 `merkle_path_batch/v1` proof DTO; the REST/gRPC `read_buckets` API returns these

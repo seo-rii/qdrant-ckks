@@ -2733,6 +2733,8 @@ pub fn try_private_result_oram_read_buckets_signature_message(
     input: PrivateResultOramReadBucketsSignatureInput<'_>,
 ) -> Result<Vec<u8>, PrivateResultOramError> {
     validate_signature_input_context(input.collection_id, input.key_id, input.rk_id)?;
+    decode_base64url_32(input.root_hash, "root_hash")?;
+    validate_private_result_oram_read_bucket_sequence_shape(input.bucket_count, input.bucket_ids)?;
     let mut message = Vec::new();
     try_push_domain(
         &mut message,
@@ -3655,6 +3657,50 @@ mod tests {
         input: PrivateResultOramReadBucketsSignatureInput<'_>,
     ) -> Vec<u8> {
         try_private_result_oram_read_buckets_signature_message(input).unwrap()
+    }
+
+    fn unchecked_read_buckets_signature_message(
+        input: PrivateResultOramReadBucketsSignatureInput<'_>,
+    ) -> Vec<u8> {
+        let mut message = Vec::new();
+        try_push_domain(
+            &mut message,
+            PRIVATE_RESULT_ORAM_READ_BUCKETS_SIGNATURE_DOMAIN.as_bytes(),
+            || PrivateResultOramError::InvalidReadBucketsSignature,
+        )
+        .unwrap();
+        try_push_str(&mut message, input.collection_id, || {
+            PrivateResultOramError::InvalidReadBucketsSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.key_id, || {
+            PrivateResultOramError::InvalidReadBucketsSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.rk_id, || {
+            PrivateResultOramError::InvalidReadBucketsSignature
+        })
+        .unwrap();
+        push_u64(&mut message, input.rk_epoch);
+        push_u64(&mut message, input.index_epoch);
+        try_push_str(&mut message, input.root_hash, || {
+            PrivateResultOramError::InvalidReadBucketsSignature
+        })
+        .unwrap();
+        push_u64(&mut message, input.bucket_count);
+        push_u32(&mut message, u32::try_from(input.bucket_ids.len()).unwrap());
+        for bucket_id in input.bucket_ids {
+            push_u64(&mut message, *bucket_id);
+        }
+        try_push_str(&mut message, input.signature_alg, || {
+            PrivateResultOramError::InvalidReadBucketsSignature
+        })
+        .unwrap();
+        try_push_str(&mut message, input.signature_key_id, || {
+            PrivateResultOramError::InvalidReadBucketsSignature
+        })
+        .unwrap();
+        message
     }
 
     fn bucket_validation_context() -> PrivateResultOramBucketValidationContext {
@@ -7438,9 +7484,15 @@ mod tests {
             bucket_count: 8,
             ..input
         };
+        assert_eq!(
+            try_private_result_oram_read_buckets_signature_message(
+                non_canonical_bucket_count_input
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
         let non_canonical_bucket_count_signature = sign_b64(
             &key_pair,
-            &checked_read_buckets_signature_message(non_canonical_bucket_count_input),
+            &unchecked_read_buckets_signature_message(non_canonical_bucket_count_input),
         );
         assert_eq!(
             validate_private_result_oram_read_buckets_signature(
@@ -7455,9 +7507,13 @@ mod tests {
             bucket_ids: &partial_path_bucket_ids,
             ..input
         };
+        assert_eq!(
+            try_private_result_oram_read_buckets_signature_message(partial_path_input),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
         let partial_path_signature = sign_b64(
             &key_pair,
-            &checked_read_buckets_signature_message(partial_path_input),
+            &unchecked_read_buckets_signature_message(partial_path_input),
         );
         assert_eq!(
             validate_private_result_oram_read_buckets_signature(
@@ -7473,9 +7529,13 @@ mod tests {
             bucket_ids: &malformed_path_bucket_ids,
             ..input
         };
+        assert_eq!(
+            try_private_result_oram_read_buckets_signature_message(malformed_path_input),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
         let malformed_path_signature = sign_b64(
             &key_pair,
-            &checked_read_buckets_signature_message(malformed_path_input),
+            &unchecked_read_buckets_signature_message(malformed_path_input),
         );
         assert_eq!(
             validate_private_result_oram_read_buckets_signature(
