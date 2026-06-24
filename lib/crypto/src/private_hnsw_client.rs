@@ -9179,6 +9179,97 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_oram_hnsw_search_keeps_state_when_final_reseal_fails() {
+        use std::cell::{Cell, RefCell};
+
+        let keys = test_keys();
+        let base_context = bucket_base_context();
+        let config = PrivateHnswOramClientConfig {
+            bucket_size: 2,
+            ..oram_config()
+        };
+        let entry = node_block_with_vector(1, &[1.0, 0.0], vec![]);
+        let mut oversized_stash_block = node_block_with_vector(99, &[99.0, 0.0], vec![]);
+        oversized_stash_block.vector = vec![99; config.block_size_bytes];
+        let mut state = PrivateHnswOramClientState::with_position_map(
+            [(entry.node_id, 0), (oversized_stash_block.node_id, 0)],
+            config.tree_height,
+        )
+        .unwrap();
+        state
+            .stash
+            .insert(oversized_stash_block.node_id, oversized_stash_block);
+        let original_state = state.clone();
+
+        let plaintext_store = RefCell::new(BTreeMap::new());
+        for bucket_id in 0..private_hnsw_oram_bucket_count(config.tree_height).unwrap() {
+            plaintext_store.borrow_mut().insert(
+                bucket_id,
+                empty_private_hnsw_oram_plaintext_bucket(bucket_id, config).unwrap(),
+            );
+        }
+        let leaf_bucket_id = *private_hnsw_oram_bucket_ids_for_leaf(0, config.tree_height)
+            .unwrap()
+            .last()
+            .unwrap();
+        plaintext_store
+            .borrow_mut()
+            .get_mut(&leaf_bucket_id)
+            .unwrap()
+            .blocks[0] = Some(entry.clone());
+
+        let encrypted_store = RefCell::new(BTreeMap::new());
+        for bucket in plaintext_store.borrow().values() {
+            let encrypted =
+                seal_private_hnsw_oram_plaintext_bucket(&keys, base_context, 42, bucket, config)
+                    .unwrap();
+            encrypted_store
+                .borrow_mut()
+                .insert(bucket.bucket_id, encrypted);
+        }
+        let writeback_called = Cell::new(false);
+
+        let err = search_private_hnsw_oram_encrypted(
+            &keys,
+            base_context,
+            43,
+            &mut state,
+            config,
+            &[1.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: entry.node_id,
+                k: 1,
+                ef: 1,
+                fixed_steps: 1,
+                distance: DistanceKind::Euclid,
+                padding_node_id: None,
+            },
+            |leaf| {
+                private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?
+                    .into_iter()
+                    .map(|bucket_id| {
+                        encrypted_store
+                            .borrow()
+                            .get(&bucket_id)
+                            .cloned()
+                            .ok_or(PrivateHnswClientError::PathBucketMismatch)
+                    })
+                    .collect()
+            },
+            |_| {
+                writeback_called.set(true);
+                Ok(())
+            },
+            || Ok(0),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, PrivateHnswClientError::EncodedBlockOversized);
+        assert!(!writeback_called.get());
+        assert_eq!(state, original_state);
+    }
+
+    #[test]
     fn verified_encrypted_oram_hnsw_search_rejects_non_advancing_writeback_epoch_before_read() {
         use std::cell::RefCell;
 
