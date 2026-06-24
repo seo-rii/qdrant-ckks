@@ -644,10 +644,10 @@ JSON artifacts after rejecting non-directory or symlinked private ORAM snapshot
 sources, unsupported source file types, client-owned ORAM state files, and
 non-empty private ORAM temp write directories. Snapshot source preflight and
 archive append also reject non-canonical private ORAM store entries before they
-are written to the archive, and validate canonical epoch commit file contents
-again at archive time. Client-owned state detection covers snake_case,
-camelCase, and kebab-case aliases for client state, encrypted client state
-snapshots, position maps, ORAM/token position maps, and stashes. Empty private
+are written to the archive, and validate current epoch plus canonical epoch
+commit file contents again at archive time. Client-owned state detection covers
+snake_case, camelCase, and kebab-case aliases for client state, encrypted client
+state snapshots, position maps, ORAM/token position maps, and stashes. Empty private
 ORAM temp directories are omitted from the archive;
 snapshot tests seal a plaintext sentinel into a client bucket and assert that
 the raw snapshot archive and restored bucket file do not contain the sentinel

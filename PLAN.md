@@ -416,7 +416,7 @@
 - collection snapshot 생성은 archive 작성 전에 private HNSW ORAM manifest/current epoch/bucket/Merkle restore-layout parity를 preflight하고, 누락 bucket 같은 layout 오류를 collection-local path나 root hash 반사 없이 fail closed 한다.
 - collection snapshot 생성은 private result ORAM store도 archive 작성 전에 manifest/current epoch/bucket/Merkle restore-layout parity를 preflight하고, configured binding 없는 orphan store나 누락 bucket 같은 layout 오류를 collection-local path나 root hash 반사 없이 fail closed 한다.
 - private HNSW ORAM과 private result ORAM restore preflight는 manifest bucket range 전체를 검사하며 first/middle/last bucket 누락과 storage-level restore 경로를 bucket filename, collection-local path, root hash, signature/ciphertext-like base64url token 반사 없이 fail closed 한다.
-- private ORAM snapshot source preflight와 archive append도 canonical store layout 외 파일을 거부한다. restore preflight는 추가 bucket/layout 파일, malformed epoch commit file, missing temp directory archive 형태를 회귀 테스트로 고정했고, epoch commit file은 bounded JSON epoch/root shape와 filename epoch 일치를 요구한다.
+- private ORAM snapshot source preflight와 archive append도 canonical store layout 외 파일을 거부한다. restore preflight는 추가 bucket/layout 파일, malformed current/epoch commit file, missing temp directory archive 형태를 회귀 테스트로 고정했고, current/epoch commit file은 bounded JSON epoch/root shape와 canonical root hash를 요구하며 commit file은 filename epoch 일치도 요구한다.
 - REST/gRPC ORAM session fixture는 writeback commit 이후 stale signed manifest로는 새 epoch session을 열 수 없고, closed session id는 `read_paths`와 `commit`에 재사용할 수 없으며, refreshed signed manifest upload 뒤에는 같은 epoch session을 열 수 있음을 검증한다.
 - REST/gRPC `read_paths`와 `commit` 오류 응답은 unknown session id sentinel을 반사하지 않는다.
 - REST/gRPC session close 오류 응답은 unknown session id sentinel을 반사하지 않는다.
