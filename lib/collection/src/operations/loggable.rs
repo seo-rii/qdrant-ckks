@@ -325,9 +325,13 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "position_map_snapshot"
                         | "position_map_snapshots"
                         | "oram_position_map"
+                        | "oram_position_maps"
                         | "oram_position_map_snapshot"
+                        | "oram_position_map_snapshots"
                         | "token_position_map"
+                        | "token_position_maps"
                         | "token_position_map_snapshot"
+                        | "token_position_map_snapshots"
                         | "stash"
                         | "stash_snapshot"
                         | "stash_snapshots"
@@ -522,9 +526,14 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "positionmapsnapshot"
                         | "positionmapsnapshots"
                         | "orampositionmap"
+                        | "orampositionmaps"
                         | "orampositionmapsnapshot"
+                        | "orampositionmapsnapshots"
                         | "tokenpositionmap"
+                        | "tokenpositionmaps"
                         | "tokenpositionmapsnapshot"
+                        | "tokenpositionmapsnapshots"
+                        | "stash"
                         | "stashsnapshot"
                         | "stashsnapshots"
                         | "entrynodeid"
@@ -1830,6 +1839,11 @@ mod tests {
             "position_maps": ["qdrant-sec-private-oram-position-maps-alias-log-sentinel"],
             "positionMap": "qdrant-sec-private-oram-camel-position-map-alias-log-sentinel",
             "positionMaps": ["qdrant-sec-private-oram-camel-position-maps-alias-log-sentinel"],
+            "oram_position_maps": ["qdrant-sec-private-oram-oram-position-maps-alias-log-sentinel"],
+            "oramPositionMaps": ["qdrant-sec-private-oram-camel-oram-position-maps-alias-log-sentinel"],
+            "token_position_maps": ["qdrant-sec-private-oram-token-position-maps-alias-log-sentinel"],
+            "tokenPositionMapSnapshots": ["qdrant-sec-private-oram-camel-token-position-map-snapshots-alias-log-sentinel"],
+            "stashSnapshot": "qdrant-sec-private-oram-camel-stash-snapshot-alias-log-sentinel",
             "stash": "qdrant-sec-private-oram-stash-alias-log-sentinel"
         });
         redact_sensitive_log_fields(&mut position_map_aliases);
@@ -1839,6 +1853,11 @@ mod tests {
             "qdrant-sec-private-oram-position-maps-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-position-map-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-position-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-oram-position-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-oram-position-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-token-position-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-token-position-map-snapshots-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-stash-snapshot-alias-log-sentinel",
             "qdrant-sec-private-oram-stash-alias-log-sentinel",
         ] {
             assert!(!position_map_aliases_serialized.contains(leaked));
