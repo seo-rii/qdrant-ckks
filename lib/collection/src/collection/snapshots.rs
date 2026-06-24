@@ -3088,6 +3088,7 @@ mod tests {
             "shard snapshot streaming",
             "shard snapshot download",
             "shard snapshot recovery",
+            "partial shard snapshot recovery",
             "partial shard snapshot manifest",
         ] {
             for config in &configs {

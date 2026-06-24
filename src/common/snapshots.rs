@@ -578,10 +578,15 @@ pub async fn try_take_partial_snapshot_recovery_lock(
         )?
         .issue_pass(collection_name);
 
-    let recovery_lock = dispatcher
+    let collection = dispatcher
         .toc(auth, pass)
         .get_collection(&collection_pass)
-        .await?
+        .await?;
+    collection
+        .validate_private_oram_shard_snapshot_allowed("partial shard snapshot recovery")
+        .await?;
+
+    let recovery_lock = collection
         .try_take_partial_snapshot_recovery_lock(shard_id, RecoveryType::Partial)
         .await?;
 
