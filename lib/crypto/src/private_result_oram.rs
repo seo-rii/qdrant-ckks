@@ -2041,6 +2041,7 @@ where
         }
     }
 
+    let mut working_state = state.clone();
     let mut accesses = Vec::with_capacity(payload_fetch_tokens.len());
     let mut writeback_by_bucket: BTreeMap<u64, PrivateResultOramPlaintextBucket> = BTreeMap::new();
     for (batch_index, token_chunk) in payload_fetch_tokens
@@ -2068,7 +2069,7 @@ where
                 .ok_or(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))?,
         );
         for payload_fetch_token in token_chunk {
-            let old_leaf = state
+            let old_leaf = working_state
                 .position(payload_fetch_token)
                 .ok_or(PrivateResultOramError::MissingPosition)?;
             expected_bucket_ids.extend(private_result_oram_bucket_ids_for_leaf(
@@ -2121,7 +2122,7 @@ where
         }
 
         for payload_fetch_token in token_chunk {
-            let old_leaf = state
+            let old_leaf = working_state
                 .position(payload_fetch_token)
                 .ok_or(PrivateResultOramError::MissingPosition)?;
             let path_bucket_ids =
@@ -2137,7 +2138,7 @@ where
                 .collect::<Result<Vec<_>, _>>()?;
 
             let access = access_private_result_oram_path(
-                state,
+                &mut working_state,
                 config,
                 *payload_fetch_token,
                 &path_buckets,
@@ -2168,6 +2169,8 @@ where
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
+
+    *state = working_state;
 
     Ok(PrivateResultOramTokenFetchResult {
         accesses,
@@ -5086,6 +5089,41 @@ mod tests {
                 }
             })
             .collect::<Vec<_>>();
+
+        let mut failing_batches = encrypted_batches.clone();
+        failing_batches[1].root_hash = BASE64URL_NOPAD.encode(&[99; 32]);
+        let mut failing_state = PrivateResultOramClientState::with_position_map(
+            token_positions
+                .iter()
+                .map(|position| (position.payload_fetch_token, position.leaf)),
+            config.tree_height,
+        )
+        .unwrap();
+        let original_failing_state = failing_state.clone();
+        let mut failing_remaps = [0, 1, 6, 7].into_iter();
+        assert_eq!(
+            fetch_private_result_oram_tokens_encrypted_verified(
+                &keys,
+                base_context,
+                42,
+                &root_hash,
+                bucket_count,
+                43,
+                &mut failing_state,
+                config,
+                &payload_fetch_tokens,
+                &read_plan,
+                &failing_batches,
+                || {
+                    failing_remaps
+                        .next()
+                        .ok_or(PrivateResultOramError::InvalidFetchPlanField("leaf"))
+                },
+            ),
+            Err(PrivateResultOramError::MerkleProofMismatch)
+        );
+        assert_eq!(failing_state, original_failing_state);
+
         let mut state = PrivateResultOramClientState::with_position_map(
             token_positions
                 .iter()
