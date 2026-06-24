@@ -1335,6 +1335,7 @@ mod tests {
     fn assert_signature_fixture(
         fixture: &serde_json::Value,
         case_name: &str,
+        expected_domain: &str,
         message: &[u8],
         signature: &str,
     ) {
@@ -1352,6 +1353,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("test vector case {case_name} must define {key}"))
         };
 
+        assert_eq!(get("domain"), expected_domain);
         assert_eq!(get("signature_alg"), "ed25519");
         assert_eq!(
             message.len() as u64,
@@ -1381,11 +1383,21 @@ mod tests {
             Some(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
         );
         assert_eq!(fixture["binding"].as_str(), Some(PRIVATE_HNSW_ORAM_BINDING));
+        assert_eq!(
+            fixture["deterministic_seed_hex"].as_str(),
+            Some("0707070707070707070707070707070707070707070707070707070707070707")
+        );
 
         let key_pair = deterministic_key_pair();
         let manifest_message = checked_manifest_signature_message(&fixture_manifest());
         let manifest_signature = sign_b64(&key_pair, &manifest_message);
-        assert_signature_fixture(&fixture, "manifest", &manifest_message, &manifest_signature);
+        assert_signature_fixture(
+            &fixture,
+            "manifest",
+            PRIVATE_HNSW_ORAM_MANIFEST_SIGNATURE_DOMAIN,
+            &manifest_message,
+            &manifest_signature,
+        );
 
         let buckets = [
             PrivateHnswOramCommitBucketRef {
@@ -1413,7 +1425,13 @@ mod tests {
         };
         let commit_message = checked_commit_signature_message(commit_input);
         let commit_signature = sign_b64(&key_pair, &commit_message);
-        assert_signature_fixture(&fixture, "commit", &commit_message, &commit_signature);
+        assert_signature_fixture(
+            &fixture,
+            "commit",
+            PRIVATE_HNSW_ORAM_COMMIT_SIGNATURE_DOMAIN,
+            &commit_message,
+            &commit_signature,
+        );
 
         let paths = ["AAAAAAAAAAA", "AAAAAAAAAAE"];
         let read_input = PrivateHnswOramReadPathsSignatureInput {
@@ -1432,7 +1450,13 @@ mod tests {
         };
         let read_message = checked_read_paths_signature_message(read_input);
         let read_signature = sign_b64(&key_pair, &read_message);
-        assert_signature_fixture(&fixture, "read_paths", &read_message, &read_signature);
+        assert_signature_fixture(
+            &fixture,
+            "read_paths",
+            PRIVATE_HNSW_ORAM_READ_PATHS_SIGNATURE_DOMAIN,
+            &read_message,
+            &read_signature,
+        );
     }
 
     #[test]

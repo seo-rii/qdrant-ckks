@@ -5948,6 +5948,7 @@ mod tests {
     fn assert_signature_fixture(
         fixture: &serde_json::Value,
         case_name: &str,
+        expected_domain: &str,
         message: &[u8],
         signature: &str,
     ) {
@@ -5965,6 +5966,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("test vector case {case_name} must define {key}"))
         };
 
+        assert_eq!(get("domain"), expected_domain);
         assert_eq!(get("signature_alg"), "ed25519");
         assert_eq!(
             message.len() as u64,
@@ -5997,11 +5999,21 @@ mod tests {
             fixture["binding"].as_str(),
             Some(PRIVATE_RESULT_ORAM_BINDING)
         );
+        assert_eq!(
+            fixture["deterministic_seed_hex"].as_str(),
+            Some("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b")
+        );
 
         let key_pair = deterministic_key_pair();
         let manifest_message = checked_manifest_signature_message(&fixture_manifest());
         let manifest_signature = sign_b64(&key_pair, &manifest_message);
-        assert_signature_fixture(&fixture, "manifest", &manifest_message, &manifest_signature);
+        assert_signature_fixture(
+            &fixture,
+            "manifest",
+            PRIVATE_RESULT_ORAM_MANIFEST_SIGNATURE_DOMAIN,
+            &manifest_message,
+            &manifest_signature,
+        );
 
         let buckets = [
             PrivateResultOramCommitBucketRef {
@@ -6028,7 +6040,13 @@ mod tests {
         };
         let commit_message = checked_commit_signature_message(commit_input);
         let commit_signature = sign_b64(&key_pair, &commit_message);
-        assert_signature_fixture(&fixture, "commit", &commit_message, &commit_signature);
+        assert_signature_fixture(
+            &fixture,
+            "commit",
+            PRIVATE_RESULT_ORAM_COMMIT_SIGNATURE_DOMAIN,
+            &commit_message,
+            &commit_signature,
+        );
 
         let bucket_ids = [0, 1, 3, 0, 1, 4];
         let read_input = PrivateResultOramReadBucketsSignatureInput {
@@ -6045,7 +6063,13 @@ mod tests {
         };
         let read_message = checked_read_buckets_signature_message(read_input);
         let read_signature = sign_b64(&key_pair, &read_message);
-        assert_signature_fixture(&fixture, "read_buckets", &read_message, &read_signature);
+        assert_signature_fixture(
+            &fixture,
+            "read_buckets",
+            PRIVATE_RESULT_ORAM_READ_BUCKETS_SIGNATURE_DOMAIN,
+            &read_message,
+            &read_signature,
+        );
     }
 
     #[test]
