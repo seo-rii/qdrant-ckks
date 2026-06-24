@@ -15,17 +15,16 @@ use qdrant_sec::{
     PrivateHnswBucketAeadBaseContext, PrivateHnswBuildPoint, PrivateHnswClientCommitPlan,
     PrivateHnswClientError, PrivateHnswClientKeys, PrivateHnswCommitSignatureContext,
     PrivateHnswEncryptedIndexBuild, PrivateHnswEncryptedPathBatch, PrivateHnswManifestBuildContext,
-    PrivateHnswOramBucket, PrivateHnswOramClientConfig, PrivateHnswOramCommitSignatureInput,
-    PrivateHnswOramManifest, PrivateHnswOramSignature, PrivateHnswParams,
-    PrivateHnswPlaintextIndexBuild, PrivateHnswSearchParams, PrivateHnswSearchResult,
-    ResultPrivacyMode, SecretKey, build_private_hnsw_oram_manifest_from_encrypted_index,
+    PrivateHnswOramBucket, PrivateHnswOramClientConfig, PrivateHnswOramManifest,
+    PrivateHnswOramSignature, PrivateHnswParams, PrivateHnswPlaintextIndexBuild,
+    PrivateHnswSearchParams, PrivateHnswSearchResult, ResultPrivacyMode, SecretKey,
+    build_private_hnsw_oram_manifest_from_encrypted_index,
     build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points,
     encode_private_hnsw_oram_leaf_label, plan_private_hnsw_oram_commit_for_manifest,
     private_hnsw_oram_bucket_ids_for_leaf, seal_private_hnsw_oram_plaintext_index,
     search_private_hnsw_oram_encrypted_verified, sign_private_hnsw_oram_commit,
     sign_private_hnsw_oram_manifest, sign_private_hnsw_oram_manifest_refresh,
     sign_private_hnsw_oram_read_paths, sign_private_hnsw_oram_read_paths_for_manifest,
-    try_private_hnsw_oram_commit_signature_message,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::json;
@@ -420,35 +419,6 @@ impl PrivateHnswRouteWireFixture {
         .unwrap()
     }
 
-    pub(crate) fn sign_commit_unchecked(
-        &self,
-        plan: &PrivateHnswClientCommitPlan,
-    ) -> PrivateHnswOramSignature {
-        let bucket_refs = plan.signature_bucket_refs();
-        let message =
-            try_private_hnsw_oram_commit_signature_message(PrivateHnswOramCommitSignatureInput {
-                collection_id: COLLECTION_ID,
-                vector_name: VECTOR_NAME,
-                key_id: KEY_ID,
-                rk_id: KEY_ID,
-                rk_epoch: RK_EPOCH,
-                old_epoch: plan.old_epoch,
-                new_epoch: plan.new_epoch,
-                old_root_hash: &plan.old_root_hash,
-                new_root_hash: &plan.new_root_hash,
-                updated_buckets: &bucket_refs,
-                signature_alg: "ed25519",
-                signature_key_id: SIGNING_KEY_ID,
-            })
-            .unwrap();
-        let signature = self.signing_key.sign(&message);
-        PrivateHnswOramSignature {
-            alg: "ed25519".to_string(),
-            key_id: SIGNING_KEY_ID.to_string(),
-            sig: BASE64URL_NOPAD.encode(signature.as_ref()),
-        }
-    }
-
     pub(crate) fn sign_manifest(
         &self,
         manifest: &PrivateHnswOramManifest,
@@ -597,13 +567,6 @@ pub(crate) async fn create_private_hnsw_collection_with_private_result_oram(
     dispatcher: &Dispatcher,
 ) {
     create_private_hnsw_collection_with_result_oram_rule(dispatcher, VECTOR_NAME, true).await
-}
-
-pub(crate) async fn create_private_hnsw_collection_with_vector_name(
-    dispatcher: &Dispatcher,
-    vector_name: &str,
-) {
-    create_private_hnsw_collection_with_result_oram_rule(dispatcher, vector_name, false).await
 }
 
 async fn create_private_hnsw_collection_with_result_oram_rule(

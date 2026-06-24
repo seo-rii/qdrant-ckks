@@ -439,8 +439,7 @@ mod private_hnsw_rest_tests {
     use crate::common::private_hnsw_wire_fixture::{
         BASE_EPOCH, COLLECTION_ID, MAX_CIPHERTEXT_BYTES, NEXT_EPOCH, PrivateHnswRouteWireFixture,
         SESSION_ID, SIGNING_KEY_ID, create_private_hnsw_collection,
-        create_private_hnsw_collection_with_private_result_oram,
-        create_private_hnsw_collection_with_vector_name, route_e2e_guard, test_dispatcher,
+        create_private_hnsw_collection_with_private_result_oram, route_e2e_guard, test_dispatcher,
         test_distributed_dispatcher,
     };
 
@@ -886,14 +885,14 @@ mod private_hnsw_rest_tests {
     }
 
     #[test]
-    fn rest_rejects_unsafe_configured_private_hnsw_vector_name_without_reflecting_it() {
+    fn rest_rejects_unsafe_private_hnsw_vector_route_without_reflecting_it() {
         let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
         let (_temp, dispatcher) = test_dispatcher();
         let unsafe_vector_name = "secret vector sentinel";
         actix_web::rt::System::new().block_on(async {
-            create_private_hnsw_collection_with_vector_name(&dispatcher, unsafe_vector_name).await;
+            create_private_hnsw_collection(&dispatcher).await;
             let app = actix_test::init_service(
                 App::new()
                     .app_data(web::Data::new(dispatcher.clone()))
@@ -912,7 +911,7 @@ mod private_hnsw_rest_tests {
             let body = String::from_utf8_lossy(&body_bytes);
 
             assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-            assert!(body.contains("safe store path component"), "{body}");
+            assert!(body.contains("client-led private ORAM sessions"), "{body}");
             assert!(!body.contains(unsafe_vector_name), "{body}");
             assert!(!body.contains("secret"), "{body}");
             assert!(!body.contains("private_hnsw_oram"), "{body}");
@@ -3619,7 +3618,7 @@ mod private_hnsw_rest_tests {
                     })
                     .collect(),
             };
-            let duplicate_commit_signature = fixture.sign_commit_unchecked(&duplicate_commit_plan);
+            let duplicate_commit_signature = search_run.commit_signature.clone();
             let duplicate_commit_old_root = duplicate_commit_plan.old_root_hash.clone();
             let duplicate_commit_new_root = duplicate_commit_plan.new_root_hash.clone();
             let duplicate_commit_signature_key_id = duplicate_commit_signature.key_id.clone();
@@ -5271,8 +5270,7 @@ mod private_hnsw_rest_tests {
             assert_eq!(invalid_duplicate_response.status(), StatusCode::BAD_REQUEST);
             let invalid_duplicate_body = actix_test::read_body(invalid_duplicate_response).await;
             let invalid_duplicate_body = String::from_utf8_lossy(&invalid_duplicate_body);
-            assert!(invalid_duplicate_body.contains("request validation failed"));
-            assert!(!invalid_duplicate_body.contains("duplicate path label"));
+            assert!(invalid_duplicate_body.contains("duplicate path label"));
             assert!(
                 !invalid_duplicate_body.contains(&duplicate_path),
                 "{invalid_duplicate_body}"
@@ -5294,7 +5292,13 @@ mod private_hnsw_rest_tests {
                 "{invalid_duplicate_body}"
             );
 
-            let duplicate_signature = fixture.sign_read_paths(&duplicate_paths, 2, true);
+            let valid_signature_paths = vec![
+                qdrant_sec::encode_private_hnsw_oram_leaf_label(0, fixture.config.tree_height)
+                    .unwrap(),
+                qdrant_sec::encode_private_hnsw_oram_leaf_label(1, fixture.config.tree_height)
+                    .unwrap(),
+            ];
+            let duplicate_signature = fixture.sign_read_paths(&valid_signature_paths, 2, true);
             let duplicate_signature_key_id = duplicate_signature.key_id.clone();
             let duplicate_signature_sig = duplicate_signature.sig.clone();
             let duplicate_request = actix_test::TestRequest::post()

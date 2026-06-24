@@ -447,7 +447,7 @@
 - REST/gRPC private HNSW `read_paths`/`commit`과 private result ORAM `read_buckets`/`commit` client signature key id는 registry lookup 전에 shape validation을 통과해야 하며 invalid key id 오류는 submitted key id sentinel을 반사하지 않는다.
 - REST/gRPC private HNSW `read_paths`와 `commit`은 active session manifest의 `owner_signing_key_id`를 확인한 뒤 verifier public key를 lookup하므로 non-owner key id 요청은 registry lookup 경계까지 가지 않는다.
 - REST/gRPC private result ORAM `read_buckets`와 `commit`도 active session manifest의 `owner_signing_key_id`를 확인한 뒤 verifier public key를 lookup하므로 non-owner key id 요청은 registry lookup 경계까지 가지 않는다.
-- REST/gRPC private HNSW `read_paths`와 `commit`은 bounded epoch/root/fixed-budget preflight 이후 client signature를 detailed path-label 또는 duplicate-bucket 검증보다 먼저 확인하므로, unauthenticated malformed traversal/writeback body는 generic signature-failure path에서 멈춘다.
+- REST/gRPC private HNSW `read_paths`와 `commit`은 malformed/duplicate path label, malformed root, empty/oversized/duplicate updated bucket 같은 request-shape 오류를 signature verification 전에 fail closed 하고, shape-valid 요청만 client signature 검증 뒤 bucket path derivation 또는 Merkle/writeback 준비로 진행한다.
 - REST/gRPC private result ORAM `read_buckets`는 session owner-key preflight 이후 canonical signed bucket-id sequence를 detailed path-shape 또는 bucket-range 검증보다 먼저 확인하므로, unauthenticated malformed read batch는 generic signature-failure path에서 멈춘다.
 - REST/gRPC bucket upload epoch/root 오류 응답은 submitted root hash sentinel을 반사하지 않는다.
 - REST/gRPC bucket upload Merkle root mismatch 오류 응답은 computed Merkle root를 반사하지 않는다.
@@ -509,10 +509,10 @@
 - REST/gRPC `commit` missing Merkle metadata 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC `read_paths` fixture는 path count, requested path count, dummy padding flag가 fixed path budget과 다르거나 exact duplicate/oversized/malformed path label을 포함하면 bucket read 전에 fail-closed로 거부하고 malformed label 본문을 반사하지 않는다.
 - REST/gRPC `read_paths` 성공 경로는 collection/vector, key lineage, epoch/root, path labels, padding metadata에 대한 Ed25519 client signature를 검증한 뒤 encrypted buckets를 반환하고, invalid read signature는 fail-closed로 거부한다.
-- REST/gRPC `read_paths`는 fixed-budget/session epoch-root 검증 뒤 leaf label을 canonical fixed-length base64url form으로 제한하고, Ed25519 request signature를 ORAM bucket path 계산보다 먼저 검증한다.
+- REST/gRPC `read_paths`는 session lookup 전에 leaf label을 canonical fixed-length base64url form으로 제한하고 duplicate path label을 거부하며, fixed-budget/session epoch-root 검증 뒤 shape-valid 요청의 Ed25519 request signature를 ORAM bucket path 계산보다 먼저 검증한다.
 - REST/gRPC `commit`은 bounded request-size/epoch checks 뒤 `old_root_hash`/`new_root_hash`를 canonical 32-byte base64url shape로 먼저 제한하고, Ed25519 request signature를 Merkle/writeback preparation보다 먼저 검증한다.
 - OpenAPI `Beta` path surface도 private HNSW ORAM manifest/bucket/session/read/commit/close와 private result ORAM manifest/bucket/session/read/commit/close REST endpoints를 노출한다. 암호화 envelope DTO는 SDK-owned wire contract라 현재 OpenAPI에서는 opaque object request/response로 고정한다.
-- REST/gRPC `read_paths`와 `commit` request signature key id는 session manifest의 `owner_signing_key_id`와 달라도 fail closed 한다.
+- REST/gRPC private HNSW `read_paths`/`commit`과 private result ORAM `read_buckets`/`commit` request signature key id는 session manifest의 `owner_signing_key_id`와 달라도 fail closed 한다.
 - gRPC private HNSW/result ORAM proto conversion은 unspecified enum뿐 아니라 unknown nonzero enum 값도 fail closed 하고, unsupported enum 값을 status message에 반사하지 않는다.
 - active session의 `read_paths`와 `commit`은 session open 이후 runtime instance policy가 바뀌어도 session manifest를 현재 runtime context와 다시 비교하고 drift를 fail closed 한다.
 - REST와 gRPC route fixtures는 active session 이후 runtime `hnsw`, `fixed_budget`, `oram`, 또는 private-result `result_privacy` policy가 drift된 settings로 HNSW `read_paths`, result ORAM `read_buckets`, 또는 `commit`을 호출하면 fail closed 되는 경계를 모두 검증한다.

@@ -805,10 +805,10 @@ lineage, `requested_paths`/path-count mismatches, and non-advancing commit
 epochs before signature body parsing or canonical message construction.
 Unsupported request signature algorithms on these paths are rejected without
 echoing the submitted algorithm value.
-After bounded session epoch/root and fixed-budget preflight, the REST/gRPC
-`read_paths` and `commit` handlers verify the client signature before returning
-detailed path-label or duplicate-bucket errors, so unauthenticated malformed
-traversal/writeback bodies stay on the generic signature-failure path.
+The REST/gRPC `read_paths` and `commit` handlers run request-shape preflight
+for bounded path labels, root hashes, padding, and updated-bucket refs before
+bucket access or writeback. Shape-valid requests then verify the client
+signature before bucket-path derivation, Merkle preparation, or writeback.
 Manifest-store layout failures during upload are sanitized without exposing
 collection-local `private_hnsw_oram` filesystem paths.
 Path ORAM manifests must also bind `bucket_count` to the canonical full binary
@@ -888,18 +888,19 @@ with drifted `fixed_budget` or `oram` options.
 The request signing key must also match the session manifest's
 `owner_signing_key_id`; merely being present in `signature_public_keys` is not
 enough to authorize ORAM read or commit requests for that private index.
-For `read_paths`, after the fixed-budget and session epoch/root checks, the
-server first bounds each ORAM leaf label to the canonical fixed-length
-base64url form without reflecting malformed labels, then verifies the Ed25519
-request signature before computing bucket paths. The SDK/server read-path
-signature message builder and validator also shape-check the root hash, path
-labels, padding metadata, and duplicate path-label invariant before signature
-body parsing.
-For `commit`, after the bounded request-size and epoch checks, the server first
-bounds `old_root_hash` and `new_root_hash` to canonical 32-byte base64url
-strings, then verifies the Ed25519 request signature before preparing
-Merkle/writeback metadata. The commit signature message builders and validators
-also reject empty commits, non-advancing epochs, malformed roots, duplicate
+For `read_paths`, the server bounds each ORAM leaf label to the canonical
+fixed-length base64url form and rejects duplicate path labels without
+reflecting malformed labels. After fixed-budget and session epoch/root checks,
+shape-valid requests verify the Ed25519 request signature before computing
+bucket paths. The SDK/server read-path signature message builder and validator
+also shape-check the root hash, path labels, padding metadata, and duplicate
+path-label invariant before signature body parsing.
+For `commit`, the server bounds `old_root_hash` and `new_root_hash` to
+canonical 32-byte base64url strings and rejects empty, oversized, duplicate, or
+malformed updated-bucket refs before storage writes. Shape-valid requests
+verify the Ed25519 request signature before preparing Merkle/writeback metadata.
+The commit signature message builders and validators also reject empty commits,
+non-advancing epochs, malformed roots, duplicate
 bucket refs, and malformed updated bucket ciphertext hashes before signature
 acceptance.
 Malformed client signature shape errors for `read_paths` and `commit` are also
@@ -1152,11 +1153,11 @@ single-read-batch limit. Its signed writeback entrypoint verifies the SDK
 Ed25519 commit signature against the stored manifest lineage
 before delegating to that helper, so an invalid commit signature leaves the
 current epoch, buckets, and Merkle metadata unchanged. The REST/gRPC commit
-handlers use the canonical commit signature validator to stop malformed
-duplicate bucket refs on the generic signature-failure path before Merkle or
-writeback validation runs. SDK commit planning, signing, and verification also
-reject empty commit bucket lists and malformed updated bucket ciphertext hashes,
-and validate each updated bucket commitment against the bucket ciphertext hash plus
+handlers reject empty, duplicate, and malformed writeback refs before Merkle or
+writeback validation runs, and shape-valid invalid signatures fail without
+storage changes. SDK commit planning, signing, and verification also reject
+empty commit bucket lists and malformed updated bucket ciphertext hashes, and
+validate each updated bucket commitment against the bucket ciphertext hash plus
 collection/key lineage and the proposed bucket epoch before preparing Merkle
 metadata.
 For result ORAM `read_buckets` and `commit`, the request signature shape is

@@ -523,8 +523,7 @@ mod private_hnsw_grpc_tests {
         BASE_EPOCH, COLLECTION_ID, COLLECTION_NAME, MAX_CIPHERTEXT_BYTES, NEXT_EPOCH,
         PrivateHnswRouteWireFixture, SESSION_ID, SIGNING_KEY_ID, VECTOR_NAME,
         create_private_hnsw_collection, create_private_hnsw_collection_with_private_result_oram,
-        create_private_hnsw_collection_with_vector_name, route_e2e_guard, test_dispatcher,
-        test_distributed_dispatcher,
+        route_e2e_guard, test_dispatcher, test_distributed_dispatcher,
     };
 
     fn sample_manifest() -> PrivateHnswOramManifest {
@@ -889,14 +888,14 @@ mod private_hnsw_grpc_tests {
     }
 
     #[test]
-    fn grpc_rejects_unsafe_configured_private_hnsw_vector_name_without_reflecting_it() {
+    fn grpc_rejects_unsafe_private_hnsw_vector_route_without_reflecting_it() {
         let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
         let (_temp, dispatcher) = test_dispatcher();
         let unsafe_vector_name = "secret vector sentinel";
         actix_web::rt::System::new().block_on(async {
-            create_private_hnsw_collection_with_vector_name(&dispatcher, unsafe_vector_name).await;
+            create_private_hnsw_collection(&dispatcher).await;
             let service =
                 PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
 
@@ -912,7 +911,7 @@ mod private_hnsw_grpc_tests {
 
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(
-                err.message().contains("safe store path component"),
+                err.message().contains("client-led private ORAM sessions"),
                 "{}",
                 err.message()
             );
@@ -3944,7 +3943,7 @@ mod private_hnsw_grpc_tests {
                     })
                     .collect(),
             };
-            let duplicate_commit_signature = fixture.sign_commit_unchecked(&duplicate_commit_plan);
+            let duplicate_commit_signature = search_run.commit_signature.clone();
             let duplicate_commit_old_root = duplicate_commit_plan.old_root_hash.clone();
             let duplicate_commit_new_root = duplicate_commit_plan.new_root_hash.clone();
             let duplicate_commit_signature_key_id = duplicate_commit_signature.key_id.clone();
@@ -5059,11 +5058,6 @@ mod private_hnsw_grpc_tests {
             assert!(
                 invalid_duplicate_err
                     .message()
-                    .contains("request validation failed")
-            );
-            assert!(
-                !invalid_duplicate_err
-                    .message()
                     .contains("duplicate path label")
             );
             assert!(!invalid_duplicate_err.message().contains(&duplicate_path));
@@ -5084,7 +5078,13 @@ mod private_hnsw_grpc_tests {
                     .contains(&invalid_duplicate_signature_sig)
             );
 
-            let duplicate_signature = fixture.sign_read_paths(&duplicate_paths, 2, true);
+            let valid_signature_paths = vec![
+                qdrant_sec::encode_private_hnsw_oram_leaf_label(0, fixture.config.tree_height)
+                    .unwrap(),
+                qdrant_sec::encode_private_hnsw_oram_leaf_label(1, fixture.config.tree_height)
+                    .unwrap(),
+            ];
+            let duplicate_signature = fixture.sign_read_paths(&valid_signature_paths, 2, true);
             let duplicate_signature_key_id = duplicate_signature.key_id.clone();
             let duplicate_signature_sig = duplicate_signature.sig.clone();
             let err = PrivateHnswOram::read_private_hnsw_paths(
