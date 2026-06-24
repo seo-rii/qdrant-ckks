@@ -3241,6 +3241,26 @@ mod tests {
     }
 
     #[test]
+    fn private_result_oram_restore_preflight_accepts_missing_temp_dir() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-missing-temp")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::remove_dir(temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR).join("temp")).unwrap();
+
+        Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn private_result_oram_restore_preflight_rejects_context_mismatch() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-restore-bad-context")
@@ -3735,6 +3755,33 @@ mod tests {
         let config = private_hnsw_config(uuid);
         let manifest = private_hnsw_manifest(uuid.to_string());
         write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+
+        Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_accepts_missing_temp_dir() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-missing-temp")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::remove_dir(
+            temp_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join("temp"),
+        )
+        .unwrap();
 
         Collection::validate_private_hnsw_oram_snapshot_restore_layout(
             "docs",
