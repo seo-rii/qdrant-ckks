@@ -1940,7 +1940,9 @@ candidate, score/distance, client-state, and token fields.
 Collection telemetry has sentinel coverage so decrypted plaintext is not
 intentionally emitted there. Audit events never include request bodies; denied
 audit errors also redact qdrant-sec envelope markers and secret-like crypto
-fields before serialization.
+fields before serialization, including private ORAM path/root/bucket/node,
+query vector/embedding/plaintext, score/distance, candidate/node score,
+candidate/node distance, token, client-state, and proof aliases.
 Prometheus request metrics may include fixed REST/gRPC endpoint labels and the
 collection label for private ORAM manifest, session, read, and commit APIs, but
 they do not include path labels, bucket ids, session ids, ciphertext bodies, or
