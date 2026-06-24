@@ -654,7 +654,10 @@ Snapshot restore preflight applies the same fail-closed tree hardening: private
 ORAM restore roots, HNSW vector store directories, and nested entries must be
 non-symlink regular files or directories, with unsupported file types and
 unexpected client-owned state aliases rejected before manifest/epoch/bucket
-parity is accepted.
+parity is accepted. Restore also rejects files outside the canonical store
+layout: manifest/signature files, encrypted bucket files in the manifest range,
+`merkle/nodes.dat`, `epochs/current.json`, and canonical numeric epoch commit
+files.
 Collection and full snapshot creation also fail closed while any active private
 HNSW ORAM or private result ORAM session exists for the collection, because a
 session may be remapping paths and writing back buckets. While a private ORAM
@@ -1189,10 +1192,11 @@ Collection snapshots include the `private_result_oram/` directory only when
 collection encryption has a configured `private-result-oram/v1` binding backed
 by `payload/private-result-oram@v1`. Snapshot creation preflights that
 configured store before writing the archive, and rejects orphan result ORAM
-stores, missing bucket files, and other layout drift fail closed. Restore
-preflight applies the same runtime-bound check before accepting the recovered
-collection. The preflight verifies the stored manifest/signature, current
-epoch/root, encrypted buckets, and Merkle metadata against runtime policy.
+stores, missing bucket files, unexpected non-canonical store files, and other
+layout drift fail closed. Restore preflight applies the same runtime-bound check
+before accepting the recovered collection. The preflight verifies the stored
+manifest/signature, current epoch/root, encrypted buckets, and Merkle metadata
+against runtime policy.
 Snapshot creation and restore still reject symlinks inside the result ORAM
 source tree without reflecting symlink targets or bucket filenames. Guard
 inspection failures are fixed messages and do not reflect collection paths,
