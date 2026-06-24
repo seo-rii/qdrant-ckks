@@ -2780,8 +2780,9 @@ where
     WriteBack: FnMut(&[PrivateHnswOramPlaintextBucket]) -> Result<(), PrivateHnswClientError>,
     NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
 {
-    search_private_hnsw_oram_plaintext_inner(
-        state,
+    let mut working_state = state.clone();
+    let result = search_private_hnsw_oram_plaintext_inner(
+        &mut working_state,
         config,
         query,
         params,
@@ -2789,7 +2790,9 @@ where
         read_path,
         writeback,
         next_remap_leaf,
-    )
+    )?;
+    *state = working_state;
+    Ok(result)
 }
 
 pub fn search_private_hnsw_oram_plaintext_with_cache<ReadPath, WriteBack, NextLeaf>(
@@ -2807,8 +2810,9 @@ where
     WriteBack: FnMut(&[PrivateHnswOramPlaintextBucket]) -> Result<(), PrivateHnswClientError>,
     NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
 {
-    search_private_hnsw_oram_plaintext_inner(
-        state,
+    let mut working_state = state.clone();
+    let result = search_private_hnsw_oram_plaintext_inner(
+        &mut working_state,
         config,
         query,
         params,
@@ -2816,7 +2820,9 @@ where
         read_path,
         writeback,
         next_remap_leaf,
-    )
+    )?;
+    *state = working_state;
+    Ok(result)
 }
 
 fn search_private_hnsw_oram_plaintext_inner<ReadPath, WriteBack, NextLeaf>(
@@ -9621,6 +9627,7 @@ mod tests {
         let mut state =
             PrivateHnswOramClientState::with_position_map([([1; 32], 0)], config.tree_height)
                 .unwrap();
+        let original_state = state.clone();
         let bad_vector = PrivateHnswNodeBlockPlaintext {
             version: NODE_BLOCK_VERSION,
             node_id: [1; 32],
@@ -9661,6 +9668,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, PrivateHnswClientError::InvalidF32VectorLength);
+        assert_eq!(state, original_state);
     }
 
     #[test]
