@@ -869,6 +869,11 @@ fn validate_private_hnsw_oram_vector_snapshot(
         expected_distance,
         private_result_oram_path_batch_size,
     )?;
+    validate_private_oram_snapshot_store_layout(
+        store.root_path(),
+        manifest.bucket_count,
+        "private HNSW ORAM",
+    )?;
 
     let current_epoch = store.read_current_epoch()?;
     if current_epoch.index_epoch != manifest.index_epoch
@@ -881,14 +886,6 @@ fn validate_private_hnsw_oram_vector_snapshot(
 
     let expected_bucket_ciphertext_bytes =
         private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest)?;
-    validate_private_oram_snapshot_bucket_dir_matches_manifest(
-        &collection_dir
-            .join(PRIVATE_HNSW_ORAM_DIR)
-            .join(vector_name)
-            .join("buckets"),
-        manifest.bucket_count,
-        "private HNSW ORAM",
-    )?;
     let mut bucket_commitments = Vec::new();
     for bucket_id in 0..manifest.bucket_count {
         let bucket = store.read_bucket(
@@ -934,6 +931,11 @@ fn validate_private_result_oram_snapshot(
     let store = PrivateResultOramStore::new(collection_dir);
     let (manifest, signature) = store.read_manifest()?;
     validate_private_result_oram_restore_manifest(&manifest, &signature, stable_crypto_id, params)?;
+    validate_private_oram_snapshot_store_layout(
+        store.root_path(),
+        manifest.bucket_count,
+        "private result ORAM",
+    )?;
 
     let current_epoch = store.read_current_epoch()?;
     if current_epoch.index_epoch != manifest.index_epoch
@@ -947,11 +949,6 @@ fn validate_private_result_oram_snapshot(
     let max_ciphertext_bytes = private_result_restore_max_bucket_ciphertext_bytes(&manifest)?;
     let expected_ciphertext_bytes =
         private_result_restore_expected_bucket_ciphertext_bytes(&manifest)?;
-    validate_private_oram_snapshot_bucket_dir_matches_manifest(
-        &collection_dir.join(PRIVATE_RESULT_ORAM_DIR).join("buckets"),
-        manifest.bucket_count,
-        "private result ORAM",
-    )?;
     let mut bucket_commitments = Vec::new();
     for bucket_id in 0..manifest.bucket_count {
         let bucket = store.read_bucket(
@@ -985,6 +982,114 @@ fn validate_private_result_oram_snapshot(
         &manifest.root_hash,
         manifest.bucket_count,
     )?;
+
+    Ok(())
+}
+
+fn validate_private_oram_snapshot_store_layout(
+    store_root: &Path,
+    bucket_count: u64,
+    label: &str,
+) -> CollectionResult<()> {
+    validate_private_oram_snapshot_store_root_entries(store_root, label)?;
+    validate_private_oram_snapshot_merkle_dir(store_root, label)?;
+    validate_private_oram_snapshot_epochs_dir(store_root, label)?;
+    validate_private_oram_snapshot_bucket_dir_matches_manifest(
+        &store_root.join("buckets"),
+        bucket_count,
+        label,
+    )
+}
+
+fn validate_private_oram_snapshot_store_root_entries(
+    store_root: &Path,
+    label: &str,
+) -> CollectionResult<()> {
+    let entries = std::fs::read_dir(store_root).map_err(|_| {
+        CollectionError::bad_request(format!("{label} snapshot store cannot be read"))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|_| {
+            CollectionError::bad_request(format!("{label} snapshot store cannot be read"))
+        })?;
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            return Err(private_oram_snapshot_unexpected_store_file_error(label));
+        };
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| {
+            CollectionError::bad_request(format!("{label} snapshot store cannot be inspected"))
+        })?;
+        let file_type = metadata.file_type();
+        match file_name {
+            "manifest.json" | "manifest.sig" if file_type.is_file() => {}
+            "buckets" | "epochs" | "merkle" | "temp" if file_type.is_dir() => {}
+            _ => return Err(private_oram_snapshot_unexpected_store_file_error(label)),
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_private_oram_snapshot_merkle_dir(
+    store_root: &Path,
+    label: &str,
+) -> CollectionResult<()> {
+    let merkle_dir = store_root.join("merkle");
+    let entries = std::fs::read_dir(&merkle_dir).map_err(|_| {
+        CollectionError::bad_request(format!("{label} snapshot Merkle store cannot be read"))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|_| {
+            CollectionError::bad_request(format!("{label} snapshot Merkle store cannot be read"))
+        })?;
+        let file_name = entry.file_name();
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| {
+            CollectionError::bad_request(format!(
+                "{label} snapshot Merkle store cannot be inspected"
+            ))
+        })?;
+        if file_name.to_str() != Some("nodes.dat") || !metadata.file_type().is_file() {
+            return Err(private_oram_snapshot_unexpected_store_file_error(label));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_private_oram_snapshot_epochs_dir(
+    store_root: &Path,
+    label: &str,
+) -> CollectionResult<()> {
+    let epochs_dir = store_root.join("epochs");
+    let entries = std::fs::read_dir(&epochs_dir).map_err(|_| {
+        CollectionError::bad_request(format!("{label} snapshot epoch store cannot be read"))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|_| {
+            CollectionError::bad_request(format!("{label} snapshot epoch store cannot be read"))
+        })?;
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            return Err(private_oram_snapshot_unexpected_store_file_error(label));
+        };
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| {
+            CollectionError::bad_request(format!(
+                "{label} snapshot epoch store cannot be inspected"
+            ))
+        })?;
+        if !metadata.file_type().is_file() {
+            return Err(private_oram_snapshot_unexpected_store_file_error(label));
+        }
+        if file_name == "current.json" {
+            continue;
+        }
+        let Some(epoch) = private_oram_snapshot_commit_file_epoch(file_name) else {
+            return Err(private_oram_snapshot_unexpected_store_file_error(label));
+        };
+        if file_name != format!("{epoch:08}.commit") {
+            return Err(private_oram_snapshot_unexpected_store_file_error(label));
+        }
+    }
 
     Ok(())
 }
@@ -1032,12 +1137,26 @@ fn validate_private_oram_snapshot_bucket_dir_matches_manifest(
     Ok(())
 }
 
+fn private_oram_snapshot_unexpected_store_file_error(label: &str) -> CollectionError {
+    CollectionError::bad_request(format!(
+        "{label} snapshot store contains an unexpected file"
+    ))
+}
+
 fn private_oram_snapshot_bucket_file_id(file_name: &str) -> Option<u64> {
     let bucket_id = file_name.strip_suffix(".bucket")?;
     if bucket_id.is_empty() || !bucket_id.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     bucket_id.parse().ok()
+}
+
+fn private_oram_snapshot_commit_file_epoch(file_name: &str) -> Option<u64> {
+    let epoch = file_name.strip_suffix(".commit")?;
+    if epoch.is_empty() || !epoch.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    epoch.parse().ok()
 }
 
 fn private_result_oram_configured(params: &CollectionParams) -> CollectionResult<bool> {
@@ -2736,6 +2855,55 @@ mod tests {
         assert!(!err.contains("00000003.bucket"));
         assert!(!err.contains("sentinel"));
         assert!(!err.contains(&manifest.root_hash), "{err}");
+    }
+
+    fn assert_private_result_oram_restore_preflight_rejects_extra_layout_file(relative_path: &str) {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-extra-layout")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join(relative_path),
+            b"extra result layout sentinel",
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+        let file_name = Path::new(relative_path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
+
+        assert!(err.contains("unexpected file"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains(file_name.as_ref()));
+        assert!(!err.contains("sentinel"));
+        assert!(!err.contains(&manifest.root_hash), "{err}");
+    }
+
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_extra_layout_files_without_path_leak() {
+        for relative_path in [
+            "unexpected-layout.bin",
+            "merkle/extra.nodes",
+            "epochs/latest.json",
+        ] {
+            assert_private_result_oram_restore_preflight_rejects_extra_layout_file(relative_path);
+        }
     }
 
     #[test]
@@ -4513,6 +4681,56 @@ mod tests {
         assert!(!err.contains("00000003.bucket"));
         assert!(!err.contains("sentinel"));
         assert!(!err.contains(&manifest.root_hash), "{err}");
+    }
+
+    fn assert_private_hnsw_oram_restore_preflight_rejects_extra_layout_file(relative_path: &str) {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-extra-layout")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join(relative_path),
+            b"extra HNSW layout sentinel",
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+        let file_name = Path::new(relative_path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
+
+        assert!(err.contains("unexpected file"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains(file_name.as_ref()));
+        assert!(!err.contains("sentinel"));
+        assert!(!err.contains(&manifest.root_hash), "{err}");
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_extra_layout_files_without_path_leak() {
+        for relative_path in [
+            "unexpected-layout.bin",
+            "merkle/extra.nodes",
+            "epochs/latest.json",
+        ] {
+            assert_private_hnsw_oram_restore_preflight_rejects_extra_layout_file(relative_path);
+        }
     }
 
     #[test]
