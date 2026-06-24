@@ -881,6 +881,14 @@ fn validate_private_hnsw_oram_vector_snapshot(
 
     let expected_bucket_ciphertext_bytes =
         private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest)?;
+    validate_private_oram_snapshot_bucket_dir_matches_manifest(
+        &collection_dir
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join(vector_name)
+            .join("buckets"),
+        manifest.bucket_count,
+        "private HNSW ORAM",
+    )?;
     let mut bucket_commitments = Vec::new();
     for bucket_id in 0..manifest.bucket_count {
         let bucket = store.read_bucket(
@@ -939,6 +947,11 @@ fn validate_private_result_oram_snapshot(
     let max_ciphertext_bytes = private_result_restore_max_bucket_ciphertext_bytes(&manifest)?;
     let expected_ciphertext_bytes =
         private_result_restore_expected_bucket_ciphertext_bytes(&manifest)?;
+    validate_private_oram_snapshot_bucket_dir_matches_manifest(
+        &collection_dir.join(PRIVATE_RESULT_ORAM_DIR).join("buckets"),
+        manifest.bucket_count,
+        "private result ORAM",
+    )?;
     let mut bucket_commitments = Vec::new();
     for bucket_id in 0..manifest.bucket_count {
         let bucket = store.read_bucket(
@@ -974,6 +987,57 @@ fn validate_private_result_oram_snapshot(
     )?;
 
     Ok(())
+}
+
+fn validate_private_oram_snapshot_bucket_dir_matches_manifest(
+    buckets_dir: &Path,
+    bucket_count: u64,
+    label: &str,
+) -> CollectionResult<()> {
+    let entries = std::fs::read_dir(buckets_dir).map_err(|_| {
+        CollectionError::bad_request(format!("{label} snapshot bucket store cannot be read"))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|_| {
+            CollectionError::bad_request(format!("{label} snapshot bucket store cannot be read"))
+        })?;
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| {
+            CollectionError::bad_request(format!(
+                "{label} snapshot bucket store cannot be inspected"
+            ))
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+            return Err(CollectionError::bad_request(format!(
+                "{label} snapshot bucket store contains an unexpected file",
+            )));
+        }
+
+        let file_name = entry.file_name().into_string().map_err(|_| {
+            CollectionError::bad_request(format!(
+                "{label} snapshot bucket store contains an unexpected file",
+            ))
+        })?;
+        let Some(bucket_id) = private_oram_snapshot_bucket_file_id(&file_name) else {
+            return Err(CollectionError::bad_request(format!(
+                "{label} snapshot bucket store contains an unexpected file",
+            )));
+        };
+        if bucket_id >= bucket_count || file_name != format!("{bucket_id:08}.bucket") {
+            return Err(CollectionError::bad_request(format!(
+                "{label} snapshot bucket store contains an unexpected file",
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn private_oram_snapshot_bucket_file_id(file_name: &str) -> Option<u64> {
+    let bucket_id = file_name.strip_suffix(".bucket")?;
+    if bucket_id.is_empty() || !bucket_id.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    bucket_id.parse().ok()
 }
 
 fn private_result_oram_configured(params: &CollectionParams) -> CollectionResult<bool> {
@@ -2638,6 +2702,43 @@ mod tests {
     }
 
     #[test]
+    fn private_result_oram_restore_preflight_rejects_extra_bucket_file_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-extra-bucket")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("buckets")
+                .join("00000003.bucket"),
+            b"extra result bucket sentinel",
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("unexpected file"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("buckets"));
+        assert!(!err.contains("00000003.bucket"));
+        assert!(!err.contains("sentinel"));
+        assert!(!err.contains(&manifest.root_hash), "{err}");
+    }
+
+    #[test]
     fn private_result_oram_restore_preflight_rejects_non_empty_temp_without_path_leak() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-restore-non-empty-temp")
@@ -2803,7 +2904,7 @@ mod tests {
         .unwrap_err();
         let rendered = err.to_string();
 
-        assert!(rendered.contains("non-symlink regular file"));
+        assert!(rendered.contains("contains a symlink"));
         assert!(!rendered.contains("outside-result.bucket"));
         assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
         assert!(!rendered.contains("00000000.bucket"));
@@ -3778,7 +3879,7 @@ mod tests {
         .unwrap_err();
         let rendered = err.to_string();
 
-        assert!(rendered.contains("non-symlink regular file"));
+        assert!(rendered.contains("contains a symlink"));
         assert!(!rendered.contains("outside.bucket"));
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!rendered.contains("00000000.bucket"));
@@ -4014,8 +4115,9 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(err.to_string().contains("non-symlink directory"));
+        assert!(err.to_string().contains("contains a symlink"));
         assert!(!err.to_string().contains("outside-private-hnsw-vector"));
+        assert!(!err.to_string().contains(PRIVATE_HNSW_ORAM_DIR));
     }
 
     #[test]
@@ -4373,6 +4475,44 @@ mod tests {
         assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_extra_bucket_file_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-extra-bucket")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join("buckets")
+                .join("00000003.bucket"),
+            b"extra HNSW bucket sentinel",
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("unexpected file"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains("buckets"));
+        assert!(!err.contains("00000003.bucket"));
+        assert!(!err.contains("sentinel"));
+        assert!(!err.contains(&manifest.root_hash), "{err}");
     }
 
     #[test]
