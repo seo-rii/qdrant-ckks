@@ -657,7 +657,9 @@ unexpected client-owned state aliases rejected before manifest/epoch/bucket
 parity is accepted. Restore also rejects files outside the canonical store
 layout: manifest/signature files, encrypted bucket files in the manifest range,
 `merkle/nodes.dat`, `epochs/current.json`, and canonical numeric epoch commit
-files.
+files. Epoch commit files must parse as bounded JSON epoch/root records, carry a
+canonical 32-byte base64url root hash, and match the epoch encoded in the
+filename.
 Collection and full snapshot creation also fail closed while any active private
 HNSW ORAM or private result ORAM session exists for the collection, because a
 session may be remapping paths and writing back buckets. While a private ORAM
