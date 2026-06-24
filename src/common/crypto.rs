@@ -2299,6 +2299,9 @@ fn sanitize_collection_crypto_validation_error(err: impl std::fmt::Display) -> S
         "private result ORAM supports one configured binding in v1".to_string()
     } else if rendered.contains("private_hnsw_oram_single_vector_selector") {
         "private HNSW ORAM supports exactly one vector per rule in v1".to_string()
+    } else if rendered.contains("private_hnsw_oram_safe_vector_store_name") {
+        "private HNSW ORAM vector names must be safe non-client-state store path components"
+            .to_string()
     } else if rendered.contains("private-result-oram/v1")
         && rendered.contains("unsupported_vector_encryption_binding")
     {
@@ -21482,6 +21485,17 @@ mod tests {
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("safe store path component")
                     && !description.contains(unsafe_vector_name)),
+            "unexpected error: {err:?}",
+        );
+
+        let err =
+            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+                .expect_err("private HNSW ORAM schema validation must redact unsafe vector names");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("safe non-client-state store path components")
+                    && !description.contains(unsafe_vector_name)
+                    && !description.contains("embedding_private_hnsw")),
             "unexpected error: {err:?}",
         );
 
