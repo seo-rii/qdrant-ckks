@@ -97,7 +97,7 @@ pub enum PrivateHnswClientError {
     UnsupportedBucketCiphertextVersion(u8),
     #[error("private HNSW bucket ciphertext authentication failed")]
     BucketOpenFailed,
-    #[error("private HNSW ORAM tree_height must be less than 63 for Path ORAM path decoding")]
+    #[error("private HNSW ORAM tree_height must be between 1 and 62 for Path ORAM path decoding")]
     InvalidTreeHeight,
     #[error("private HNSW ORAM leaf label is outside ORAM tree range")]
     LeafOutOfRange,
@@ -4769,6 +4769,11 @@ mod tests {
 
     #[test]
     fn path_oram_helpers_reject_invalid_tree_and_leaf_labels() {
+        assert!(
+            PrivateHnswClientError::InvalidTreeHeight
+                .to_string()
+                .contains("between 1 and 62")
+        );
         assert_eq!(
             private_hnsw_oram_leaf_count(0),
             Err(PrivateHnswClientError::InvalidTreeHeight)
