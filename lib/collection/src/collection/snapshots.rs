@@ -698,6 +698,10 @@ fn validate_private_oram_snapshot_source_tree(
                 )));
             }
             validate_private_oram_snapshot_source_tree(&entry.path(), label, dir_name, depth + 1)?;
+        } else if !metadata.file_type().is_file() {
+            return Err(CollectionError::service_error(format!(
+                "{label} snapshot source contains an unsupported file type",
+            )));
         }
     }
     Ok(())
@@ -2372,6 +2376,40 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn private_hnsw_oram_snapshot_source_dir_rejects_fifo_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-snapshot-source-fifo")
+            .tempdir()
+            .unwrap();
+        let buckets_dir = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("buckets");
+        fs::create_dir_all(&buckets_dir).unwrap();
+        nix::unistd::mkfifo(
+            &buckets_dir.join("fifo-sentinel"),
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(
+            rendered
+                .contains("private HNSW ORAM snapshot source contains an unsupported file type")
+        );
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("text"));
+        assert!(!rendered.contains("buckets"));
+        assert!(!rendered.contains("fifo-sentinel"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn private_result_oram_snapshot_source_dir_rejects_symlink_without_target_leak() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-snapshot-source-symlink")
@@ -2421,6 +2459,38 @@ mod tests {
         assert!(!rendered.contains("outside-result-bucket"));
         assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
         assert!(!rendered.contains("00000000.bucket"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_result_oram_snapshot_source_dir_rejects_fifo_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-snapshot-source-fifo")
+            .tempdir()
+            .unwrap();
+        let buckets_dir = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("buckets");
+        fs::create_dir_all(&buckets_dir).unwrap();
+        nix::unistd::mkfifo(
+            &buckets_dir.join("fifo-sentinel"),
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+
+        assert!(
+            rendered
+                .contains("private result ORAM snapshot source contains an unsupported file type")
+        );
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!rendered.contains("buckets"));
+        assert!(!rendered.contains("fifo-sentinel"));
     }
 
     #[test]
