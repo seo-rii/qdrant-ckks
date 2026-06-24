@@ -2630,6 +2630,50 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_snapshot_source_dir_accepts_valid_epoch_files() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-source-valid-epoch")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+
+        let hnsw_manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &hnsw_manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join("epochs")
+                .join("00000042.commit"),
+            format!(
+                r#"{{"index_epoch":{},"root_hash":"{}"}}"#,
+                hnsw_manifest.index_epoch, hnsw_manifest.root_hash
+            ),
+        )
+        .unwrap();
+        private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap();
+
+        fs::remove_dir_all(temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR)).unwrap();
+
+        let result_manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &result_manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("epochs")
+                .join("00000042.commit"),
+            format!(
+                r#"{{"index_epoch":{},"root_hash":"{}"}}"#,
+                result_manifest.index_epoch, result_manifest.root_hash
+            ),
+        )
+        .unwrap();
+        private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap();
+    }
+
+    #[test]
     fn private_oram_snapshot_source_dir_sanitizes_inspection_errors() {
         let collection_path = std::path::Path::new("private-oram-source-inspect\0sentinel");
 
