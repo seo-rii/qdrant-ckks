@@ -1274,6 +1274,65 @@ mod tests {
     }
 
     #[test]
+    fn signature_known_answer_vectors_are_stable() {
+        let key_pair = deterministic_key_pair();
+        let manifest = fixture_manifest();
+        assert_eq!(
+            sign_b64(&key_pair, &checked_manifest_signature_message(&manifest)),
+            "L9Q5eSm8eDGxINlvhFUYSsBiRrhqkc0eEcqbyqv9rnsAuqYCEv9k4ZWUL0RiWi-ft49oq-JBu9yX_xrtkXG_Bw"
+        );
+
+        let buckets = [
+            PrivateHnswOramCommitBucketRef {
+                bucket_id: 9,
+                ciphertext_sha256: &BASE64URL_NOPAD.encode(&[9; 32]),
+            },
+            PrivateHnswOramCommitBucketRef {
+                bucket_id: 27,
+                ciphertext_sha256: &BASE64URL_NOPAD.encode(&[27; 32]),
+            },
+        ];
+        let commit_input = PrivateHnswOramCommitSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            new_root_hash: &BASE64URL_NOPAD.encode(&[43; 32]),
+            updated_buckets: &buckets,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+        assert_eq!(
+            sign_b64(&key_pair, &checked_commit_signature_message(commit_input)),
+            "wRomyqNMlHx22E4hNCitBRnqk06QhZ2Y_SwWnCrKhteedbtrxIslkFfUTiPWgl03hfFiKWJbzhi8jZVVb9u_Ag"
+        );
+
+        let paths = ["AAAAAAAAAAA", "AAAAAAAAAAE"];
+        let read_input = PrivateHnswOramReadPathsSignatureInput {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            paths: &paths,
+            requested_paths: 2,
+            dummy_paths_included: true,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+        };
+        assert_eq!(
+            sign_b64(&key_pair, &checked_read_paths_signature_message(read_input)),
+            "xoxnYq-yulLq8ufkyv_wLANeEpsC2lYdbwWPr8KvjRgPc-3st2HrbKDwE_wQZTPiByEp_W5F3lVS84TWgbVcCw"
+        );
+    }
+
+    #[test]
     fn signature_message_builders_reject_client_state_vector_aliases() {
         let mut manifest = fixture_manifest();
         manifest.vector_name = "client.state".to_string();

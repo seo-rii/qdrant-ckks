@@ -439,6 +439,7 @@
 - runtime `signature_public_keys` registry는 동일 Ed25519 public key를 여러 key id alias로 등록하는 설정을 거부해 private HNSW v1 manifest의 `owner_signing_key_id` authorization이 verifier alias로 재바인딩되지 않도록 한다. 같은 registry validator를 쓰는 private result ORAM과 client envelope provider도 동일한 key-id uniqueness invariant를 공유한다.
 - REST/gRPC private result ORAM manifest upload/read, bucket upload, session open은 runtime ORAM tree policy drift도 fail closed 하며 drifted option name이나 submitted bucket ciphertext를 반사하지 않는다.
 - SDK manifest/read_paths/commit signing helpers는 malformed manifest, path-count mismatch, malformed path label/root/hash, non-advancing commit epoch, empty commit을 canonical message construction 전에 거부한다.
+- `qdrant-sec` crypto tests는 private HNSW manifest/read_paths/commit과 private result manifest/read_buckets/commit의 canonical message SHA-256 digest 및 deterministic Ed25519 known-answer signature를 고정한다.
 - REST/gRPC manifest upload store layout 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC manifest read corrupt store 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC `read_paths`와 `commit` client signature key id는 registry lookup 전에 shape validation을 통과해야 하며 invalid key id 오류는 submitted key id sentinel을 반사하지 않는다.

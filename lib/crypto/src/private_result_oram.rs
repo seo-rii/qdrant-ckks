@@ -5885,6 +5885,67 @@ mod tests {
     }
 
     #[test]
+    fn signature_known_answer_vectors_are_stable() {
+        let key_pair = deterministic_key_pair();
+        assert_eq!(
+            sign_b64(
+                &key_pair,
+                &checked_manifest_signature_message(&fixture_manifest())
+            ),
+            "GKetv5HZkKN_7nAWL13DeBewxPe58jh9FOqAU0zawMUpY2QtJQ7HEVdBAm93jK3VzacU1EHFJ2msAzZMlBaDDQ"
+        );
+
+        let buckets = [
+            PrivateResultOramCommitBucketRef {
+                bucket_id: 9,
+                ciphertext_sha256: &BASE64URL_NOPAD.encode(&[9; 32]),
+            },
+            PrivateResultOramCommitBucketRef {
+                bucket_id: 27,
+                ciphertext_sha256: &BASE64URL_NOPAD.encode(&[27; 32]),
+            },
+        ];
+        let commit_input = PrivateResultOramCommitSignatureInput {
+            collection_id: "collection-uuid-1",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            new_root_hash: &BASE64URL_NOPAD.encode(&[43; 32]),
+            updated_buckets: &buckets,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-result-signing-v1",
+        };
+        assert_eq!(
+            sign_b64(&key_pair, &checked_commit_signature_message(commit_input)),
+            "6obLb5HsEc1T-PpKlm3_yQJATe-dKP7I-wQ0UcaVBTuJz_IPbWyy6VoLeZ87pbZRUonloDrDsIByfFj8YD7fBQ"
+        );
+
+        let bucket_ids = [0, 1, 3, 0, 1, 4];
+        let read_input = PrivateResultOramReadBucketsSignatureInput {
+            collection_id: "collection-uuid-1",
+            key_id: "tenant-a/payload-private-rk",
+            rk_id: "tenant-a/payload-private-rk",
+            rk_epoch: 7,
+            index_epoch: 42,
+            root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            bucket_count: 7,
+            bucket_ids: &bucket_ids,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-result-signing-v1",
+        };
+        assert_eq!(
+            sign_b64(
+                &key_pair,
+                &checked_read_buckets_signature_message(read_input)
+            ),
+            "ddffysc8cqOCF7Lp2gVTLIBrVPlEy9xBK1vCOby4mUNoONW5Roa7fgJ_rm8es8XvAYRP224MCZLvWBZlkNQXAA"
+        );
+    }
+
+    #[test]
     fn signature_message_builders_reject_invalid_context() {
         let mut manifest = fixture_manifest();
         manifest.collection_id = "collection id sentinel".to_string();
