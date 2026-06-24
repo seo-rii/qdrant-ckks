@@ -2946,8 +2946,9 @@ where
     WriteBack: FnMut(&[PrivateHnswOramBucket]) -> Result<(), PrivateHnswClientError>,
     NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
 {
-    search_private_hnsw_oram_plaintext(
-        state,
+    let mut working_state = state.clone();
+    let result = search_private_hnsw_oram_plaintext(
+        &mut working_state,
         config,
         query,
         params,
@@ -2975,7 +2976,9 @@ where
             writeback(&encrypted_buckets)
         },
         next_remap_leaf,
-    )
+    )?;
+    *state = working_state;
+    Ok(result)
 }
 
 pub fn search_private_hnsw_oram_encrypted_with_cache<ReadPath, WriteBack, NextLeaf>(
@@ -2996,8 +2999,9 @@ where
     WriteBack: FnMut(&[PrivateHnswOramBucket]) -> Result<(), PrivateHnswClientError>,
     NextLeaf: FnMut() -> Result<u64, PrivateHnswClientError>,
 {
-    search_private_hnsw_oram_plaintext_with_cache(
-        state,
+    let mut working_state = state.clone();
+    let result = search_private_hnsw_oram_plaintext_with_cache(
+        &mut working_state,
         config,
         query,
         params,
@@ -3026,7 +3030,9 @@ where
             writeback(&encrypted_buckets)
         },
         next_remap_leaf,
-    )
+    )?;
+    *state = working_state;
+    Ok(result)
 }
 
 pub fn search_private_hnsw_oram_encrypted_verified<ReadPath, WriteBack, NextLeaf>(
@@ -3054,8 +3060,9 @@ where
     }
     validate_verified_hnsw_search_context(config, expected_root_hash, expected_bucket_count)?;
 
-    search_private_hnsw_oram_plaintext(
-        state,
+    let mut working_state = state.clone();
+    let result = search_private_hnsw_oram_plaintext(
+        &mut working_state,
         config,
         query,
         params,
@@ -3094,7 +3101,9 @@ where
             writeback(&encrypted_buckets)
         },
         next_remap_leaf,
-    )
+    )?;
+    *state = working_state;
+    Ok(result)
 }
 
 pub fn search_private_hnsw_oram_encrypted_verified_with_cache<ReadPath, WriteBack, NextLeaf>(
@@ -3123,8 +3132,9 @@ where
     }
     validate_verified_hnsw_search_context(config, expected_root_hash, expected_bucket_count)?;
 
-    search_private_hnsw_oram_plaintext_with_cache(
-        state,
+    let mut working_state = state.clone();
+    let result = search_private_hnsw_oram_plaintext_with_cache(
+        &mut working_state,
         config,
         query,
         params,
@@ -3168,7 +3178,9 @@ where
             writeback(&encrypted_buckets)
         },
         next_remap_leaf,
-    )
+    )?;
+    *state = working_state;
+    Ok(result)
 }
 
 fn validate_verified_hnsw_search_context(
@@ -9292,6 +9304,76 @@ mod tests {
             .unwrap();
         let root_hash = private_hnsw_oram_merkle_root_for_commitments(&commitments).unwrap();
         let writebacks = RefCell::new(Vec::new());
+
+        let mut partial_failure_state = state.clone();
+        let original_partial_failure_state = partial_failure_state.clone();
+        let partial_failure_reads = RefCell::new(0usize);
+        let partial_failure_writebacks = RefCell::new(0usize);
+        let mut partial_failure_remaps = [3].into_iter();
+        let err = search_private_hnsw_oram_encrypted_verified(
+            &keys,
+            base_context,
+            42,
+            &root_hash,
+            bucket_count,
+            43,
+            &mut partial_failure_state,
+            config,
+            &[1.0, 0.0],
+            PrivateHnswSearchParams {
+                entry_node_id: entry.node_id,
+                k: 1,
+                ef: 1,
+                fixed_steps: 2,
+                distance: DistanceKind::Euclid,
+                padding_node_id: Some(far.node_id),
+            },
+            |leaf| {
+                let mut reads = partial_failure_reads.borrow_mut();
+                let read_index = *reads;
+                *reads += 1;
+
+                let bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?;
+                let buckets = bucket_ids
+                    .iter()
+                    .map(|bucket_id| {
+                        encrypted_store
+                            .borrow()
+                            .get(bucket_id)
+                            .cloned()
+                            .ok_or(PrivateHnswClientError::PathBucketMismatch)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let proof = proof_for_bucket_ids(&bucket_ids, 42, root_hash.clone(), &commitments);
+                Ok(PrivateHnswEncryptedPathBatch {
+                    index_epoch: 42,
+                    root_hash: if read_index == 0 {
+                        root_hash.clone()
+                    } else {
+                        BASE64URL_NOPAD.encode(&[99; 32])
+                    },
+                    bucket_count,
+                    proof_value: serde_json::to_string(&proof).unwrap(),
+                    buckets,
+                })
+            },
+            |writeback_buckets| {
+                assert!(!writeback_buckets.is_empty());
+                *partial_failure_writebacks.borrow_mut() += 1;
+                Ok(())
+            },
+            || {
+                partial_failure_remaps
+                    .next()
+                    .ok_or(PrivateHnswClientError::LeafOutOfRange)
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, PrivateHnswClientError::MerkleProofMismatch);
+        assert_eq!(*partial_failure_reads.borrow(), 2);
+        assert_eq!(*partial_failure_writebacks.borrow(), 1);
+        assert_eq!(partial_failure_state, original_partial_failure_state);
 
         let mut bad_state = state.clone();
         let bad_writeback_called = RefCell::new(false);
