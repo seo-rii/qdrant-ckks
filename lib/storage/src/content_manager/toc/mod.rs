@@ -40,6 +40,7 @@ use segment::data_types::collection_defaults::CollectionConfigDefaults;
 use tokio::runtime::{Handle, Runtime};
 use tokio::sync::{Mutex, RwLock, Semaphore};
 
+use self::collection_meta_ops::collection_params_use_private_oram_bucket_store;
 use self::dispatcher::TocDispatcher;
 use crate::ConsensusOperations;
 use crate::content_manager::alias_mapping::AliasPersistence;
@@ -594,10 +595,13 @@ impl TableOfContent {
         log::info!("Initiating receiving shard {collection_name}:{shard_id}");
 
         // TODO: Ensure cancel safety!
-        let initiate_shard_transfer_future = self
-            .get_collection_unchecked(&collection_name)
-            .await?
-            .initiate_shard_transfer(shard_id);
+        let collection = self.get_collection_unchecked(&collection_name).await?;
+        let config = collection.config_snapshot().await;
+        reject_private_oram_receiving_shard_until_supported(
+            &collection_name,
+            collection_params_use_private_oram_bucket_store(&config.params),
+        )?;
+        let initiate_shard_transfer_future = collection.initiate_shard_transfer(shard_id);
         initiate_shard_transfer_future.await?;
         Ok(())
     }
@@ -872,8 +876,28 @@ impl TableOfContent {
     }
 }
 
+fn reject_private_oram_receiving_shard_until_supported(
+    collection_name: &str,
+    private_oram_bucket_store_collection: bool,
+) -> Result<(), StorageError> {
+    if !private_oram_bucket_store_collection {
+        return Ok(());
+    }
+
+    Err(StorageError::bad_request(format!(
+        "cannot initiate receiving shard for private ORAM collection {collection_name}: \
+         encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are not \
+         implemented for shard transfer",
+    )))
+}
+
 #[cfg(test)]
 mod tests {
+    use collection::config::{
+        CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
+        EncryptionSelector, PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING,
+    };
+
     use super::*;
 
     #[test]
@@ -913,5 +937,50 @@ mod tests {
         assert!(CLIENT_PAYLOAD_NONCE_REPLAY_ERROR.contains("nonce was already used"));
         assert!(CLIENT_PAYLOAD_NONCE_REPLAY_ERROR.contains("regenerate the client-side envelope"));
         assert!(CLIENT_PAYLOAD_NONCE_REPLAY_ERROR.contains("fresh nonce before retrying"));
+    }
+
+    #[test]
+    fn receiving_shard_rejects_private_oram_collection_until_bucket_transfer_exists() {
+        reject_private_oram_receiving_shard_until_supported("docs", false).unwrap();
+
+        let err = reject_private_oram_receiving_shard_until_supported("docs", true).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("private ORAM collection docs"));
+        assert!(rendered.contains("encrypted ORAM bucket transfer"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("private_result_oram"));
+    }
+
+    #[test]
+    fn receiving_shard_guard_uses_private_oram_binding_detection() {
+        for binding in [PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING] {
+            let params = CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a/private-rk".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "private_oram_rule".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["document.body".to_string()],
+                        },
+                        instance: "docs_private_oram_v1".to_string(),
+                        binding: Some(binding.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            };
+
+            assert!(collection_params_use_private_oram_bucket_store(&params));
+            assert!(
+                reject_private_oram_receiving_shard_until_supported(
+                    "docs",
+                    collection_params_use_private_oram_bucket_store(&params),
+                )
+                .is_err()
+            );
+        }
     }
 }

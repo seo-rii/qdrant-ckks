@@ -968,7 +968,7 @@ fn replica_changes_remove_shard_replica(replica_changes: Option<&[replica_set::C
     })
 }
 
-fn collection_params_use_private_oram_bucket_store(params: &CollectionParams) -> bool {
+pub(super) fn collection_params_use_private_oram_bucket_store(params: &CollectionParams) -> bool {
     params.encryption.as_ref().is_some_and(|encryption| {
         encryption.rules.iter().any(|rule| {
             matches!(
