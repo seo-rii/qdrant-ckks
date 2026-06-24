@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::io::ErrorKind;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use common::fs::read_json;
 use common::storage_version::StorageVersion as _;
@@ -581,7 +581,13 @@ fn private_oram_snapshot_source_dir(
             )))
         }
         Ok(_) => {
-            validate_private_oram_snapshot_source_tree(&source_dir, label, dir_name, 0)?;
+            validate_private_oram_snapshot_source_tree(
+                &source_dir,
+                Path::new(dir_name),
+                label,
+                dir_name,
+                0,
+            )?;
             Ok(Some(source_dir))
         }
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
@@ -631,6 +637,17 @@ fn blocking_append_private_oram_snapshot_tree(
         }
 
         let archive_path = archive_dir.join(Path::new(&file_name));
+        if !metadata.file_type().is_dir() && !metadata.file_type().is_file() {
+            return Err(CollectionError::service_error(format!(
+                "{label} snapshot source contains an unsupported file type",
+            )));
+        }
+        validate_private_oram_snapshot_archive_entry_layout(
+            label,
+            dir_name,
+            &archive_path,
+            &metadata.file_type(),
+        )?;
         if metadata.file_type().is_dir() {
             if private_oram_snapshot_entry_is_temp_dir(dir_name, depth, &file_name) {
                 continue;
@@ -644,11 +661,6 @@ fn blocking_append_private_oram_snapshot_tree(
                 label,
             )?;
             continue;
-        }
-        if !metadata.file_type().is_file() {
-            return Err(CollectionError::service_error(format!(
-                "{label} snapshot source contains an unsupported file type",
-            )));
         }
         tar.blocking_append_file(&entry.path(), &archive_path)
             .map_err(|_| {
@@ -671,6 +683,7 @@ fn private_oram_label(dir_name: &str) -> &'static str {
 
 fn validate_private_oram_snapshot_source_tree(
     source_dir: &Path,
+    archive_dir: &Path,
     label: &str,
     dir_name: &str,
     depth: usize,
@@ -695,6 +708,18 @@ fn validate_private_oram_snapshot_source_tree(
                 "{label} snapshot source contains a symlink",
             )));
         }
+        if !metadata.file_type().is_dir() && !metadata.file_type().is_file() {
+            return Err(CollectionError::service_error(format!(
+                "{label} snapshot source contains an unsupported file type",
+            )));
+        }
+        let archive_path = archive_dir.join(entry.file_name());
+        validate_private_oram_snapshot_archive_entry_layout(
+            label,
+            dir_name,
+            &archive_path,
+            &metadata.file_type(),
+        )?;
         if metadata.file_type().is_dir() {
             if private_oram_snapshot_entry_is_temp_dir(dir_name, depth, &entry.file_name())
                 && private_oram_snapshot_dir_has_entries(&entry.path()).map_err(|_| {
@@ -707,14 +732,105 @@ fn validate_private_oram_snapshot_source_tree(
                     "{label} snapshot source contains incomplete private ORAM write state",
                 )));
             }
-            validate_private_oram_snapshot_source_tree(&entry.path(), label, dir_name, depth + 1)?;
-        } else if !metadata.file_type().is_file() {
-            return Err(CollectionError::service_error(format!(
-                "{label} snapshot source contains an unsupported file type",
-            )));
+            validate_private_oram_snapshot_source_tree(
+                &entry.path(),
+                &archive_path,
+                label,
+                dir_name,
+                depth + 1,
+            )?;
         }
     }
     Ok(())
+}
+
+fn validate_private_oram_snapshot_archive_entry_layout(
+    label: &str,
+    dir_name: &str,
+    archive_path: &Path,
+    file_type: &std::fs::FileType,
+) -> CollectionResult<()> {
+    let allowed =
+        private_oram_snapshot_archive_entry_matches_layout(dir_name, archive_path, file_type)
+            .unwrap_or(false);
+    if allowed {
+        return Ok(());
+    }
+
+    Err(CollectionError::service_error(format!(
+        "{label} snapshot source contains an unexpected file",
+    )))
+}
+
+fn private_oram_snapshot_archive_entry_matches_layout(
+    dir_name: &str,
+    archive_path: &Path,
+    file_type: &std::fs::FileType,
+) -> Option<bool> {
+    let relative = archive_path.strip_prefix(Path::new(dir_name)).ok()?;
+    let components = private_oram_snapshot_archive_components(relative)?;
+    match dir_name {
+        PRIVATE_RESULT_ORAM_DIR => Some(private_oram_snapshot_result_entry_matches_layout(
+            &components,
+            file_type,
+        )),
+        PRIVATE_HNSW_ORAM_DIR => Some(private_oram_snapshot_hnsw_entry_matches_layout(
+            &components,
+            file_type,
+        )),
+        _ => Some(true),
+    }
+}
+
+fn private_oram_snapshot_archive_components(path: &Path) -> Option<Vec<&str>> {
+    path.components()
+        .map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect()
+}
+
+fn private_oram_snapshot_result_entry_matches_layout(
+    components: &[&str],
+    file_type: &std::fs::FileType,
+) -> bool {
+    match components {
+        ["manifest.json"] | ["manifest.sig"] => file_type.is_file(),
+        ["buckets"] | ["epochs"] | ["merkle"] | ["temp"] => file_type.is_dir(),
+        ["buckets", file_name] => {
+            file_type.is_file() && private_oram_snapshot_bucket_file_is_canonical(file_name)
+        }
+        ["epochs", "current.json"] => file_type.is_file(),
+        ["epochs", file_name] => {
+            file_type.is_file() && private_oram_snapshot_commit_file_is_canonical(file_name)
+        }
+        ["merkle", "nodes.dat"] => file_type.is_file(),
+        _ => false,
+    }
+}
+
+fn private_oram_snapshot_hnsw_entry_matches_layout(
+    components: &[&str],
+    file_type: &std::fs::FileType,
+) -> bool {
+    match components {
+        [_vector_name] => file_type.is_dir(),
+        [_vector_name, "manifest.json"] | [_vector_name, "manifest.sig"] => file_type.is_file(),
+        [_vector_name, "buckets"]
+        | [_vector_name, "epochs"]
+        | [_vector_name, "merkle"]
+        | [_vector_name, "temp"] => file_type.is_dir(),
+        [_vector_name, "buckets", file_name] => {
+            file_type.is_file() && private_oram_snapshot_bucket_file_is_canonical(file_name)
+        }
+        [_vector_name, "epochs", "current.json"] => file_type.is_file(),
+        [_vector_name, "epochs", file_name] => {
+            file_type.is_file() && private_oram_snapshot_commit_file_is_canonical(file_name)
+        }
+        [_vector_name, "merkle", "nodes.dat"] => file_type.is_file(),
+        _ => false,
+    }
 }
 
 fn private_oram_snapshot_source_entry_is_client_owned_state(name: &std::ffi::OsStr) -> bool {
@@ -1190,12 +1306,22 @@ fn private_oram_snapshot_bucket_file_id(file_name: &str) -> Option<u64> {
     bucket_id.parse().ok()
 }
 
+fn private_oram_snapshot_bucket_file_is_canonical(file_name: &str) -> bool {
+    private_oram_snapshot_bucket_file_id(file_name)
+        .is_some_and(|bucket_id| file_name == format!("{bucket_id:08}.bucket"))
+}
+
 fn private_oram_snapshot_commit_file_epoch(file_name: &str) -> Option<u64> {
     let epoch = file_name.strip_suffix(".commit")?;
     if epoch.is_empty() || !epoch.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     epoch.parse().ok()
+}
+
+fn private_oram_snapshot_commit_file_is_canonical(file_name: &str) -> bool {
+    private_oram_snapshot_commit_file_epoch(file_name)
+        .is_some_and(|epoch| file_name == format!("{epoch:08}.commit"))
 }
 
 fn private_oram_snapshot_root_hash_is_canonical(root_hash: &str) -> bool {
@@ -2306,6 +2432,50 @@ mod tests {
         assert!(rendered.contains("private HNSW ORAM snapshot source"));
         assert!(rendered.contains("non-symlink directory"));
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn private_oram_snapshot_source_dir_rejects_unexpected_layout_file_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-source-extra-layout")
+            .tempdir()
+            .unwrap();
+
+        let hnsw_extra = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("epochs")
+            .join("latest.json");
+        fs::create_dir_all(hnsw_extra.parent().unwrap()).unwrap();
+        fs::write(&hnsw_extra, b"private HNSW source layout sentinel").unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("unexpected file"), "{rendered}");
+        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!rendered.contains("latest.json"));
+        assert!(!rendered.contains("sentinel"));
+        assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
+
+        fs::remove_dir_all(temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR)).unwrap();
+        let result_extra = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("epochs")
+            .join("latest.json");
+        fs::create_dir_all(result_extra.parent().unwrap()).unwrap();
+        fs::write(&result_extra, b"private result source layout sentinel").unwrap();
+
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("unexpected file"), "{rendered}");
+        assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!rendered.contains("latest.json"));
+        assert!(!rendered.contains("sentinel"));
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
     }
 
