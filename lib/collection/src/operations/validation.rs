@@ -58,6 +58,10 @@ fn describe_error(
         "private_hnsw_oram_single_vector_selector" => {
             "private HNSW ORAM supports exactly one vector per rule in v1".to_string()
         }
+        "private_hnsw_oram_safe_vector_store_name" => {
+            "private HNSW ORAM vector names must be safe non-client-state store path components"
+                .to_string()
+        }
         "unsupported_vector_encryption_binding"
             if params
                 .get("value")
@@ -363,6 +367,23 @@ mod tests {
         assert!(multi_vector_message.contains("private HNSW ORAM supports exactly one vector"));
         assert!(!multi_vector_message.contains("embedding_private_hnsw"));
         assert!(!multi_vector_message.contains("body-secret"));
+
+        let mut unsafe_store_name =
+            ValidationError::new("private_hnsw_oram_safe_vector_store_name");
+        unsafe_store_name.add_param(
+            std::borrow::Cow::from("value"),
+            &serde_json::json!([
+                {
+                    "id": "stash_private_hnsw",
+                    "selector": { "names": ["stash"] },
+                    "binding": "private-hnsw-oram/v1",
+                },
+            ]),
+        );
+        let unsafe_store_name_message = describe_error(&unsafe_store_name);
+        assert!(unsafe_store_name_message.contains("safe non-client-state store path"));
+        assert!(!unsafe_store_name_message.contains("stash_private_hnsw"));
+        assert!(!unsafe_store_name_message.contains("stash"));
 
         let mut overlap = ValidationError::new("overlapping_encryption_selector");
         overlap.add_param(

@@ -934,6 +934,10 @@ snapshot recovery. Store-originated layout failures in this CLI path are
 sanitized before reporting, so collection-local `private_hnsw_oram` paths and
 stored bucket bodies are not reflected; CLI layout failures are fixed messages
 that also avoid bucket ids and bucket commitment mismatch details.
+Private HNSW vector store names are rejected if they compact to reserved
+client-owned state aliases such as `client.state`, `position.map`, or `stash`,
+and snapshot source/restore preflight applies the same alias check before
+archiving or accepting ORAM store contents.
 CLI and REST snapshot recovery also validate stored private HNSW ORAM manifest
 and private result ORAM manifest signatures against the runtime
 `signature_public_keys` registry after the restore-layout preflight passes, so

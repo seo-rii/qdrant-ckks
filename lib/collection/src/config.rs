@@ -28,6 +28,7 @@ use crate::operations::types::{
 };
 use crate::operations::validation;
 use crate::optimizers_builder::OptimizersConfig;
+use crate::private_hnsw_oram_store::private_hnsw_oram_vector_name_is_safe_store_component;
 
 pub const COLLECTION_CONFIG_FILE: &str = "config.json";
 const PAYLOAD_FIELD_BINDING: &str = "payload-field/v1";
@@ -1791,6 +1792,57 @@ mod ckks_tests {
     }
 
     #[test]
+    fn encryption_config_rejects_private_hnsw_oram_unsafe_vector_store_names() {
+        for vector_name in [
+            "stash",
+            "client.state",
+            "position-map",
+            "tenant/private-vector-secret",
+            "private vector secret",
+        ] {
+            let params = CollectionParams {
+                vectors: VectorsConfig::Multi(BTreeMap::from([(
+                    vector_name.into(),
+                    VectorParams {
+                        size: std::num::NonZeroU64::new(2).unwrap(),
+                        distance: Distance::Cosine,
+                        hnsw_config: None,
+                        quantization_config: None,
+                        on_disk: None,
+                        datatype: None,
+                        multivector_config: None,
+                    },
+                )])),
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 3,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec![vector_name.into()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some("private-hnsw-oram/v1".to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            };
+
+            let err = params
+                .validate()
+                .expect_err("private HNSW ORAM vector store name must be safe");
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains("private_hnsw_oram_safe_vector_store_name"),
+                "{rendered}"
+            );
+        }
+    }
+
+    #[test]
     fn encryption_config_rejects_private_hnsw_oram_vector_overlap() {
         let params = CollectionParams {
             vectors: VectorsConfig::Multi(BTreeMap::from([(
@@ -2623,6 +2675,15 @@ fn validate_encryption_rules(
                 if binding == Some(PRIVATE_HNSW_ORAM_BINDING) && names.len() != 1 {
                     return Err(validator::ValidationError::new(
                         "private_hnsw_oram_single_vector_selector",
+                    ));
+                }
+                if binding == Some(PRIVATE_HNSW_ORAM_BINDING)
+                    && names
+                        .iter()
+                        .any(|name| !private_hnsw_oram_vector_name_is_safe_store_component(name))
+                {
+                    return Err(validator::ValidationError::new(
+                        "private_hnsw_oram_safe_vector_store_name",
                     ));
                 }
                 for name in names {

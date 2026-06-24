@@ -1437,19 +1437,61 @@ fn decode_base64url_32(value: &str, field: &str) -> CollectionResult<[u8; 32]> {
 }
 
 fn validate_path_component(value: &str, label: &str) -> CollectionResult<()> {
-    if value.is_empty()
-        || value.len() > 128
-        || value == "."
-        || value == ".."
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
-    {
+    if !private_hnsw_oram_vector_name_is_safe_store_component(value) {
         return Err(CollectionError::bad_request(format!(
             "private HNSW ORAM {label} is not a safe store path component",
         )));
     }
     Ok(())
+}
+
+pub(crate) fn private_hnsw_oram_vector_name_is_safe_store_component(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value != "."
+        && value != ".."
+        && !path_component_is_client_owned_oram_state_alias(value)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
+}
+
+fn path_component_is_client_owned_oram_state_alias(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    let compact_value = value.replace(['_', '-', '.'], "");
+    if compact_path_component_is_client_owned_oram_state_alias(&compact_value) {
+        return true;
+    }
+    let Some((stem, _extension)) = value.rsplit_once('.') else {
+        return false;
+    };
+    compact_path_component_is_client_owned_oram_state_alias(&stem.replace(['_', '-', '.'], ""))
+}
+
+fn compact_path_component_is_client_owned_oram_state_alias(value: &str) -> bool {
+    matches!(
+        value,
+        "clientstate"
+            | "clientstatesnapshot"
+            | "clientstatesnapshots"
+            | "encryptedclientstatesnapshot"
+            | "encryptedclientstatesnapshots"
+            | "positionmap"
+            | "positionmaps"
+            | "positionmapsnapshot"
+            | "positionmapsnapshots"
+            | "orampositionmap"
+            | "orampositionmaps"
+            | "orampositionmapsnapshot"
+            | "orampositionmapsnapshots"
+            | "tokenpositionmap"
+            | "tokenpositionmaps"
+            | "tokenpositionmapsnapshot"
+            | "tokenpositionmapsnapshots"
+            | "stash"
+            | "stashsnapshot"
+            | "stashsnapshots"
+    )
 }
 
 fn create_private_dir(path: &Path) -> CollectionResult<()> {
@@ -1767,6 +1809,16 @@ mod tests {
             "/tmp/secret-vector-sentinel",
             "tenant/secret-vector-sentinel",
             "secret vector sentinel",
+            "client_state",
+            "client-state",
+            "client.state",
+            "client_state.json",
+            "position_map",
+            "position.map",
+            "oram-position-map",
+            "token.position.map",
+            "stash",
+            "stash.snapshot",
             &"x".repeat(129),
         ] {
             let err = PrivateHnswOramStore::new("/tmp/hnsw-safe-path-test", vector_name)
