@@ -3532,8 +3532,14 @@ pub fn sign_private_hnsw_oram_read_paths(
             "dummy_paths_included",
         ));
     }
+    let mut seen_paths = BTreeSet::new();
     for path in paths {
         decode_private_hnsw_oram_leaf_label_shape(path)?;
+        if !seen_paths.insert(path.as_str()) {
+            return Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+                "paths",
+            ));
+        }
     }
     let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
     let input = PrivateHnswOramReadPathsSignatureInput {
@@ -6147,6 +6153,21 @@ mod tests {
         )
         .unwrap();
 
+        let duplicate_paths = vec![paths[0].clone(), paths[0].clone()];
+        assert_eq!(
+            sign_private_hnsw_oram_read_paths(
+                &key_pair,
+                context,
+                42,
+                &root_hash,
+                &duplicate_paths,
+                2,
+                true,
+            ),
+            Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+                "paths"
+            ))
+        );
         assert_eq!(
             sign_private_hnsw_oram_read_paths(&key_pair, context, 42, &root_hash, &paths, 2, true,),
             Err(PrivateHnswClientError::InvalidCommitSignatureContext(

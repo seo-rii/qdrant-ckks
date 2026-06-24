@@ -888,8 +888,8 @@ For `read_paths`, after the fixed-budget and session epoch/root checks, the
 server first bounds each ORAM leaf label to the canonical fixed-length
 base64url form without reflecting malformed labels, then verifies the Ed25519
 request signature before computing bucket paths. The SDK/server read-path
-signature validator also shape-checks the root hash and path labels before
-signature body parsing.
+signature validator also shape-checks the root hash, path labels, and duplicate
+path-label invariant before signature body parsing.
 For `commit`, after the bounded request-size and epoch checks, the server first
 bounds `old_root_hash` and `new_root_hash` to canonical 32-byte base64url
 strings, then verifies the Ed25519 request signature before preparing

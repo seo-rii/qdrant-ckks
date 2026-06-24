@@ -491,8 +491,12 @@ pub fn validate_private_hnsw_oram_read_paths_signature(
     {
         return Err(PrivateHnswOramError::InvalidReadPathsSignature);
     }
+    let mut seen_paths = BTreeSet::new();
     for path in input.paths {
         decode_base64url_8(path).map_err(|_| PrivateHnswOramError::InvalidReadPathsSignature)?;
+        if !seen_paths.insert(*path) {
+            return Err(PrivateHnswOramError::InvalidReadPathsSignature);
+        }
     }
     let signature_bytes = decode_base64url_64(signature)?;
     let message = try_private_hnsw_oram_read_paths_signature_message(input)?;
@@ -1611,6 +1615,25 @@ mod tests {
             validate_private_hnsw_oram_read_paths_signature(
                 malformed_path,
                 "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
+
+        let duplicate_paths = ["AAAAAAAAAAA", "AAAAAAAAAAA"];
+        let duplicate_path_input = PrivateHnswOramReadPathsSignatureInput {
+            paths: &duplicate_paths,
+            requested_paths: 2,
+            ..input
+        };
+        let duplicate_path_signature = sign_b64(
+            &key_pair,
+            &checked_read_paths_signature_message(duplicate_path_input),
+        );
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                duplicate_path_input,
+                &duplicate_path_signature,
                 verification,
             ),
             Err(PrivateHnswOramError::InvalidReadPathsSignature)
