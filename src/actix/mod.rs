@@ -90,8 +90,7 @@ pub(crate) fn redact_private_oram_access_path(path_and_query: &str) -> String {
     let (path, query) = path_and_query
         .split_once('?')
         .map_or((path_and_query, None), |(path, query)| (path, Some(query)));
-    let private_oram_path =
-        path.contains("/private-hnsw/") || path.contains("/private-result-oram");
+    let private_oram_path = path_has_private_oram_marker(path);
     let redacted_path = redact_private_oram_path(path);
 
     match (private_oram_path, query) {
@@ -450,7 +449,12 @@ fn should_sanitize_private_oram_json_validation_error(
 }
 
 fn is_private_oram_request_path(path: &str) -> bool {
-    path.contains("/private-hnsw/") || path.contains("/private-result-oram")
+    path_has_private_oram_marker(path)
+}
+
+fn path_has_private_oram_marker(path: &str) -> bool {
+    path.split('/')
+        .any(|segment| matches!(segment, "private-hnsw" | "private-result-oram"))
 }
 
 #[cfg(test)]
@@ -689,6 +693,22 @@ mod tests {
         assert_eq!(
             redact_private_oram_access_path("/collections/docs/points/scroll?offset=7"),
             "/collections/docs/points/scroll?offset=7"
+        );
+        assert_eq!(
+            redact_private_oram_access_path("/collections/docs/private-hnsw?leaf=query-sentinel"),
+            "/collections/docs/private-hnsw?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-result-oram?token=query-sentinel"
+            ),
+            "/collections/docs/private-result-oram?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/not-private-hnsw?leaf=query-sentinel"
+            ),
+            "/collections/docs/not-private-hnsw?leaf=query-sentinel"
         );
     }
 
