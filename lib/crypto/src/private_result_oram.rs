@@ -1281,6 +1281,19 @@ fn path_oram_bucket_count(tree_height: u32) -> Option<u64> {
         .and_then(|count| count.checked_sub(1))
 }
 
+fn path_oram_tree_height_from_bucket_count(bucket_count: u64) -> Option<u32> {
+    for tree_height in 1..63 {
+        let expected_bucket_count = path_oram_bucket_count(tree_height)?;
+        if expected_bucket_count == bucket_count {
+            return Some(tree_height);
+        }
+        if expected_bucket_count > bucket_count {
+            return None;
+        }
+    }
+    None
+}
+
 pub fn private_result_oram_leaf_count(tree_height: u32) -> Result<u64, PrivateResultOramError> {
     if tree_height >= 63 {
         return Err(PrivateResultOramError::InvalidFetchPlanField("tree_height"));
@@ -2290,16 +2303,7 @@ pub fn validate_private_result_oram_read_buckets_signature(
     validate_signature_fields(input.signature_alg, input.signature_key_id, verification)?;
     validate_signature_input_context(input.collection_id, input.key_id, input.rk_id)?;
     decode_base64url_32(input.root_hash, "root_hash")?;
-    if input.bucket_count == 0
-        || input.bucket_ids.is_empty()
-        || u32::try_from(input.bucket_ids.len()).is_err()
-        || input
-            .bucket_ids
-            .iter()
-            .any(|bucket_id| *bucket_id >= input.bucket_count)
-    {
-        return Err(PrivateResultOramError::InvalidReadBucketsSignature);
-    }
+    validate_private_result_oram_read_bucket_sequence_shape(input.bucket_count, input.bucket_ids)?;
     let signature_bytes = decode_base64url_64(signature)?;
     let message = try_private_result_oram_read_buckets_signature_message(input)?;
     UnparsedPublicKey::new(&ED25519, verification.public_key)
@@ -2382,15 +2386,7 @@ pub fn sign_private_result_oram_read_buckets(
 ) -> Result<PrivateResultOramSignature, PrivateResultOramError> {
     validate_read_buckets_signature_context(context)?;
     decode_base64url_32(root_hash, "root_hash")?;
-    if bucket_count == 0
-        || bucket_ids.is_empty()
-        || u32::try_from(bucket_ids.len()).is_err()
-        || bucket_ids
-            .iter()
-            .any(|bucket_id| *bucket_id >= bucket_count)
-    {
-        return Err(PrivateResultOramError::InvalidReadBucketsSignature);
-    }
+    validate_private_result_oram_read_bucket_sequence_shape(bucket_count, bucket_ids)?;
     let input = PrivateResultOramReadBucketsSignatureInput {
         collection_id: context.collection_id,
         key_id: context.key_id,
@@ -2448,6 +2444,31 @@ pub fn sign_private_result_oram_read_buckets_for_manifest(
         manifest.bucket_count,
         bucket_ids,
     )
+}
+
+fn validate_private_result_oram_read_bucket_sequence_shape(
+    bucket_count: u64,
+    bucket_ids: &[u64],
+) -> Result<(), PrivateResultOramError> {
+    let tree_height = path_oram_tree_height_from_bucket_count(bucket_count)
+        .ok_or(PrivateResultOramError::InvalidReadBucketsSignature)?;
+    let path_len = usize::try_from(tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or(PrivateResultOramError::InvalidReadBucketsSignature)?;
+    if bucket_ids.is_empty()
+        || u32::try_from(bucket_ids.len()).is_err()
+        || bucket_ids.len() % path_len != 0
+        || bucket_ids
+            .iter()
+            .any(|bucket_id| *bucket_id >= bucket_count)
+    {
+        return Err(PrivateResultOramError::InvalidReadBucketsSignature);
+    }
+    for path in bucket_ids.chunks(path_len) {
+        validate_private_result_oram_read_bucket_path_shape(path)?;
+    }
+    Ok(())
 }
 
 fn validate_private_result_oram_read_bucket_path_shape(
@@ -7353,6 +7374,31 @@ mod tests {
         validate_private_result_oram_read_buckets_signature(input, &signature.sig, verification)
             .unwrap();
 
+        assert_eq!(
+            sign_private_result_oram_read_buckets(
+                &key_pair,
+                context,
+                42,
+                &root_hash,
+                8,
+                &bucket_ids,
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+
+        let partial_path_bucket_ids = [0, 1];
+        assert_eq!(
+            sign_private_result_oram_read_buckets(
+                &key_pair,
+                context,
+                42,
+                &root_hash,
+                7,
+                &partial_path_bucket_ids,
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+
         let empty_input = PrivateResultOramReadBucketsSignatureInput {
             bucket_ids: &[],
             ..input
@@ -7375,6 +7421,58 @@ mod tests {
             validate_private_result_oram_read_buckets_signature(
                 out_of_range_input,
                 "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+
+        let non_canonical_bucket_count_input = PrivateResultOramReadBucketsSignatureInput {
+            bucket_count: 8,
+            ..input
+        };
+        let non_canonical_bucket_count_signature = sign_b64(
+            &key_pair,
+            &checked_read_buckets_signature_message(non_canonical_bucket_count_input),
+        );
+        assert_eq!(
+            validate_private_result_oram_read_buckets_signature(
+                non_canonical_bucket_count_input,
+                &non_canonical_bucket_count_signature,
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+
+        let partial_path_input = PrivateResultOramReadBucketsSignatureInput {
+            bucket_ids: &partial_path_bucket_ids,
+            ..input
+        };
+        let partial_path_signature = sign_b64(
+            &key_pair,
+            &checked_read_buckets_signature_message(partial_path_input),
+        );
+        assert_eq!(
+            validate_private_result_oram_read_buckets_signature(
+                partial_path_input,
+                &partial_path_signature,
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+
+        let malformed_path_bucket_ids = [0, 2, 3];
+        let malformed_path_input = PrivateResultOramReadBucketsSignatureInput {
+            bucket_ids: &malformed_path_bucket_ids,
+            ..input
+        };
+        let malformed_path_signature = sign_b64(
+            &key_pair,
+            &checked_read_buckets_signature_message(malformed_path_input),
+        );
+        assert_eq!(
+            validate_private_result_oram_read_buckets_signature(
+                malformed_path_input,
+                &malformed_path_signature,
                 verification,
             ),
             Err(PrivateResultOramError::InvalidReadBucketsSignature)
