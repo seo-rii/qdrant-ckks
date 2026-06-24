@@ -805,7 +805,8 @@ impl PrivateHnswSearchResult {
                 .collect::<BTreeSet<_>>()
                 .len(),
             fixed_steps: params.fixed_steps,
-            exhausted_fixed_budget: self.completed_steps == params.fixed_steps
+            exhausted_fixed_budget: params.fixed_steps > 0
+                && self.completed_steps == params.fixed_steps
                 && self.accessed_leaf_labels.len() == params.fixed_steps,
         }
     }
@@ -6851,6 +6852,25 @@ mod tests {
                 path_accesses: 1,
                 unique_leaf_labels: 1,
                 fixed_steps: 3,
+                exhausted_fixed_budget: false,
+            }
+        );
+
+        let zero_step_params = PrivateHnswSearchParams {
+            fixed_steps: 0,
+            ..params
+        };
+        let empty_result = PrivateHnswSearchResult {
+            hits: Vec::new(),
+            accessed_leaf_labels: Vec::new(),
+            completed_steps: 0,
+        };
+        assert_eq!(
+            empty_result.access_metrics(&zero_step_params),
+            PrivateHnswSearchAccessMetrics {
+                path_accesses: 0,
+                unique_leaf_labels: 0,
+                fixed_steps: 0,
                 exhausted_fixed_budget: false,
             }
         );
