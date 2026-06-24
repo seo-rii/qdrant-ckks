@@ -4356,6 +4356,159 @@ esac
                 .expect_err("private result ORAM batch update must fail closed"),
                 "cannot set payload for private result ORAM payload field",
             );
+
+            assert_private_result_write_error(
+                do_batch_update_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    vec![UpdateOperation::Upsert(UpsertOperation {
+                        upsert: PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                            points: vec![api::rest::PointStruct {
+                                id: 2.into(),
+                                vector: api::rest::VectorStruct::Single(vec![0.5, 0.6]),
+                                payload: Some(segment::types::Payload(
+                                    json!({ "body": "ordinary batch upsert secret" })
+                                        .as_object()
+                                        .unwrap()
+                                        .clone(),
+                                )),
+                            }],
+                            shard_key: None,
+                            update_filter: None,
+                            update_mode: None,
+                        }),
+                    })],
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM batch upsert operation must fail closed"),
+                "cannot upsert points for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_batch_update_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    vec![UpdateOperation::OverwritePayload(
+                        OverwritePayloadOperation {
+                            overwrite_payload: SetPayload {
+                                payload: segment::types::Payload(
+                                    json!({ "body": "ordinary batch overwrite secret" })
+                                        .as_object()
+                                        .unwrap()
+                                        .clone(),
+                                ),
+                                points: Some(vec![1.into()]),
+                                filter: None,
+                                shard_key: None,
+                                key: None,
+                            },
+                        },
+                    )],
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM batch overwrite must fail closed"),
+                "cannot overwrite payload for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_batch_update_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    vec![UpdateOperation::DeletePayload(DeletePayloadOperation {
+                        delete_payload: DeletePayload {
+                            keys: vec!["body".parse().unwrap()],
+                            points: Some(vec![1.into()]),
+                            filter: None,
+                            shard_key: None,
+                        },
+                    })],
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM batch delete_payload must fail closed"),
+                "cannot delete payload for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_batch_update_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    vec![UpdateOperation::ClearPayload(ClearPayloadOperation {
+                        clear_payload: PointsSelector::PointIdsSelector(PointIdsList {
+                            points: vec![1.into()],
+                            shard_key: None,
+                        }),
+                    })],
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM batch clear_payload must fail closed"),
+                "cannot clear payload for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_batch_update_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    vec![UpdateOperation::Delete(DeleteOperation {
+                        delete: PointsSelector::PointIdsSelector(PointIdsList {
+                            points: vec![1.into()],
+                            shard_key: None,
+                        }),
+                    })],
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM batch delete points must fail closed"),
+                "cannot delete points for private result ORAM payload field",
+            );
         });
     }
 
@@ -4972,6 +5125,110 @@ esac
                     delete_vectors: DeleteVectors {
                         points: Some(vec![1.into()]),
                         filter: None,
+                        vector: std::iter::once("embedding".to_string()).collect(),
+                        shard_key: None,
+                    },
+                })],
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
+                        && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+            ));
+
+            let err = do_batch_update_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                vec![UpdateOperation::Upsert(UpsertOperation {
+                    upsert: PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                        points: vec![api::rest::PointStruct {
+                            id: 2.into(),
+                            vector: api::rest::VectorStruct::Named(HashMap::from([(
+                                "embedding".to_string(),
+                                api::rest::Vector::Dense(vec![0.5, 0.6]),
+                            )])),
+                            payload: None,
+                        }],
+                        shard_key: None,
+                        update_filter: None,
+                        update_mode: None,
+                    }),
+                })],
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
+                        && !description.contains("CKKS vector encryption runtime")
+            ));
+
+            let err = do_batch_update_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                vec![UpdateOperation::Delete(DeleteOperation {
+                    delete: PointsSelector::FilterSelector(FilterSelector {
+                        filter: Filter::new(),
+                        shard_key: None,
+                    }),
+                })],
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
+                        && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+            ));
+
+            let err = do_batch_update_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                vec![UpdateOperation::DeleteVectors(DeleteVectorsOperation {
+                    delete_vectors: DeleteVectors {
+                        points: None,
+                        filter: Some(Filter::new()),
                         vector: std::iter::once("embedding".to_string()).collect(),
                         shard_key: None,
                     },
