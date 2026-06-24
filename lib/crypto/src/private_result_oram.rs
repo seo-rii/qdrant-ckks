@@ -4974,6 +4974,130 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_verified_token_fetch_keeps_state_when_final_reseal_fails() {
+        let keys = result_test_keys();
+        let base_context = result_bucket_base_context();
+        let config = result_client_config();
+        let bucket_count = private_result_oram_bucket_count(config.tree_height).unwrap();
+        let block = payload_block(10);
+
+        let mut plaintext_store = BTreeMap::new();
+        for bucket_id in 0..bucket_count {
+            plaintext_store.insert(
+                bucket_id,
+                empty_private_result_oram_plaintext_bucket(bucket_id, config).unwrap(),
+            );
+        }
+        let leaf_bucket_id = *private_result_oram_bucket_ids_for_leaf(2, config.tree_height)
+            .unwrap()
+            .last()
+            .unwrap();
+        plaintext_store.get_mut(&leaf_bucket_id).unwrap().blocks[0] = Some(block.clone());
+
+        let encrypted_store = plaintext_store
+            .values()
+            .map(|bucket| {
+                let encrypted = seal_private_result_oram_plaintext_bucket(
+                    &keys,
+                    base_context,
+                    42,
+                    bucket,
+                    config,
+                )
+                .unwrap();
+                (bucket.bucket_id, encrypted)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let commitments = (0..bucket_count)
+            .map(|bucket_id| {
+                encrypted_store
+                    .get(&bucket_id)
+                    .unwrap()
+                    .bucket_commitment
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        let root_hash = private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
+        let manifest = PrivateResultOramManifest {
+            oram: OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: config.bucket_size as u32,
+                block_size_bytes: config.block_size_bytes as u32,
+                tree_height: config.tree_height,
+                path_batch_size: 1,
+            },
+            bucket_count,
+            root_hash: root_hash.clone(),
+            logical_result_count: 1,
+            dummy_result_count: 0,
+            ..fixture_manifest()
+        };
+
+        let payload_fetch_tokens = [block.payload_fetch_token];
+        let token_positions = [PrivateResultOramFetchTokenPosition {
+            payload_fetch_token: block.payload_fetch_token,
+            leaf: 2,
+        }];
+        let read_plan = plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
+            &manifest,
+            &payload_fetch_tokens,
+            &token_positions,
+        )
+        .unwrap();
+        let bucket_ids = &read_plan.batches[0].bucket_ids;
+        let proof = result_proof_for_bucket_ids(bucket_ids, 42, root_hash.clone(), &commitments);
+        let encrypted_batch = PrivateResultOramEncryptedBucketBatch {
+            index_epoch: 42,
+            root_hash: root_hash.clone(),
+            bucket_count,
+            proof_value: serde_json::to_string(&proof).unwrap(),
+            buckets: bucket_ids
+                .iter()
+                .map(|bucket_id| encrypted_store.get(bucket_id).unwrap().clone())
+                .collect(),
+        };
+        let mut oversized_stash_block = payload_block(99);
+        oversized_stash_block.payload = vec![99; config.block_size_bytes];
+        let mut state = PrivateResultOramClientState::with_position_map(
+            [
+                (block.payload_fetch_token, 2),
+                (oversized_stash_block.payload_fetch_token, 0),
+            ],
+            config.tree_height,
+        )
+        .unwrap();
+        state.stash.insert(
+            oversized_stash_block.payload_fetch_token,
+            oversized_stash_block,
+        );
+        let original_state = state.clone();
+        let mut remaps = [0].into_iter();
+
+        let err = fetch_private_result_oram_tokens_encrypted_verified(
+            &keys,
+            base_context,
+            42,
+            &root_hash,
+            bucket_count,
+            43,
+            &mut state,
+            config,
+            &payload_fetch_tokens,
+            &read_plan,
+            &[encrypted_batch],
+            || {
+                remaps
+                    .next()
+                    .ok_or(PrivateResultOramError::InvalidFetchPlanField("leaf"))
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, PrivateResultOramError::PayloadBlockOversized);
+        assert_eq!(state, original_state);
+    }
+
+    #[test]
     fn encrypted_verified_token_fetch_rejects_multi_batch_single_commit_writeback() {
         let keys = result_test_keys();
         let base_context = result_bucket_base_context();
