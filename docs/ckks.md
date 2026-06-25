@@ -988,10 +988,10 @@ and explicit sibling paths, such as a `document.title` write beside protected
 `document.body`, stay on the ordinary update path.
 Ordinary raw payload reads through retrieve, scroll, search, or query also fail
 closed when `with_payload` would return a `private-result-oram/v1` payload path.
-The public gRPC `GetPoints`, `ScrollPoints`, `SearchPoints`, grouped search,
-`RecommendPoints`, grouped recommend, `DiscoverPoints`, `QueryPoints`, and
-grouped query wrappers follow the same fail-closed read guard before returning
-raw protected payload bytes.
+The public gRPC `GetPoints`, `ScrollPoints`, `SearchPoints`, batch/grouped
+search, `RecommendPoints`, batch/grouped recommend, `DiscoverPoints`, batch
+discover, `QueryPoints`, and grouped/batch query wrappers follow the same
+fail-closed read guard before returning raw protected payload bytes.
 Grouped gRPC `with_lookup` payload requests use the same guard when the lookup
 collection is bound to `private-result-oram/v1`.
 Callers may omit payloads or request redacted encrypted payload output, but raw
