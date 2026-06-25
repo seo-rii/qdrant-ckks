@@ -318,7 +318,10 @@ mod tests {
     fn cluster_telemetry_peer_error_log_redacts_crypto_material() {
         let rendered = cluster_telemetry_peer_error_for_log(
             7,
-            "remote status included $qdrant_client_aead ciphertext=qdrant-sec-telemetry-error-sentinel",
+            "remote status included $qdrant_client_aead \
+             ciphertext=qdrant-sec-telemetry-error-sentinel \
+             readPath=qdrant-sec-telemetry-read-path-sentinel \
+             readPathLabel=qdrant-sec-telemetry-read-path-label-sentinel",
         );
 
         assert!(rendered.contains("peer 7"), "{rendered}");
@@ -328,6 +331,14 @@ mod tests {
         );
         assert!(
             !rendered.contains("qdrant-sec-telemetry-error-sentinel"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-telemetry-read-path-sentinel"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-telemetry-read-path-label-sentinel"),
             "{rendered}"
         );
         assert!(!rendered.contains("$qdrant_client_aead"), "{rendered}");

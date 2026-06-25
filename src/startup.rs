@@ -77,13 +77,15 @@ mod tests {
     #[test]
     fn panic_message_and_backtrace_redact_crypto_material() {
         let (message, backtrace) = redact_panic_message_and_backtrace(
-            r#"panic while handling {"$qdrant_client_aead":{"ciphertext":"payload-sentinel"}}"#,
-            "frame with X-Amz-Security-Token: aws-token-sentinel",
+            r#"panic while handling {"$qdrant_client_aead":{"ciphertext":"payload-sentinel"}} readPath=panic-read-path-sentinel"#,
+            "frame with X-Amz-Security-Token: aws-token-sentinel readPathLabel=panic-read-path-label-sentinel",
         );
 
         assert!(message.contains("crypto material omitted"));
         assert!(backtrace.contains("crypto material omitted"));
         assert!(!message.contains("payload-sentinel"));
+        assert!(!message.contains("panic-read-path-sentinel"));
         assert!(!backtrace.contains("aws-token-sentinel"));
+        assert!(!backtrace.contains("panic-read-path-label-sentinel"));
     }
 }

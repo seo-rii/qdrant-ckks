@@ -300,11 +300,14 @@ mod tests {
     #[test]
     fn service_error_log_messages_redact_crypto_material() {
         let err = StorageError::ServiceError {
-            description:
-                "$qdrant_client_aead ciphertext=qdrant-sec-rest-error-ciphertext wrapped_key_b64=qdrant-sec-rest-error-wrapped-key"
-                    .to_string(),
+            description: "$qdrant_client_aead ciphertext=qdrant-sec-rest-error-ciphertext \
+                 wrapped_key_b64=qdrant-sec-rest-error-wrapped-key \
+                 readPath=qdrant-sec-rest-error-read-path"
+                .to_string(),
             backtrace: Some(
-                "frame signature_b64=qdrant-sec-rest-backtrace-signature Authorization=Bearer qdrant-sec-rest-backtrace-token"
+                "frame signature_b64=qdrant-sec-rest-backtrace-signature \
+                 Authorization=Bearer qdrant-sec-rest-backtrace-token \
+                 readPathLabel=qdrant-sec-rest-backtrace-read-path-label"
                     .to_string(),
             ),
         };
@@ -325,11 +328,19 @@ mod tests {
             "{message}"
         );
         assert!(
+            !message.contains("qdrant-sec-rest-error-read-path"),
+            "{message}"
+        );
+        assert!(
             !backtrace.contains("qdrant-sec-rest-backtrace-signature"),
             "{backtrace}",
         );
         assert!(
             !backtrace.contains("qdrant-sec-rest-backtrace-token"),
+            "{backtrace}",
+        );
+        assert!(
+            !backtrace.contains("qdrant-sec-rest-backtrace-read-path-label"),
             "{backtrace}",
         );
     }
