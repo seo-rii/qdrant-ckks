@@ -1157,7 +1157,7 @@ fn validate_encrypted_cluster_data_movement_parity(
 }
 
 fn reject_private_oram_cluster_transfer_until_supported(
-    collection_name: &str,
+    _collection_name: &str,
     config: &CollectionConfigInternal,
     operation: &ClusterOperations,
 ) -> Result<(), StorageError> {
@@ -1168,17 +1168,16 @@ fn reject_private_oram_cluster_transfer_until_supported(
     }
 
     Err(StorageError::BadRequest {
-        description: format!(
-            "cannot start shard transfer for private ORAM collection {collection_name}: \
-             encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are not \
-             implemented for shard transfer; use collection snapshot/restore preflight or keep \
-             the private ORAM collection on the current shard owner",
-        ),
+        description: "cannot start shard transfer for private ORAM collections: encrypted ORAM \
+                      bucket transfer and consensus-backed epoch/root ownership are not \
+                      implemented for shard transfer; use collection snapshot/restore preflight or \
+                      keep the private ORAM collection on the current shard owner"
+            .to_string(),
     })
 }
 
 fn reject_private_oram_cluster_resharding_until_supported(
-    collection_name: &str,
+    _collection_name: &str,
     config: &CollectionConfigInternal,
     operation: &ClusterOperations,
 ) -> Result<(), StorageError> {
@@ -1189,12 +1188,11 @@ fn reject_private_oram_cluster_resharding_until_supported(
     }
 
     Err(StorageError::BadRequest {
-        description: format!(
-            "cannot start resharding for private ORAM collection {collection_name}: \
-             encrypted ORAM bucket migration and consensus-backed epoch/root ownership are not \
-             implemented for resharding; use collection snapshot/restore preflight or keep the \
-             private ORAM collection on the current shard layout",
-        ),
+        description: "cannot start resharding for private ORAM collections: encrypted ORAM bucket \
+                      migration and consensus-backed epoch/root ownership are not implemented for \
+                      resharding; use collection snapshot/restore preflight or keep the private \
+                      ORAM collection on the current shard layout"
+            .to_string(),
     })
 }
 
@@ -1210,7 +1208,7 @@ fn cluster_operation_progresses_resharding(operation: &ClusterOperations) -> boo
 }
 
 fn reject_private_oram_cluster_shard_key_change_until_supported(
-    collection_name: &str,
+    _collection_name: &str,
     config: &CollectionConfigInternal,
     operation: &ClusterOperations,
 ) -> Result<(), StorageError> {
@@ -1221,11 +1219,10 @@ fn reject_private_oram_cluster_shard_key_change_until_supported(
     }
 
     Err(StorageError::BadRequest {
-        description: format!(
-            "cannot change shard keys for private ORAM collection {collection_name}: \
-             collection-local ORAM bucket migration and consensus-backed epoch/root ownership are \
-             not implemented for shard-key layout changes",
-        ),
+        description: "cannot change shard keys for private ORAM collections: collection-local \
+                      ORAM bucket migration and consensus-backed epoch/root ownership are not \
+                      implemented for shard-key layout changes"
+            .to_string(),
     })
 }
 
@@ -1237,7 +1234,7 @@ fn cluster_operation_changes_shard_keys(operation: &ClusterOperations) -> bool {
 }
 
 fn reject_private_oram_cluster_replica_remove_until_supported(
-    collection_name: &str,
+    _collection_name: &str,
     config: &CollectionConfigInternal,
     operation: &ClusterOperations,
 ) -> Result<(), StorageError> {
@@ -1248,11 +1245,10 @@ fn reject_private_oram_cluster_replica_remove_until_supported(
     }
 
     Err(StorageError::BadRequest {
-        description: format!(
-            "cannot drop shard replica for private ORAM collection {collection_name}: \
-             collection-local ORAM bucket migration and consensus-backed epoch/root ownership are \
-             not implemented for replica removal",
-        ),
+        description: "cannot drop shard replica for private ORAM collections: collection-local \
+                      ORAM bucket migration and consensus-backed epoch/root ownership are not \
+                      implemented for replica removal"
+            .to_string(),
     })
 }
 
@@ -1758,12 +1754,14 @@ mod tests {
     #[test]
     fn private_hnsw_transfer_guard_blocks_until_bucket_transfer_is_supported() {
         let config = private_hnsw_collection_config();
+        let collection_name = "private-oram-transfer-secret-collection";
         for operation in private_hnsw_transfer_start_operations() {
-            let err =
-                reject_private_oram_cluster_transfer_until_supported("docs", &config, &operation)
-                    .expect_err(
-                        "private HNSW ORAM transfer must fail closed until bucket transfer exists",
-                    );
+            let err = reject_private_oram_cluster_transfer_until_supported(
+                collection_name,
+                &config,
+                &operation,
+            )
+            .expect_err("private HNSW ORAM transfer must fail closed until bucket transfer exists");
             assert!(
                 err.to_string().contains("encrypted ORAM bucket transfer"),
                 "unexpected error for {operation:?}: {err}",
@@ -1775,6 +1773,7 @@ mod tests {
                     "docs_text_private_hnsw",
                     PRIVATE_HNSW_ORAM_BINDING,
                     "private_hnsw_oram",
+                    collection_name,
                 ],
             );
         }
@@ -1783,9 +1782,12 @@ mod tests {
     #[test]
     fn private_result_oram_transfer_guard_blocks_until_bucket_transfer_is_supported() {
         let config = private_result_oram_collection_config();
+        let collection_name = "private-result-oram-transfer-secret-collection";
         for operation in private_hnsw_transfer_start_operations() {
             let err = reject_private_oram_cluster_transfer_until_supported(
-                "docs", &config, &operation,
+                collection_name,
+                &config,
+                &operation,
             )
             .expect_err(
                 "private result ORAM transfer must fail closed until bucket transfer exists",
@@ -1801,6 +1803,7 @@ mod tests {
                     "body_private_result_oram",
                     PRIVATE_RESULT_ORAM_BINDING,
                     "private_result_oram",
+                    collection_name,
                 ],
             );
         }
@@ -1808,6 +1811,7 @@ mod tests {
 
     #[test]
     fn private_oram_resharding_guard_blocks_progress_until_bucket_migration_supported() {
+        let collection_name = "private-oram-resharding-secret-collection";
         for (label, config, sentinels) in [
             (
                 "private HNSW ORAM",
@@ -1817,6 +1821,7 @@ mod tests {
                     "docs_text_private_hnsw",
                     PRIVATE_HNSW_ORAM_BINDING,
                     "private_hnsw_oram",
+                    collection_name,
                 ],
             ),
             (
@@ -1827,12 +1832,15 @@ mod tests {
                     "body_private_result_oram",
                     PRIVATE_RESULT_ORAM_BINDING,
                     "private_result_oram",
+                    collection_name,
                 ],
             ),
         ] {
             for operation in private_oram_resharding_progress_operations() {
                 let err = reject_private_oram_cluster_resharding_until_supported(
-                    "docs", &config, &operation,
+                    collection_name,
+                    &config,
+                    &operation,
                 )
                 .unwrap_err();
                 assert!(
@@ -1858,6 +1866,7 @@ mod tests {
 
     #[test]
     fn private_oram_shard_key_guard_blocks_layout_changes_until_bucket_migration_supported() {
+        let collection_name = "private-oram-shard-key-secret-collection";
         for (label, config, sentinels) in [
             (
                 "private HNSW ORAM",
@@ -1867,6 +1876,7 @@ mod tests {
                     "docs_text_private_hnsw",
                     PRIVATE_HNSW_ORAM_BINDING,
                     "private_hnsw_oram",
+                    collection_name,
                 ],
             ),
             (
@@ -1877,12 +1887,15 @@ mod tests {
                     "body_private_result_oram",
                     PRIVATE_RESULT_ORAM_BINDING,
                     "private_result_oram",
+                    collection_name,
                 ],
             ),
         ] {
             for operation in private_oram_shard_key_change_operations() {
                 let err = reject_private_oram_cluster_shard_key_change_until_supported(
-                    "docs", &config, &operation,
+                    collection_name,
+                    &config,
+                    &operation,
                 )
                 .expect_err("private ORAM shard-key layout changes must fail closed");
                 assert!(
@@ -1898,7 +1911,7 @@ mod tests {
 
         for operation in private_oram_shard_key_change_operations() {
             reject_private_oram_cluster_shard_key_change_until_supported(
-                "docs",
+                collection_name,
                 &ordinary_collection_config(),
                 &operation,
             )
@@ -1909,6 +1922,7 @@ mod tests {
     #[test]
     fn private_oram_drop_replica_guard_blocks_until_bucket_migration_supported() {
         let operation = private_oram_drop_replica_operation();
+        let collection_name = "private-oram-drop-replica-secret-collection";
 
         for (label, config, sentinels) in [
             (
@@ -1919,6 +1933,7 @@ mod tests {
                     "docs_text_private_hnsw",
                     PRIVATE_HNSW_ORAM_BINDING,
                     "private_hnsw_oram",
+                    collection_name,
                 ],
             ),
             (
@@ -1929,11 +1944,14 @@ mod tests {
                     "body_private_result_oram",
                     PRIVATE_RESULT_ORAM_BINDING,
                     "private_result_oram",
+                    collection_name,
                 ],
             ),
         ] {
             let err = reject_private_oram_cluster_replica_remove_until_supported(
-                "docs", &config, &operation,
+                collection_name,
+                &config,
+                &operation,
             )
             .expect_err("private ORAM replica removal must fail closed");
             assert!(
@@ -1947,7 +1965,7 @@ mod tests {
         }
 
         reject_private_oram_cluster_replica_remove_until_supported(
-            "docs",
+            collection_name,
             &ordinary_collection_config(),
             &operation,
         )
