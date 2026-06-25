@@ -7176,6 +7176,17 @@ mod tests {
                 fixed_steps: 3,
             })
         );
+        assert_eq!(
+            validate_private_hnsw_strict_search_result(
+                ResultPrivacyMode::IdsVisible,
+                &params,
+                &short_result,
+            ),
+            Err(PrivateHnswClientError::FixedBudgetNotExhausted {
+                completed_steps: 1,
+                fixed_steps: 3,
+            })
+        );
 
         let padded_result = PrivateHnswSearchResult {
             accessed_leaf_labels: vec![
@@ -7189,11 +7200,34 @@ mod tests {
 
         validate_private_hnsw_search_fixed_budget(&params, &padded_result).unwrap();
         validate_private_hnsw_strict_search_result(
+            ResultPrivacyMode::IdsVisible,
+            &params,
+            &padded_result,
+        )
+        .unwrap();
+        validate_private_hnsw_strict_search_result(
             ResultPrivacyMode::PrivatePayloadOramRequired,
             &params,
             &padded_result,
         )
         .unwrap();
+
+        let zero_step_params = PrivateHnswSearchParams {
+            fixed_steps: 0,
+            ..params
+        };
+        assert_eq!(
+            validate_private_hnsw_search_fixed_budget(&zero_step_params, &padded_result),
+            Err(PrivateHnswClientError::InvalidSearchConfig("fixed_steps"))
+        );
+        assert_eq!(
+            validate_private_hnsw_strict_search_result(
+                ResultPrivacyMode::IdsVisible,
+                &zero_step_params,
+                &padded_result,
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig("fixed_steps"))
+        );
     }
 
     #[test]
