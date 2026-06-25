@@ -8,7 +8,7 @@ use futures::stream::FuturesUnordered;
 use super::{Collection, collection_encryption_uses_private_oram_bucket_store};
 use crate::collection::payload_index_schema::PayloadIndexSchema;
 use crate::collection_state::{ShardInfo, State};
-use crate::config::CollectionConfigInternal;
+use crate::config::{CollectionConfigInternal, CollectionParams};
 use crate::operations::types::{CollectionError, CollectionResult};
 use crate::shards::replica_set::ShardReplicaSet;
 use crate::shards::resharding::ReshardState;
@@ -157,6 +157,10 @@ impl Collection {
                 // collection have to be *recreated*.
                 return Err(CollectionError::service_error(err.to_string()));
             }
+            validate_private_oram_apply_config_layout_until_supported(
+                &config.params,
+                &new_config.params,
+            )?;
 
             // Destructure `new_config`, to ensure we compare all config fields. Compiler would
             // complain, if new field is added to `CollectionConfig` struct, but not destructured
@@ -351,6 +355,32 @@ fn validate_private_oram_apply_reshard_state_until_supported(
     ))
 }
 
+fn validate_private_oram_apply_config_layout_until_supported(
+    current: &CollectionParams,
+    next: &CollectionParams,
+) -> CollectionResult<()> {
+    let private_oram_bucket_store_collection = current
+        .effective_encryption()
+        .as_ref()
+        .is_some_and(collection_encryption_uses_private_oram_bucket_store);
+    if !private_oram_bucket_store_collection {
+        return Ok(());
+    }
+
+    if current.shard_number == next.shard_number
+        && current.sharding_method == next.sharding_method
+        && current.replication_factor == next.replication_factor
+    {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(
+        "cannot apply shard layout config change for private ORAM collections: collection-local \
+         encrypted ORAM buckets cannot be repartitioned or replicated by consensus snapshot apply \
+         until ORAM bucket migration and consensus-backed epoch/root ownership are implemented",
+    ))
+}
+
 fn validate_private_oram_apply_shard_transfers_until_supported(
     shard_transfers: &HashSet<ShardTransfer>,
     private_oram_bucket_store_collection: bool,
@@ -408,9 +438,15 @@ fn validate_private_oram_apply_shard_info_until_supported(
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use uuid::Uuid;
 
     use super::*;
+    use crate::config::{
+        CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef, EncryptionSelector,
+        ShardingMethod,
+    };
     use crate::operations::cluster_ops::ReshardingDirection;
     use crate::shards::replica_set::replica_set_state::ReplicaState;
     use crate::shards::transfer::ShardTransferMethod;
@@ -442,6 +478,47 @@ mod tests {
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+    }
+
+    #[test]
+    fn private_oram_apply_config_layout_guard_redacts_collection_details() {
+        let private_params = private_oram_params_fixture();
+
+        validate_private_oram_apply_config_layout_until_supported(&private_params, &private_params)
+            .unwrap();
+
+        let mut ordinary_changed = CollectionParams::empty();
+        ordinary_changed.shard_number = NonZeroU32::new(2).unwrap();
+        validate_private_oram_apply_config_layout_until_supported(
+            &CollectionParams::empty(),
+            &ordinary_changed,
+        )
+        .unwrap();
+
+        let mut changed_shards = private_params.clone();
+        changed_shards.shard_number = NonZeroU32::new(2).unwrap();
+        let mut changed_method = private_params.clone();
+        changed_method.sharding_method = Some(ShardingMethod::Custom);
+        let mut changed_replication = private_params.clone();
+        changed_replication.replication_factor = NonZeroU32::new(2).unwrap();
+
+        for next in [changed_shards, changed_method, changed_replication] {
+            let err =
+                validate_private_oram_apply_config_layout_until_supported(&private_params, &next)
+                    .unwrap_err();
+            let rendered = format!("{err:?}");
+
+            assert!(rendered.contains("cannot apply shard layout config change"));
+            assert!(rendered.contains("collection-local encrypted ORAM buckets"));
+            assert!(rendered.contains("consensus-backed epoch/root"));
+            assert!(!rendered.contains("tenant-a/vector-private-rk"));
+            assert!(!rendered.contains("docs_text_private_hnsw"));
+            assert!(!rendered.contains("docs_private_hnsw_v1"));
+            assert!(!rendered.contains("private_hnsw_oram"));
+            assert!(!rendered.contains("private_result_oram"));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+        }
     }
 
     #[test]
@@ -554,5 +631,26 @@ mod tests {
                 replicas: HashMap::from_iter(replicas),
             },
         )])
+    }
+
+    fn private_oram_params_fixture() -> CollectionParams {
+        CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/vector-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "docs_text_private_hnsw".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["text".to_string()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        }
     }
 }
