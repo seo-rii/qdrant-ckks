@@ -758,7 +758,7 @@ mod private_result_oram_rest_tests {
         let bucket_ids = vec![987_654, 987_655];
         let read_signature = qdrant_sec::PrivateResultOramSignature {
             alg: "ed25519".to_string(),
-            key_id: SIGNING_KEY_ID.to_string(),
+            key_id: "RESULT-REST-READ-KEY-ID-SENTINEL".to_string(),
             sig: "RESULT-REST-READ-SIGNATURE-SENTINEL".to_string(),
         };
         let read_request = ReadPrivateResultOramBucketsRequest {
@@ -768,7 +768,8 @@ mod private_result_oram_rest_tests {
             bucket_ids: bucket_ids.clone(),
             read_signature: read_signature.clone(),
         };
-        let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+        let (updated_bucket, mut commit_signature, new_root_hash) = fixture.commit_bucket();
+        commit_signature.key_id = "RESULT-REST-COMMIT-KEY-ID-SENTINEL".to_string();
         let commit_request = CommitPrivateResultOramBucketsRequest {
             session_id: SESSION_ID.to_string(),
             old_epoch: BASE_EPOCH,
@@ -808,7 +809,9 @@ mod private_result_oram_rest_tests {
             fixture.manifest.root_hash.clone(),
             new_root_hash,
             fixture.buckets[0].ciphertext.clone(),
+            read_signature.key_id,
             read_signature.sig,
+            commit_signature.key_id,
             commit_signature.sig,
             "987654".to_string(),
             "RESULT-REST-PROOF-SENTINEL".to_string(),
