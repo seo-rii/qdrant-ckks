@@ -555,6 +555,7 @@
 - REST/gRPC session open의 stale requested epoch 오류는 requested/current epoch 값을 반사하지 않고, private HNSW runtime `result_privacy` unsupported-value 오류도 submitted option value를 반사하지 않는다.
 - collection/runtime vector dim/distance mismatch 오류는 실제 dim/distance 값을 반사하지 않는다.
 - `qdrant-sec` private HNSW provider/client와 private result ORAM helper의 `Display` 오류 문자열은 structured enum fields를 보존하되 bucket id, epoch, version, ciphertext length, leaf, unsupported algorithm 같은 값은 반사하지 않도록 고정 메시지화한다.
+- `qdrant-sec` private HNSW client와 private result ORAM error `Debug` 회귀도 Display와 같은 structured-value variant를 직접 렌더링해 bucket id, epoch, version, context sentinel, unsupported algorithm/detail이 반사되지 않는지 고정한다.
 - Collection store initial upload의 unsupported/tampered manifest signature 오류도 submitted algorithm, signature key/body, manifest root, bucket ciphertext/hash/commitment를 반사하지 않고 layout 생성 전 fail closed 된다.
 - Collection store writeback의 unsupported commit signature algorithm 오류도 submitted signature key/body, old/new root, updated bucket ciphertext, bucket commitment를 반사하지 않고 저장 epoch/bucket/Merkle 상태를 유지한다.
 - `qdrant-sec` private HNSW client와 private result ORAM client helper의 encryption wrapper error도 inner AEAD algorithm/detail 문자열을 Display에 붙이지 않는다.

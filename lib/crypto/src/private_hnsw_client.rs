@@ -4670,6 +4670,10 @@ mod tests {
             format!("{:?}", PrivateHnswClientError::UnsupportedBlockVersion(99)),
             format!(
                 "{:?}",
+                PrivateHnswClientError::UnsupportedVectorEncoding(88)
+            ),
+            format!(
+                "{:?}",
                 PrivateHnswClientError::InvalidBucketContext("bucket-context-sentinel")
             ),
             format!(
@@ -4679,6 +4683,34 @@ mod tests {
                     expected_bytes: 4096,
                     actual_bytes: 2048,
                 }
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidOramClientConfig("client-config-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidBuildConfig("build-config-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::UnsupportedBucketCiphertextVersion(66)
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::OramInitialPlacementOverflow { leaf: 777 }
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidClientStateContext("client-state-context-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::UnsupportedClientStateSnapshotVersion(44)
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(33)
             ),
             format!(
                 "{:?}",
@@ -4693,11 +4725,37 @@ mod tests {
             ),
             format!(
                 "{:?}",
+                PrivateHnswClientError::BucketOutOfRange {
+                    bucket_id: 123,
+                    bucket_count: 456,
+                }
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::DuplicateBucket { bucket_id: 123 }
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::MissingBucket { bucket_id: 123 }
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::DuplicateUpdatedBucket { bucket_id: 123 }
+            ),
+            format!(
+                "{:?}",
                 PrivateHnswClientError::StaleBucketEpoch {
                     bucket_id: 123,
                     expected_epoch: 42,
                     actual_epoch: 43,
                 }
+            ),
+            format!("{:?}", PrivateHnswClientError::UnsupportedBucketVersion(22)),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidCommitSignatureContext(
+                    "commit-signature-context-sentinel"
+                )
             ),
             format!(
                 "{:?}",
@@ -4711,13 +4769,18 @@ mod tests {
             assert!(!rendered.contains("aead-alg-sentinel"), "{rendered}");
             for leaked in [
                 "bucket-context-sentinel",
+                "client-config-sentinel",
+                "build-config-sentinel",
+                "client-state-context-sentinel",
                 "search-config-sentinel",
+                "commit-signature-context-sentinel",
                 "manifest-signature-context-sentinel",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
             for leaked in [
-                "77", "55", "99", "123", "4096", "2048", "314", "271", "42", "43",
+                "77", "55", "99", "88", "123", "4096", "2048", "66", "777", "44", "33", "456",
+                "314", "271", "42", "43", "22",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }

@@ -3759,7 +3759,42 @@ mod tests {
             ),
             format!(
                 "{:?}",
+                PrivateResultOramError::InvalidBucketContext("bucket-context-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::UnsupportedBucketCiphertextVersion(77)
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidFetchPlanField("fetch-plan-field-sentinel")
+            ),
+            format!(
+                "{:?}",
                 PrivateResultOramError::InvalidClientConfig("client-config-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::UnsupportedPayloadBlockVersion(99)
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::UnsupportedClientStateSnapshotVersion(55)
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidClientStateContext("client-state-context-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::UnsupportedClientStateCiphertextVersion(66)
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::BucketOutOfRange {
+                    bucket_id: 123,
+                    bucket_count: 456,
+                }
             ),
             format!(
                 "{:?}",
@@ -3768,6 +3803,10 @@ mod tests {
                     expected_epoch: 42,
                     actual_epoch: 43,
                 }
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::DuplicateUpdatedBucket { bucket_id: 123 }
             ),
         ];
 
@@ -3778,11 +3817,14 @@ mod tests {
                 "manifest-field-sentinel",
                 "manifest-context-sentinel",
                 "bucket-field-sentinel",
+                "bucket-context-sentinel",
+                "fetch-plan-field-sentinel",
                 "client-config-sentinel",
+                "client-state-context-sentinel",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
-            for leaked in ["99", "88", "123", "42", "43"] {
+            for leaked in ["99", "88", "77", "66", "55", "123", "456", "42", "43"] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
         }
