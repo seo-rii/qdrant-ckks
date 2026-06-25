@@ -6635,6 +6635,70 @@ esac
                 )),
             };
 
+            let no_vector_records = crate::common::query::do_get_points(
+                &toc,
+                collection_name,
+                PointRequestInternal {
+                    ids: Vec::new(),
+                    with_payload: Some(WithPayloadInterface::Bool(true)),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .expect("private HNSW ORAM retrieve without vectors must remain ordinary");
+            assert!(no_vector_records.is_empty());
+
+            let grpc_no_vector_records = crate::tonic::api::query_common::get(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::GetPoints {
+                    collection_name: collection_name.to_string(),
+                    ids: Vec::new(),
+                    with_payload: None,
+                    with_vectors: None,
+                    read_consistency: None,
+                    shard_key_selector: None,
+                    timeout: None,
+                },
+                None,
+                auth.clone(),
+                request_hw_counter(),
+                None,
+            )
+            .await
+            .expect("private HNSW ORAM gRPC retrieve without vectors must remain ordinary")
+            .into_inner();
+            assert!(grpc_no_vector_records.result.is_empty());
+
+            let grpc_no_vector_scroll = crate::tonic::api::query_common::scroll(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::ScrollPoints {
+                    collection_name: collection_name.to_string(),
+                    filter: None,
+                    offset: None,
+                    limit: Some(1),
+                    with_payload: None,
+                    with_vectors: None,
+                    read_consistency: None,
+                    shard_key_selector: None,
+                    order_by: None,
+                    timeout: None,
+                },
+                None,
+                auth.clone(),
+                request_hw_counter(),
+                None,
+            )
+            .await
+            .expect("private HNSW ORAM gRPC scroll without vectors must remain ordinary")
+            .into_inner();
+            assert!(grpc_no_vector_scroll.result.is_empty());
+
             assert_private_hnsw_read_error(
                 crate::common::query::do_get_points(
                     &toc,
