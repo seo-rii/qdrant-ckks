@@ -213,14 +213,14 @@ impl PrivateResultOramStore {
     fn initial_epoch_status(
         &self,
         epoch: &PrivateResultOramEpochState,
-        operation: &str,
+        _operation: &str,
     ) -> CollectionResult<InitialEpochStatus> {
         self.ensure_layout()?;
         match self.read_current_epoch() {
             Ok(current) if current == *epoch => Ok(InitialEpochStatus::Matching),
-            Ok(_) => Err(CollectionError::bad_request(format!(
-                "private result ORAM current epoch/root does not match {operation} epoch",
-            ))),
+            Ok(_) => Err(CollectionError::bad_request(
+                "private result ORAM current epoch/root does not match initial epoch",
+            )),
             Err(CollectionError::NotFound { .. }) => Ok(InitialEpochStatus::Absent),
             Err(err) => Err(err),
         }
@@ -2581,7 +2581,9 @@ mod tests {
             .write_initial_upload_bundle(&replacement, 128)
             .unwrap_err();
 
-        assert!(err.to_string().contains("current epoch/root"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("current epoch/root"));
+        assert!(!rendered.contains("upload bundle"), "{rendered}");
         assert_eq!(store.read_manifest().unwrap().0, original.manifest);
         assert_eq!(
             store

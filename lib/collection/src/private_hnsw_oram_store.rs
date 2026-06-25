@@ -284,14 +284,14 @@ impl PrivateHnswOramStore {
     fn initial_epoch_status(
         &self,
         epoch: &PrivateHnswOramEpochState,
-        operation: &str,
+        _operation: &str,
     ) -> CollectionResult<InitialEpochStatus> {
         self.ensure_layout()?;
         match self.read_current_epoch() {
             Ok(current) if current == *epoch => Ok(InitialEpochStatus::Matching),
-            Ok(_) => Err(CollectionError::bad_request(format!(
-                "private HNSW ORAM current epoch/root does not match {operation} epoch",
-            ))),
+            Ok(_) => Err(CollectionError::bad_request(
+                "private HNSW ORAM current epoch/root does not match initial epoch",
+            )),
             Err(CollectionError::NotFound { .. }) => Ok(InitialEpochStatus::Absent),
             Err(err) => Err(err),
         }
@@ -2479,6 +2479,7 @@ mod tests {
         let rendered = err.to_string();
 
         assert!(rendered.contains("current epoch/root"), "{rendered}");
+        assert!(!rendered.contains("upload bundle"), "{rendered}");
         assert_eq!(store.read_manifest().unwrap().0, original.manifest);
         assert_eq!(
             store
