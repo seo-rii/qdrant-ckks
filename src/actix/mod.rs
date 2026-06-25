@@ -659,6 +659,12 @@ mod tests {
         );
         assert_eq!(
             redact_private_oram_access_path(
+                "/collections/docs/private-hnsw/text/session/client-state-backup-sentinel?token=query-sentinel"
+            ),
+            "/collections/docs/private-hnsw/text/session/{session_id}/[redacted]?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
                 "/collections/docs/private-result-oram/session/session-id-sentinel/close?token=query-sentinel"
             ),
             "/collections/docs/private-result-oram/session/{session_id}/close?[redacted]"
@@ -672,6 +678,12 @@ mod tests {
         assert_eq!(
             redact_private_oram_access_path(
                 "/collections/docs/private-result-oram/session/result-session-id-sentinel/read_buckets?bucket_ids=query-sentinel"
+            ),
+            "/collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-result-oram/session/token-position-map-backup-sentinel?bucket_ids=query-sentinel"
             ),
             "/collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted]"
         );
@@ -810,6 +822,24 @@ mod tests {
                     .to_srv_request(),
                 "POST /collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
                 ["result-session-id-sentinel", "query-sentinel"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-hnsw/text/session/client-state-backup-sentinel/read_paths?token=query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-hnsw/text/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
+                ["client-state-backup-sentinel", "query-sentinel"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-result-oram/session/token-position-map-backup-sentinel/read_buckets?bucket_ids=query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
+                ["token-position-map-backup-sentinel", "query-sentinel"],
             ),
         ];
 
