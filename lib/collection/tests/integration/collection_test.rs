@@ -267,6 +267,24 @@ fn private_hnsw_vector_encryption_config() -> CollectionEncryptionConfig {
     }
 }
 
+fn private_result_oram_encryption_config() -> CollectionEncryptionConfig {
+    CollectionEncryptionConfig {
+        version: 1,
+        key_id: Some("tenant-a:result-private-rk".to_string()),
+        crypto_schema_version: 1,
+        encryption_epoch: 7,
+        migration_state: CryptoMigrationState::Active,
+        rules: vec![EncryptionRuleRef {
+            id: "document_body_private_result".to_string(),
+            selector: EncryptionSelector::PayloadPaths {
+                paths: vec!["document.body".to_string()],
+            },
+            instance: "docs_private_result_oram_v1".to_string(),
+            binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
+        }],
+    }
+}
+
 fn assert_private_hnsw_session_api_error(err: CollectionError) {
     assert_private_hnsw_session_api_error_without(err, &[]);
 }
@@ -281,6 +299,27 @@ fn assert_private_hnsw_session_api_error_without(err: CollectionError, forbidden
             && description.contains("/private-hnsw/")
             && description.contains("/session")
             && !description.contains("runtime CKKS"),
+        "unexpected error: {description}",
+    );
+    for value in forbidden {
+        assert!(!description.contains(value), "{description}");
+    }
+}
+
+fn assert_private_result_oram_read_error_without(
+    err: CollectionError,
+    operation: &str,
+    forbidden: &[&str],
+) {
+    let CollectionError::BadInput { description } = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert!(
+        description.contains(&format!(
+            "cannot {operation} private result ORAM payload field"
+        )) && description.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+            && description.contains("/private-result-oram/session")
+            && !description.contains("runtime payload encryption"),
         "unexpected error: {description}",
     );
     for value in forbidden {
@@ -2905,6 +2944,107 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
                 && description.contains("document.body")
                 && description.contains("blind index")
     ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn private_result_oram_raw_payload_reads_require_session_api_in_collection_ops() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        private_result_oram_encryption_config(),
+    )
+    .await;
+    let private_point_id = 987_654_321_u64;
+    let raw_private_selector =
+        || WithPayloadInterface::Fields(vec!["document.body.lang".parse().unwrap()]);
+    let forbidden = [
+        "document.body.lang",
+        "document.body",
+        "document",
+        "body",
+        "lang",
+        "987654321",
+    ];
+
+    let err = collection
+        .retrieve(
+            PointRequestInternal {
+                ids: vec![private_point_id.into()],
+                with_payload: Some(raw_private_selector()),
+                with_vector: false.into(),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_read_error_without(err, "retrieve", &forbidden);
+
+    let err = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: None,
+                with_payload: Some(raw_private_selector()),
+                with_vector: false.into(),
+                order_by: None,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_read_error_without(err, "scroll", &forbidden);
+
+    let err = collection
+        .search(
+            SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(raw_private_selector()),
+                with_vector: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into(),
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_read_error_without(err, "search", &forbidden);
+
+    let err = collection
+        .query(
+            ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Sample(SampleInternal::Random)),
+                filter: None,
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: raw_private_selector(),
+            },
+            None,
+            ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_read_error_without(err, "query", &forbidden);
 }
 
 #[tokio::test(flavor = "multi_thread")]
