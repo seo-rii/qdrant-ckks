@@ -3020,6 +3020,8 @@ async fn private_result_oram_payload_writes_require_session_api_in_collection_op
         "body",
         "12345.125",
         "-23456.25",
+        "34567.5",
+        "-45678.75",
     ];
     let operations = [
         (
@@ -3045,14 +3047,52 @@ async fn private_result_oram_payload_writes_require_session_api_in_collection_op
             "upsert points",
         ),
         (
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPointsConditional(
+                ConditionalInsertOperationInternal {
+                    points_op: PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                        id: private_point_id.into(),
+                        vector: VectorStructPersisted::from(vec![
+                            12345.125, -23456.25, 34567.5, -45678.75,
+                        ]),
+                        payload: Some(public_payload.clone()),
+                    }]),
+                    condition: Filter::new(),
+                    update_mode: None,
+                },
+            )),
+            "upsert points",
+        ),
+        (
+            CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(
+                PointSyncOperation {
+                    from_id: None,
+                    to_id: None,
+                    points: vec![PointStructPersisted {
+                        id: private_point_id.into(),
+                        vector: VectorStructPersisted::from(vec![
+                            12345.125, -23456.25, 34567.5, -45678.75,
+                        ]),
+                        payload: Some(public_payload.clone()),
+                    }],
+                },
+            )),
+            "sync points",
+        ),
+        (
             CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints {
                 ids: vec![private_point_id.into()],
             }),
             "delete points",
         ),
         (
+            CollectionUpdateOperations::PointOperation(PointOperations::DeletePointsByFilter(
+                Filter::new(),
+            )),
+            "delete points by filter",
+        ),
+        (
             CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
-                payload: private_payload,
+                payload: private_payload.clone(),
                 points: Some(vec![private_point_id.into()]),
                 filter: None,
                 key: None,
@@ -3060,10 +3100,37 @@ async fn private_result_oram_payload_writes_require_session_api_in_collection_op
             "set payload",
         ),
         (
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::OverwritePayload(
+                SetPayloadOp {
+                    payload: public_payload,
+                    points: Some(vec![private_point_id.into()]),
+                    filter: None,
+                    key: None,
+                },
+            )),
+            "overwrite payload",
+        ),
+        (
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(
+                DeletePayloadOp {
+                    keys: vec!["document.body".parse().unwrap()],
+                    points: Some(vec![private_point_id.into()]),
+                    filter: None,
+                },
+            )),
+            "delete payload",
+        ),
+        (
             CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload {
                 points: vec![private_point_id.into()],
             }),
             "clear payload",
+        ),
+        (
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayloadByFilter(
+                Filter::new(),
+            )),
+            "clear payload by filter",
         ),
     ];
 
