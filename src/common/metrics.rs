@@ -1692,6 +1692,21 @@ mod tests {
             canonical_grpc_endpoint_label("/qdrant.Points/Search/vector-name-sentinel"),
             None,
         );
+        for raw in [
+            "/qdrant.PrivateHnswOram",
+            "/qdrant.PrivateHnswOramish/ReadPrivateHnswPaths/leaf-label-sentinel",
+            "/qdrant.PrivateHnswOram/ReadPrivateHnswPathsExtra/leaf-label-sentinel",
+            "/qdrant.PrivateHnswOram/CommitPrivateHnswPathsExtra/updated-bucket-sentinel",
+            "/qdrant.PrivateResultOramish/ReadPrivateResultOramBuckets/result-bucket-id-sentinel",
+            "/qdrant.PrivateResultOram/ReadPrivateResultOramBucketsExtra/result-bucket-id-sentinel",
+            "/qdrant.PrivateResultOram/ClosePrivateResultOramSessionExtra/result-session-id-sentinel",
+        ] {
+            assert_eq!(
+                canonical_grpc_endpoint_label(raw),
+                None,
+                "malformed or lookalike private ORAM gRPC method must not become a fixed metrics label: {raw}"
+            );
+        }
     }
 
     fn is_private_oram_openapi_path(path: &str) -> bool {
