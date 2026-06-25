@@ -1277,6 +1277,12 @@ pub async fn do_create_index(
         ));
     };
 
+    auth.check_collection_access(
+        &collection_name,
+        AccessRequirements::new().write().extras(),
+        "create_payload_index",
+    )?;
+
     let consensus_op = CollectionMetaOperations::CreatePayloadIndex(CreatePayloadIndex {
         collection_name: collection_name.clone(),
         field_name: operation.field_name.clone(),
@@ -4349,6 +4355,40 @@ esac
                     "private result ORAM gRPC internal delete payload index must fail closed",
                 ),
                 "cannot delete payload index on private result ORAM payload field",
+            );
+
+            let unauthorized_create_index = do_create_index(
+                dispatcher.clone().into(),
+                "private_result_write_docs".to_string(),
+                private_result_create_index(),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                Auth::new_internal(Access::full_ro("For test")),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .expect_err("private result ORAM create payload index must check auth first");
+            let unauthorized_create_index_message = unauthorized_create_index.to_string();
+            assert!(
+                matches!(unauthorized_create_index, StorageError::Forbidden { .. }),
+                "{unauthorized_create_index_message}"
+            );
+            assert!(
+                !unauthorized_create_index_message
+                    .contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                "{unauthorized_create_index_message}"
+            );
+            assert!(
+                !unauthorized_create_index_message.contains("/private-result-oram/session"),
+                "{unauthorized_create_index_message}"
+            );
+            assert!(
+                !unauthorized_create_index_message.contains("body"),
+                "{unauthorized_create_index_message}"
             );
 
             let unauthorized_delete_index = do_delete_index(

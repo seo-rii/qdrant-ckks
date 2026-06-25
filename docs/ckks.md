@@ -1013,7 +1013,7 @@ search, and grouped query wrappers enforce the same selector guard after
 converting their payload paths.
 Payload index/schema creation or deletion on a `private-result-oram/v1` payload
 path, including gRPC create/delete-field-index wrappers, is also rejected by the
-encrypted payload index guard. Public delete-field-index requests check
+encrypted payload index guard. Public create/delete-field-index requests check
 write/extras authorization before this private-result guard, so unauthorized
 callers receive the normal forbidden response without provider/session details.
 Result ORAM snapshot restore preflight is open for configured
