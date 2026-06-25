@@ -461,7 +461,9 @@ mod tests {
         let message = redact_health_checker_panic_message(
             "health panic with session_token=session-token-sentinel, signatureB64=sig-sentinel, \
              owner_signing_key_id=owner-signing-key-sentinel, readPath=read-path-camel-sentinel, \
-             readPathLabel=read-path-label-camel-sentinel",
+             readPathLabel=read-path-label-camel-sentinel, \
+             clientStateBackups=client-state-backups-camel-sentinel, \
+             tokenPositionMapBackups=token-position-map-backups-camel-sentinel",
         );
 
         assert!(message.contains("crypto material omitted"));
@@ -470,6 +472,8 @@ mod tests {
         assert!(!message.contains("owner-signing-key-sentinel"));
         assert!(!message.contains("read-path-camel-sentinel"));
         assert!(!message.contains("read-path-label-camel-sentinel"));
+        assert!(!message.contains("client-state-backups-camel-sentinel"));
+        assert!(!message.contains("token-position-map-backups-camel-sentinel"));
     }
 
     #[test]
