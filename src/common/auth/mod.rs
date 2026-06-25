@@ -91,7 +91,13 @@ pub fn log_denied_auth(
 }
 
 fn redacted_denied_auth_error(error: &AuthError) -> String {
-    redact_crypto_material_for_report(&error.to_string())
+    let rendered = error.to_string();
+    let redacted = redact_crypto_material_for_report(&rendered);
+    if redacted == rendered {
+        redacted
+    } else {
+        "[redacted: crypto material omitted from audit error]".to_string()
+    }
 }
 
 impl AuthKeys {
@@ -280,7 +286,10 @@ mod tests {
 
         let redacted = redacted_denied_auth_error(&error);
 
-        assert!(redacted.contains("crypto material omitted"), "{redacted}");
+        assert_eq!(
+            redacted,
+            "[redacted: crypto material omitted from audit error]"
+        );
         assert!(!redacted.contains("owner-signing-key-sentinel"));
         assert!(!redacted.contains("signing-key-camel-sentinel"));
         assert!(!redacted.contains("signature-public-keys-sentinel"));
