@@ -6988,11 +6988,13 @@ async fn private_hnsw_vector_rejects_plaintext_vector_writes_with_session_api_me
     )
     .await;
 
+    let plaintext_point_id = 987_654_321_u64;
+    let plaintext_vector_sentinel = vec![12345.125_f32, -23456.25, 34567.5, -45678.75];
     let plaintext_point =
         CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
             PointInsertOperationsInternal::PointsList(vec![PointStructPersisted {
-                id: 1.into(),
-                vector: VectorStructPersisted::from(vec![1.0, 0.0, 0.0, 0.0]),
+                id: plaintext_point_id.into(),
+                vector: VectorStructPersisted::from(plaintext_vector_sentinel.clone()),
                 payload: None,
             }]),
         ));
@@ -7006,13 +7008,24 @@ async fn private_hnsw_vector_rejects_plaintext_vector_writes_with_session_api_me
         )
         .await
         .unwrap_err();
-    assert_private_hnsw_session_api_error(err);
+    assert_private_hnsw_session_api_error_without(
+        err,
+        &[
+            "987654321",
+            "12345.125",
+            "-23456.25",
+            "34567.5",
+            "-45678.75",
+        ],
+    );
 
+    let update_point_id = 876_543_210_u64;
+    let update_vector_sentinel = vec![54321.5_f32, -65432.75, 76543.875, -87654.125];
     let plaintext_vector_update = CollectionUpdateOperations::VectorOperation(
         VectorOperations::UpdateVectors(UpdateVectorsOp {
             points: vec![PointVectorsPersisted {
-                id: 1.into(),
-                vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
+                id: update_point_id.into(),
+                vector: VectorStructPersisted::from(update_vector_sentinel.clone()),
             }],
             update_filter: None,
         }),
@@ -7027,11 +7040,21 @@ async fn private_hnsw_vector_rejects_plaintext_vector_writes_with_session_api_me
         )
         .await
         .unwrap_err();
-    assert_private_hnsw_session_api_error(err);
+    assert_private_hnsw_session_api_error_without(
+        err,
+        &[
+            "876543210",
+            "54321.5",
+            "-65432.75",
+            "76543.875",
+            "-87654.125",
+        ],
+    );
 
+    let delete_vector_point_id = 765_432_109_u64;
     let delete_vector =
         CollectionUpdateOperations::VectorOperation(VectorOperations::DeleteVectors(
-            vec![1.into()].into(),
+            vec![delete_vector_point_id.into()].into(),
             vec![DEFAULT_VECTOR_NAME.to_string()],
         ));
     let err = collection
@@ -7044,7 +7067,7 @@ async fn private_hnsw_vector_rejects_plaintext_vector_writes_with_session_api_me
         )
         .await
         .unwrap_err();
-    assert_private_hnsw_session_api_error(err);
+    assert_private_hnsw_session_api_error_without(err, &["765432109"]);
 
     let delete_vector_by_filter =
         CollectionUpdateOperations::VectorOperation(VectorOperations::DeleteVectorsByFilter(
@@ -7074,8 +7097,9 @@ async fn private_hnsw_vector_rejects_point_delete_and_sync_with_session_api_mess
     )
     .await;
 
+    let delete_point_id = 654_321_098_u64;
     let delete_points = CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints {
-        ids: vec![1.into()],
+        ids: vec![delete_point_id.into()],
     });
     let err = collection
         .update_from_client_simple(
@@ -7087,7 +7111,7 @@ async fn private_hnsw_vector_rejects_point_delete_and_sync_with_session_api_mess
         )
         .await
         .unwrap_err();
-    assert_private_hnsw_session_api_error(err);
+    assert_private_hnsw_session_api_error_without(err, &["654321098"]);
 
     let delete_points_by_filter = CollectionUpdateOperations::PointOperation(
         PointOperations::DeletePointsByFilter(Filter::default()),
@@ -7104,11 +7128,17 @@ async fn private_hnsw_vector_rejects_point_delete_and_sync_with_session_api_mess
         .unwrap_err();
     assert_private_hnsw_session_api_error(err);
 
+    let sync_point_id = 543_210_987_u64;
+    let sync_vector_sentinel = vec![11111.125_f32, -22222.25, 33333.5, -44444.75];
     let sync_points = CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(
         PointSyncOperation {
             from_id: None,
             to_id: None,
-            points: vec![],
+            points: vec![PointStructPersisted {
+                id: sync_point_id.into(),
+                vector: VectorStructPersisted::from(sync_vector_sentinel.clone()),
+                payload: None,
+            }],
         },
     ));
     let err = collection
@@ -7121,7 +7151,16 @@ async fn private_hnsw_vector_rejects_point_delete_and_sync_with_session_api_mess
         )
         .await
         .unwrap_err();
-    assert_private_hnsw_session_api_error(err);
+    assert_private_hnsw_session_api_error_without(
+        err,
+        &[
+            "543210987",
+            "11111.125",
+            "-22222.25",
+            "33333.5",
+            "-44444.75",
+        ],
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
