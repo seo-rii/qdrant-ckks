@@ -929,14 +929,14 @@ fn replica_state_operation_touches_resharding_state(operation: &SetShardReplicaS
 fn reject_private_oram_shard_key_change_until_supported(
     _collection_id: &str,
     params: &CollectionParams,
-    operation: &str,
+    _operation: &str,
 ) -> Result<(), StorageError> {
     if !collection_params_use_private_oram_bucket_store(params) {
         return Ok(());
     }
 
     Err(StorageError::bad_input(format!(
-        "private ORAM {operation} is not supported for private ORAM collections: \
+        "private ORAM shard-key layout changes are not supported for private ORAM collections: \
          collection-local ORAM bucket migration and consensus-backed epoch/root ownership are not \
          implemented for shard-key layout changes",
     )))
@@ -1470,7 +1470,11 @@ mod tests {
             ("private HNSW ORAM", private_hnsw_params),
             ("private result ORAM", private_result_params),
         ] {
-            for operation in ["create_shard_key", "drop_shard_key"] {
+            for operation in [
+                "create_shard_key",
+                "drop_shard_key",
+                "operation-secret-sentinel",
+            ] {
                 let err = reject_private_oram_shard_key_change_until_supported(
                     "docs", &params, operation,
                 )
@@ -1482,6 +1486,7 @@ mod tests {
                             .contains("consensus-backed epoch/root ownership"),
                     "unexpected {label} {operation} error: {err}",
                 );
+                assert!(!err.to_string().contains(operation), "{err}");
                 assert_private_oram_consensus_guard_redacts_config(&err.to_string());
             }
         }
