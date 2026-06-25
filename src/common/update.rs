@@ -5592,6 +5592,21 @@ esac
                 assert!(!message.contains("runtime CKKS sidecar"), "{message}");
                 assert!(!message.contains("payload sidecar only"), "{message}");
             };
+            let assert_private_hnsw_grpc_read_error = |err: tonic::Status| {
+                let message = err.message();
+                assert!(
+                    message.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("/private-hnsw/{vector}/session"),
+                    "{message}"
+                );
+                assert!(!message.contains(private_vector_name), "{message}");
+                assert!(!message.contains(collection_name), "{message}");
+                assert!(!message.contains("runtime CKKS sidecar"), "{message}");
+                assert!(!message.contains("payload sidecar only"), "{message}");
+            };
 
             assert_private_hnsw_read_error(
                 crate::common::query::do_get_points(
@@ -5656,6 +5671,73 @@ esac
                 .unwrap_err(),
             );
 
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::get(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::GetPoints {
+                        collection_name: collection_name.to_string(),
+                        ids: vec![segment::types::PointIdType::from(1).into()],
+                        with_payload: None,
+                        with_vectors: Some(api::grpc::qdrant::WithVectorsSelector {
+                            selector_options: Some(
+                                api::grpc::qdrant::with_vectors_selector::SelectorOptions::Include(
+                                    api::grpc::qdrant::VectorsSelector {
+                                        names: vec![private_vector_name.to_string()],
+                                    },
+                                ),
+                            ),
+                        }),
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                        HwMeasurementAcc::disposable(),
+                        false,
+                    ),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::scroll(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::ScrollPoints {
+                        collection_name: collection_name.to_string(),
+                        filter: None,
+                        offset: None,
+                        limit: Some(1),
+                        with_payload: None,
+                        with_vectors: Some(api::grpc::qdrant::WithVectorsSelector {
+                            selector_options: Some(
+                                api::grpc::qdrant::with_vectors_selector::SelectorOptions::Include(
+                                    api::grpc::qdrant::VectorsSelector {
+                                        names: vec![private_vector_name.to_string()],
+                                    },
+                                ),
+                            ),
+                        }),
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        order_by: None,
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                        HwMeasurementAcc::disposable(),
+                        false,
+                    ),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
             assert_private_hnsw_read_error(
                 crate::common::query::do_core_search_points(
                     &toc,
@@ -5678,6 +5760,28 @@ esac
                     auth.clone(),
                     None,
                     HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::search(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::SearchPoints {
+                        collection_name: collection_name.to_string(),
+                        vector: vec![0.0, 0.0],
+                        limit: 1,
+                        vector_name: Some(private_vector_name.to_string()),
+                        ..Default::default()
+                    },
+                    None,
+                    auth.clone(),
+                    storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                        HwMeasurementAcc::disposable(),
+                        false,
+                    ),
                     None,
                 )
                 .await
@@ -5748,6 +5852,27 @@ esac
                     ShardSelectorInternal::All,
                     auth.clone(),
                     None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::search_points_matrix(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::SearchMatrixPoints {
+                        collection_name: collection_name.to_string(),
+                        filter: None,
+                        sample: Some(2),
+                        limit: Some(1),
+                        using: Some(private_vector_name.to_string()),
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        timeout: None,
+                    },
+                    auth.clone(),
                     HwMeasurementAcc::disposable(),
                     None,
                 )
