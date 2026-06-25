@@ -523,7 +523,39 @@ mod tests {
                     web::post().to(private_oram_validation_test_endpoint),
                 )
                 .route(
+                    "/collections/{collection_name}/private-hnsw/{vector_name}/manifest",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/private-hnsw/{vector_name}/buckets",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
                     "/collections/{collection_name}/private-result-oram/session",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/private-result-oram/manifest",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/private-result-oram/buckets",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/private-result-oram/oram/commit",
                     web::post().to(private_oram_validation_test_endpoint),
                 )
                 .route(
@@ -538,46 +570,42 @@ mod tests {
         .await;
 
         let sentinel = "qdrant-sec-private-oram-unknown-field-sentinel";
-        let private_hnsw_request = actix_test::TestRequest::post()
-            .uri("/collections/docs/private-hnsw/text/session")
-            .set_json(body_with_unknown_field(sentinel, "must-not-reflect"))
-            .to_request();
-        let private_hnsw_response = actix_test::call_service(&app, private_hnsw_request).await;
-        assert_eq!(
-            private_hnsw_response.status(),
-            actix_web::http::StatusCode::BAD_REQUEST
-        );
-        let private_hnsw_body = actix_test::read_body(private_hnsw_response).await;
-        let private_hnsw_body = String::from_utf8_lossy(&private_hnsw_body);
-        assert!(
-            private_hnsw_body.contains("Invalid JSON body for private ORAM request"),
-            "{private_hnsw_body}"
-        );
-        assert!(!private_hnsw_body.contains(sentinel), "{private_hnsw_body}");
-        assert!(
-            !private_hnsw_body.contains("unknown field"),
-            "{private_hnsw_body}"
-        );
-
-        let private_result_request = actix_test::TestRequest::post()
-            .uri("/collections/docs/private-result-oram/session")
-            .set_json(body_with_unknown_field(sentinel, "must-not-reflect"))
-            .to_request();
-        let private_result_response = actix_test::call_service(&app, private_result_request).await;
-        assert_eq!(
-            private_result_response.status(),
-            actix_web::http::StatusCode::BAD_REQUEST
-        );
-        let private_result_body = actix_test::read_body(private_result_response).await;
-        let private_result_body = String::from_utf8_lossy(&private_result_body);
-        assert!(
-            private_result_body.contains("Invalid JSON body for private ORAM request"),
-            "{private_result_body}"
-        );
-        assert!(
-            !private_result_body.contains(sentinel),
-            "{private_result_body}"
-        );
+        for private_oram_path in [
+            "/collections/docs/private-hnsw/text/session",
+            "/collections/docs/private-hnsw/text/manifest",
+            "/collections/docs/private-hnsw/text/buckets",
+            "/collections/docs/private-hnsw/text/oram/read_paths",
+            "/collections/docs/private-hnsw/text/oram/commit",
+            "/collections/docs/private-result-oram/session",
+            "/collections/docs/private-result-oram/manifest",
+            "/collections/docs/private-result-oram/buckets",
+            "/collections/docs/private-result-oram/oram/read_buckets",
+            "/collections/docs/private-result-oram/oram/commit",
+        ] {
+            let private_oram_request = actix_test::TestRequest::post()
+                .uri(private_oram_path)
+                .set_json(body_with_unknown_field(sentinel, "must-not-reflect"))
+                .to_request();
+            let private_oram_response = actix_test::call_service(&app, private_oram_request).await;
+            assert_eq!(
+                private_oram_response.status(),
+                actix_web::http::StatusCode::BAD_REQUEST
+            );
+            let private_oram_body = actix_test::read_body(private_oram_response).await;
+            let private_oram_body = String::from_utf8_lossy(&private_oram_body);
+            assert!(
+                private_oram_body.contains("Invalid JSON body for private ORAM request"),
+                "{private_oram_path}: {private_oram_body}"
+            );
+            assert!(
+                !private_oram_body.contains(sentinel),
+                "{private_oram_path}: {private_oram_body}"
+            );
+            assert!(
+                !private_oram_body.contains("unknown field"),
+                "{private_oram_path}: {private_oram_body}"
+            );
+        }
 
         let malformed_body_sentinel = "qdrant-sec-private-oram-malformed-json-body-sentinel";
         let malformed_private_request = actix_test::TestRequest::post()
