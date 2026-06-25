@@ -7,7 +7,7 @@ use ring::hkdf;
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 const VERSION: u8 = 1;
 const ALGORITHM: &str = "AES-256-GCM";
@@ -380,12 +380,39 @@ pub struct AeadCipher {
     key: SecretKey,
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+impl Drop for AeadCipher {
+    fn drop(&mut self) {
+        self.key_id.zeroize();
+        self.material_fingerprint.zeroize();
+        self.rk_id.zeroize();
+    }
+}
+
+#[derive(Clone, Eq, Hash, PartialEq)]
 struct AeadCipherMetadataKey {
     key_id: String,
     material_fingerprint: String,
     rk_id: String,
     rk_epoch: Option<u64>,
+}
+
+impl Debug for AeadCipherMetadataKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AeadCipherMetadataKey")
+            .field("key_id", &"[redacted]")
+            .field("material_fingerprint", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .finish()
+    }
+}
+
+impl Drop for AeadCipherMetadataKey {
+    fn drop(&mut self) {
+        self.key_id.zeroize();
+        self.material_fingerprint.zeroize();
+        self.rk_id.zeroize();
+    }
 }
 
 impl AeadCipherMetadataKey {
@@ -922,6 +949,24 @@ mod tests {
         assert_eq!(rendered, r#"SecretKey { bytes: "[redacted; 32 bytes]" }"#);
         assert!(!rendered.contains("AAAA"));
         assert!(!rendered.contains("[65"));
+    }
+
+    #[test]
+    fn cipher_metadata_key_debug_redacts_identifiers() {
+        let metadata = AeadCipherMetadataKey {
+            key_id: "tenant-a/payload-key-sentinel".to_string(),
+            material_fingerprint: "tenant-a/material-fingerprint-sentinel".to_string(),
+            rk_id: "tenant-a/resource-key-sentinel".to_string(),
+            rk_epoch: Some(7),
+        };
+
+        let rendered = format!("{metadata:?}");
+
+        assert!(rendered.contains("AeadCipherMetadataKey"));
+        assert!(rendered.contains("rk_epoch"));
+        assert!(!rendered.contains("payload-key-sentinel"));
+        assert!(!rendered.contains("material-fingerprint-sentinel"));
+        assert!(!rendered.contains("resource-key-sentinel"));
     }
 
     #[test]
