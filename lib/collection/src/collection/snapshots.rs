@@ -540,6 +540,9 @@ impl Collection {
         shard_id: ShardId,
         recovery_type: RecoveryType,
     ) -> CollectionResult<Option<tokio::sync::OwnedRwLockWriteGuard<()>>> {
+        self.validate_private_oram_shard_snapshot_allowed("partial shard snapshot recovery")
+            .await?;
+
         self.shards_holder
             .read()
             .await
