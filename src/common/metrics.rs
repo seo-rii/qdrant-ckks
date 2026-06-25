@@ -1623,7 +1623,29 @@ mod tests {
             ),
         ];
         for (raw, canonical) in rest_cases {
-            assert_eq!(canonical_rest_endpoint_label(raw), Some(canonical));
+            let label =
+                canonical_rest_endpoint_label(raw).expect("private ORAM path canonicalizes");
+            assert_eq!(label, canonical);
+            for leaked in [
+                "docs",
+                "text",
+                "bucket-id-sentinel",
+                "root-hash-sentinel",
+                "leaf-label-sentinel",
+                "hnsw-query-leaf-sentinel",
+                "updated-bucket-sentinel",
+                "client-state-sentinel",
+                "session-id-sentinel",
+                "hnsw-session-id-sentinel",
+                "token-position-map-sentinel",
+                "result-bucket-id-sentinel",
+                "result-root-hash-sentinel",
+                "result-query-bucket-sentinel",
+                "result-updated-bucket-sentinel",
+                "result-session-id-sentinel",
+            ] {
+                assert!(!label.contains(leaked), "{raw} canonicalized to {label}");
+            }
         }
         assert_eq!(
             canonical_rest_endpoint_label("/collections/docs/points/search/not-whitelisted"),
@@ -1686,7 +1708,22 @@ mod tests {
             ),
         ];
         for (raw, canonical) in grpc_cases {
-            assert_eq!(canonical_grpc_endpoint_label(raw), Some(canonical));
+            let label =
+                canonical_grpc_endpoint_label(raw).expect("private ORAM gRPC method canonicalizes");
+            assert_eq!(label, canonical);
+            for leaked in [
+                "client-state-sentinel",
+                "leaf-label-sentinel",
+                "updated-bucket-sentinel",
+                "session-id-sentinel",
+                "result-updated-bucket-sentinel",
+                "token-position-map-sentinel",
+                "result-bucket-id-sentinel",
+                "result-root-hash-sentinel",
+                "result-session-id-sentinel",
+            ] {
+                assert!(!label.contains(leaked), "{raw} canonicalized to {label}");
+            }
         }
         assert_eq!(
             canonical_grpc_endpoint_label("/qdrant.Points/Search/vector-name-sentinel"),
