@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use ahash::AHashSet;
-use api::rest::SearchRequestInternal;
+use api::rest::{LookupLocation, SearchRequestInternal};
 use collection::collection::Collection;
 use collection::collection::distance_matrix::CollectionSearchMatrixRequest;
 use collection::config::{
@@ -9161,6 +9161,159 @@ async fn private_hnsw_vector_rejects_plaintext_vector_reads_with_session_api_mes
         .await
         .unwrap_err();
     assert_private_hnsw_session_api_error(err);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn private_hnsw_vector_rejects_lookup_source_reference_reads_with_session_api_message() {
+    let private_collection_dir = Builder::new()
+        .prefix("private-hnsw-lookup-source")
+        .tempdir()
+        .unwrap();
+    let private_collection = Arc::new(
+        encrypted_collection_fixture(
+            private_collection_dir.path(),
+            1,
+            private_hnsw_vector_encryption_config(),
+        )
+        .await,
+    );
+    let plain_collection_dir = Builder::new()
+        .prefix("plain-lookup-target")
+        .tempdir()
+        .unwrap();
+    let plain_collection = simple_collection_fixture(plain_collection_dir.path(), 1).await;
+    let point_id_sentinel = 4_242_424_242_u64;
+    let lookup_from_private_hnsw = || LookupLocation {
+        collection: "private_docs".to_string(),
+        vector: Some(DEFAULT_VECTOR_NAME.to_string()),
+        shard_key: None,
+    };
+
+    let lookup_collection = Arc::clone(&private_collection);
+    let err = plain_collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::Vector(VectorQuery::Nearest(
+                        VectorInputInternal::Id(point_id_sentinel.into()),
+                    ))),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: Some(lookup_from_private_hnsw()),
+                },
+                ShardSelectorInternal::All,
+            )],
+            move |_name| {
+                let lookup_collection = Arc::clone(&lookup_collection);
+                async move { Some(lookup_collection) }
+            },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_session_api_error_without(err, &["4242424242"]);
+
+    let lookup_collection = Arc::clone(&private_collection);
+    let err = recommend_by(
+        RecommendRequestInternal {
+            positive: vec![RecommendExample::PointId(point_id_sentinel.into())],
+            negative: vec![],
+            strategy: None,
+            filter: None,
+            params: None,
+            limit: 1,
+            offset: None,
+            with_payload: Some(WithPayloadInterface::Bool(false)),
+            with_vector: Some(WithVector::Bool(false)),
+            score_threshold: None,
+            using: None,
+            lookup_from: Some(lookup_from_private_hnsw()),
+        },
+        &plain_collection,
+        move |_name| {
+            let lookup_collection = Arc::clone(&lookup_collection);
+            async move { Some(lookup_collection) }
+        },
+        None,
+        ShardSelectorInternal::All,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_hnsw_session_api_error_without(err, &["4242424242"]);
+
+    let lookup_collection = Arc::clone(&private_collection);
+    let err = discover(
+        DiscoverRequestInternal {
+            target: Some(RecommendExample::PointId(point_id_sentinel.into())),
+            context: None,
+            filter: None,
+            params: None,
+            limit: 1,
+            offset: None,
+            with_payload: Some(WithPayloadInterface::Bool(false)),
+            with_vector: Some(WithVector::Bool(false)),
+            using: None,
+            lookup_from: Some(lookup_from_private_hnsw()),
+        },
+        &plain_collection,
+        move |_name| {
+            let lookup_collection = Arc::clone(&lookup_collection);
+            async move { Some(lookup_collection) }
+        },
+        None,
+        ShardSelectorInternal::All,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_hnsw_session_api_error_without(err, &["4242424242"]);
+
+    let lookup_collection = Arc::clone(&private_collection);
+    let err = GroupBy::new(
+        GroupRequest {
+            source: SourceRequest::Query(CollectionQueryRequest {
+                prefetch: vec![],
+                query: Some(Query::Vector(VectorQuery::Nearest(
+                    VectorInputInternal::Id(point_id_sentinel.into()),
+                ))),
+                using: DEFAULT_VECTOR_NAME.to_string(),
+                filter: None,
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+                lookup_from: Some(lookup_from_private_hnsw()),
+            }),
+            group_by: "group".parse().unwrap(),
+            group_size: 1,
+            limit: 1,
+            with_lookup: None,
+        },
+        &plain_collection,
+        move |_name| {
+            let lookup_collection = Arc::clone(&lookup_collection);
+            async move { Some(lookup_collection) }
+        },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap_err();
+    assert_private_hnsw_session_api_error_without(err, &["4242424242"]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
