@@ -13747,6 +13747,26 @@ esac
                 "cannot filter on private result ORAM payload field",
             );
 
+            assert_private_result_grpc_predicate_error(
+                crate::tonic::api::query_common::count(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::CountPoints {
+                        collection_name: "private_result_predicate_docs".to_string(),
+                        filter: Some(private_body_grpc_filter()),
+                        exact: Some(true),
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                )
+                .await
+                .expect_err("private result ORAM gRPC count filter must fail closed"),
+                "cannot filter on private result ORAM payload field",
+            );
+
             assert_private_result_predicate_error(
                 crate::common::query::do_query_points(
                     &toc,
