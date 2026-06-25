@@ -29,10 +29,10 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
         return Ok(());
     };
 
-    let action_label = if action == "create" {
-        "create payload index".to_string()
-    } else {
-        format!("{action} payload index schema")
+    let action_label = match action {
+        "create" => "create payload index".to_string(),
+        "delete" => "delete payload index".to_string(),
+        action => format!("{action} payload index schema"),
     };
 
     if encryption
@@ -255,6 +255,13 @@ impl Collection {
         &self,
         field_name: JsonPath,
     ) -> CollectionResult<Option<UpdateResult>> {
+        let collection_params = self.collection_config.read().await.params.clone();
+        validate_payload_index_paths_for_encrypted_paths(
+            [&field_name],
+            &collection_params,
+            "delete",
+        )?;
+
         self.payload_index_schema.write(|schema| {
             schema.schema.remove(&field_name);
         })?;
@@ -609,6 +616,22 @@ mod tests {
                 err,
                 CollectionError::BadInput { description }
                     if description.contains("create payload index")
+                        && description.contains("private result ORAM payload field")
+                        && description.contains("/private-result-oram/session")
+                        && !description.contains("document.body")
+            ));
+
+            let err = validate_payload_index_paths_for_encrypted_paths(
+                [&field_name.parse().unwrap()],
+                &collection_params,
+                "delete",
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                err,
+                CollectionError::BadInput { description }
+                    if description.contains("delete payload index")
                         && description.contains("private result ORAM payload field")
                         && description.contains("/private-result-oram/session")
                         && !description.contains("document.body")

@@ -1368,10 +1368,11 @@ pub async fn do_delete_index(
         field_name: index_name.clone(),
     });
 
-    // Nothing to verify here.
     let pass = new_unchecked_verification_pass();
 
     let toc = dispatcher.toc(&auth, &pass).clone();
+
+    ensure_payload_index_delete_allowed_by_encryption(&toc, &collection_name, &index_name).await?;
 
     // TODO: Is `submit_collection_meta_op` cancel-safe!? Should be, I think?.. 🤔
     dispatcher
@@ -1402,6 +1403,8 @@ pub async fn do_delete_index_internal(
     params: UpdateParams,
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<UpdateResult, StorageError> {
+    ensure_payload_index_delete_allowed_by_encryption(&toc, &collection_name, &index_name).await?;
+
     let operation = CollectionUpdateOperations::FieldIndexOperation(
         FieldIndexOperations::DeleteIndex(index_name),
     );
@@ -1495,6 +1498,24 @@ async fn ensure_payload_index_allowed_by_encryption(
     }
 
     Ok(())
+}
+
+async fn ensure_payload_index_delete_allowed_by_encryption(
+    toc: &TableOfContent,
+    collection_name: &str,
+    index_name: &JsonPath,
+) -> Result<(), StorageError> {
+    let multipass = CollectionMultipass;
+    let collection_pass = multipass.issue_pass(collection_name);
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+
+    validate_payload_index_paths_for_encrypted_paths(
+        [index_name],
+        &collection_config.params,
+        "delete",
+    )
+    .map_err(collection_error_to_storage_error)
 }
 
 fn collection_error_to_storage_error(err: CollectionError) -> StorageError {
@@ -4132,6 +4153,14 @@ esac
                     ordering: None,
                     timeout: None,
                 };
+            let grpc_private_result_delete_index =
+                || api::grpc::qdrant::DeleteFieldIndexCollection {
+                    collection_name: "private_result_write_docs".to_string(),
+                    wait: Some(true),
+                    field_name: "body".to_string(),
+                    ordering: None,
+                    timeout: None,
+                };
             let grpc_payload = |payload: Value| {
                 api::conversions::json::payload_to_proto(segment::types::Payload(
                     payload.as_object().unwrap().clone(),
@@ -4252,6 +4281,68 @@ esac
                     "private result ORAM gRPC internal create payload index must fail closed",
                 ),
                 "cannot create payload index on private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_delete_index(
+                    dispatcher.clone().into(),
+                    "private_result_write_docs".to_string(),
+                    "body".parse().unwrap(),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM delete payload index must fail closed"),
+                "cannot delete payload index on private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_delete_index_internal(
+                    toc.clone(),
+                    "private_result_write_docs".to_string(),
+                    "body".parse().unwrap(),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM internal delete payload index must fail closed"),
+                "cannot delete payload index on private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::delete_field_index(
+                    dispatcher.clone().into(),
+                    grpc_private_result_delete_index(),
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                )
+                .await
+                .expect_err("private result ORAM gRPC delete payload index must fail closed"),
+                "cannot delete payload index on private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::delete_field_index_internal(
+                    toc.clone(),
+                    grpc_private_result_delete_index(),
+                    InternalUpdateParams::default(),
+                )
+                .await
+                .expect_err(
+                    "private result ORAM gRPC internal delete payload index must fail closed",
+                ),
+                "cannot delete payload index on private result ORAM payload field",
             );
 
             assert_private_result_write_error(

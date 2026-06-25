@@ -1008,9 +1008,9 @@ guidance rather than suggesting a blind-index fallback.
 The gRPC facet, count filter, scroll filter/order-by, formula query, grouped
 search, and grouped query wrappers enforce the same selector guard after
 converting their payload paths.
-Payload index/schema creation on a `private-result-oram/v1` payload path,
-including gRPC create-field-index wrappers, is also rejected by the encrypted
-payload index guard.
+Payload index/schema creation or deletion on a `private-result-oram/v1` payload
+path, including gRPC create/delete-field-index wrappers, is also rejected by the
+encrypted payload index guard.
 Result ORAM snapshot restore preflight is open for configured
 `private-result-oram/v1` bindings and validates manifest/current epoch, buckets,
 Merkle metadata, and runtime Ed25519 signatures. The SDK search result now
