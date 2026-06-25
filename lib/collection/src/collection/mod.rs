@@ -672,6 +672,15 @@ impl Collection {
         new_state: ReplicaState,
         from_state: Option<ReplicaState>,
     ) -> CollectionResult<()> {
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
+
         let shard_holder = self.shards_holder.read().await;
         let replica_set = shard_holder
             .get_shard(shard_id)
@@ -684,6 +693,13 @@ impl Collection {
         );
 
         let current_state = replica_set.peer_state(peer_id);
+
+        validate_private_oram_resharding_replica_state_until_supported(
+            new_state,
+            from_state,
+            current_state,
+            private_oram_bucket_store_collection,
+        )?;
 
         // Validation:
         //
@@ -1493,6 +1509,35 @@ fn validate_private_oram_automatic_transfer_recovery_until_supported(
     ))
 }
 
+fn validate_private_oram_resharding_replica_state_until_supported(
+    new_state: ReplicaState,
+    from_state: Option<ReplicaState>,
+    current_state: Option<ReplicaState>,
+    private_oram_bucket_store_collection: bool,
+) -> CollectionResult<()> {
+    if !private_oram_bucket_store_collection
+        || !replica_state_transition_touches_resharding_state(new_state, from_state, current_state)
+    {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(
+        "cannot change resharding replica state for private ORAM collections: collection-local \
+         encrypted ORAM buckets cannot be moved or promoted by resharding until ORAM bucket \
+         migration and consensus-backed epoch/root ownership are implemented",
+    ))
+}
+
+fn replica_state_transition_touches_resharding_state(
+    new_state: ReplicaState,
+    from_state: Option<ReplicaState>,
+    current_state: Option<ReplicaState>,
+) -> bool {
+    new_state.is_resharding()
+        || from_state.is_some_and(|state| state.is_resharding())
+        || current_state.is_some_and(|state| state.is_resharding())
+}
+
 struct CollectionVersion;
 
 impl StorageVersion for CollectionVersion {
@@ -1719,6 +1764,51 @@ mod tests {
         assert!(!rendered.contains("shard 3"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains("private_result_oram"));
+    }
+
+    #[test]
+    fn private_oram_resharding_replica_state_guard_redacts_collection_details() {
+        validate_private_oram_resharding_replica_state_until_supported(
+            ReplicaState::Active,
+            Some(ReplicaState::Partial),
+            Some(ReplicaState::Partial),
+            true,
+        )
+        .unwrap();
+        validate_private_oram_resharding_replica_state_until_supported(
+            ReplicaState::Active,
+            Some(ReplicaState::Resharding),
+            Some(ReplicaState::Resharding),
+            false,
+        )
+        .unwrap();
+
+        for (new_state, from_state, current_state) in [
+            (ReplicaState::Resharding, None, None),
+            (ReplicaState::Active, Some(ReplicaState::Resharding), None),
+            (
+                ReplicaState::Dead,
+                None,
+                Some(ReplicaState::ReshardingScaleDown),
+            ),
+        ] {
+            let err = validate_private_oram_resharding_replica_state_until_supported(
+                new_state,
+                from_state,
+                current_state,
+                true,
+            )
+            .unwrap_err();
+            let rendered = format!("{err:?}");
+
+            assert!(rendered.contains("cannot change resharding replica state"));
+            assert!(rendered.contains("collection-local encrypted ORAM buckets"));
+            assert!(rendered.contains("consensus-backed epoch/root"));
+            assert!(!rendered.contains("private_hnsw_oram"));
+            assert!(!rendered.contains("private_result_oram"));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+        }
     }
 
     #[cfg(unix)]
