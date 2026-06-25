@@ -1698,11 +1698,50 @@ fn private_oram_snapshot_layout_error_contains_sensitive_detail(
     let collection_dir = collection_dir.to_string_lossy();
     rendered.contains(collection_dir.as_ref())
         || rendered.contains(private_oram_dir)
+        || private_oram_snapshot_layout_error_contains_sensitive_marker(rendered)
         || rendered
             .split(|ch: char| !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')))
             .any(|token| {
                 token.ends_with(".bucket") || looks_like_base64url_private_oram_token(token)
             })
+}
+
+fn private_oram_snapshot_layout_error_contains_sensitive_marker(rendered: &str) -> bool {
+    const SENSITIVE_MARKERS: &[&str] = &[
+        "accessed_leaf_labels",
+        "bucket id",
+        "bucket_id",
+        "bucket_ids",
+        "ciphertext",
+        "client_signature",
+        "commit_signature",
+        "entry_node_id",
+        "leaf hash",
+        "leaf_hash",
+        "leaf_label",
+        "manifest_signature",
+        "new_root_hash",
+        "node_id",
+        "old_root_hash",
+        "path_label",
+        "payload_fetch_token",
+        "payload_fetch_tokens",
+        "point_token",
+        "proof",
+        "read_bucket_id",
+        "read_bucket_ids",
+        "read_signature",
+        "root_hash",
+        "sibling hash",
+        "sibling_hash",
+        "signature",
+        "visited_node_ids",
+    ];
+
+    let rendered = rendered.to_ascii_lowercase();
+    SENSITIVE_MARKERS
+        .iter()
+        .any(|marker| rendered.contains(marker))
 }
 
 fn looks_like_base64url_private_oram_token(token: &str) -> bool {
@@ -2448,6 +2487,28 @@ mod tests {
         assert!(hnsw_bucket.contains("private HNSW ORAM snapshot layout validation failed"));
         assert!(!hnsw_bucket.contains("00000002.bucket"), "{hnsw_bucket}");
 
+        let hnsw_short_markers = [
+            "hnsw-short-bucket-id",
+            "hnsw-short-path-label",
+            "hnsw-short-node-id",
+            "hnsw-short-point-token",
+        ];
+        let hnsw_short = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private HNSW ORAM bucket_id {} path_label {} node_id {} point_token {}",
+                hnsw_short_markers[0],
+                hnsw_short_markers[1],
+                hnsw_short_markers[2],
+                hnsw_short_markers[3],
+            )),
+        )
+        .to_string();
+        assert!(hnsw_short.contains("private HNSW ORAM snapshot layout validation failed"));
+        for marker in hnsw_short_markers {
+            assert!(!hnsw_short.contains(marker), "{hnsw_short}");
+        }
+
         let leaked_ciphertext = BASE64URL_NOPAD.encode(&[7; 96]);
         let result = sanitize_private_result_oram_snapshot_layout_error(
             temp_dir.path(),
@@ -2458,6 +2519,29 @@ mod tests {
         .to_string();
         assert!(result.contains("private result ORAM snapshot layout validation failed"));
         assert!(!result.contains(&leaked_ciphertext), "{result}");
+
+        let result_short_markers = [
+            "result-short-read-bucket-id",
+            "result-short-proof-leaf",
+            "result-short-read-signature",
+            "result-short-commit-signature",
+        ];
+        let result_short = sanitize_private_result_oram_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private result ORAM read_bucket_id {} proof leaf_hash {} \
+                 read_signature {} commit_signature {}",
+                result_short_markers[0],
+                result_short_markers[1],
+                result_short_markers[2],
+                result_short_markers[3],
+            )),
+        )
+        .to_string();
+        assert!(result_short.contains("private result ORAM snapshot layout validation failed"));
+        for marker in result_short_markers {
+            assert!(!result_short.contains(marker), "{result_short}");
+        }
 
         let safe = sanitize_private_hnsw_snapshot_layout_error(
             temp_dir.path(),
