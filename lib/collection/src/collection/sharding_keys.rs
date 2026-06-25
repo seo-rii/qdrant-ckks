@@ -339,18 +339,18 @@ async fn cleanup_unadded_replica_set(replica_set: ShardReplicaSet) -> Collection
 }
 
 fn validate_private_oram_shard_key_change_until_supported(
-    operation_name: &str,
+    _operation_name: &str,
     private_oram_bucket_store_collection: bool,
 ) -> CollectionResult<()> {
     if !private_oram_bucket_store_collection {
         return Ok(());
     }
 
-    Err(CollectionError::bad_input(format!(
-        "cannot {operation_name} for private ORAM collections: collection-local encrypted ORAM \
+    Err(CollectionError::bad_input(
+        "cannot change shard-key layout for private ORAM collections: collection-local encrypted ORAM \
          buckets cannot be moved or deleted by shard-key layout changes until ORAM bucket \
          migration and consensus-backed epoch/root ownership are implemented",
-    )))
+    ))
 }
 
 fn validate_private_oram_replica_set_creation_until_supported(
@@ -375,17 +375,26 @@ mod tests {
     fn private_oram_shard_key_change_guard_redacts_collection_details() {
         validate_private_oram_shard_key_change_until_supported("create shard key", false).unwrap();
 
-        let err = validate_private_oram_shard_key_change_until_supported("create shard key", true)
-            .unwrap_err();
-        let rendered = format!("{err:?}");
+        for operation_name in [
+            "create shard key",
+            "drop shard key",
+            "private-shard-key-operation-sentinel",
+        ] {
+            let err = validate_private_oram_shard_key_change_until_supported(operation_name, true)
+                .unwrap_err();
+            let rendered = format!("{err:?}");
 
-        assert!(rendered.contains("cannot create shard key for private ORAM collections"));
-        assert!(rendered.contains("collection-local encrypted ORAM buckets"));
-        assert!(rendered.contains("consensus-backed epoch/root"));
-        assert!(!rendered.contains("private_hnsw_oram"));
-        assert!(!rendered.contains("private_result_oram"));
-        assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
-        assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+            assert!(
+                rendered.contains("cannot change shard-key layout for private ORAM collections")
+            );
+            assert!(rendered.contains("collection-local encrypted ORAM buckets"));
+            assert!(rendered.contains("consensus-backed epoch/root"));
+            assert!(!rendered.contains(operation_name));
+            assert!(!rendered.contains("private_hnsw_oram"));
+            assert!(!rendered.contains("private_result_oram"));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+        }
     }
 
     #[test]
