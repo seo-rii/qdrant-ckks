@@ -1312,11 +1312,7 @@ impl Collection {
                         rule.binding.as_deref() == Some(CLIENT_PAYLOAD_ENVELOPE_BINDING);
                     for encrypted_path in paths {
                         let encrypted_json_path =
-                            encrypted_path.parse::<JsonPath>().map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                                ))
-                            })?;
+                            parse_payload_selector_guard_path(rule, encrypted_path)?;
                         let touches_encrypted_payload = match operation {
                             CollectionUpdateOperations::PointOperation(point_operation) => {
                                 match point_operation {
@@ -2281,11 +2277,7 @@ impl Collection {
                             rule.binding.as_deref() == Some(CLIENT_PAYLOAD_ENVELOPE_BINDING);
                         for encrypted_path in paths {
                             let encrypted_json_path =
-                                encrypted_path.parse::<JsonPath>().map_err(|err| {
-                                    CollectionError::bad_input(format!(
-                                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                                    ))
-                                })?;
+                                parse_payload_selector_guard_path(rule, encrypted_path)?;
 
                             let touches_encrypted_payload = match &operation {
                                 CollectionUpdateOperations::PointOperation(point_operation) => {
