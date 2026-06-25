@@ -301,6 +301,10 @@ mod tests {
     fn audit_error_redaction_hides_private_oram_access_pattern_fields() {
         for error in [
             "private HNSW read failed path_label=private-path-label-sentinel",
+            "private HNSW read failed read_path=[private-read-path-sentinel]",
+            "private HNSW read failed readPath=[private-read-path-camel-sentinel]",
+            "private HNSW read failed read_path_label=private-read-path-label-sentinel",
+            "private HNSW read failed readPathLabel=private-read-path-label-camel-sentinel",
             "private HNSW read failed leafHash=private-leaf-hash-sentinel",
             "private HNSW read failed bucket_ids=[private-bucket-id-sentinel]",
             "private HNSW read failed root_hash=private-root-hash-sentinel",
