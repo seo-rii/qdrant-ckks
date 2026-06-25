@@ -156,7 +156,7 @@ impl Debug for PrivateHnswClientSignature {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswClientSignature")
             .field("alg", &self.alg)
-            .field("key_id", &self.key_id)
+            .field("key_id", &"[redacted]")
             .field("sig", &"[redacted]")
             .finish()
     }
@@ -3341,11 +3341,17 @@ mod private_hnsw_tests {
                 value: "hnsw-common-proof-sentinel".to_string(),
             },
         };
+        let client_signature = PrivateHnswClientSignature {
+            alg: "ed25519".to_string(),
+            key_id: "hnsw-common-client-signature-key-sentinel".to_string(),
+            sig: "hnsw-common-client-signature-body-sentinel".to_string(),
+        };
 
         let rendered = [
             format!("{session:?}"),
             format!("{response:?}"),
             format!("{read_response:?}"),
+            format!("{client_signature:?}"),
         ]
         .join("\n");
         for leaked in [
@@ -3355,6 +3361,8 @@ mod private_hnsw_tests {
             root_hash.as_str(),
             ciphertext.as_str(),
             "hnsw-common-proof-sentinel",
+            "hnsw-common-client-signature-key-sentinel",
+            "hnsw-common-client-signature-body-sentinel",
         ] {
             assert!(!rendered.contains(leaked), "{rendered}");
         }

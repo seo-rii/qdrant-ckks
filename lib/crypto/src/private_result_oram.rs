@@ -252,7 +252,7 @@ impl Debug for PrivateResultOramSignature {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramSignature")
             .field("alg", &self.alg)
-            .field("key_id", &self.key_id)
+            .field("key_id", &"[redacted]")
             .field("sig", &"[redacted]")
             .finish()
     }
@@ -1152,8 +1152,8 @@ impl Debug for PrivateResultOramCommitSignatureInput<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramCommitSignatureInput")
             .field("collection_id", &self.collection_id)
-            .field("key_id", &self.key_id)
-            .field("rk_id", &self.rk_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
             .field("old_epoch", &self.old_epoch)
             .field("new_epoch", &self.new_epoch)
@@ -1161,7 +1161,7 @@ impl Debug for PrivateResultOramCommitSignatureInput<'_> {
             .field("new_root_hash", &"[redacted]")
             .field("updated_bucket_count", &self.updated_buckets.len())
             .field("signature_alg", &self.signature_alg)
-            .field("signature_key_id", &self.signature_key_id)
+            .field("signature_key_id", &"[redacted]")
             .finish()
     }
 }
@@ -1184,15 +1184,15 @@ impl Debug for PrivateResultOramReadBucketsSignatureInput<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramReadBucketsSignatureInput")
             .field("collection_id", &self.collection_id)
-            .field("key_id", &self.key_id)
-            .field("rk_id", &self.rk_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
             .field("requested_bucket_count", &self.bucket_ids.len())
             .field("signature_alg", &self.signature_alg)
-            .field("signature_key_id", &self.signature_key_id)
+            .field("signature_key_id", &"[redacted]")
             .finish()
     }
 }
@@ -4126,7 +4126,7 @@ mod tests {
         };
         let signature = PrivateResultOramSignature {
             alg: "ed25519".to_string(),
-            key_id: "tenant-a/private-result-signing-v1".to_string(),
+            key_id: "RESULT-SIGNATURE-KEY-SENTINEL".to_string(),
             sig: "RESULT-SIGNATURE-SENTINEL".to_string(),
         };
         let state_snapshot = PrivateResultOramClientStateSnapshot {
@@ -4188,8 +4188,8 @@ mod tests {
         let commit_refs = commit_plan.signature_bucket_refs();
         let commit_signature_input = PrivateResultOramCommitSignatureInput {
             collection_id: "collection-uuid-1",
-            key_id: "tenant-a/payload-private-rk",
-            rk_id: "tenant-a/payload-private-rk",
+            key_id: "RESULT-COMMIT-KEY-SENTINEL",
+            rk_id: "RESULT-COMMIT-RK-SENTINEL",
             rk_epoch: 7,
             old_epoch: 42,
             new_epoch: 43,
@@ -4197,20 +4197,20 @@ mod tests {
             new_root_hash: "RESULT-NEW-ROOT-SENTINEL",
             updated_buckets: &commit_refs,
             signature_alg: "ed25519",
-            signature_key_id: "tenant-a/private-result-signing-v1",
+            signature_key_id: "RESULT-COMMIT-SIGNATURE-KEY-SENTINEL",
         };
         let read_bucket_ids = [123_456, 123_457];
         let read_signature_input = PrivateResultOramReadBucketsSignatureInput {
             collection_id: "collection-uuid-1",
-            key_id: "tenant-a/payload-private-rk",
-            rk_id: "tenant-a/payload-private-rk",
+            key_id: "RESULT-READ-KEY-SENTINEL",
+            rk_id: "RESULT-READ-RK-SENTINEL",
             rk_epoch: 7,
             index_epoch: 42,
             root_hash: "RESULT-ROOT-SENTINEL",
             bucket_count: 8,
             bucket_ids: &read_bucket_ids,
             signature_alg: "ed25519",
-            signature_key_id: "tenant-a/private-result-signing-v1",
+            signature_key_id: "RESULT-READ-SIGNATURE-KEY-SENTINEL",
         };
 
         let rendered = [
@@ -4266,7 +4266,14 @@ mod tests {
             "RESULT-CIPHERTEXT-SENTINEL".to_string(),
             "RESULT-SHA-SENTINEL".to_string(),
             "RESULT-COMMITMENT-SENTINEL".to_string(),
+            "RESULT-SIGNATURE-KEY-SENTINEL".to_string(),
             "RESULT-SIGNATURE-SENTINEL".to_string(),
+            "RESULT-COMMIT-KEY-SENTINEL".to_string(),
+            "RESULT-COMMIT-RK-SENTINEL".to_string(),
+            "RESULT-COMMIT-SIGNATURE-KEY-SENTINEL".to_string(),
+            "RESULT-READ-KEY-SENTINEL".to_string(),
+            "RESULT-READ-RK-SENTINEL".to_string(),
+            "RESULT-READ-SIGNATURE-KEY-SENTINEL".to_string(),
             "RESULT-ROOT-SENTINEL".to_string(),
             "RESULT-STATE-CIPHERTEXT-SENTINEL".to_string(),
             "RESULT-STATE-SHA-SENTINEL".to_string(),

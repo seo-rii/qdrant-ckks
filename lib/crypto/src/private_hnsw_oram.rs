@@ -255,7 +255,7 @@ impl Debug for PrivateHnswOramSignature {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswOramSignature")
             .field("alg", &self.alg)
-            .field("key_id", &self.key_id)
+            .field("key_id", &"[redacted]")
             .field("sig", &"[redacted]")
             .finish()
     }
@@ -322,8 +322,8 @@ impl Debug for PrivateHnswOramCommitSignatureInput<'_> {
         f.debug_struct("PrivateHnswOramCommitSignatureInput")
             .field("collection_id", &self.collection_id)
             .field("vector_name", &self.vector_name)
-            .field("key_id", &self.key_id)
-            .field("rk_id", &self.rk_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
             .field("old_epoch", &self.old_epoch)
             .field("new_epoch", &self.new_epoch)
@@ -331,7 +331,7 @@ impl Debug for PrivateHnswOramCommitSignatureInput<'_> {
             .field("new_root_hash", &"[redacted]")
             .field("updated_bucket_count", &self.updated_buckets.len())
             .field("signature_alg", &self.signature_alg)
-            .field("signature_key_id", &self.signature_key_id)
+            .field("signature_key_id", &"[redacted]")
             .finish()
     }
 }
@@ -357,8 +357,8 @@ impl Debug for PrivateHnswOramReadPathsSignatureInput<'_> {
         f.debug_struct("PrivateHnswOramReadPathsSignatureInput")
             .field("collection_id", &self.collection_id)
             .field("vector_name", &self.vector_name)
-            .field("key_id", &self.key_id)
-            .field("rk_id", &self.rk_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
@@ -366,7 +366,7 @@ impl Debug for PrivateHnswOramReadPathsSignatureInput<'_> {
             .field("requested_paths", &self.requested_paths)
             .field("dummy_paths_included", &self.dummy_paths_included)
             .field("signature_alg", &self.signature_alg)
-            .field("signature_key_id", &self.signature_key_id)
+            .field("signature_key_id", &"[redacted]")
             .finish()
     }
 }
@@ -1072,7 +1072,7 @@ mod tests {
         };
         let signature = PrivateHnswOramSignature {
             alg: "ed25519".to_string(),
-            key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+            key_id: "HNSW-SIGNATURE-KEY-SENTINEL".to_string(),
             sig: "HNSW-SIGNATURE-SENTINEL".to_string(),
         };
         let mut manifest = fixture_manifest();
@@ -1084,8 +1084,8 @@ mod tests {
         let commit_signature_input = PrivateHnswOramCommitSignatureInput {
             collection_id: "collection-uuid-1",
             vector_name: "text",
-            key_id: "tenant-a/vector-private-rk",
-            rk_id: "tenant-a/vector-private-rk",
+            key_id: "HNSW-COMMIT-KEY-SENTINEL",
+            rk_id: "HNSW-COMMIT-RK-SENTINEL",
             rk_epoch: 7,
             old_epoch: 42,
             new_epoch: 43,
@@ -1093,14 +1093,14 @@ mod tests {
             new_root_hash: "HNSW-NEW-ROOT-SENTINEL",
             updated_buckets: &commit_refs,
             signature_alg: "ed25519",
-            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+            signature_key_id: "HNSW-COMMIT-SIGNATURE-KEY-SENTINEL",
         };
         let paths = ["HNSW-PATH-LABEL-SENTINEL"];
         let read_paths_signature_input = PrivateHnswOramReadPathsSignatureInput {
             collection_id: "collection-uuid-1",
             vector_name: "text",
-            key_id: "tenant-a/vector-private-rk",
-            rk_id: "tenant-a/vector-private-rk",
+            key_id: "HNSW-READ-KEY-SENTINEL",
+            rk_id: "HNSW-READ-RK-SENTINEL",
             rk_epoch: 7,
             index_epoch: 42,
             root_hash: "HNSW-ROOT-SENTINEL",
@@ -1108,7 +1108,7 @@ mod tests {
             requested_paths: 1,
             dummy_paths_included: true,
             signature_alg: "ed25519",
-            signature_key_id: "tenant-a/private-hnsw-signing-v1",
+            signature_key_id: "HNSW-READ-SIGNATURE-KEY-SENTINEL",
         };
 
         let rendered = [
@@ -1132,7 +1132,14 @@ mod tests {
             "HNSW-CIPHERTEXT-SENTINEL",
             "HNSW-SHA-SENTINEL",
             "HNSW-COMMITMENT-SENTINEL",
+            "HNSW-SIGNATURE-KEY-SENTINEL",
             "HNSW-SIGNATURE-SENTINEL",
+            "HNSW-COMMIT-KEY-SENTINEL",
+            "HNSW-COMMIT-RK-SENTINEL",
+            "HNSW-COMMIT-SIGNATURE-KEY-SENTINEL",
+            "HNSW-READ-KEY-SENTINEL",
+            "HNSW-READ-RK-SENTINEL",
+            "HNSW-READ-SIGNATURE-KEY-SENTINEL",
             "HNSW-MANIFEST-ROOT-SENTINEL",
             "HNSW-OLD-ROOT-SENTINEL",
             "HNSW-NEW-ROOT-SENTINEL",
