@@ -401,9 +401,9 @@ impl Debug for PrivateResultOramEncryptedClientStateSnapshot {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramEncryptedClientStateSnapshot")
             .field("version", &self.version)
-            .field("index_epoch", &self.index_epoch)
+            .field("index_epoch", &"[redacted]")
             .field("root_hash", &"[redacted]")
-            .field("ciphertext_len", &self.ciphertext.len())
+            .field("ciphertext_len", &"[redacted]")
             .field("ciphertext_sha256", &"[redacted]")
             .finish()
     }
@@ -795,7 +795,7 @@ impl Debug for PrivateResultOramMerkleProof {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramMerkleProof")
             .field("kind", &self.kind)
-            .field("index_epoch", &self.index_epoch)
+            .field("index_epoch", &"[redacted]")
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
             .field("leaf_count", &self.leaves.len())
@@ -1040,7 +1040,7 @@ pub struct PrivateResultOramEncryptedBucketBatch {
 impl Debug for PrivateResultOramEncryptedBucketBatch {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramEncryptedBucketBatch")
-            .field("index_epoch", &self.index_epoch)
+            .field("index_epoch", &"[redacted]")
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
             .field("proof_value", &"[redacted]")
@@ -4233,6 +4233,19 @@ mod tests {
             format!("{read_signature_input:?}"),
         ]
         .join("\n");
+        for epoch_redacted in [
+            format!("{encrypted_state_snapshot:?}"),
+            format!("{proof:?}"),
+            format!("{encrypted_batch:?}"),
+        ] {
+            assert!(!epoch_redacted.contains("42"), "{epoch_redacted}");
+        }
+        let encrypted_state_snapshot_rendered = format!("{encrypted_state_snapshot:?}");
+        assert!(
+            !encrypted_state_snapshot_rendered
+                .contains(&encrypted_state_snapshot.ciphertext.len().to_string()),
+            "{encrypted_state_snapshot_rendered}"
+        );
         let encrypted_bucket_rendered = format!("{encrypted_bucket:?}");
         assert!(!encrypted_bucket_rendered.contains("123456"));
         assert!(!encrypted_bucket_rendered.contains("42"));
