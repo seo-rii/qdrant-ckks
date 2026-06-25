@@ -988,8 +988,9 @@ and explicit sibling paths, such as a `document.title` write beside protected
 `document.body`, stay on the ordinary update path.
 Ordinary raw payload reads through retrieve, scroll, search, or query also fail
 closed when `with_payload` would return a `private-result-oram/v1` payload path.
-The public gRPC `GetPoints` and `ScrollPoints` wrappers follow the same
-fail-closed read guard before returning raw protected payload bytes.
+The public gRPC `GetPoints`, `ScrollPoints`, `SearchPoints`, `RecommendPoints`,
+`DiscoverPoints`, and `QueryPoints` wrappers follow the same fail-closed read
+guard before returning raw protected payload bytes.
 Callers may omit payloads or request redacted encrypted payload output, but raw
 result payload bytes require the private result ORAM session/read/commit APIs.
 Trusted-bridge CKKS sidecar fallback paths, including point-id query resolution,

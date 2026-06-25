@@ -12294,6 +12294,26 @@ esac
                     api::grpc::qdrant::with_payload_selector::SelectorOptions::Enable(true),
                 ),
             };
+            let grpc_dense_vector = || api::grpc::qdrant::Vector {
+                vector: Some(api::grpc::qdrant::vector::Vector::Dense(
+                    api::grpc::qdrant::DenseVector {
+                        data: vec![0.1, 0.2],
+                    },
+                )),
+                ..Default::default()
+            };
+            let grpc_dense_input = || api::grpc::qdrant::VectorInput {
+                variant: Some(api::grpc::qdrant::vector_input::Variant::Dense(
+                    api::grpc::qdrant::DenseVector {
+                        data: vec![0.1, 0.2],
+                    },
+                )),
+            };
+            let grpc_nearest_query = || api::grpc::qdrant::Query {
+                variant: Some(api::grpc::qdrant::query::Variant::Nearest(
+                    grpc_dense_input(),
+                )),
+            };
             let collection_pass = auth
                 .check_collection_access("private_result_docs", AccessRequirements::new(), "test")
                 .unwrap();
@@ -12494,6 +12514,35 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM search must fail closed"),
+            );
+
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::search(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::SearchPoints {
+                        collection_name: "private_result_docs".to_string(),
+                        vector: vec![0.1, 0.2],
+                        filter: None,
+                        limit: 1,
+                        with_payload: Some(grpc_payload_enabled()),
+                        params: None,
+                        score_threshold: None,
+                        offset: None,
+                        vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        with_vectors: None,
+                        read_consistency: None,
+                        timeout: None,
+                        shard_key_selector: None,
+                        sparse_indices: None,
+                        ckks_encrypted_query: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC search must fail closed"),
             );
 
             assert_private_result_session_error(
@@ -12788,6 +12837,37 @@ esac
                 .expect_err("private result ORAM recommend must fail closed"),
             );
 
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::recommend(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::RecommendPoints {
+                        collection_name: "private_result_docs".to_string(),
+                        positive: Vec::new(),
+                        negative: Vec::new(),
+                        filter: None,
+                        limit: 1,
+                        with_payload: Some(grpc_payload_enabled()),
+                        params: None,
+                        score_threshold: None,
+                        offset: None,
+                        using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        with_vectors: None,
+                        lookup_from: None,
+                        read_consistency: None,
+                        strategy: None,
+                        positive_vectors: vec![grpc_dense_vector()],
+                        negative_vectors: Vec::new(),
+                        timeout: None,
+                        shard_key_selector: None,
+                    },
+                    auth.clone(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC recommend must fail closed"),
+            );
+
             assert_private_result_session_error(
                 collection::recommendations::recommend_by(
                     RecommendRequestInternal {
@@ -12942,6 +13022,43 @@ esac
                 .expect_err("private result ORAM discover must fail closed"),
             );
 
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::discover(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::DiscoverPoints {
+                        collection_name: "private_result_docs".to_string(),
+                        target: Some(api::grpc::qdrant::TargetVector {
+                            target: Some(api::grpc::qdrant::target_vector::Target::Single(
+                                api::grpc::qdrant::VectorExample {
+                                    example: Some(
+                                        api::grpc::qdrant::vector_example::Example::Vector(
+                                            grpc_dense_vector(),
+                                        ),
+                                    ),
+                                },
+                            )),
+                        }),
+                        context: Vec::new(),
+                        filter: None,
+                        limit: 1,
+                        with_payload: Some(grpc_payload_enabled()),
+                        params: None,
+                        offset: None,
+                        using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        with_vectors: None,
+                        lookup_from: None,
+                        read_consistency: None,
+                        timeout: None,
+                        shard_key_selector: None,
+                    },
+                    auth.clone(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC discover must fail closed"),
+            );
+
             assert_private_result_session_error(
                 collection::discovery::discover(
                     DiscoverRequestInternal {
@@ -13025,6 +13142,36 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM universal query must fail closed"),
+            );
+
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::query(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::QueryPoints {
+                        collection_name: "private_result_docs".to_string(),
+                        prefetch: Vec::new(),
+                        query: Some(grpc_nearest_query()),
+                        using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        limit: Some(1),
+                        offset: None,
+                        with_vectors: None,
+                        with_payload: Some(grpc_payload_enabled()),
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        lookup_from: None,
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    InferenceParams::default(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC query must fail closed"),
             );
 
             assert_private_result_session_error(
@@ -13111,6 +13258,38 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM batch universal query must fail closed"),
+            );
+
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::query_batch(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_docs",
+                    vec![api::grpc::qdrant::QueryPoints {
+                        collection_name: "private_result_docs".to_string(),
+                        prefetch: Vec::new(),
+                        query: Some(grpc_nearest_query()),
+                        using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        limit: Some(1),
+                        offset: None,
+                        with_vectors: None,
+                        with_payload: Some(grpc_payload_enabled()),
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        lookup_from: None,
+                        timeout: None,
+                    }],
+                    None,
+                    auth.clone(),
+                    None,
+                    request_hw_counter(),
+                    InferenceParams::default(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC batch query must fail closed"),
             );
         });
     }
