@@ -459,13 +459,17 @@ mod tests {
     #[test]
     fn health_checker_panic_message_redacts_crypto_material() {
         let message = redact_health_checker_panic_message(
-            "health panic with session_token=session-token-sentinel, signatureB64=sig-sentinel, owner_signing_key_id=owner-signing-key-sentinel",
+            "health panic with session_token=session-token-sentinel, signatureB64=sig-sentinel, \
+             owner_signing_key_id=owner-signing-key-sentinel, readPath=read-path-camel-sentinel, \
+             readPathLabel=read-path-label-camel-sentinel",
         );
 
         assert!(message.contains("crypto material omitted"));
         assert!(!message.contains("session-token-sentinel"));
         assert!(!message.contains("sig-sentinel"));
         assert!(!message.contains("owner-signing-key-sentinel"));
+        assert!(!message.contains("read-path-camel-sentinel"));
+        assert!(!message.contains("read-path-label-camel-sentinel"));
     }
 
     #[test]
