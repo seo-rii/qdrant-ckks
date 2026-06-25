@@ -521,4 +521,49 @@ mod tests {
             vec![1, 2, 3, 4, 5],
         );
     }
+
+    #[test]
+    fn private_oram_readiness_mismatch_reports_only_peer_ids() {
+        let local_fingerprint = "private-oram-local-fingerprint-sentinel";
+        let peer_fingerprint = "private-oram-peer-fingerprint-sentinel";
+        let verifier_key = "private-oram-verifier-public-key-sentinel";
+        let mut metadata = HashMap::from([
+            (
+                1,
+                PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                    local_fingerprint.to_string(),
+                )),
+            ),
+            (
+                2,
+                PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(format!(
+                    "{peer_fingerprint}:{verifier_key}"
+                ))),
+            ),
+            (3, PeerMetadata::current()),
+            (
+                4,
+                PeerMetadata::current_with_crypto_runtime_capability_fingerprint(Some(
+                    String::new(),
+                )),
+            ),
+        ]);
+
+        let mismatches = crypto_runtime_capability_mismatched_peers(1, &metadata);
+        assert_eq!(mismatches, vec![2, 3, 4]);
+
+        let rendered = format!("{mismatches:?}");
+        for sentinel in [local_fingerprint, peer_fingerprint, verifier_key] {
+            assert!(
+                !rendered.contains(sentinel),
+                "readiness mismatch output must not expose private ORAM fingerprint material: {rendered}",
+            );
+        }
+
+        metadata.remove(&1);
+        assert_eq!(
+            crypto_runtime_capability_mismatched_peers(1, &metadata),
+            vec![1, 2, 3, 4],
+        );
+    }
 }
