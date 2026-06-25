@@ -1036,7 +1036,7 @@ fn validate_private_result_oram_snapshot_store_matches_config(
 fn validate_private_oram_shard_snapshot_operation(
     _collection_name: &str,
     params: &CollectionParams,
-    operation_name: &str,
+    _operation_name: &str,
 ) -> CollectionResult<()> {
     if private_hnsw_oram_configured_vectors(params)?.is_empty()
         && !private_result_oram_configured(params)?
@@ -1044,11 +1044,11 @@ fn validate_private_oram_shard_snapshot_operation(
         return Ok(());
     }
 
-    Err(CollectionError::bad_request(format!(
-        "{operation_name} for private ORAM collections is disabled until shard snapshots include \
+    Err(CollectionError::bad_request(
+        "shard snapshot operations for private ORAM collections are disabled until shard snapshots include \
          collection-local encrypted ORAM buckets with epoch/root parity; \
          use collection snapshot/restore preflight",
-    )))
+    ))
 }
 
 fn validate_private_hnsw_oram_vector_snapshot(
@@ -3102,6 +3102,7 @@ mod tests {
             "shard snapshot upload recovery",
             "partial shard snapshot recovery",
             "partial shard snapshot manifest",
+            "private-shard-snapshot-operation-sentinel",
         ] {
             for config in &configs {
                 let err = validate_private_oram_shard_snapshot_operation(
@@ -3112,7 +3113,9 @@ mod tests {
                 .expect_err("private ORAM shard snapshots must fail closed");
                 let rendered = err.to_string();
                 assert!(
-                    rendered.contains(&format!("{operation_name} for private ORAM collections")),
+                    rendered.contains(
+                        "shard snapshot operations for private ORAM collections are disabled"
+                    ),
                     "unexpected error: {rendered}",
                 );
                 assert!(
@@ -3123,6 +3126,7 @@ mod tests {
                     rendered.contains("collection snapshot/restore preflight"),
                     "unexpected error: {rendered}",
                 );
+                assert!(!rendered.contains(operation_name));
                 assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
                 assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
                 for sentinel in [
