@@ -5,7 +5,7 @@ use common::fs::sync_parent_dir_async;
 use fs_err::tokio as tokio_fs;
 use segment::types::ShardKey;
 
-use crate::collection::Collection;
+use super::{Collection, collection_encryption_uses_private_oram_bucket_store};
 use crate::collection::payload_index_schema::validate_payload_index_schema_for_encryption;
 use crate::config::ShardingMethod;
 use crate::operations::types::{CollectionError, CollectionResult};
@@ -70,6 +70,9 @@ impl Collection {
         placement: ShardsPlacement,
         init_state: ReplicaState,
     ) -> CollectionResult<()> {
+        self.validate_private_oram_shard_key_change_until_supported("create shard key")
+            .await?;
+
         let hw_counter = HwMeasurementAcc::disposable(); // Internal operation. No measurement needed.
 
         let state = self.state().await;
@@ -197,6 +200,9 @@ impl Collection {
     }
 
     pub async fn drop_shard_key(&self, shard_key: ShardKey) -> CollectionResult<()> {
+        self.validate_private_oram_shard_key_change_until_supported("drop shard key")
+            .await?;
+
         let state = self.state().await;
 
         match state.config.params.sharding_method.unwrap_or_default() {
@@ -273,6 +279,24 @@ impl Collection {
         }
         Ok(replicas)
     }
+
+    async fn validate_private_oram_shard_key_change_until_supported(
+        &self,
+        operation_name: &str,
+    ) -> CollectionResult<()> {
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
+        validate_private_oram_shard_key_change_until_supported(
+            operation_name,
+            private_oram_bucket_store_collection,
+        )
+    }
 }
 
 async fn cleanup_unadded_replica_set(replica_set: ShardReplicaSet) -> CollectionResult<()> {
@@ -292,5 +316,42 @@ async fn cleanup_unadded_replica_set(replica_set: ShardReplicaSet) -> Collection
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(CollectionError::service_error(err.to_string())),
+    }
+}
+
+fn validate_private_oram_shard_key_change_until_supported(
+    operation_name: &str,
+    private_oram_bucket_store_collection: bool,
+) -> CollectionResult<()> {
+    if !private_oram_bucket_store_collection {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(format!(
+        "cannot {operation_name} for private ORAM collections: collection-local encrypted ORAM \
+         buckets cannot be moved or deleted by shard-key layout changes until ORAM bucket \
+         migration and consensus-backed epoch/root ownership are implemented",
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_oram_shard_key_change_guard_redacts_collection_details() {
+        validate_private_oram_shard_key_change_until_supported("create shard key", false).unwrap();
+
+        let err = validate_private_oram_shard_key_change_until_supported("create shard key", true)
+            .unwrap_err();
+        let rendered = format!("{err:?}");
+
+        assert!(rendered.contains("cannot create shard key for private ORAM collections"));
+        assert!(rendered.contains("collection-local encrypted ORAM buckets"));
+        assert!(rendered.contains("consensus-backed epoch/root"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("private_result_oram"));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
     }
 }
