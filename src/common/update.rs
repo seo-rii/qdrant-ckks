@@ -4051,6 +4051,9 @@ esac
                         "{message}"
                     );
                     assert!(!message.contains("payload encryption runtime"), "{message}");
+                    assert!(!message.contains("ordinary"), "{message}");
+                    assert!(!message.contains("body"), "{message}");
+                    assert!(!message.contains("title"), "{message}");
                 };
 
             assert_private_result_write_error(
@@ -4187,6 +4190,75 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM payload-less upsert must fail closed"),
+                "cannot upsert points for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_upsert_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    PointInsertOperations::PointsBatch(api::rest::schema::PointsBatch {
+                        batch: api::rest::schema::Batch {
+                            ids: vec![5.into()],
+                            vectors: api::rest::schema::BatchVectorStruct::Single(vec![vec![
+                                0.9, 1.0,
+                            ]]),
+                            payloads: Some(vec![Some(segment::types::Payload(
+                                json!({ "title": "ordinary public-looking batch payload" })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            ))]),
+                        },
+                        shard_key: None,
+                        update_filter: None,
+                        update_mode: None,
+                    }),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM public-looking batch upsert must fail closed"),
+                "cannot upsert points for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_upsert_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    PointInsertOperations::PointsBatch(api::rest::schema::PointsBatch {
+                        batch: api::rest::schema::Batch {
+                            ids: vec![6.into()],
+                            vectors: api::rest::schema::BatchVectorStruct::Single(vec![vec![
+                                1.1, 1.2,
+                            ]]),
+                            payloads: None,
+                        },
+                        shard_key: None,
+                        update_filter: None,
+                        update_mode: None,
+                    }),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM payload-less batch upsert must fail closed"),
                 "cannot upsert points for private result ORAM payload field",
             );
 
@@ -4456,6 +4528,87 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM batch upsert operation must fail closed"),
+                "cannot upsert points for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_batch_update_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    vec![UpdateOperation::Upsert(UpsertOperation {
+                        upsert: PointInsertOperations::PointsBatch(
+                            api::rest::schema::PointsBatch {
+                                batch: api::rest::schema::Batch {
+                                    ids: vec![3.into()],
+                                    vectors: api::rest::schema::BatchVectorStruct::Single(vec![
+                                        vec![0.7, 0.8],
+                                    ]),
+                                    payloads: Some(vec![Some(segment::types::Payload(
+                                        json!({
+                                            "title": "ordinary public-looking batch operation payload",
+                                        })
+                                        .as_object()
+                                        .unwrap()
+                                        .clone(),
+                                    ))]),
+                                },
+                                shard_key: None,
+                                update_filter: None,
+                                update_mode: None,
+                            },
+                        ),
+                    })],
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err(
+                    "private result ORAM public-looking batch upsert operation must fail closed",
+                ),
+                "cannot upsert points for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_batch_update_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    vec![UpdateOperation::Upsert(UpsertOperation {
+                        upsert: PointInsertOperations::PointsBatch(
+                            api::rest::schema::PointsBatch {
+                                batch: api::rest::schema::Batch {
+                                    ids: vec![4.into()],
+                                    vectors: api::rest::schema::BatchVectorStruct::Single(vec![
+                                        vec![0.9, 1.0],
+                                    ]),
+                                    payloads: None,
+                                },
+                                shard_key: None,
+                                update_filter: None,
+                                update_mode: None,
+                            },
+                        ),
+                    })],
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM payload-less batch upsert operation must fail closed"),
                 "cannot upsert points for private result ORAM payload field",
             );
 
