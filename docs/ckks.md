@@ -609,6 +609,8 @@ runtime fallback messages on ordinary vector upsert/update, inference-derived
 vector writes, point delete, peer `SyncPoints`, `delete_vectors`,
 query/search/recommend/discover/group/matrix APIs, `lookup_from` source-vector
 resolution, or lower-level collection peer/internal write guards.
+Ordinary retrieve/scroll reads that do not request vector output remain allowed,
+because they do not ask Qdrant to reveal or score the private vector.
 Collection-internal direct query/search/search-matrix entrypoints make the same
 binding distinction: `private-hnsw-oram/v1` returns private ORAM session
 guidance, while other encrypted vector bindings keep the CKKS sidecar runtime
@@ -994,8 +996,9 @@ discover, `QueryPoints`, and grouped/batch query wrappers follow the same
 fail-closed read guard before returning raw protected payload bytes.
 Grouped gRPC `with_lookup` payload requests use the same guard when the lookup
 collection is bound to `private-result-oram/v1`.
-Callers may omit payloads or request redacted encrypted payload output, but raw
-result payload bytes require the private result ORAM session/read/commit APIs.
+Callers may omit payloads or request redacted encrypted payload output, so
+payload-omitted retrieve/scroll/search requests remain ordinary. Raw result
+payload bytes require the private result ORAM session/read/commit APIs.
 Trusted-bridge CKKS sidecar fallback paths, including point-id query resolution,
 grouped search/query, and search matrix sampling, request only the reserved
 vector sidecar field and any required group key instead of full raw payloads, so

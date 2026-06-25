@@ -6745,6 +6745,28 @@ esac
             .expect("private HNSW ORAM retrieve without vectors must remain ordinary");
             assert!(no_vector_records.is_empty());
 
+            let no_vector_scroll = crate::common::query::do_scroll_points(
+                &toc,
+                collection_name,
+                shard::scroll::ScrollRequestInternal {
+                    offset: None,
+                    limit: Some(1),
+                    filter: None,
+                    with_payload: Some(WithPayloadInterface::Bool(true)),
+                    with_vector: WithVector::Bool(false),
+                    order_by: None,
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .expect("private HNSW ORAM scroll without vectors must remain ordinary");
+            assert!(no_vector_scroll.points.is_empty());
+
             let grpc_no_vector_records = crate::tonic::api::query_common::get(
                 UncheckedTocProvider::new_unchecked(&toc),
                 api::grpc::qdrant::GetPoints {
@@ -12617,6 +12639,52 @@ esac
             .expect("private result ORAM gRPC retrieve without payload must remain ordinary")
             .into_inner();
             assert!(grpc_no_payload_records.result.is_empty());
+
+            let no_payload_scroll = crate::common::query::do_scroll_points(
+                &toc,
+                "private_result_docs",
+                shard::scroll::ScrollRequestInternal {
+                    offset: None,
+                    limit: Some(1),
+                    filter: None,
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: WithVector::Bool(false),
+                    order_by: None,
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .expect("private result ORAM scroll without payload must remain ordinary");
+            assert!(no_payload_scroll.points.is_empty());
+
+            let no_payload_search = crate::common::query::do_search_points(
+                &toc,
+                "private_result_docs",
+                SearchRequestInternal {
+                    vector: vec![0.1, 0.2].into(),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: Some(WithVector::Bool(false)),
+                    filter: None,
+                    params: None,
+                    limit: 1,
+                    offset: None,
+                    score_threshold: None,
+                },
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                None,
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .expect("private result ORAM search without payload must remain ordinary");
+            assert!(no_payload_search.is_empty());
 
             let grpc_no_payload_search = crate::tonic::api::query_common::search(
                 UncheckedTocProvider::new_unchecked(&toc),
