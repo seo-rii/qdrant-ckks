@@ -327,6 +327,28 @@ fn assert_private_result_oram_read_error_without(
     }
 }
 
+fn assert_private_result_oram_selector_error_without(
+    err: CollectionError,
+    operation: &str,
+    forbidden: &[&str],
+) {
+    let CollectionError::BadInput { description } = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert!(
+        description.contains(&format!(
+            "cannot {operation} private result ORAM payload field"
+        )) && description.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+            && description.contains("/private-result-oram/session")
+            && !description.contains("blind index")
+            && !description.contains("runtime payload encryption"),
+        "unexpected error: {description}",
+    );
+    for value in forbidden {
+        assert!(!description.contains(value), "{description}");
+    }
+}
+
 #[derive(Clone, Copy)]
 struct CollectionTestCkksBackend;
 
@@ -3045,6 +3067,284 @@ async fn private_result_oram_raw_payload_reads_require_session_api_in_collection
         .await
         .unwrap_err();
     assert_private_result_oram_read_error_without(err, "query", &forbidden);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn private_result_oram_payload_selectors_require_session_api_in_collection_ops() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        private_result_oram_encryption_config(),
+    )
+    .await;
+    let private_payload_value = "private result selector sentinel";
+    let private_filter = || {
+        Filter::new_must(Condition::Field(FieldCondition::new_match(
+            "document.body.lang".parse().unwrap(),
+            private_payload_value.to_string().into(),
+        )))
+    };
+    let private_order_by = || OrderBy {
+        key: "document.body.lang".parse().unwrap(),
+        direction: Some(Direction::Asc),
+        start_from: None,
+    };
+    let forbidden = [
+        "document.body.lang",
+        "document.body",
+        "document",
+        "body",
+        "lang",
+        private_payload_value,
+    ];
+
+    let err = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: Some(private_filter()),
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: false.into(),
+                order_by: None,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_selector_error_without(err, "filter on", &forbidden);
+
+    let err = collection
+        .count(
+            CountRequestInternal {
+                filter: Some(private_filter()),
+                exact: true,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_selector_error_without(err, "filter on", &forbidden);
+
+    let err = collection
+        .search(
+            SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: None,
+                filter: Some(private_filter()),
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into(),
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_selector_error_without(err, "filter on", &forbidden);
+
+    let err = collection
+        .query(
+            ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Sample(SampleInternal::Random)),
+                filter: Some(private_filter()),
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: WithPayloadInterface::Bool(false),
+            },
+            None,
+            ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_selector_error_without(err, "filter on", &forbidden);
+
+    let err = collection
+        .facet(
+            FacetParams {
+                key: "document.title".parse().unwrap(),
+                limit: 10,
+                filter: Some(private_filter()),
+                exact: true,
+            },
+            ShardSelectorInternal::All,
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_selector_error_without(err, "filter on", &forbidden);
+
+    let err = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: None,
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: false.into(),
+                order_by: Some(OrderByInterface::Struct(private_order_by())),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_selector_error_without(err, "order by", &forbidden);
+
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::OrderBy(private_order_by())),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_selector_error_without(err, "order by", &forbidden);
+
+    let err = collection
+        .facet(
+            FacetParams {
+                key: "document.body.lang".parse().unwrap(),
+                limit: 10,
+                filter: None,
+                exact: true,
+            },
+            ShardSelectorInternal::All,
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_selector_error_without(err, "facet on", &forbidden);
+
+    let group_request = GroupRequest {
+        source: SourceRequest::Search(SearchRequestInternal {
+            vector: vec![0.0, 0.0, 0.0, 0.0].into(),
+            filter: None,
+            params: None,
+            limit: 1,
+            offset: Some(0),
+            with_payload: Some(WithPayloadInterface::Bool(false)),
+            with_vector: Some(WithVector::Bool(false)),
+            score_threshold: None,
+        }),
+        group_by: "document.body.lang".parse().unwrap(),
+        group_size: 1,
+        limit: 1,
+        with_lookup: None,
+    };
+    let err = GroupBy::new(
+        group_request,
+        &collection,
+        |_name| async { None },
+        HwMeasurementAcc::new(),
+    )
+    .execute()
+    .await
+    .unwrap_err();
+    assert_private_result_oram_selector_error_without(err, "group by", &forbidden);
+
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::Formula(FormulaInternal {
+                        formula: ExpressionInternal::Variable("document.body.lang".to_string()),
+                        defaults: HashMap::new(),
+                    })),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_selector_error_without(err, "use", &forbidden);
+
+    let err = collection
+        .query_batch(
+            vec![(
+                CollectionQueryRequest {
+                    prefetch: vec![],
+                    query: Some(Query::Formula(FormulaInternal {
+                        formula: ExpressionInternal::Condition(Box::new(
+                            private_filter().must.unwrap().pop().unwrap(),
+                        )),
+                        defaults: HashMap::new(),
+                    })),
+                    using: DEFAULT_VECTOR_NAME.to_string(),
+                    filter: None,
+                    score_threshold: None,
+                    limit: 1,
+                    offset: 0,
+                    params: None,
+                    with_vector: WithVector::Bool(false),
+                    with_payload: WithPayloadInterface::Bool(false),
+                    lookup_from: None,
+                },
+                ShardSelectorInternal::All,
+            )],
+            |_name| async { None },
+            None,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_result_oram_selector_error_without(err, "use formula condition on", &forbidden);
 }
 
 #[tokio::test(flavor = "multi_thread")]
