@@ -286,8 +286,14 @@ mod tests {
         let signature_public_key = "qdrant-sec-telemetry-signature-public-key-sentinel";
         let private_hnsw_signature_public_key =
             "qdrant-sec-telemetry-private-hnsw-signature-public-key-sentinel";
+        let private_hnsw_key_id = "qdrant-sec-telemetry-private-hnsw-key-id-sentinel";
+        let private_hnsw_signing_key_id =
+            "qdrant-sec-telemetry-private-hnsw-signing-key-id-sentinel";
         let private_result_signature_public_key =
             "qdrant-sec-telemetry-private-result-signature-public-key-sentinel";
+        let private_result_key_id = "qdrant-sec-telemetry-private-result-key-id-sentinel";
+        let private_result_signing_key_id =
+            "qdrant-sec-telemetry-private-result-signing-key-id-sentinel";
         let mut settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: None,
@@ -324,8 +330,8 @@ mod tests {
                             materials: HashMap::new(),
                             backend_ref: None,
                             options: json!({
-                                "key_id": "tenant-a/vector-private-rk",
-                                "expected_rk_id": "tenant-a/vector-private-rk",
+                                "key_id": private_hnsw_key_id,
+                                "expected_rk_id": private_hnsw_key_id,
                                 "min_rk_epoch": 7,
                                 "max_rk_epoch": 7,
                                 "search_execution": "client_led",
@@ -359,7 +365,7 @@ mod tests {
                                     "merkle_root_required": true,
                                 },
                                 "signature_public_keys": {
-                                    "tenant-a/private-hnsw-signing-v1": private_hnsw_signature_public_key,
+                                    "qdrant-sec-telemetry-private-hnsw-signing-key-id-sentinel": private_hnsw_signature_public_key,
                                 },
                             }),
                         },
@@ -371,8 +377,8 @@ mod tests {
                             materials: HashMap::new(),
                             backend_ref: None,
                             options: json!({
-                                "key_id": "tenant-a/result-private-rk",
-                                "expected_rk_id": "tenant-a/result-private-rk",
+                                "key_id": private_result_key_id,
+                                "expected_rk_id": private_result_key_id,
                                 "min_rk_epoch": 7,
                                 "max_rk_epoch": 7,
                                 "result_privacy": "private_payload_oram_required",
@@ -389,7 +395,7 @@ mod tests {
                                     "merkle_root_required": true,
                                 },
                                 "signature_public_keys": {
-                                    "tenant-a/private-result-signing-v1": private_result_signature_public_key,
+                                    "qdrant-sec-telemetry-private-result-signing-key-id-sentinel": private_result_signature_public_key,
                                 },
                             }),
                         },
@@ -429,7 +435,11 @@ mod tests {
             wrapped_secret,
             signature_public_key,
             private_hnsw_signature_public_key,
+            private_hnsw_key_id,
+            private_hnsw_signing_key_id,
             private_result_signature_public_key,
+            private_result_key_id,
+            private_result_signing_key_id,
         ] {
             assert!(
                 !serialized.contains(sentinel),
