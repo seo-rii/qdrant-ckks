@@ -3115,6 +3115,20 @@ mod tests {
                 );
                 assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
                 assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
+                for sentinel in [
+                    "tenant-a/vector-private-rk",
+                    "docs_text_private_hnsw",
+                    PRIVATE_HNSW_ORAM_BINDING,
+                    "tenant-a/result-private-rk",
+                    "docs_body_private_result",
+                    "docs_private_result_oram",
+                    PRIVATE_RESULT_ORAM_BINDING,
+                ] {
+                    assert!(
+                        !rendered.contains(sentinel),
+                        "private ORAM shard snapshot guard must not expose config sentinel `{sentinel}`: {rendered}",
+                    );
+                }
             }
         }
     }
