@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use ahash::AHashMap;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
@@ -212,6 +212,14 @@ impl Collection {
         let mut extra_shards: AHashMap<ShardId, ShardReplicaSet> = AHashMap::new();
 
         let shard_ids = shards.keys().copied().collect::<HashSet<_>>();
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
 
         // There are two components, where shard-related info is stored:
         // Shard objects themselves and shard_holder, that maps shard_keys to shards.
@@ -220,6 +228,30 @@ impl Collection {
         // and create new shards if needed
 
         let mut shards_holder = self.shards_holder.write().await;
+
+        let current_shard_ids = shards_holder
+            .get_shards()
+            .map(|(shard_id, _)| shard_id)
+            .collect::<HashSet<_>>();
+        let current_shards_key_mapping = shards_holder.get_shard_key_to_ids_mapping();
+        let current_replica_peers = shards_holder
+            .get_shards()
+            .map(|(shard_id, replica_set)| {
+                (
+                    shard_id,
+                    replica_set.peers().keys().copied().collect::<HashSet<_>>(),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        validate_private_oram_apply_shard_info_until_supported(
+            &shards,
+            &shards_key_mapping,
+            &current_shard_ids,
+            &current_shards_key_mapping,
+            &current_replica_peers,
+            private_oram_bucket_store_collection,
+        )?;
 
         for (shard_id, shard_info) in shards {
             let shard_key = shards_key_mapping.shard_key(shard_id);
@@ -306,12 +338,53 @@ fn validate_private_oram_apply_reshard_state_until_supported(
     ))
 }
 
+fn validate_private_oram_apply_shard_info_until_supported(
+    shards: &AHashMap<ShardId, ShardInfo>,
+    shards_key_mapping: &ShardKeyMapping,
+    current_shard_ids: &HashSet<ShardId>,
+    current_shards_key_mapping: &ShardKeyMapping,
+    current_replica_peers: &HashMap<ShardId, HashSet<PeerId>>,
+    private_oram_bucket_store_collection: bool,
+) -> CollectionResult<()> {
+    if !private_oram_bucket_store_collection {
+        return Ok(());
+    }
+
+    let shard_ids = shards.keys().copied().collect::<HashSet<_>>();
+    let membership_changes = shards.iter().any(|(shard_id, shard_info)| {
+        let incoming_peers = shard_info.replicas.keys().copied().collect::<HashSet<_>>();
+        current_replica_peers.get(shard_id) != Some(&incoming_peers)
+    });
+    let touches_resharding_replica_state = shards.values().any(|shard_info| {
+        shard_info
+            .replicas
+            .values()
+            .any(|state| state.is_resharding())
+    });
+
+    if shard_ids == *current_shard_ids
+        && shards_key_mapping == current_shards_key_mapping
+        && !membership_changes
+        && !touches_resharding_replica_state
+    {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(
+        "cannot apply shard-info layout change for private ORAM collections: collection-local \
+         encrypted ORAM buckets cannot be moved, deleted, or reassigned by consensus snapshot \
+         apply until ORAM bucket migration and consensus-backed epoch/root ownership are \
+         implemented",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use uuid::Uuid;
 
     use super::*;
     use crate::operations::cluster_ops::ReshardingDirection;
+    use crate::shards::replica_set::replica_set_state::ReplicaState;
 
     #[test]
     fn private_oram_apply_reshard_state_guard_redacts_collection_details() {
@@ -340,5 +413,83 @@ mod tests {
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+    }
+
+    #[test]
+    fn private_oram_apply_shard_info_guard_redacts_collection_details() {
+        let mut current_mapping = ShardKeyMapping::default();
+        current_mapping.insert("tenant-secret-shard-key".into(), HashSet::from([1]));
+
+        let current_shard_ids = HashSet::from([1]);
+        let current_replica_peers = HashMap::from([(1, HashSet::from([7]))]);
+
+        let active_shards = shard_info_fixture(1, [(7, ReplicaState::Active)]);
+        validate_private_oram_apply_shard_info_until_supported(
+            &active_shards,
+            &current_mapping,
+            &current_shard_ids,
+            &current_mapping,
+            &current_replica_peers,
+            true,
+        )
+        .unwrap();
+
+        for (shards, mapping) in [
+            (
+                shard_info_fixture(2, [(7, ReplicaState::Active)]),
+                current_mapping.clone(),
+            ),
+            (
+                shard_info_fixture(1, [(8, ReplicaState::Active)]),
+                current_mapping.clone(),
+            ),
+            (
+                shard_info_fixture(1, [(7, ReplicaState::Resharding)]),
+                current_mapping.clone(),
+            ),
+            (active_shards.clone(), ShardKeyMapping::default()),
+        ] {
+            validate_private_oram_apply_shard_info_until_supported(
+                &shards,
+                &mapping,
+                &current_shard_ids,
+                &current_mapping,
+                &current_replica_peers,
+                false,
+            )
+            .unwrap();
+
+            let err = validate_private_oram_apply_shard_info_until_supported(
+                &shards,
+                &mapping,
+                &current_shard_ids,
+                &current_mapping,
+                &current_replica_peers,
+                true,
+            )
+            .unwrap_err();
+            let rendered = format!("{err:?}");
+
+            assert!(rendered.contains("cannot apply shard-info layout change"));
+            assert!(rendered.contains("collection-local encrypted ORAM buckets"));
+            assert!(rendered.contains("consensus-backed epoch/root"));
+            assert!(!rendered.contains("tenant-secret-shard-key"));
+            assert!(!rendered.contains("private_hnsw_oram"));
+            assert!(!rendered.contains("private_result_oram"));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+        }
+    }
+
+    fn shard_info_fixture(
+        shard_id: ShardId,
+        replicas: impl IntoIterator<Item = (PeerId, ReplicaState)>,
+    ) -> AHashMap<ShardId, ShardInfo> {
+        AHashMap::from_iter([(
+            shard_id,
+            ShardInfo {
+                replicas: HashMap::from_iter(replicas),
+            },
+        )])
     }
 }
