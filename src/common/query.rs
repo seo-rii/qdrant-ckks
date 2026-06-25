@@ -12376,8 +12376,10 @@ mod tests {
             );
             let message = err.to_string();
             assert!(
-                message.contains("cannot search group lookup private result ORAM payload field")
+                message.contains("cannot read private result ORAM payload field"),
+                "{message}"
             );
+            assert!(!message.contains("search group lookup"), "{message}");
             assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
             assert!(message.contains("/private-result-oram/session"));
             assert!(!message.contains("body"), "{message}");
@@ -12401,8 +12403,10 @@ mod tests {
             .expect_err("explicit lookup payload path must fail closed for private result payload");
             let message = err.to_string();
             assert!(
-                message.contains("cannot recommend group lookup private result ORAM payload field")
+                message.contains("cannot read private result ORAM payload field"),
+                "{message}"
             );
+            assert!(!message.contains("recommend group lookup"), "{message}");
             assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
             assert!(message.contains("/private-result-oram/session"));
             assert!(!message.contains("body.lang"), "{message}");
@@ -12431,8 +12435,10 @@ mod tests {
             );
             let message = err.to_string();
             assert!(
-                message.contains("cannot query group lookup private result ORAM payload field")
+                message.contains("cannot read private result ORAM payload field"),
+                "{message}"
             );
+            assert!(!message.contains("query group lookup"), "{message}");
             assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
             assert!(message.contains("/private-result-oram/session"));
             assert!(

@@ -2104,8 +2104,9 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("bucket commitment context mismatch"));
             assert!(
-                err.message()
+                !err.message()
                     .contains("initial upload bucket commitment context mismatch")
             );
             assert!(
@@ -3314,6 +3315,10 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(
                 err.message()
+                    .contains("current epoch/root does not match active session")
+            );
+            assert!(
+                !err.message()
                     .contains("read_paths current epoch/root does not match active session")
             );
             assert!(
@@ -3387,6 +3392,10 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(
                 err.message()
+                    .contains("current epoch/root does not match active session")
+            );
+            assert!(
+                !err.message()
                     .contains("commit current epoch/root does not match active session")
             );
             assert!(

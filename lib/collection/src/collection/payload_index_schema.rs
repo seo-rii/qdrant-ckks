@@ -613,9 +613,10 @@ mod tests {
             assert!(matches!(
                 err,
                 CollectionError::BadInput { description }
-                    if description.contains("create payload index")
+                    if description.contains("cannot use private result ORAM payload field")
                         && description.contains("private result ORAM payload field")
                         && description.contains("/private-result-oram/session")
+                        && !description.contains("create payload index")
                         && !description.contains("document.body")
             ));
 
@@ -629,9 +630,10 @@ mod tests {
             assert!(matches!(
                 err,
                 CollectionError::BadInput { description }
-                    if description.contains("delete payload index")
+                    if description.contains("cannot use private result ORAM payload field")
                         && description.contains("private result ORAM payload field")
                         && description.contains("/private-result-oram/session")
+                        && !description.contains("delete payload index")
                         && !description.contains("document.body")
             ));
 
@@ -651,9 +653,10 @@ mod tests {
                 assert!(matches!(
                     err,
                     CollectionError::BadInput { description }
-                        if description.contains(&action_label)
+                        if description.contains("cannot use private result ORAM payload field")
                             && description.contains("private result ORAM payload field")
                             && description.contains("/private-result-oram/session")
+                            && !description.contains(&action_label)
                             && !description.contains("document.body")
                 ));
             }

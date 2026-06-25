@@ -2000,6 +2000,10 @@ mod private_result_oram_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(
                 err.message()
+                    .contains("current epoch/root does not match active session")
+            );
+            assert!(
+                !err.message()
                     .contains("read_buckets current epoch/root does not match active session")
             );
             assert!(
@@ -2065,6 +2069,10 @@ mod private_result_oram_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(
                 err.message()
+                    .contains("current epoch/root does not match active session")
+            );
+            assert!(
+                !err.message()
                     .contains("commit current epoch/root does not match active session")
             );
             assert!(

@@ -317,13 +317,13 @@ fn assert_private_result_oram_read_error_without(
         panic!("unexpected error: {err:?}");
     };
     assert!(
-        description.contains(&format!(
-            "cannot {operation} private result ORAM payload field"
-        )) && description.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+        description.contains("cannot read private result ORAM payload field")
+            && description.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
             && description.contains("/private-result-oram/session")
             && !description.contains("runtime payload encryption"),
         "unexpected error: {description}",
     );
+    assert!(!description.contains(operation), "{description}");
     for value in forbidden {
         assert!(!description.contains(value), "{description}");
     }
@@ -338,13 +338,13 @@ fn assert_private_result_oram_write_error_without(
         panic!("unexpected error: {err:?}");
     };
     assert!(
-        description.contains(&format!(
-            "cannot {operation} for private result ORAM payload field"
-        )) && description.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+        description.contains("cannot modify private result ORAM payload field")
+            && description.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
             && description.contains("/private-result-oram/session")
             && !description.contains("runtime payload encryption"),
         "unexpected error: {description}",
     );
+    assert!(!description.contains(operation), "{description}");
     for value in forbidden {
         assert!(!description.contains(value), "{description}");
     }
@@ -359,14 +359,16 @@ fn assert_private_result_oram_selector_error_without(
         panic!("unexpected error: {err:?}");
     };
     assert!(
-        description.contains(&format!(
-            "cannot {operation} private result ORAM payload field"
-        )) && description.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+        description.contains("cannot use private result ORAM payload field")
+            && description.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
             && description.contains("/private-result-oram/session")
             && !description.contains("blind index")
             && !description.contains("runtime payload encryption"),
         "unexpected error: {description}",
     );
+    if operation != "use" {
+        assert!(!description.contains(operation), "{description}");
+    }
     for value in forbidden {
         assert!(!description.contains(value), "{description}");
     }

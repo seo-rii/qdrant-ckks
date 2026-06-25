@@ -4693,7 +4693,11 @@ mod tests {
                 reject_private_result_oram_payload_point_operation(&operation, &encryption, false)
                     .unwrap_err();
             let message = format!("{err}");
-            assert!(message.contains(expected_kind), "{message}");
+            assert!(
+                message.contains("cannot modify private result ORAM payload field"),
+                "{message}"
+            );
+            assert!(!message.contains(expected_kind), "{message}");
             assert!(
                 message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
                 "{message}"
@@ -4713,7 +4717,11 @@ mod tests {
                     .unwrap_err();
             let peer_message = format!("{peer_err}");
             assert!(peer_message.contains("peer update"), "{peer_message}");
-            assert!(peer_message.contains(expected_kind), "{peer_message}");
+            assert!(
+                peer_message.contains("cannot modify private result ORAM payload field"),
+                "{peer_message}"
+            );
+            assert!(!peer_message.contains(expected_kind), "{peer_message}");
             assert!(
                 peer_message.contains("/private-result-oram/session"),
                 "{peer_message}"
