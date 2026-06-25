@@ -1760,6 +1760,7 @@ mod tests {
         let rendered = format!("{err:?}");
         assert!(rendered.contains("private ORAM collections"));
         assert!(rendered.contains("encrypted ORAM bucket transfer"));
+        assert!(rendered.contains("consensus-backed epoch/root"));
         assert!(!rendered.contains(collection_name));
         assert!(!rendered.contains("shard 3"));
         assert!(!rendered.contains("private_hnsw_oram"));
@@ -1782,6 +1783,30 @@ mod tests {
             false,
         )
         .unwrap();
+
+        for state in [
+            ReplicaState::Active,
+            ReplicaState::Dead,
+            ReplicaState::Partial,
+            ReplicaState::Initializing,
+            ReplicaState::Listener,
+            ReplicaState::PartialSnapshot,
+            ReplicaState::Recovery,
+            ReplicaState::ActiveRead,
+            ReplicaState::ManualRecovery,
+        ] {
+            validate_private_oram_resharding_replica_state_until_supported(
+                state,
+                Some(state),
+                Some(state),
+                true,
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "private ORAM resharding replica-state guard must allow non-resharding state-only transition for {state:?}: {err}"
+                )
+            });
+        }
 
         for (new_state, from_state, current_state) in [
             (ReplicaState::Resharding, None, None),
