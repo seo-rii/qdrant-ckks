@@ -327,6 +327,27 @@ fn assert_private_result_oram_read_error_without(
     }
 }
 
+fn assert_private_result_oram_write_error_without(
+    err: CollectionError,
+    operation: &str,
+    forbidden: &[&str],
+) {
+    let CollectionError::BadInput { description } = err else {
+        panic!("unexpected error: {err:?}");
+    };
+    assert!(
+        description.contains(&format!(
+            "cannot {operation} for private result ORAM payload field"
+        )) && description.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER)
+            && description.contains("/private-result-oram/session")
+            && !description.contains("runtime payload encryption"),
+        "unexpected error: {description}",
+    );
+    for value in forbidden {
+        assert!(!description.contains(value), "{description}");
+    }
+}
+
 fn assert_private_result_oram_selector_error_without(
     err: CollectionError,
     operation: &str,
@@ -2966,6 +2987,99 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
                 && description.contains("document.body")
                 && description.contains("blind index")
     ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn private_result_oram_payload_writes_require_session_api_in_collection_ops() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        private_result_oram_encryption_config(),
+    )
+    .await;
+    let private_point_id = 987_654_321_u64;
+    let public_point_id = 876_543_210_u64;
+    let private_payload: Payload = serde_json::from_value(serde_json::json!({
+        "document": {
+            "body": "plaintext result payload",
+            "title": "public",
+        }
+    }))
+    .unwrap();
+    let public_payload: Payload = serde_json::from_value(serde_json::json!({
+        "summary": "public",
+    }))
+    .unwrap();
+    let forbidden = [
+        "987654321",
+        "876543210",
+        "plaintext result payload",
+        "document.body",
+        "document",
+        "body",
+        "12345.125",
+        "-23456.25",
+    ];
+    let operations = [
+        (
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                    id: private_point_id.into(),
+                    vector: VectorStructPersisted::from(vec![
+                        12345.125, -23456.25, 34567.5, -45678.75,
+                    ]),
+                    payload: Some(private_payload.clone()),
+                }]),
+            )),
+            "upsert points",
+        ),
+        (
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+                PointInsertOperationsInternal::from(vec![PointStructPersisted {
+                    id: public_point_id.into(),
+                    vector: VectorStructPersisted::from(vec![0.0, 1.0, 0.0, 0.0]),
+                    payload: Some(public_payload.clone()),
+                }]),
+            )),
+            "upsert points",
+        ),
+        (
+            CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints {
+                ids: vec![private_point_id.into()],
+            }),
+            "delete points",
+        ),
+        (
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+                payload: private_payload,
+                points: Some(vec![private_point_id.into()]),
+                filter: None,
+                key: None,
+            })),
+            "set payload",
+        ),
+        (
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload {
+                points: vec![private_point_id.into()],
+            }),
+            "clear payload",
+        ),
+    ];
+
+    for (operation, expected_kind) in operations {
+        let err = collection
+            .update_from_client_simple(
+                operation,
+                true,
+                None,
+                WriteOrdering::default(),
+                HwMeasurementAcc::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_private_result_oram_write_error_without(err, expected_kind, &forbidden);
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
