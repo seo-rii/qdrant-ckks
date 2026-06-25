@@ -13291,8 +13291,14 @@ mod tests {
         )
         .expect_err("private HNSW ORAM runtime drift must fail parity validation");
         assert!(err.to_string().contains("peer-private-hnsw-oram"));
+        assert!(!err.to_string().contains(&fingerprint), "{err:?}");
+        assert!(
+            !err.to_string().contains(&peer_shape_fingerprint),
+            "{err:?}"
+        );
 
         let mut peer_with_different_verifier = settings.clone();
+        let peer_verifier_public_key_b64 = BASE64URL_NOPAD.encode(&[12_u8; 32]);
         peer_with_different_verifier
             .crypto
             .instances
@@ -13303,12 +13309,31 @@ mod tests {
             .unwrap()
             .insert(
                 SIGNATURE_PUBLIC_KEYS_OPTION.to_string(),
-                json!({ "tenant-a/private-hnsw-signing-v1": BASE64URL_NOPAD.encode(&[12_u8; 32]) }),
+                json!({ "tenant-a/private-hnsw-signing-v1": peer_verifier_public_key_b64.clone() }),
             );
+        let peer_verifier_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_verifier);
         assert_ne!(
-            fingerprint,
-            crypto_runtime_capability_fingerprint(&peer_with_different_verifier),
+            fingerprint, peer_verifier_fingerprint,
             "private HNSW signing verifier drift must change the parity fingerprint",
+        );
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [(
+                "peer-private-hnsw-verifier",
+                peer_verifier_fingerprint.as_str(),
+            )],
+        )
+        .expect_err("private HNSW verifier drift must fail parity validation");
+        assert!(err.to_string().contains("peer-private-hnsw-verifier"));
+        assert!(!err.to_string().contains(&fingerprint), "{err:?}");
+        assert!(
+            !err.to_string().contains(&peer_verifier_fingerprint),
+            "{err:?}"
+        );
+        assert!(
+            !err.to_string().contains(&peer_verifier_public_key_b64),
+            "{err:?}"
         );
     }
 
@@ -13366,8 +13391,14 @@ mod tests {
         )
         .expect_err("private result ORAM runtime drift must fail parity validation");
         assert!(err.to_string().contains("peer-private-result-oram"));
+        assert!(!err.to_string().contains(&fingerprint), "{err:?}");
+        assert!(
+            !err.to_string().contains(&peer_shape_fingerprint),
+            "{err:?}"
+        );
 
         let mut peer_with_different_verifier = settings.clone();
+        let peer_verifier_public_key_b64 = BASE64URL_NOPAD.encode(&[14_u8; 32]);
         peer_with_different_verifier
             .crypto
             .instances
@@ -13378,12 +13409,31 @@ mod tests {
             .unwrap()
             .insert(
                 SIGNATURE_PUBLIC_KEYS_OPTION.to_string(),
-                json!({ "tenant-a/private-result-signing-v1": BASE64URL_NOPAD.encode(&[14_u8; 32]) }),
+                json!({ "tenant-a/private-result-signing-v1": peer_verifier_public_key_b64.clone() }),
             );
+        let peer_verifier_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_different_verifier);
         assert_ne!(
-            fingerprint,
-            crypto_runtime_capability_fingerprint(&peer_with_different_verifier),
+            fingerprint, peer_verifier_fingerprint,
             "private result ORAM signing verifier drift must change the parity fingerprint",
+        );
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [(
+                "peer-private-result-verifier",
+                peer_verifier_fingerprint.as_str(),
+            )],
+        )
+        .expect_err("private result ORAM verifier drift must fail parity validation");
+        assert!(err.to_string().contains("peer-private-result-verifier"));
+        assert!(!err.to_string().contains(&fingerprint), "{err:?}");
+        assert!(
+            !err.to_string().contains(&peer_verifier_fingerprint),
+            "{err:?}"
+        );
+        assert!(
+            !err.to_string().contains(&peer_verifier_public_key_b64),
+            "{err:?}"
         );
     }
 
