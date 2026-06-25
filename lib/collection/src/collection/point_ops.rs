@@ -232,16 +232,16 @@ fn reject_private_result_oram_payload_point_operation(
     encryption: &CollectionEncryptionConfig,
     peer_update: bool,
 ) -> CollectionResult<()> {
-    let Some((payload_path, operation_kind)) =
+    let Some(payload_path) =
         private_result_oram_payload_operation_violation(operation, encryption)?
     else {
         return Ok(());
     };
 
     let prefix = if peer_update {
-        format!("peer update cannot {operation_kind} for private result ORAM payload field")
+        "peer update cannot modify private result ORAM payload field"
     } else {
-        format!("cannot {operation_kind} for private result ORAM payload field")
+        "cannot modify private result ORAM payload field"
     };
     Err(CollectionError::bad_input(format!(
         "{prefix}; {}",
@@ -252,7 +252,7 @@ fn reject_private_result_oram_payload_point_operation(
 fn private_result_oram_payload_operation_violation<'a>(
     operation: &CollectionUpdateOperations,
     encryption: &'a CollectionEncryptionConfig,
-) -> CollectionResult<Option<(&'a str, &'static str)>> {
+) -> CollectionResult<Option<&'a str>> {
     for rule in encryption
         .rules
         .iter()
@@ -265,10 +265,8 @@ fn private_result_oram_payload_operation_violation<'a>(
             let protected_path = payload_path.parse::<JsonPath>().map_err(|_| {
                 CollectionError::bad_input("private result ORAM payload field path is invalid")
             })?;
-            if let Some(operation_kind) =
-                private_result_oram_payload_operation_kind(operation, &protected_path)
-            {
-                return Ok(Some((payload_path.as_str(), operation_kind)));
+            if private_result_oram_payload_operation_touches_path(operation, &protected_path) {
+                return Ok(Some(payload_path.as_str()));
             }
         }
     }
@@ -276,10 +274,10 @@ fn private_result_oram_payload_operation_violation<'a>(
     Ok(None)
 }
 
-fn private_result_oram_payload_operation_kind(
+fn private_result_oram_payload_operation_touches_path(
     operation: &CollectionUpdateOperations,
     protected_path: &JsonPath,
-) -> Option<&'static str> {
+) -> bool {
     match operation {
         CollectionUpdateOperations::PointOperation(point_operation) => match point_operation {
             PointOperations::UpsertPoints(_)
@@ -289,10 +287,10 @@ fn private_result_oram_payload_operation_kind(
                     condition: _,
                     update_mode: _,
                 },
-            ) => Some("upsert points"),
-            PointOperations::SyncPoints(_) => Some("sync points"),
-            PointOperations::DeletePoints { .. } => Some("delete points"),
-            PointOperations::DeletePointsByFilter(_) => Some("delete points by filter"),
+            ) => true,
+            PointOperations::SyncPoints(_) => true,
+            PointOperations::DeletePoints { .. } => true,
+            PointOperations::DeletePointsByFilter(_) => true,
         },
         CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(operation)) => {
             private_result_oram_payload_touches_path(
@@ -300,34 +298,27 @@ fn private_result_oram_payload_operation_kind(
                 operation.key.as_ref(),
                 protected_path,
             )
-            .then_some("set payload")
         }
         CollectionUpdateOperations::PayloadOperation(PayloadOps::OverwritePayload(operation)) => {
-            (operation.key.is_none()
+            operation.key.is_none()
                 || private_result_oram_payload_touches_path(
                     &operation.payload,
                     operation.key.as_ref(),
                     protected_path,
-                ))
-            .then_some("overwrite payload")
+                )
         }
         CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(operation)) => {
             operation
                 .keys
                 .iter()
                 .any(|key| key.compatible(protected_path))
-                .then_some("delete payload")
         }
-        CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload { .. }) => {
-            Some("clear payload")
-        }
-        CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayloadByFilter(_)) => {
-            Some("clear payload by filter")
-        }
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload { .. }) => true,
+        CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayloadByFilter(_)) => true,
         CollectionUpdateOperations::VectorOperation(_)
-        | CollectionUpdateOperations::FieldIndexOperation(_) => None,
+        | CollectionUpdateOperations::FieldIndexOperation(_) => false,
         #[cfg(feature = "staging")]
-        CollectionUpdateOperations::StagingOperation(_) => None,
+        CollectionUpdateOperations::StagingOperation(_) => false,
     }
 }
 

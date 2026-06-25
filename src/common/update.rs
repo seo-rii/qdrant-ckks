@@ -1846,13 +1846,10 @@ async fn maybe_encrypt_upsert_payloads(
     let collection = toc.get_collection(&collection_pass).await?;
     let collection_config = collection.config_snapshot().await;
     if let Some(encryption) = collection_config.params.effective_encryption()
-        && let Some((payload_path, operation_kind)) =
+        && let Some(payload_path) =
             private_result_oram_payload_upsert_violation(&encryption, &operation)?
     {
-        return Err(private_result_oram_payload_write_error(
-            payload_path,
-            operation_kind,
-        ));
+        return Err(private_result_oram_payload_write_error(payload_path));
     }
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
@@ -2932,10 +2929,7 @@ async fn maybe_encrypt_point_payload_update(
         && let Some(payload_path) =
             private_result_oram_payload_update_violation(&encryption, &operation)?
     {
-        return Err(private_result_oram_payload_write_error(
-            payload_path,
-            payload_update_operation_kind(operation_name),
-        ));
+        return Err(private_result_oram_payload_write_error(payload_path));
     }
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
@@ -3165,13 +3159,10 @@ async fn ensure_payload_runtime_available_for_upsert(
         return Ok(());
     };
 
-    if let Some((payload_path, operation_kind)) =
+    if let Some(payload_path) =
         private_result_oram_payload_upsert_violation(&encryption, operation)?
     {
-        return Err(private_result_oram_payload_write_error(
-            payload_path,
-            operation_kind,
-        ));
+        return Err(private_result_oram_payload_write_error(payload_path));
     }
 
     let mut touches_encrypted_payload = false;
@@ -3225,10 +3216,7 @@ async fn ensure_payload_runtime_available_for_payload_update(
     if let Some(payload_path) =
         private_result_oram_payload_update_violation(&encryption, operation)?
     {
-        return Err(private_result_oram_payload_write_error(
-            payload_path,
-            payload_update_operation_kind(operation_name),
-        ));
+        return Err(private_result_oram_payload_write_error(payload_path));
     }
 
     if payload_touches_encrypted_config(&encryption, &operation.payload, operation.key.as_ref())? {
@@ -3243,7 +3231,7 @@ async fn ensure_payload_runtime_available_for_payload_update(
 fn private_result_oram_payload_upsert_violation<'a>(
     encryption: &'a collection::config::CollectionEncryptionConfig,
     operation: &PointInsertOperations,
-) -> Result<Option<(&'a str, &'static str)>, StorageError> {
+) -> Result<Option<&'a str>, StorageError> {
     for rule in encryption
         .rules
         .iter()
@@ -3257,7 +3245,7 @@ fn private_result_oram_payload_upsert_violation<'a>(
                 StorageError::bad_input("private result ORAM payload field path is invalid")
             })?;
             if upsert_touches_payload_path(operation, &protected_path) {
-                return Ok(Some((payload_path.as_str(), "upsert points")));
+                return Ok(Some(payload_path.as_str()));
             }
         }
     }
@@ -3331,20 +3319,9 @@ fn payload_touches_path(
     !protected_path.value_get(&payload.0).is_empty()
 }
 
-fn payload_update_operation_kind(operation_name: &str) -> &'static str {
-    match operation_name {
-        "set_payload" => "set payload",
-        "overwrite_payload" => "overwrite payload",
-        _ => "payload update",
-    }
-}
-
-fn private_result_oram_payload_write_error(
-    payload_path: &str,
-    operation_kind: &str,
-) -> StorageError {
+fn private_result_oram_payload_write_error(payload_path: &str) -> StorageError {
     StorageError::bad_input(format!(
-        "cannot {operation_kind} for private result ORAM payload field; {}",
+        "cannot modify private result ORAM payload field; {}",
         private_result_oram_api_required_message(payload_path),
     ))
 }
@@ -4457,7 +4434,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM upsert must fail closed"),
-                "cannot upsert points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4494,7 +4471,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM batch upsert must fail closed"),
-                "cannot upsert points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4529,7 +4506,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM public-looking upsert must fail closed"),
-                "cannot upsert points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4559,7 +4536,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM payload-less upsert must fail closed"),
-                "cannot upsert points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4596,7 +4573,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM public-looking batch upsert must fail closed"),
-                "cannot upsert points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4628,7 +4605,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM payload-less batch upsert must fail closed"),
-                "cannot upsert points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4659,7 +4636,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM set_payload must fail closed"),
-                "cannot set payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4690,7 +4667,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM overwrite_payload must fail closed"),
-                "cannot overwrite payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4714,7 +4691,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM delete_payload must fail closed"),
-                "cannot delete payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4738,7 +4715,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM delete_payload by filter must fail closed"),
-                "cannot delete payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4760,7 +4737,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM clear_payload must fail closed"),
-                "cannot clear payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4782,7 +4759,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM clear_payload by filter must fail closed"),
-                "cannot clear payload by filter for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4804,7 +4781,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM delete_points must fail closed"),
-                "cannot delete points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4826,7 +4803,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM delete_points by filter must fail closed"),
-                "cannot delete points by filter for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4860,7 +4837,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM batch update must fail closed"),
-                "cannot set payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4897,7 +4874,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM batch upsert operation must fail closed"),
-                "cannot upsert points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4942,7 +4919,7 @@ esac
                 .expect_err(
                     "private result ORAM public-looking batch upsert operation must fail closed",
                 ),
-                "cannot upsert points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4978,7 +4955,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM payload-less batch upsert operation must fail closed"),
-                "cannot upsert points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -5014,7 +4991,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM batch overwrite must fail closed"),
-                "cannot overwrite payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -5042,7 +5019,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM batch delete_payload must fail closed"),
-                "cannot delete payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -5068,7 +5045,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM batch clear_payload must fail closed"),
-                "cannot clear payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -5094,7 +5071,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM batch delete points must fail closed"),
-                "cannot delete points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5118,7 +5095,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC upsert must fail closed"),
-                "cannot upsert points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5141,7 +5118,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC set_payload must fail closed"),
-                "cannot set payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5164,7 +5141,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC set_payload by filter must fail closed"),
-                "cannot set payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5187,7 +5164,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC overwrite_payload must fail closed"),
-                "cannot overwrite payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5212,7 +5189,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC overwrite_payload by filter must fail closed"),
-                "cannot overwrite payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5233,7 +5210,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC delete_payload must fail closed"),
-                "cannot delete payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5254,7 +5231,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC delete_payload by filter must fail closed"),
-                "cannot delete payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5274,7 +5251,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC clear_payload must fail closed"),
-                "cannot clear payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5294,7 +5271,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC clear_payload by filter must fail closed"),
-                "cannot clear payload by filter for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5314,7 +5291,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC delete points must fail closed"),
-                "cannot delete points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5334,7 +5311,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC delete points by filter must fail closed"),
-                "cannot delete points by filter for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5356,7 +5333,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC batch upsert must fail closed"),
-                "cannot upsert points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5380,7 +5357,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC batch set_payload must fail closed"),
-                "cannot set payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5404,7 +5381,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC batch overwrite_payload must fail closed"),
-                "cannot overwrite payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5427,7 +5404,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC batch delete_payload must fail closed"),
-                "cannot delete payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5449,7 +5426,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC batch clear_payload must fail closed"),
-                "cannot clear payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5471,7 +5448,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC batch delete points must fail closed"),
-                "cannot delete points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5492,7 +5469,7 @@ esac
                 .expect_err(
                     "private result ORAM gRPC batch deprecated delete must fail closed",
                 ),
-                "cannot delete points for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -5513,7 +5490,7 @@ esac
                 .expect_err(
                     "private result ORAM gRPC batch deprecated clear_payload must fail closed",
                 ),
-                "cannot clear payload for private result ORAM payload field",
+                "cannot modify private result ORAM payload field",
             );
         });
     }
@@ -11489,15 +11466,14 @@ esac
             "delete points",
             "delete points by filter",
             "payload update",
+            "private-result-write-operation-sentinel",
         ] {
-            let err =
-                private_result_oram_payload_write_error(payload_path, operation_kind).to_string();
+            let err = private_result_oram_payload_write_error(payload_path).to_string();
 
             assert!(err.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
             assert!(err.contains("/private-result-oram/session"));
-            assert!(err.contains(&format!(
-                "cannot {operation_kind} for private result ORAM payload field"
-            )));
+            assert!(err.contains("cannot modify private result ORAM payload field"));
+            assert!(!err.contains(operation_kind), "{err}");
             assert!(!err.contains(payload_path), "{err}");
             assert!(
                 !err.contains("private-result-payload-path-sentinel"),
