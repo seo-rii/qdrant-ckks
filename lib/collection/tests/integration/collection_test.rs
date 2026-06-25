@@ -5513,6 +5513,8 @@ async fn peer_update_rejects_client_envelope_replay_without_verifier_manifest() 
     let rng = SystemRandom::new();
     let pkcs8 = Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
     let key_pair = Ed25519KeyPair::from_pkcs8(pkcs8.as_ref()).unwrap();
+    let nonce_sentinel = "AAAAAAAAAAAAAAAA";
+    let ciphertext_sentinel = "AAAAAAAAAAAAAAAAAAAAAA";
     let mut payload = Payload(
         serde_json::json!({
             "document": {
@@ -5531,8 +5533,8 @@ async fn peer_update_rejects_client_envelope_replay_without_verifier_manifest() 
                             "field_path": "document.body",
                             "schema_version": 1
                         },
-                        "nonce": "AAAAAAAAAAAAAAAA",
-                        "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA",
+                        "nonce": nonce_sentinel,
+                        "ciphertext": ciphertext_sentinel,
                         "signature": {
                             "alg": "ed25519",
                             "key_id": "tenant-a/client-signing-v1",
@@ -5547,6 +5549,16 @@ async fn peer_update_rejects_client_envelope_replay_without_verifier_manifest() 
         .clone(),
     );
     sign_client_payload(&mut payload, &key_pair);
+    let signature_sentinel = payload
+        .0
+        .get("document")
+        .and_then(|document| document.get("body"))
+        .and_then(|body| body.get(CLIENT_ENCRYPTED_PAYLOAD_MARKER))
+        .and_then(|marker| marker.get("signature"))
+        .and_then(|signature| signature.get("sig"))
+        .and_then(|sig| sig.as_str())
+        .expect("signed fixture must contain client signature")
+        .to_string();
     let peer_upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
         PointInsertOperationsInternal::from(vec![PointStructPersisted {
             id: 21.into(),
@@ -5567,13 +5579,17 @@ async fn peer_update_rejects_client_envelope_replay_without_verifier_manifest() 
         .await
         .unwrap_err();
 
-    assert!(matches!(
-        err,
-        CollectionError::BadInput { description }
-            if description.contains("peer client encrypted payload marker")
-                && description.contains("runtime verifier manifest")
-                && description.contains("cluster-wide nonce ledger")
-    ));
+    let CollectionError::BadInput { description } = err else {
+        panic!("unexpected peer replay error: {err:?}");
+    };
+    assert!(description.contains("peer client encrypted payload marker"));
+    assert!(description.contains("runtime verifier manifest"));
+    assert!(description.contains("cluster-wide nonce ledger"));
+    assert!(!description.contains(nonce_sentinel), "{description}");
+    assert!(!description.contains(ciphertext_sentinel), "{description}");
+    assert!(!description.contains(&signature_sentinel), "{description}");
+    assert!(!description.contains("tenant-a/client-rk-2026-04"));
+    assert!(!description.contains("tenant-a/client-signing-v1"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
