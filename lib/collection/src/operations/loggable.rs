@@ -2291,6 +2291,30 @@ mod tests {
                 "position_maps": [{ "node-b": 2 }]
             }
         });
+        insert_test_json_field(
+            &mut first,
+            &["read_buckets"],
+            "read_path",
+            json!(["single-read-path-a"]),
+        );
+        insert_test_json_field(
+            &mut first,
+            &["read_buckets"],
+            "read_path_label",
+            json!("single-read-path-label-a"),
+        );
+        insert_test_json_field(
+            &mut second,
+            &["read_buckets"],
+            "read_path",
+            json!(["single-read-path-b"]),
+        );
+        insert_test_json_field(
+            &mut second,
+            &["read_buckets"],
+            "read_path_label",
+            json!("single-read-path-label-b"),
+        );
         redact_sensitive_log_fields(&mut first);
         redact_sensitive_log_fields(&mut second);
         assert_eq!(first, second);
@@ -2375,6 +2399,30 @@ mod tests {
                 "payloadOramLeaf": "private-oram-camel-payload-leaf-b"
             }
         });
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "readPath",
+            json!(["private-oram-camel-single-read-path-a"]),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "readPathLabel",
+            json!("private-oram-camel-single-read-path-label-a"),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "readPath",
+            json!(["private-oram-camel-single-read-path-b"]),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "readPathLabel",
+            json!("private-oram-camel-single-read-path-label-b"),
+        );
         redact_sensitive_log_fields(&mut camel_first);
         redact_sensitive_log_fields(&mut camel_second);
         assert_eq!(camel_first, camel_second);
