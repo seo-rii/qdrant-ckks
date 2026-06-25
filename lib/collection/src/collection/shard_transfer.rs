@@ -22,18 +22,17 @@ use crate::shards::transfer::{
 use crate::shards::{shard_initializing_flag_path, transfer};
 
 fn validate_private_oram_transfer_task_start_until_supported(
-    collection_name: &str,
+    _collection_name: &str,
     private_oram_bucket_store_collection: bool,
 ) -> CollectionResult<()> {
     if !private_oram_bucket_store_collection {
         return Ok(());
     }
 
-    Err(CollectionError::bad_input(format!(
-        "cannot start shard transfer task for private ORAM collection {collection_name}: \
-         encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are not \
-         implemented for shard transfer",
-    )))
+    Err(CollectionError::bad_input(
+        "cannot start shard transfer task for private ORAM collections: encrypted ORAM bucket \
+         transfer and consensus-backed epoch/root ownership are not implemented for shard transfer",
+    ))
 }
 
 impl Collection {
@@ -607,14 +606,16 @@ mod tests {
 
     #[test]
     fn private_hnsw_transfer_task_start_fails_closed_until_bucket_transfer_supported() {
-        validate_private_oram_transfer_task_start_until_supported("docs", false).unwrap();
+        let collection_name = "private-oram-transfer-task-secret-collection";
+        validate_private_oram_transfer_task_start_until_supported(collection_name, false).unwrap();
 
-        let err =
-            validate_private_oram_transfer_task_start_until_supported("docs", true).unwrap_err();
+        let err = validate_private_oram_transfer_task_start_until_supported(collection_name, true)
+            .unwrap_err();
         let rendered = format!("{err:?}");
-        assert!(rendered.contains("private ORAM collection docs"));
+        assert!(rendered.contains("private ORAM collections"));
         assert!(rendered.contains("encrypted ORAM bucket transfer"));
         assert!(rendered.contains("consensus-backed epoch/root"));
+        assert!(!rendered.contains(collection_name));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains("private_result_oram"));
     }

@@ -1024,7 +1024,7 @@ fn validate_private_result_oram_snapshot_store_matches_config(
 }
 
 fn validate_private_oram_shard_snapshot_operation(
-    collection_name: &str,
+    _collection_name: &str,
     params: &CollectionParams,
     operation_name: &str,
 ) -> CollectionResult<()> {
@@ -1035,8 +1035,8 @@ fn validate_private_oram_shard_snapshot_operation(
     }
 
     Err(CollectionError::bad_request(format!(
-        "{operation_name} for private ORAM collection {collection_name} is disabled until \
-         shard snapshots include collection-local encrypted ORAM buckets with epoch/root parity; \
+        "{operation_name} for private ORAM collections is disabled until shard snapshots include \
+         collection-local encrypted ORAM buckets with epoch/root parity; \
          use collection snapshot/restore preflight",
     )))
 }
@@ -3083,6 +3083,7 @@ mod tests {
             private_hnsw_config(Uuid::from_u128(7)),
             private_result_config(Uuid::from_u128(8)),
         ];
+        let collection_name = "private-oram-shard-snapshot-secret-collection";
         for operation_name in [
             "shard snapshot creation",
             "shard snapshot streaming",
@@ -3094,16 +3095,14 @@ mod tests {
         ] {
             for config in &configs {
                 let err = validate_private_oram_shard_snapshot_operation(
-                    "docs",
+                    collection_name,
                     &config.params,
                     operation_name,
                 )
                 .expect_err("private ORAM shard snapshots must fail closed");
                 let rendered = err.to_string();
                 assert!(
-                    rendered.contains(&format!(
-                        "{operation_name} for private ORAM collection docs"
-                    )),
+                    rendered.contains(&format!("{operation_name} for private ORAM collections")),
                     "unexpected error: {rendered}",
                 );
                 assert!(
@@ -3124,6 +3123,7 @@ mod tests {
                     "docs_body_private_result",
                     "docs_private_result_oram",
                     PRIVATE_RESULT_ORAM_BINDING,
+                    collection_name,
                 ] {
                     assert!(
                         !rendered.contains(sentinel),
