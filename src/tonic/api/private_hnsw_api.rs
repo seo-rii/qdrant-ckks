@@ -702,6 +702,25 @@ mod private_hnsw_grpc_tests {
     }
 
     #[test]
+    fn route_param_validation_rejects_oversized_values_without_reflecting_them() {
+        let collection_sentinel = "hnsw-grpc-collection-route-sentinel";
+        let oversized_collection = format!("{collection_sentinel}{}", "x".repeat(256));
+        let err = validate_collection_and_vector(&oversized_collection, VECTOR_NAME).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("collection_name"));
+        assert!(!err.message().contains(collection_sentinel));
+        assert!(!err.message().contains(&oversized_collection));
+
+        let vector_sentinel = "hnsw-grpc-vector-route-sentinel";
+        let oversized_vector = format!("{vector_sentinel}{}", "x".repeat(129));
+        let err = validate_collection_and_vector(COLLECTION_NAME, &oversized_vector).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("vector_name"));
+        assert!(!err.message().contains(vector_sentinel));
+        assert!(!err.message().contains(&oversized_vector));
+    }
+
+    #[test]
     fn sdk_fixture_roundtrips_through_grpc_wire_requests_and_verified_path_response() {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let upload_manifest = grpc::UploadPrivateHnswManifestRequest {

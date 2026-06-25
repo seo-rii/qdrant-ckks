@@ -852,6 +852,17 @@ mod private_result_oram_grpc_tests {
     }
 
     #[test]
+    fn route_param_validation_rejects_oversized_values_without_reflecting_them() {
+        let collection_sentinel = "result-grpc-collection-route-sentinel";
+        let oversized_collection = format!("{collection_sentinel}{}", "x".repeat(256));
+        let err = validate_collection(&oversized_collection).unwrap_err();
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("collection_name"));
+        assert!(!err.message().contains(collection_sentinel));
+        assert!(!err.message().contains(&oversized_collection));
+    }
+
+    #[test]
     fn private_result_oram_uploads_and_reads_through_grpc_service() {
         let _guard = route_e2e_guard();
         let fixture = PrivateResultRouteFixture::build();
