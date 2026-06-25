@@ -1601,6 +1601,10 @@ mod private_hnsw_rest_tests {
                 mismatched_bucket_count_error,
                 &mismatched_bucket_count_signature_sig
             );
+            assert!(
+                !mismatched_bucket_count_error.contains("bucket_count"),
+                "{mismatched_bucket_count_error}"
+            );
 
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
             mismatched_privacy_manifest.result_privacy =
@@ -1619,6 +1623,14 @@ mod private_hnsw_rest_tests {
             assert_manifest_mismatch_error_redacts!(
                 mismatched_privacy_error,
                 &mismatched_privacy_signature_sig
+            );
+            assert!(
+                !mismatched_privacy_error.contains("private_payload_oram_required"),
+                "{mismatched_privacy_error}"
+            );
+            assert!(
+                !mismatched_privacy_error.contains("PrivatePayloadOramRequired"),
+                "{mismatched_privacy_error}"
             );
 
             let mut mismatched_hnsw_manifest = fixture.manifest.clone();
@@ -1656,6 +1668,10 @@ mod private_hnsw_rest_tests {
                 mismatched_oram_error,
                 &mismatched_oram_signature_sig
             );
+            assert!(
+                !mismatched_oram_error.contains("bucket_size"),
+                "{mismatched_oram_error}"
+            );
 
             let mut mismatched_fixed_budget_manifest = fixture.manifest.clone();
             mismatched_fixed_budget_manifest.fixed_budget.fixed_result_k = 2;
@@ -1675,6 +1691,10 @@ mod private_hnsw_rest_tests {
             assert_manifest_mismatch_error_redacts!(
                 mismatched_fixed_budget_error,
                 &mismatched_fixed_budget_signature_sig
+            );
+            assert!(
+                !mismatched_fixed_budget_error.contains("fixed_result_k"),
+                "{mismatched_fixed_budget_error}"
             );
 
             let signature_key_id_sentinel = "signature-key-id-sentinel";

@@ -1562,6 +1562,7 @@ mod private_hnsw_grpc_tests {
 
             let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
             mismatched_bucket_count_manifest.bucket_count -= 1;
+            let mismatched_bucket_count_signature_sig = fixture.manifest_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -1575,11 +1576,17 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("request validation failed"));
+            assert_manifest_mismatch_error_redacts!(
+                err.message(),
+                &mismatched_bucket_count_signature_sig
+            );
+            assert!(!err.message().contains("bucket_count"));
 
             let mut mismatched_privacy_manifest = fixture.manifest.clone();
             mismatched_privacy_manifest.result_privacy =
                 ResultPrivacyMode::PrivatePayloadOramRequired;
             let mismatched_privacy_signature = fixture.sign_manifest(&mismatched_privacy_manifest);
+            let mismatched_privacy_signature_sig = mismatched_privacy_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -1596,10 +1603,17 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest result_privacy does not match runtime instance")
             );
+            assert_manifest_mismatch_error_redacts!(
+                err.message(),
+                &mismatched_privacy_signature_sig
+            );
+            assert!(!err.message().contains("private_payload_oram_required"));
+            assert!(!err.message().contains("PrivatePayloadOramRequired"));
 
             let mut mismatched_hnsw_manifest = fixture.manifest.clone();
             mismatched_hnsw_manifest.hnsw.m = 3;
             let mismatched_hnsw_signature = fixture.sign_manifest(&mismatched_hnsw_manifest);
+            let mismatched_hnsw_signature_sig = mismatched_hnsw_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -1616,10 +1630,12 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest hnsw does not match runtime instance")
             );
+            assert_manifest_mismatch_error_redacts!(err.message(), &mismatched_hnsw_signature_sig);
 
             let mut mismatched_oram_manifest = fixture.manifest.clone();
             mismatched_oram_manifest.oram.bucket_size = 4;
             let mismatched_oram_signature = fixture.sign_manifest(&mismatched_oram_manifest);
+            let mismatched_oram_signature_sig = mismatched_oram_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -1636,11 +1652,15 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest oram does not match runtime instance")
             );
+            assert_manifest_mismatch_error_redacts!(err.message(), &mismatched_oram_signature_sig);
+            assert!(!err.message().contains("bucket_size"));
 
             let mut mismatched_fixed_budget_manifest = fixture.manifest.clone();
             mismatched_fixed_budget_manifest.fixed_budget.fixed_result_k = 2;
             let mismatched_fixed_budget_signature =
                 fixture.sign_manifest(&mismatched_fixed_budget_manifest);
+            let mismatched_fixed_budget_signature_sig =
+                mismatched_fixed_budget_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -1657,6 +1677,11 @@ mod private_hnsw_grpc_tests {
                 err.message()
                     .contains("manifest fixed_budget does not match runtime instance")
             );
+            assert_manifest_mismatch_error_redacts!(
+                err.message(),
+                &mismatched_fixed_budget_signature_sig
+            );
+            assert!(!err.message().contains("fixed_result_k"));
 
             let signature_key_id_sentinel = "signature-key-id-sentinel";
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
