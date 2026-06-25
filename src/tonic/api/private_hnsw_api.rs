@@ -3008,6 +3008,9 @@ mod private_hnsw_grpc_tests {
             let mut unsupported_read_signature =
                 fixture.sign_read_paths(&unsupported_read_paths, 1, true);
             unsupported_read_signature.alg = read_signature_alg_sentinel.to_string();
+            let unsupported_read_path_label = unsupported_read_paths[0].clone();
+            let unsupported_read_key_id = unsupported_read_signature.key_id.clone();
+            let unsupported_read_sig = unsupported_read_signature.sig.clone();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -3036,6 +3039,15 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                unsupported_read_path_label.as_str(),
+                unsupported_read_key_id.as_str(),
+                unsupported_read_sig.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let unknown_read_session_sentinel = "read-session-id-sentinel";
             let unknown_read_paths = vec![fixture.entry_leaf_label()];
@@ -3596,6 +3608,8 @@ mod private_hnsw_grpc_tests {
             let commit_signature_alg_sentinel = "rsa-pss-hnsw-commit-sentinel";
             let mut unsupported_commit_signature = search_run.commit_signature.clone();
             unsupported_commit_signature.alg = commit_signature_alg_sentinel.to_string();
+            let unsupported_commit_key_id = unsupported_commit_signature.key_id.clone();
+            let unsupported_commit_sig = unsupported_commit_signature.sig.clone();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -3627,6 +3641,16 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                search_run.commit_plan.old_root_hash.as_str(),
+                search_run.commit_plan.new_root_hash.as_str(),
+                unsupported_commit_key_id.as_str(),
+                unsupported_commit_sig.as_str(),
+                search_run.updated_buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let unknown_commit_session_sentinel = "commit-session-id-sentinel";
             let err = PrivateHnswOram::commit_private_hnsw_paths(

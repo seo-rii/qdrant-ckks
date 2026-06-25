@@ -2449,6 +2449,8 @@ mod private_result_oram_grpc_tests {
             let read_signature_alg_sentinel = "rsa-pss-result-read-sentinel";
             let mut unsupported_read_signature = fixture.read_signature(&read_bucket_ids);
             unsupported_read_signature.alg = read_signature_alg_sentinel.to_string();
+            let unsupported_read_key_id = unsupported_read_signature.key_id.clone();
+            let unsupported_read_sig = unsupported_read_signature.sig.clone();
             let unsupported_read_signature = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::ReadPrivateResultOramBucketsRequest {
@@ -2473,6 +2475,18 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(read_signature_alg_sentinel)
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                unsupported_read_key_id.as_str(),
+                unsupported_read_sig.as_str(),
+            ] {
+                assert!(
+                    !unsupported_read_signature.message().contains(sentinel),
+                    "{}",
+                    unsupported_read_signature.message()
+                );
+            }
 
             let deduped_bucket_ids = vec![0, 1, 3, 4];
             let deduped_path_signature = fixture.read_signature(&read_bucket_ids);
@@ -3440,6 +3454,8 @@ mod private_result_oram_grpc_tests {
             let commit_signature_alg_sentinel = "rsa-pss-result-commit-sentinel";
             let mut unsupported_commit_signature = commit_signature.clone();
             unsupported_commit_signature.alg = commit_signature_alg_sentinel.to_string();
+            let unsupported_commit_key_id = unsupported_commit_signature.key_id.clone();
+            let unsupported_commit_sig = unsupported_commit_signature.sig.clone();
             let unsupported_commit_signature =
                 PrivateResultOram::commit_private_result_oram_buckets(
                     &service,
@@ -3467,6 +3483,20 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(commit_signature_alg_sentinel)
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                new_root_hash.as_str(),
+                unsupported_commit_key_id.as_str(),
+                unsupported_commit_sig.as_str(),
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unsupported_commit_signature.message().contains(sentinel),
+                    "{}",
+                    unsupported_commit_signature.message()
+                );
+            }
 
             let committed = PrivateResultOram::commit_private_result_oram_buckets(
                 &service,
