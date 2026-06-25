@@ -520,7 +520,7 @@ pub struct EncryptedCkksVector {
     pub envelope: EncryptedEnvelope,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CkksVectorSidecarEnvelopeKey {
     collection_id: String,
     point_id: String,
@@ -535,9 +535,35 @@ pub struct CkksVectorSidecarEnvelopeKey {
     ciphertext_sha256_b64: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+impl Debug for CkksVectorSidecarEnvelopeKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksVectorSidecarEnvelopeKey")
+            .field("collection_id", &"[redacted]")
+            .field("point_id", &"[redacted]")
+            .field("vector_name", &self.vector_name)
+            .field("envelope_version", &self.envelope_version)
+            .field("envelope_algorithm", &self.envelope_algorithm)
+            .field("key_id", &"[redacted]")
+            .field("material_fingerprint", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("nonce", &"[redacted]")
+            .field("ciphertext_sha256_b64", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CkksVectorVerifiedSidecarKey {
     envelope_key: CkksVectorSidecarEnvelopeKey,
+}
+
+impl Debug for CkksVectorVerifiedSidecarKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksVectorVerifiedSidecarKey")
+            .field("envelope_key", &self.envelope_key)
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -586,17 +612,42 @@ impl Debug for ClientCkksVectorVerifiedSidecarKey {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct CkksVectorVerifiedSidecarDeleteKey {
     collection_id: String,
     vector_name: String,
     target: CkksVectorSidecarDeleteTarget,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+impl Debug for CkksVectorVerifiedSidecarDeleteKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CkksVectorVerifiedSidecarDeleteKey")
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &self.vector_name)
+            .field("target", &self.target)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub enum CkksVectorSidecarDeleteTarget {
     PointIds { digest_b64: String },
     Filter { digest_b64: String },
+}
+
+impl Debug for CkksVectorSidecarDeleteTarget {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PointIds { .. } => f
+                .debug_struct("PointIds")
+                .field("digest_b64", &"[redacted]")
+                .finish(),
+            Self::Filter { .. } => f
+                .debug_struct("Filter")
+                .field("digest_b64", &"[redacted]")
+                .finish(),
+        }
+    }
 }
 
 impl CkksVectorVerifiedSidecarKey {
@@ -1978,5 +2029,42 @@ mod tests {
         assert!(!verified_key_debug.contains("CLIENT-CKKS-SHA-SENTINEL"));
         assert!(!verified_key_debug.contains("CLIENT-CKKS-SIGNING-KEY-SENTINEL"));
         assert!(!verified_key_debug.contains("CLIENT-CKKS-SIGNATURE-SHA-SENTINEL"));
+
+        let server_sidecar_key = CkksVectorSidecarEnvelopeKey {
+            collection_id: "SERVER-CKKS-COLLECTION-SENTINEL".to_string(),
+            point_id: "SERVER-CKKS-POINT-SENTINEL".to_string(),
+            vector_name: "text".to_string(),
+            envelope_version: VERSION,
+            envelope_algorithm: "AES-256-GCM".to_string(),
+            key_id: "SERVER-CKKS-KEY-SENTINEL".to_string(),
+            material_fingerprint: "SERVER-CKKS-MATERIAL-FINGERPRINT-SENTINEL".to_string(),
+            rk_id: "SERVER-CKKS-RK-SENTINEL".to_string(),
+            rk_epoch: Some(7),
+            nonce: "SERVER-CKKS-NONCE-SENTINEL".to_string(),
+            ciphertext_sha256_b64: "SERVER-CKKS-CIPHERTEXT-SHA-SENTINEL".to_string(),
+        };
+        let server_verified_key = CkksVectorVerifiedSidecarKey {
+            envelope_key: server_sidecar_key,
+        };
+        let server_verified_debug = format!("{server_verified_key:?}");
+        assert!(server_verified_debug.contains("envelope_version"));
+        assert!(!server_verified_debug.contains("SERVER-CKKS-COLLECTION-SENTINEL"));
+        assert!(!server_verified_debug.contains("SERVER-CKKS-POINT-SENTINEL"));
+        assert!(!server_verified_debug.contains("SERVER-CKKS-KEY-SENTINEL"));
+        assert!(!server_verified_debug.contains("SERVER-CKKS-MATERIAL-FINGERPRINT-SENTINEL"));
+        assert!(!server_verified_debug.contains("SERVER-CKKS-RK-SENTINEL"));
+        assert!(!server_verified_debug.contains("SERVER-CKKS-NONCE-SENTINEL"));
+        assert!(!server_verified_debug.contains("SERVER-CKKS-CIPHERTEXT-SHA-SENTINEL"));
+
+        let delete_key = CkksVectorVerifiedSidecarDeleteKey {
+            collection_id: "SERVER-CKKS-DELETE-COLLECTION-SENTINEL".to_string(),
+            vector_name: "text".to_string(),
+            target: CkksVectorSidecarDeleteTarget::PointIds {
+                digest_b64: "SERVER-CKKS-DELETE-DIGEST-SENTINEL".to_string(),
+            },
+        };
+        let delete_debug = format!("{delete_key:?}");
+        assert!(!delete_debug.contains("SERVER-CKKS-DELETE-COLLECTION-SENTINEL"));
+        assert!(!delete_debug.contains("SERVER-CKKS-DELETE-DIGEST-SENTINEL"));
     }
 }

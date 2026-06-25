@@ -731,6 +731,11 @@ fn debug_output_redacts_secrets_and_ciphertexts() {
     assert!(!debug_envelope.contains(&envelope.nonce));
     assert!(!debug_envelope.contains(&envelope.ciphertext));
     assert!(!debug_envelope.contains("hidden text"));
+    assert!(!debug_envelope.contains("tenant-a:primary"));
+    assert!(!debug_envelope.contains("tenant-a/primary@v1"));
+    if !envelope.material_fingerprint.is_empty() {
+        assert!(!debug_envelope.contains(&envelope.material_fingerprint));
+    }
 }
 
 proptest! {

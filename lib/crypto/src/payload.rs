@@ -254,7 +254,7 @@ impl Debug for ClientPayloadEnvelopeKey {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ServerPayloadEnvelopeKey {
     collection_id: String,
     point_id: String,
@@ -267,6 +267,24 @@ pub struct ServerPayloadEnvelopeKey {
     encryption_epoch: u64,
     nonce: String,
     ciphertext_sha256_b64: String,
+}
+
+impl Debug for ServerPayloadEnvelopeKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerPayloadEnvelopeKey")
+            .field("collection_id", &"[redacted]")
+            .field("point_id", &"[redacted]")
+            .field("field_path", &"[redacted]")
+            .field("key_id", &"[redacted]")
+            .field("material_fingerprint", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("schema_version", &self.schema_version)
+            .field("encryption_epoch", &self.encryption_epoch)
+            .field("nonce", &"[redacted]")
+            .field("ciphertext_sha256_b64", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -284,9 +302,17 @@ impl Debug for ClientPayloadVerifiedEnvelopeKey {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ServerPayloadVerifiedEnvelopeKey {
     envelope_key: ServerPayloadEnvelopeKey,
+}
+
+impl Debug for ServerPayloadVerifiedEnvelopeKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerPayloadVerifiedEnvelopeKey")
+            .field("envelope_key", &self.envelope_key)
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -1959,6 +1985,36 @@ mod tests {
         assert!(!verified_key_debug.contains(&BASE64URL_NOPAD.encode(&[2_u8; 16])));
         assert!(!verified_key_debug.contains(&BASE64URL_NOPAD.encode(&[3_u8; 64])));
         assert!(!verified_key_debug.contains(&BASE64URL_NOPAD.encode(&[8_u8; 32])));
+    }
+
+    #[test]
+    fn server_payload_provenance_debug_redacts_envelope_identifiers() {
+        let envelope_key = ServerPayloadEnvelopeKey {
+            collection_id: "SERVER-PAYLOAD-COLLECTION-SENTINEL".to_string(),
+            point_id: "SERVER-PAYLOAD-POINT-SENTINEL".to_string(),
+            field_path: "SERVER-PAYLOAD-FIELD-SENTINEL".to_string(),
+            key_id: "SERVER-PAYLOAD-KEY-SENTINEL".to_string(),
+            material_fingerprint: "SERVER-PAYLOAD-MATERIAL-FINGERPRINT-SENTINEL".to_string(),
+            rk_id: "SERVER-PAYLOAD-RK-SENTINEL".to_string(),
+            rk_epoch: Some(3),
+            schema_version: 1,
+            encryption_epoch: 7,
+            nonce: "SERVER-PAYLOAD-NONCE-SENTINEL".to_string(),
+            ciphertext_sha256_b64: "SERVER-PAYLOAD-CIPHERTEXT-SHA-SENTINEL".to_string(),
+        };
+        let verified_key = ServerPayloadVerifiedEnvelopeKey { envelope_key };
+        let rendered = format!("{verified_key:?}");
+
+        assert!(rendered.contains("schema_version"));
+        assert!(rendered.contains("encryption_epoch"));
+        assert!(!rendered.contains("SERVER-PAYLOAD-COLLECTION-SENTINEL"));
+        assert!(!rendered.contains("SERVER-PAYLOAD-POINT-SENTINEL"));
+        assert!(!rendered.contains("SERVER-PAYLOAD-FIELD-SENTINEL"));
+        assert!(!rendered.contains("SERVER-PAYLOAD-KEY-SENTINEL"));
+        assert!(!rendered.contains("SERVER-PAYLOAD-MATERIAL-FINGERPRINT-SENTINEL"));
+        assert!(!rendered.contains("SERVER-PAYLOAD-RK-SENTINEL"));
+        assert!(!rendered.contains("SERVER-PAYLOAD-NONCE-SENTINEL"));
+        assert!(!rendered.contains("SERVER-PAYLOAD-CIPHERTEXT-SHA-SENTINEL"));
     }
 
     #[test]
