@@ -13558,6 +13558,12 @@ esac
             };
             let private_body_grpc_filter =
                 || api::grpc::qdrant::Filter::from(private_body_filter());
+            let private_body_grpc_condition = || {
+                private_body_grpc_filter()
+                    .must
+                    .pop()
+                    .expect("private body filter must contain a condition")
+            };
             let assert_private_result_predicate_error =
                 |err: StorageError, expected_operation: &str| {
                     let message = err.to_string();
@@ -13605,6 +13611,30 @@ esac
             let grpc_nearest_query = || api::grpc::qdrant::Query {
                 variant: Some(api::grpc::qdrant::query::Variant::Nearest(
                     grpc_dense_input(),
+                )),
+            };
+            let grpc_formula_variable_query = || api::grpc::qdrant::Query {
+                variant: Some(api::grpc::qdrant::query::Variant::Formula(
+                    api::grpc::qdrant::Formula {
+                        expression: Some(api::grpc::qdrant::Expression {
+                            variant: Some(api::grpc::qdrant::expression::Variant::Variable(
+                                "body".to_string(),
+                            )),
+                        }),
+                        defaults: Default::default(),
+                    },
+                )),
+            };
+            let grpc_formula_condition_query = || api::grpc::qdrant::Query {
+                variant: Some(api::grpc::qdrant::query::Variant::Formula(
+                    api::grpc::qdrant::Formula {
+                        expression: Some(api::grpc::qdrant::Expression {
+                            variant: Some(api::grpc::qdrant::expression::Variant::Condition(
+                                private_body_grpc_condition(),
+                            )),
+                        }),
+                        defaults: Default::default(),
+                    },
                 )),
             };
 
@@ -13749,6 +13779,37 @@ esac
                 "cannot use private result ORAM payload field",
             );
 
+            assert_private_result_grpc_predicate_error(
+                crate::tonic::api::query_common::query(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::QueryPoints {
+                        collection_name: "private_result_predicate_docs".to_string(),
+                        prefetch: Vec::new(),
+                        query: Some(grpc_formula_variable_query()),
+                        using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        limit: Some(1),
+                        offset: None,
+                        with_vectors: None,
+                        with_payload: Some(grpc_payload_disabled()),
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        lookup_from: None,
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    InferenceParams::default(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC formula must fail closed"),
+                "cannot use private result ORAM payload field",
+            );
+
             assert_private_result_predicate_error(
                 crate::common::query::do_query_points(
                     &toc,
@@ -13780,6 +13841,37 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM formula condition must fail closed"),
+                "cannot use formula condition on private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_predicate_error(
+                crate::tonic::api::query_common::query(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::QueryPoints {
+                        collection_name: "private_result_predicate_docs".to_string(),
+                        prefetch: Vec::new(),
+                        query: Some(grpc_formula_condition_query()),
+                        using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        limit: Some(1),
+                        offset: None,
+                        with_vectors: None,
+                        with_payload: Some(grpc_payload_disabled()),
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        lookup_from: None,
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    InferenceParams::default(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC formula condition must fail closed"),
                 "cannot use formula condition on private result ORAM payload field",
             );
 
