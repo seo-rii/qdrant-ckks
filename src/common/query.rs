@@ -3980,9 +3980,17 @@ fn ensure_group_path_does_not_touch_encrypted_crypto_selectors(
                     let encrypted_json_path =
                         encrypted_path
                             .parse::<JsonPath>()
-                            .map_err(|err| StorageError::bad_input(format!(
-                                "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                            )))?;
+                            .map_err(|err| {
+                                if encryption_rule_uses_private_result_oram(rule) {
+                                    StorageError::bad_input(
+                                        "private result ORAM payload field path is invalid",
+                                    )
+                                } else {
+                                    StorageError::bad_input(format!(
+                                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                                    ))
+                                }
+                            })?;
                     if group_by.compatible(&encrypted_json_path) {
                         if encryption_rule_uses_private_result_oram(rule) {
                             return Err(StorageError::bad_input(
@@ -12313,6 +12321,39 @@ mod tests {
                 "unexpected error for {group_by}: {err}",
             );
         }
+    }
+
+    #[test]
+    fn private_result_oram_grouping_invalid_payload_path_error_is_sanitized() {
+        let secret_path = "document.body[private-result-group-secret";
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:result-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "private_result_payload".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec![secret_path.to_string()],
+                },
+                instance: "docs_private_result_oram_v1".to_string(),
+                binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
+            }],
+        };
+        let group_by = "document".parse::<JsonPath>().unwrap();
+
+        let err = ensure_group_path_does_not_touch_encrypted_crypto_selectors(
+            Some(&encryption),
+            &group_by,
+        )
+        .expect_err("invalid private result ORAM selector must fail closed")
+        .to_string();
+
+        assert!(err.contains("private result ORAM payload field path is invalid"));
+        assert!(!err.contains(secret_path), "{err}");
+        assert!(!err.contains("private-result-group-secret"), "{err}");
+        assert!(!err.contains("JsonPath"), "{err}");
     }
 
     #[test]

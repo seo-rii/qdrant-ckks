@@ -57,9 +57,13 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
 
         for encrypted_path in paths {
             let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                CollectionError::bad_input(format!(
-                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                ))
+                if encryption_rule_uses_private_result_oram(rule) {
+                    CollectionError::bad_input("private result ORAM payload field path is invalid")
+                } else {
+                    CollectionError::bad_input(format!(
+                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                    ))
+                }
             })?;
 
             for field_name in &field_names {
@@ -633,6 +637,26 @@ mod tests {
                 ));
             }
         }
+    }
+
+    #[test]
+    fn payload_index_private_result_oram_invalid_payload_path_error_is_sanitized() {
+        let secret_path = "document.body[private-result-index-secret";
+        let collection_params = params_with_private_result_oram_path(secret_path);
+        let field_name = "document".parse::<JsonPath>().unwrap();
+
+        let err = validate_payload_index_paths_for_encrypted_paths(
+            [&field_name],
+            &collection_params,
+            "create",
+        )
+        .expect_err("invalid private result ORAM selector must fail closed")
+        .to_string();
+
+        assert!(err.contains("private result ORAM payload field path is invalid"));
+        assert!(!err.contains(secret_path), "{err}");
+        assert!(!err.contains("private-result-index-secret"), "{err}");
+        assert!(!err.contains("JsonPath"), "{err}");
     }
 
     #[test]

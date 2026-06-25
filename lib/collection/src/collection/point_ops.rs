@@ -402,6 +402,21 @@ fn private_result_oram_payload_touches_path(
     !protected_path.value_get(&payload.0).is_empty()
 }
 
+fn parse_payload_selector_guard_path(
+    rule: &EncryptionRuleRef,
+    encrypted_path: &str,
+) -> CollectionResult<JsonPath> {
+    encrypted_path.parse::<JsonPath>().map_err(|err| {
+        if encryption_rule_uses_private_result_oram(rule) {
+            CollectionError::bad_input("private result ORAM payload field path is invalid")
+        } else {
+            CollectionError::bad_input(format!(
+                "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+            ))
+        }
+    })
+}
+
 impl Collection {
     pub(crate) async fn backfill_client_payload_nonce_replay_cache_from_storage(
         &self,
@@ -3299,11 +3314,7 @@ impl Collection {
                 EncryptionSelector::PayloadPaths { paths } => {
                     for encrypted_path in paths {
                         let encrypted_json_path =
-                            encrypted_path.parse::<JsonPath>().map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                                ))
-                            })?;
+                            parse_payload_selector_guard_path(rule, encrypted_path)?;
                         if let Some(filter_path) =
                             filter_touches_encrypted_payload(filter, &encrypted_json_path)
                         {
@@ -3392,11 +3403,7 @@ impl Collection {
                 EncryptionSelector::PayloadPaths { paths } => {
                     for encrypted_path in paths {
                         let encrypted_json_path =
-                            encrypted_path.parse::<JsonPath>().map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                                ))
-                        })?;
+                            parse_payload_selector_guard_path(rule, encrypted_path)?;
                         if order_by.key.compatible(&encrypted_json_path) {
                             if encryption_rule_uses_private_result_oram(rule) {
                                 return Err(CollectionError::bad_input(
@@ -3468,11 +3475,7 @@ impl Collection {
                 EncryptionSelector::PayloadPaths { paths } => {
                     for encrypted_path in paths {
                         let encrypted_json_path =
-                            encrypted_path.parse::<JsonPath>().map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                                ))
-                        })?;
+                            parse_payload_selector_guard_path(rule, encrypted_path)?;
                         if group_by.compatible(&encrypted_json_path) {
                             if encryption_rule_uses_private_result_oram(rule) {
                                 return Err(CollectionError::bad_input(
@@ -3558,11 +3561,7 @@ impl Collection {
                 EncryptionSelector::PayloadPaths { paths } => {
                     for encrypted_path in paths {
                         let encrypted_json_path =
-                            encrypted_path.parse::<JsonPath>().map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                                ))
-                            })?;
+                            parse_payload_selector_guard_path(rule, encrypted_path)?;
 
                         if let Some(formula_path) = formula
                             .payload_vars
@@ -4844,6 +4843,21 @@ mod tests {
         assert!(err.contains("private result ORAM payload field path is invalid"));
         assert!(!err.contains(secret_path), "{err}");
         assert!(!err.contains("private-result-secret"), "{err}");
+        assert!(!err.contains("JsonPath"), "{err}");
+    }
+
+    #[test]
+    fn private_result_oram_selector_guard_invalid_path_errors_are_sanitized() {
+        let secret_path = "document.body[private-result-selector-secret";
+        let rule = private_result_oram_payload_rule(secret_path);
+
+        let err = parse_payload_selector_guard_path(&rule, secret_path)
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("private result ORAM payload field path is invalid"));
+        assert!(!err.contains(secret_path), "{err}");
+        assert!(!err.contains("private-result-selector-secret"), "{err}");
         assert!(!err.contains("JsonPath"), "{err}");
     }
 

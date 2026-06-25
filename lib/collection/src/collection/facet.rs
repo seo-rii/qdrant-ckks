@@ -105,9 +105,15 @@ fn ensure_facet_key_does_not_touch_encrypted_payload(
             EncryptionSelector::PayloadPaths { paths } => {
                 for encrypted_path in paths {
                     let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                        CollectionError::bad_input(format!(
-                            "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                        ))
+                        if encryption_rule_uses_private_result_oram(rule) {
+                            CollectionError::bad_input(
+                                "private result ORAM payload field path is invalid",
+                            )
+                        } else {
+                            CollectionError::bad_input(format!(
+                                "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
+                            ))
+                        }
                     })?;
                     if key.compatible(&encrypted_json_path) {
                         if encryption_rule_uses_private_result_oram(rule) {
@@ -192,5 +198,21 @@ mod tests {
         let public_key = "document.title".parse::<JsonPath>().unwrap();
         ensure_facet_key_does_not_touch_encrypted_payload(&public_key, &encryption)
             .expect("unrelated public payload facets should remain allowed");
+    }
+
+    #[test]
+    fn facet_private_result_oram_invalid_payload_path_error_is_sanitized() {
+        let secret_path = "document.body[private-result-facet-secret";
+        let encryption = private_result_oram_encryption(secret_path);
+        let key = "document".parse::<JsonPath>().unwrap();
+
+        let err = ensure_facet_key_does_not_touch_encrypted_payload(&key, &encryption)
+            .expect_err("invalid private result ORAM selector must fail closed")
+            .to_string();
+
+        assert!(err.contains("private result ORAM payload field path is invalid"));
+        assert!(!err.contains(secret_path), "{err}");
+        assert!(!err.contains("private-result-facet-secret"), "{err}");
+        assert!(!err.contains("JsonPath"), "{err}");
     }
 }
