@@ -5859,6 +5859,101 @@ esac
                 .unwrap_err(),
             );
 
+            assert_private_hnsw_read_error(
+                crate::common::query::do_recommend_points(
+                    &toc,
+                    collection_name,
+                    RecommendRequestInternal {
+                        positive: vec![RecommendExample::Dense(vec![0.0, 0.0])],
+                        negative: Vec::new(),
+                        strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                        filter: None,
+                        params: None,
+                        limit: 1,
+                        offset: None,
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        score_threshold: None,
+                        using: Some(collection::operations::types::UsingVector::Name(
+                            private_vector_name.to_string(),
+                        )),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_recommend_point_groups(
+                    &toc,
+                    collection_name,
+                    RecommendGroupsRequestInternal {
+                        positive: vec![RecommendExample::Dense(vec![0.0, 0.0])],
+                        negative: Vec::new(),
+                        strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                        filter: None,
+                        params: None,
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        score_threshold: None,
+                        using: Some(collection::operations::types::UsingVector::Name(
+                            private_vector_name.to_string(),
+                        )),
+                        lookup_from: None,
+                        group_request: BaseGroupRequest {
+                            group_by: "group".parse().unwrap(),
+                            group_size: 1,
+                            limit: 1,
+                            with_lookup: None,
+                        },
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_discover_points(
+                    &toc,
+                    collection_name,
+                    DiscoverRequestInternal {
+                        target: Some(RecommendExample::Dense(vec![0.0, 0.0])),
+                        context: None,
+                        filter: None,
+                        params: None,
+                        limit: 1,
+                        offset: None,
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        using: Some(collection::operations::types::UsingVector::Name(
+                            private_vector_name.to_string(),
+                        )),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
             assert_private_hnsw_grpc_read_error(
                 crate::tonic::api::query_common::search_points_matrix(
                     UncheckedTocProvider::new_unchecked(&toc),
