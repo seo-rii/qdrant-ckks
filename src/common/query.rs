@@ -12357,7 +12357,7 @@ mod tests {
     }
 
     #[test]
-    fn private_result_oram_rest_group_lookup_preflight_rejects_raw_payload_reads() {
+    fn private_result_oram_rest_group_lookup_preflight_rejects_raw_or_decrypted_payload_reads() {
         let (_temp, dispatcher) = test_dispatcher();
         let auth = Auth::new_internal(Access::full("private result ORAM group lookup test"));
         tokio::runtime::Runtime::new().unwrap().block_on(async {
@@ -12411,6 +12411,39 @@ mod tests {
             assert!(message.contains("/private-result-oram/session"));
             assert!(!message.contains("body.lang"), "{message}");
             assert!(!message.contains("body"), "{message}");
+
+            let explicit_decrypted_lookup = Some(api::rest::WithLookupInterface::WithLookup(
+                api::rest::WithLookup {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    with_payload: Some(WithPayloadInterface::Encrypted(
+                        PayloadEncryptedReadPolicy {
+                            encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                        },
+                    )),
+                    with_vectors: Some(WithVector::Bool(false)),
+                },
+            ));
+            let err = preflight_rest_group_lookup_private_result_oram_raw_payload_read(
+                &toc,
+                &explicit_decrypted_lookup,
+                "query group lookup",
+                &auth,
+            )
+            .await
+            .expect_err(
+                "decrypted lookup payload mode must fail closed for private result payload",
+            );
+            let message = err.to_string();
+            assert!(
+                message.contains("cannot query group lookup private result ORAM payload field")
+            );
+            assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+            assert!(message.contains("/private-result-oram/session"));
+            assert!(
+                !message.contains("requires runtime crypto settings"),
+                "{message}"
+            );
+            assert!(!message.contains("payload decrypt"), "{message}");
 
             for allowed_lookup in [
                 None,

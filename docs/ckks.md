@@ -994,8 +994,8 @@ The public gRPC `GetPoints`, `ScrollPoints`, `SearchPoints`, batch/grouped
 search, `RecommendPoints`, batch/grouped recommend, `DiscoverPoints`, batch
 discover, `QueryPoints`, and grouped/batch query wrappers follow the same
 fail-closed read guard before returning raw protected payload bytes.
-Grouped gRPC `with_lookup` payload requests use the same guard when the lookup
-collection is bound to `private-result-oram/v1`.
+Grouped gRPC `with_lookup` payload requests and REST group lookup preflight use
+the same guard when the lookup collection is bound to `private-result-oram/v1`.
 Callers may omit payloads or request redacted encrypted payload output, so
 payload-omitted retrieve/scroll/search requests remain ordinary. Raw or
 server-decrypted result payload bytes require the private result ORAM
