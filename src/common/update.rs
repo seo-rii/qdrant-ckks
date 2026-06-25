@@ -1506,6 +1506,26 @@ fn collection_error_to_storage_error(err: CollectionError) -> StorageError {
     }
 }
 
+async fn ensure_sync_points_allowed_by_encryption(
+    toc: &TableOfContent,
+    collection_name: &str,
+    operation: &PointSyncOperation,
+    auth: &Auth,
+) -> Result<(), StorageError> {
+    let collection_pass =
+        auth.check_collection_access(collection_name, AccessRequirements::new(), "sync_points")?;
+    let collection = toc.get_collection(&collection_pass).await?;
+    let collection_config = collection.config_snapshot().await;
+
+    if let Some(vector_name) =
+        sync_points_touch_private_hnsw_oram_config(operation, &collection_config.params)
+    {
+        return Err(private_hnsw_oram_api_required_error(&vector_name));
+    }
+
+    Ok(())
+}
+
 #[expect(clippy::too_many_arguments)]
 pub async fn update(
     toc: &TableOfContent,
@@ -1529,6 +1549,14 @@ pub async fn update(
         ordering,
         timeout: _,
     } = params;
+
+    if let CollectionUpdateOperations::PointOperation(point_ops::PointOperations::SyncPoints(
+        sync_operation,
+    )) = &operation
+    {
+        ensure_sync_points_allowed_by_encryption(toc, collection_name, sync_operation, &auth)
+            .await?;
+    }
 
     // Use wait_override if present, otherwise fall back to the wait boolean
     let wait =
@@ -2378,6 +2406,16 @@ fn point_vectors_touch_private_hnsw_oram_config(
     params: &CollectionParams,
 ) -> Option<String> {
     points
+        .iter()
+        .find_map(|point| vector_struct_touches_private_hnsw_oram_config(&point.vector, params))
+}
+
+fn sync_points_touch_private_hnsw_oram_config(
+    operation: &PointSyncOperation,
+    params: &CollectionParams,
+) -> Option<String> {
+    operation
+        .points
         .iter()
         .find_map(|point| vector_struct_touches_private_hnsw_oram_config(&point.vector, params))
 }
@@ -5063,6 +5101,26 @@ esac
             let grpc_vectors_selector = || api::grpc::qdrant::VectorsSelector {
                 names: vec!["embedding".to_string()],
             };
+            let grpc_sync_points = || api::grpc::qdrant::SyncPoints {
+                collection_name: "private_hnsw_docs".to_string(),
+                wait: Some(true),
+                points: vec![grpc_point_struct()],
+                from_id: None,
+                to_id: None,
+                ordering: None,
+                timeout: None,
+            };
+            let grpc_sync_points_internal = || api::grpc::qdrant::SyncPointsInternal {
+                sync_points: Some(grpc_sync_points()),
+                shard_id: Some(0),
+                clock_tag: None,
+                wait_override: None,
+            };
+            let points_internal_service =
+                crate::tonic::api::points_internal_api::PointsInternalService::new(
+                    toc.clone(),
+                    settings.service.clone(),
+                );
 
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
@@ -5651,6 +5709,31 @@ esac
                     InternalUpdateParams::default(),
                     auth.clone(),
                     request_hw_counter(),
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_write_error(
+                api::grpc::qdrant::points_internal_server::PointsInternal::sync(
+                    &points_internal_service,
+                    tonic::Request::new(grpc_sync_points_internal()),
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_write_error(
+                api::grpc::qdrant::points_internal_server::PointsInternal::update_batch(
+                    &points_internal_service,
+                    tonic::Request::new(api::grpc::qdrant::UpdateBatchInternal {
+                        operations: vec![api::grpc::qdrant::UpdateOperation {
+                            update: Some(api::grpc::qdrant::update_operation::Update::Sync(
+                                grpc_sync_points_internal(),
+                            )),
+                        }],
+                        wait_override: None,
+                    }),
                 )
                 .await
                 .unwrap_err(),
