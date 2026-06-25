@@ -1118,10 +1118,12 @@ mod tests {
             "text_private_hnsw",
             "docs_private_hnsw_v1",
             PRIVATE_HNSW_ORAM_BINDING,
+            "private_hnsw_oram",
             "tenant-a/result-private-rk",
             "body_private_result_oram",
             "docs_private_result_oram_v1",
             PRIVATE_RESULT_ORAM_BINDING,
+            "private_result_oram",
         ] {
             assert!(
                 !rendered.contains(sentinel),

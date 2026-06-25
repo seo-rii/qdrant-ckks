@@ -1774,6 +1774,7 @@ mod tests {
                     "tenant-a/vector-private-rk",
                     "docs_text_private_hnsw",
                     PRIVATE_HNSW_ORAM_BINDING,
+                    "private_hnsw_oram",
                 ],
             );
         }
@@ -1799,6 +1800,7 @@ mod tests {
                     "tenant-a/result-private-rk",
                     "body_private_result_oram",
                     PRIVATE_RESULT_ORAM_BINDING,
+                    "private_result_oram",
                 ],
             );
         }
@@ -1814,6 +1816,7 @@ mod tests {
                     "tenant-a/vector-private-rk",
                     "docs_text_private_hnsw",
                     PRIVATE_HNSW_ORAM_BINDING,
+                    "private_hnsw_oram",
                 ],
             ),
             (
@@ -1823,6 +1826,7 @@ mod tests {
                     "tenant-a/result-private-rk",
                     "body_private_result_oram",
                     PRIVATE_RESULT_ORAM_BINDING,
+                    "private_result_oram",
                 ],
             ),
         ] {
@@ -1862,6 +1866,7 @@ mod tests {
                     "tenant-a/vector-private-rk",
                     "docs_text_private_hnsw",
                     PRIVATE_HNSW_ORAM_BINDING,
+                    "private_hnsw_oram",
                 ],
             ),
             (
@@ -1871,6 +1876,7 @@ mod tests {
                     "tenant-a/result-private-rk",
                     "body_private_result_oram",
                     PRIVATE_RESULT_ORAM_BINDING,
+                    "private_result_oram",
                 ],
             ),
         ] {
@@ -1912,6 +1918,7 @@ mod tests {
                     "tenant-a/vector-private-rk",
                     "docs_text_private_hnsw",
                     PRIVATE_HNSW_ORAM_BINDING,
+                    "private_hnsw_oram",
                 ],
             ),
             (
@@ -1921,6 +1928,7 @@ mod tests {
                     "tenant-a/result-private-rk",
                     "body_private_result_oram",
                     PRIVATE_RESULT_ORAM_BINDING,
+                    "private_result_oram",
                 ],
             ),
         ] {
