@@ -480,6 +480,7 @@ pub async fn do_upload_private_result_oram_manifest(
         AccessRequirements::new().write(),
     )
     .await?;
+    validate_private_result_oram_single_node_epoch_mode(toc.is_distributed())?;
     let epoch = validate_private_result_oram_manifest(
         &manifest,
         Some(&signature),
@@ -563,7 +564,6 @@ pub async fn do_open_private_result_oram_session(
     fixed_budget: bool,
 ) -> StorageResult<PrivateResultOramSessionResponse> {
     validate_private_result_oram_client_id_shape(&client_id)?;
-    validate_private_result_oram_session_cluster_epoch_mode(toc.is_distributed())?;
     if is_strict(settings) && !fixed_budget {
         return Err(StorageError::bad_request(
             "private result ORAM strict mode requires fixed_budget=true",
@@ -580,6 +580,7 @@ pub async fn do_open_private_result_oram_session(
         AccessRequirements::new().write(),
         "private_result_oram_session_open",
     )?;
+    validate_private_result_oram_single_node_epoch_mode(toc.is_distributed())?;
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
@@ -682,6 +683,7 @@ pub async fn do_upload_private_result_oram_buckets(
     )?;
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
+    validate_private_result_oram_single_node_epoch_mode(toc.is_distributed())?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
     let collection_crypto_id = config.stable_crypto_id(collection.name())?;
     validate_collection_crypto_runtime_with_crypto_id(
@@ -786,6 +788,7 @@ pub async fn do_read_private_result_oram_buckets(
         AccessRequirements::new(),
     )
     .await?;
+    validate_private_result_oram_single_node_epoch_mode(toc.is_distributed())?;
     let now_unix = current_unix_secs()?;
     let mut registry = session_registry().lock().map_err(|_| {
         StorageError::service_error("private result ORAM session registry poisoned")
@@ -891,6 +894,7 @@ pub async fn do_commit_private_result_oram_buckets(
         AccessRequirements::new().write(),
     )
     .await?;
+    validate_private_result_oram_single_node_epoch_mode(toc.is_distributed())?;
     let now_unix = current_unix_secs()?;
     let mut registry = session_registry().lock().map_err(|_| {
         StorageError::service_error("private result ORAM session registry poisoned")
@@ -1453,10 +1457,10 @@ fn is_strict(settings: &Settings) -> bool {
     settings.crypto.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT)
 }
 
-fn validate_private_result_oram_session_cluster_epoch_mode(distributed: bool) -> StorageResult<()> {
+fn validate_private_result_oram_single_node_epoch_mode(distributed: bool) -> StorageResult<()> {
     if distributed {
         return Err(StorageError::bad_request(
-            "private result ORAM distributed sessions require consensus-backed epoch/root CAS; \
+            "private result ORAM distributed operations require consensus-backed epoch/root CAS; \
              this MVP supports private ORAM sessions only in single-node mode",
         ));
     }
@@ -2633,10 +2637,10 @@ mod private_result_oram_tests {
     }
 
     #[test]
-    fn distributed_session_epoch_mode_requires_consensus_backed_cas() {
-        assert!(validate_private_result_oram_session_cluster_epoch_mode(false).is_ok());
+    fn distributed_epoch_operations_require_consensus_backed_cas() {
+        assert!(validate_private_result_oram_single_node_epoch_mode(false).is_ok());
 
-        let err = validate_private_result_oram_session_cluster_epoch_mode(true).unwrap_err();
+        let err = validate_private_result_oram_single_node_epoch_mode(true).unwrap_err();
         assert!(err.to_string().contains("consensus-backed epoch/root CAS"));
     }
 

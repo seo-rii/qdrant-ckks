@@ -599,6 +599,7 @@ pub async fn do_upload_private_hnsw_manifest(
         AccessRequirements::new().write(),
     )
     .await?;
+    validate_private_hnsw_oram_single_node_epoch_mode(toc.is_distributed())?;
     let epoch = validate_private_hnsw_oram_manifest(
         &manifest,
         Some(&signature),
@@ -721,6 +722,7 @@ pub async fn do_upload_private_hnsw_buckets(
     )?;
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
+    validate_private_hnsw_oram_single_node_epoch_mode(toc.is_distributed())?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
     let collection_crypto_id = config.stable_crypto_id(collection.name())?;
     validate_collection_crypto_runtime_with_crypto_id(
@@ -815,7 +817,6 @@ pub async fn do_open_private_hnsw_session(
     result_privacy: ResultPrivacyMode,
 ) -> StorageResult<PrivateHnswSessionResponse> {
     validate_private_hnsw_client_id_shape(&client_id)?;
-    validate_private_hnsw_session_cluster_epoch_mode(toc.is_distributed())?;
     if is_strict(settings) && !fixed_budget {
         return Err(StorageError::bad_request(
             "private HNSW ORAM strict mode requires fixed_budget=true",
@@ -827,6 +828,7 @@ pub async fn do_open_private_hnsw_session(
         AccessRequirements::new().write(),
         "private_hnsw_session_open",
     )?;
+    validate_private_hnsw_oram_single_node_epoch_mode(toc.is_distributed())?;
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
@@ -964,6 +966,7 @@ pub async fn do_read_private_hnsw_paths(
         AccessRequirements::new(),
     )
     .await?;
+    validate_private_hnsw_oram_single_node_epoch_mode(toc.is_distributed())?;
     let now_unix = current_unix_secs()?;
     let mut registry = session_registry()
         .lock()
@@ -1086,6 +1089,7 @@ pub async fn do_commit_private_hnsw_paths(
         AccessRequirements::new().write(),
     )
     .await?;
+    validate_private_hnsw_oram_single_node_epoch_mode(toc.is_distributed())?;
     let now_unix = current_unix_secs()?;
     let mut registry = session_registry()
         .lock()
@@ -1893,10 +1897,10 @@ fn is_strict(settings: &Settings) -> bool {
     settings.crypto.zero_trust_profile.as_deref() == Some(ZERO_TRUST_PROFILE_STRICT)
 }
 
-fn validate_private_hnsw_session_cluster_epoch_mode(distributed: bool) -> StorageResult<()> {
+fn validate_private_hnsw_oram_single_node_epoch_mode(distributed: bool) -> StorageResult<()> {
     if distributed {
         return Err(StorageError::bad_request(
-            "private HNSW ORAM distributed sessions require consensus-backed epoch/root CAS; \
+            "private HNSW ORAM distributed operations require consensus-backed epoch/root CAS; \
              this MVP supports private ORAM sessions only in single-node mode",
         ));
     }
@@ -3147,10 +3151,10 @@ mod private_hnsw_tests {
     }
 
     #[test]
-    fn distributed_session_epoch_mode_requires_consensus_backed_cas() {
-        assert!(validate_private_hnsw_session_cluster_epoch_mode(false).is_ok());
+    fn distributed_epoch_operations_require_consensus_backed_cas() {
+        assert!(validate_private_hnsw_oram_single_node_epoch_mode(false).is_ok());
 
-        let err = validate_private_hnsw_session_cluster_epoch_mode(true).unwrap_err();
+        let err = validate_private_hnsw_oram_single_node_epoch_mode(true).unwrap_err();
         assert!(err.to_string().contains("consensus-backed epoch/root CAS"));
     }
 
