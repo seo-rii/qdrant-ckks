@@ -261,13 +261,22 @@ impl Debug for PrivateHnswOramSignature {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswSignatureVerification<'a> {
     pub expected_key_id: &'a str,
     pub public_key: &'a [u8],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateHnswSignatureVerification<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswSignatureVerification")
+            .field("expected_key_id", &"[redacted]")
+            .field("public_key", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswManifestValidationContext<'a> {
     pub expected_collection_id: &'a str,
     pub expected_vector_name: &'a str,
@@ -278,6 +287,22 @@ pub struct PrivateHnswManifestValidationContext<'a> {
     pub expected_dim: u32,
     pub expected_distance: DistanceKind,
     pub signature_verification: PrivateHnswSignatureVerification<'a>,
+}
+
+impl Debug for PrivateHnswManifestValidationContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswManifestValidationContext")
+            .field("expected_collection_id", &self.expected_collection_id)
+            .field("expected_vector_name", &self.expected_vector_name)
+            .field("expected_key_id", &"[redacted]")
+            .field("expected_rk_id", &"[redacted]")
+            .field("min_rk_epoch", &self.min_rk_epoch)
+            .field("max_rk_epoch", &self.max_rk_epoch)
+            .field("expected_dim", &self.expected_dim)
+            .field("expected_distance", &self.expected_distance)
+            .field("signature_verification", &self.signature_verification)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1110,6 +1135,20 @@ mod tests {
             signature_alg: "ed25519",
             signature_key_id: "HNSW-READ-SIGNATURE-KEY-SENTINEL",
         };
+        let validation_context = PrivateHnswManifestValidationContext {
+            expected_collection_id: "collection-uuid-1",
+            expected_vector_name: "text",
+            expected_key_id: "HNSW-CONTEXT-KEY-SENTINEL",
+            expected_rk_id: "HNSW-CONTEXT-RK-SENTINEL",
+            min_rk_epoch: 7,
+            max_rk_epoch: 7,
+            expected_dim: 1536,
+            expected_distance: DistanceKind::Cosine,
+            signature_verification: PrivateHnswSignatureVerification {
+                expected_key_id: "HNSW-CONTEXT-SIGNATURE-KEY-SENTINEL",
+                public_key: &[99; 32],
+            },
+        };
 
         let rendered = [
             format!("{encrypted_bucket:?}"),
@@ -1118,6 +1157,7 @@ mod tests {
             format!("{:?}", commit_refs[0]),
             format!("{commit_signature_input:?}"),
             format!("{read_paths_signature_input:?}"),
+            format!("{validation_context:?}"),
         ]
         .join("\n");
         let encrypted_bucket_rendered = format!("{encrypted_bucket:?}");
@@ -1140,6 +1180,10 @@ mod tests {
             "HNSW-READ-KEY-SENTINEL",
             "HNSW-READ-RK-SENTINEL",
             "HNSW-READ-SIGNATURE-KEY-SENTINEL",
+            "HNSW-CONTEXT-KEY-SENTINEL",
+            "HNSW-CONTEXT-RK-SENTINEL",
+            "HNSW-CONTEXT-SIGNATURE-KEY-SENTINEL",
+            "[99, 99, 99",
             "HNSW-MANIFEST-ROOT-SENTINEL",
             "HNSW-OLD-ROOT-SENTINEL",
             "HNSW-NEW-ROOT-SENTINEL",

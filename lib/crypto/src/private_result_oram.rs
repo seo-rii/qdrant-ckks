@@ -902,13 +902,22 @@ pub struct PrivateResultOramEpoch {
     pub root_hash: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramSignatureVerification<'a> {
     pub expected_key_id: &'a str,
     pub public_key: &'a [u8],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateResultOramSignatureVerification<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramSignatureVerification")
+            .field("expected_key_id", &"[redacted]")
+            .field("public_key", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramManifestValidationContext<'a> {
     pub expected_collection_id: &'a str,
     pub expected_key_id: &'a str,
@@ -918,7 +927,20 @@ pub struct PrivateResultOramManifestValidationContext<'a> {
     pub signature_verification: PrivateResultOramSignatureVerification<'a>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateResultOramManifestValidationContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramManifestValidationContext")
+            .field("expected_collection_id", &self.expected_collection_id)
+            .field("expected_key_id", &"[redacted]")
+            .field("expected_rk_id", &"[redacted]")
+            .field("min_rk_epoch", &self.min_rk_epoch)
+            .field("max_rk_epoch", &self.max_rk_epoch)
+            .field("signature_verification", &self.signature_verification)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramCommitSignatureContext<'a> {
     pub collection_id: &'a str,
     pub key_id: &'a str,
@@ -927,13 +949,37 @@ pub struct PrivateResultOramCommitSignatureContext<'a> {
     pub signing_key_id: &'a str,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateResultOramCommitSignatureContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramCommitSignatureContext")
+            .field("collection_id", &self.collection_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("signing_key_id", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramReadBucketsSignatureContext<'a> {
     pub collection_id: &'a str,
     pub key_id: &'a str,
     pub rk_id: &'a str,
     pub rk_epoch: u64,
     pub signing_key_id: &'a str,
+}
+
+impl Debug for PrivateResultOramReadBucketsSignatureContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramReadBucketsSignatureContext")
+            .field("collection_id", &self.collection_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("signing_key_id", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4212,6 +4258,31 @@ mod tests {
             signature_alg: "ed25519",
             signature_key_id: "RESULT-READ-SIGNATURE-KEY-SENTINEL",
         };
+        let validation_context = PrivateResultOramManifestValidationContext {
+            expected_collection_id: "collection-uuid-1",
+            expected_key_id: "RESULT-CONTEXT-KEY-SENTINEL",
+            expected_rk_id: "RESULT-CONTEXT-RK-SENTINEL",
+            min_rk_epoch: 7,
+            max_rk_epoch: 7,
+            signature_verification: PrivateResultOramSignatureVerification {
+                expected_key_id: "RESULT-CONTEXT-SIGNATURE-KEY-SENTINEL",
+                public_key: &[88; 32],
+            },
+        };
+        let commit_signature_context = PrivateResultOramCommitSignatureContext {
+            collection_id: "collection-uuid-1",
+            key_id: "RESULT-SIGN-CONTEXT-KEY-SENTINEL",
+            rk_id: "RESULT-SIGN-CONTEXT-RK-SENTINEL",
+            rk_epoch: 7,
+            signing_key_id: "RESULT-SIGN-CONTEXT-SIGNING-KEY-SENTINEL",
+        };
+        let read_signature_context = PrivateResultOramReadBucketsSignatureContext {
+            collection_id: "collection-uuid-1",
+            key_id: "RESULT-READ-CONTEXT-KEY-SENTINEL",
+            rk_id: "RESULT-READ-CONTEXT-RK-SENTINEL",
+            rk_epoch: 7,
+            signing_key_id: "RESULT-READ-CONTEXT-SIGNING-KEY-SENTINEL",
+        };
 
         let rendered = [
             format!("{block:?}"),
@@ -4231,6 +4302,9 @@ mod tests {
             format!("{commit_plan:?}"),
             format!("{commit_signature_input:?}"),
             format!("{read_signature_input:?}"),
+            format!("{validation_context:?}"),
+            format!("{commit_signature_context:?}"),
+            format!("{read_signature_context:?}"),
         ]
         .join("\n");
         for epoch_redacted in [
@@ -4274,6 +4348,16 @@ mod tests {
             "RESULT-READ-KEY-SENTINEL".to_string(),
             "RESULT-READ-RK-SENTINEL".to_string(),
             "RESULT-READ-SIGNATURE-KEY-SENTINEL".to_string(),
+            "RESULT-CONTEXT-KEY-SENTINEL".to_string(),
+            "RESULT-CONTEXT-RK-SENTINEL".to_string(),
+            "RESULT-CONTEXT-SIGNATURE-KEY-SENTINEL".to_string(),
+            "[88, 88, 88".to_string(),
+            "RESULT-SIGN-CONTEXT-KEY-SENTINEL".to_string(),
+            "RESULT-SIGN-CONTEXT-RK-SENTINEL".to_string(),
+            "RESULT-SIGN-CONTEXT-SIGNING-KEY-SENTINEL".to_string(),
+            "RESULT-READ-CONTEXT-KEY-SENTINEL".to_string(),
+            "RESULT-READ-CONTEXT-RK-SENTINEL".to_string(),
+            "RESULT-READ-CONTEXT-SIGNING-KEY-SENTINEL".to_string(),
             "RESULT-ROOT-SENTINEL".to_string(),
             "RESULT-STATE-CIPHERTEXT-SENTINEL".to_string(),
             "RESULT-STATE-SHA-SENTINEL".to_string(),
