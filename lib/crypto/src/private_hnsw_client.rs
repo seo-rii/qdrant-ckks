@@ -5086,6 +5086,19 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(colliding_padding.real_path_count, 2);
         assert_eq!(colliding_padding_leaves, vec![0, 1, 2]);
+        let all_dummy_padding =
+            plan_private_hnsw_oram_speculative_prefetch(&state, config, &[], 3, 2).unwrap();
+        let all_dummy_leaves = all_dummy_padding
+            .leaf_labels
+            .iter()
+            .map(|label| decode_private_hnsw_oram_leaf_label(label, config.tree_height).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(all_dummy_padding.real_path_count, 0);
+        assert_eq!(all_dummy_leaves, vec![2, 3, 0]);
+        assert_eq!(
+            all_dummy_leaves.iter().collect::<BTreeSet<_>>().len(),
+            all_dummy_leaves.len()
+        );
         assert_eq!(
             plan_private_hnsw_oram_speculative_prefetch(&state, config, &[[1; 32]], 0, 3),
             Err(PrivateHnswClientError::InvalidSearchConfig(
@@ -5247,6 +5260,29 @@ mod tests {
         assert_eq!(
             sparse_leaves.iter().collect::<BTreeSet<_>>().len(),
             sparse_leaves.len()
+        );
+        let all_filtered_plan = plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
+            &state,
+            config,
+            &current,
+            &[backward.clone(), sideways.clone()],
+            &[10.0, 0.0],
+            DistanceKind::Euclid,
+            3,
+            6,
+        )
+        .unwrap();
+        let all_filtered_leaves = all_filtered_plan
+            .leaf_labels
+            .iter()
+            .map(|label| decode_private_hnsw_oram_leaf_label(label, config.tree_height).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(all_filtered_plan.retained_neighbor_count, 0);
+        assert_eq!(all_filtered_plan.real_path_count, 0);
+        assert_eq!(all_filtered_leaves, vec![6, 7, 0]);
+        assert_eq!(
+            all_filtered_leaves.iter().collect::<BTreeSet<_>>().len(),
+            all_filtered_leaves.len()
         );
         assert_eq!(
             plan_private_hnsw_oram_graph_traversal_path_batch_with_stats(
