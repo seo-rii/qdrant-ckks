@@ -268,6 +268,10 @@ mod tests {
              resultIds=result-id-camel-sentinel \
              point_tokens=point-token-snake-sentinel \
              clientState=client-state-camel-sentinel \
+             clientStateCiphertext=client-state-ciphertext-camel-sentinel \
+             clientStateCiphertextHash=client-state-ciphertext-hash-camel-sentinel \
+             encryptedClientStateCiphertext=encrypted-client-state-ciphertext-camel-sentinel \
+             stateCiphertext=state-ciphertext-camel-sentinel \
              position_map=position-map-snake-sentinel \
              positionMap=position-map-camel-sentinel \
              positionMaps=position-maps-camel-sentinel \
@@ -387,6 +391,10 @@ mod tests {
         assert!(!rendered.contains("result-id-camel-sentinel"));
         assert!(!rendered.contains("point-token-snake-sentinel"));
         assert!(!rendered.contains("client-state-camel-sentinel"));
+        assert!(!rendered.contains("client-state-ciphertext-camel-sentinel"));
+        assert!(!rendered.contains("client-state-ciphertext-hash-camel-sentinel"));
+        assert!(!rendered.contains("encrypted-client-state-ciphertext-camel-sentinel"));
+        assert!(!rendered.contains("state-ciphertext-camel-sentinel"));
         assert!(!rendered.contains("position-map-snake-sentinel"));
         assert!(!rendered.contains("position-map-camel-sentinel"));
         assert!(!rendered.contains("position-maps-camel-sentinel"));
