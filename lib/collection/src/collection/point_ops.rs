@@ -4570,20 +4570,22 @@ mod tests {
             .unwrap()
             .clone(),
         );
+        let private_point_id = 987_654_321_u64;
+        let public_point_id = 876_543_210_u64;
         let point = PointStructPersisted {
-            id: 1.into(),
+            id: private_point_id.into(),
             vector: VectorStructPersisted::Single(vec![0.0]),
             payload: Some(payload.clone()),
         };
         let public_point = PointStructPersisted {
-            id: 2.into(),
+            id: public_point_id.into(),
             vector: VectorStructPersisted::Single(vec![0.0]),
             payload: Some(public_payload.clone()),
         };
         reject_private_result_oram_payload_point_operation(
             &CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
                 payload: public_payload.clone(),
-                points: Some(vec![1.into()]),
+                points: Some(vec![private_point_id.into()]),
                 filter: None,
                 key: None,
             })),
@@ -4626,7 +4628,7 @@ mod tests {
             ),
             (
                 CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints {
-                    ids: vec![1.into()],
+                    ids: vec![private_point_id.into()],
                 }),
                 "delete points",
             ),
@@ -4640,7 +4642,7 @@ mod tests {
                 CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(
                     SetPayloadOp {
                         payload: payload.clone(),
-                        points: Some(vec![1.into()]),
+                        points: Some(vec![private_point_id.into()]),
                         filter: None,
                         key: None,
                     },
@@ -4651,7 +4653,7 @@ mod tests {
                 CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(
                     SetPayloadOp {
                         payload: public_document_payload,
-                        points: Some(vec![1.into()]),
+                        points: Some(vec![private_point_id.into()]),
                         filter: None,
                         key: None,
                     },
@@ -4662,7 +4664,7 @@ mod tests {
                 CollectionUpdateOperations::PayloadOperation(PayloadOps::OverwritePayload(
                     SetPayloadOp {
                         payload: payload.clone(),
-                        points: Some(vec![1.into()]),
+                        points: Some(vec![private_point_id.into()]),
                         filter: None,
                         key: None,
                     },
@@ -4673,7 +4675,7 @@ mod tests {
                 CollectionUpdateOperations::PayloadOperation(PayloadOps::OverwritePayload(
                     SetPayloadOp {
                         payload: public_payload,
-                        points: Some(vec![1.into()]),
+                        points: Some(vec![private_point_id.into()]),
                         filter: None,
                         key: None,
                     },
@@ -4684,7 +4686,7 @@ mod tests {
                 CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(
                     crate::operations::payload_ops::DeletePayloadOp {
                         keys: vec!["document.body".parse().unwrap()],
-                        points: Some(vec![1.into()]),
+                        points: Some(vec![private_point_id.into()]),
                         filter: None,
                     },
                 )),
@@ -4692,7 +4694,7 @@ mod tests {
             ),
             (
                 CollectionUpdateOperations::PayloadOperation(PayloadOps::ClearPayload {
-                    points: vec![1.into()],
+                    points: vec![private_point_id.into()],
                 }),
                 "clear payload",
             ),
@@ -4721,6 +4723,8 @@ mod tests {
             assert!(!message.contains("runtime payload encryption"), "{message}");
             assert!(!message.contains("document.body"), "{message}");
             assert!(!message.contains("plaintext result payload"), "{message}");
+            assert!(!message.contains("987654321"), "{message}");
+            assert!(!message.contains("876543210"), "{message}");
 
             let peer_err =
                 reject_private_result_oram_payload_point_operation(&operation, &encryption, true)
@@ -4737,6 +4741,8 @@ mod tests {
                 !peer_message.contains("plaintext result payload"),
                 "{peer_message}"
             );
+            assert!(!peer_message.contains("987654321"), "{peer_message}");
+            assert!(!peer_message.contains("876543210"), "{peer_message}");
         }
     }
 
