@@ -426,7 +426,7 @@ mod private_result_oram_grpc_tests {
 
     use super::*;
     use crate::common::private_hnsw_wire_fixture::{
-        route_e2e_guard, test_dispatcher, test_distributed_dispatcher,
+        create_plain_collection, route_e2e_guard, test_dispatcher, test_distributed_dispatcher,
     };
     use crate::settings::{CryptoInstanceConfig, CryptoSettings};
 
@@ -772,6 +772,39 @@ mod private_result_oram_grpc_tests {
             )
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn grpc_rejects_private_result_missing_collection_encryption_without_reflecting_collection() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateResultRouteFixture::build();
+        let settings = fixture.settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let collection_name = "private-result-grpc-missing-encryption-secret-collection";
+        actix_web::rt::System::new().block_on(async {
+            create_plain_collection(&dispatcher, collection_name).await;
+            let service =
+                PrivateResultOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+
+            let err = PrivateResultOram::get_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::GetPrivateResultOramManifestRequest {
+                    collection_name: collection_name.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("does not configure private result ORAM encryption"),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains(collection_name));
+            assert!(!err.message().contains("secret"));
+        });
     }
 
     #[test]

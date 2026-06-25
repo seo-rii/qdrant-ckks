@@ -525,8 +525,9 @@ mod private_hnsw_grpc_tests {
     use crate::common::private_hnsw_wire_fixture::{
         BASE_EPOCH, COLLECTION_ID, COLLECTION_NAME, MAX_CIPHERTEXT_BYTES, NEXT_EPOCH,
         PrivateHnswRouteWireFixture, SESSION_ID, SIGNING_KEY_ID, VECTOR_NAME,
-        create_private_hnsw_collection, create_private_hnsw_collection_with_private_result_oram,
-        route_e2e_guard, test_dispatcher, test_distributed_dispatcher,
+        create_plain_collection, create_private_hnsw_collection,
+        create_private_hnsw_collection_with_private_result_oram, route_e2e_guard, test_dispatcher,
+        test_distributed_dispatcher,
     };
 
     fn sample_manifest() -> PrivateHnswOramManifest {
@@ -960,6 +961,40 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("secret"));
             assert!(!err.message().contains("private_hnsw_oram"));
             assert!(!err.message().contains("/tmp"));
+        });
+    }
+
+    #[test]
+    fn grpc_rejects_private_hnsw_missing_collection_encryption_without_reflecting_collection() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let collection_name = "private-hnsw-grpc-missing-encryption-secret-collection";
+        actix_web::rt::System::new().block_on(async {
+            create_plain_collection(&dispatcher, collection_name).await;
+            let service =
+                PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+
+            let err = PrivateHnswOram::get_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::GetPrivateHnswManifestRequest {
+                    collection_name: collection_name.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                }),
+            )
+            .await
+            .unwrap_err();
+
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("does not configure private HNSW ORAM encryption"),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains(collection_name));
+            assert!(!err.message().contains("secret"));
         });
     }
 
