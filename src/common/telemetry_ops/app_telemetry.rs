@@ -428,8 +428,11 @@ mod tests {
             &settings,
         );
         let serialized = serde_json::to_string(&telemetry).unwrap();
+        let anonymized = telemetry.anonymize();
+        let anonymized_serialized = serde_json::to_string(&anonymized).unwrap();
 
         assert!(telemetry.crypto_runtime_capability_fingerprint.is_some());
+        assert!(anonymized.crypto_runtime_capability_fingerprint.is_none());
         for sentinel in [
             inline_secret,
             wrapped_secret,
@@ -444,6 +447,10 @@ mod tests {
             assert!(
                 !serialized.contains(sentinel),
                 "app telemetry leaked crypto material sentinel {sentinel}",
+            );
+            assert!(
+                !anonymized_serialized.contains(sentinel),
+                "anonymized app telemetry leaked crypto material sentinel {sentinel}",
             );
         }
     }
