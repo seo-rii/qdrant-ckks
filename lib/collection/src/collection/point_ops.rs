@@ -4784,6 +4784,22 @@ mod tests {
                 &with_payload,
                 &protected_path
             ));
+            let message = format!(
+                "cannot retrieve private result ORAM payload field through ordinary collection payload reads; {}",
+                private_result_oram_api_required_message(violation.unwrap()),
+            );
+            assert!(
+                message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                "{message}"
+            );
+            assert!(
+                message.contains("/private-result-oram/session"),
+                "{message}"
+            );
+            assert!(!message.contains("document"), "{message}");
+            assert!(!message.contains("document.body"), "{message}");
+            assert!(!message.contains("document.body.lang"), "{message}");
+            assert!(!message.contains("document.title"), "{message}");
         }
 
         let allowed_cases = [
