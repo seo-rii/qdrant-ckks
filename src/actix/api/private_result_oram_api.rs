@@ -2304,6 +2304,8 @@ mod private_result_oram_rest_tests {
             let read_signature_alg_sentinel = "rsa-pss-result-read-sentinel";
             let mut unsupported_read_signature = fixture.read_signature(&read_bucket_ids);
             unsupported_read_signature.alg = read_signature_alg_sentinel.to_string();
+            let unsupported_read_key_id = unsupported_read_signature.key_id.clone();
+            let unsupported_read_sig = unsupported_read_signature.sig.clone();
             let unsupported_read_signature_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
@@ -2320,6 +2322,17 @@ mod private_result_oram_rest_tests {
                 !unsupported_read_signature_error.contains(read_signature_alg_sentinel),
                 "{unsupported_read_signature_error}"
             );
+            for sentinel in [
+                session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                unsupported_read_key_id.as_str(),
+                unsupported_read_sig.as_str(),
+            ] {
+                assert!(
+                    !unsupported_read_signature_error.contains(sentinel),
+                    "{unsupported_read_signature_error}"
+                );
+            }
 
             let deduped_bucket_ids = vec![0, 1, 3, 4];
             let deduped_path_signature = fixture.read_signature(&read_bucket_ids);
@@ -2852,6 +2865,8 @@ mod private_result_oram_rest_tests {
             let commit_signature_alg_sentinel = "rsa-pss-result-commit-sentinel";
             let mut unsupported_commit_signature = commit_signature.clone();
             unsupported_commit_signature.alg = commit_signature_alg_sentinel.to_string();
+            let unsupported_commit_key_id = unsupported_commit_signature.key_id.clone();
+            let unsupported_commit_sig = unsupported_commit_signature.sig.clone();
             let unsupported_commit_signature_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",
                 CommitPrivateResultOramBucketsRequest {
@@ -2870,6 +2885,19 @@ mod private_result_oram_rest_tests {
                 !unsupported_commit_signature_error.contains(commit_signature_alg_sentinel),
                 "{unsupported_commit_signature_error}"
             );
+            for sentinel in [
+                session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                new_root_hash.as_str(),
+                unsupported_commit_key_id.as_str(),
+                unsupported_commit_sig.as_str(),
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unsupported_commit_signature_error.contains(sentinel),
+                    "{unsupported_commit_signature_error}"
+                );
+            }
 
             let commit_result = post_json_ok!(
                 "/collections/docs/private-result-oram/oram/commit",

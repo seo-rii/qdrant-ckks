@@ -439,8 +439,8 @@
 - REST/gRPC manifest upload, `read_paths`, `commit` signature key id lookup 오류 응답은 submitted key id sentinel을 반사하지 않는다.
 - REST/gRPC manifest upload unsupported signature algorithm 오류 응답은 submitted algorithm sentinel을 반사하지 않는다.
 - REST/gRPC manifest upload malformed signature 오류 응답은 submitted signature sentinel을 반사하지 않는다.
-- REST/gRPC private HNSW ORAM `read_paths`와 `commit`의 unsupported request signature algorithm 오류 응답도 submitted algorithm sentinel을 반사하지 않는다.
-- REST/gRPC private result ORAM `read_buckets`와 `commit`의 unsupported request signature algorithm 오류 응답도 submitted algorithm sentinel을 반사하지 않는다.
+- REST/gRPC private HNSW ORAM `read_paths`와 `commit`의 unsupported request signature algorithm 오류 응답도 submitted algorithm, session/root/path, signature key/body, bucket ciphertext sentinel을 반사하지 않는다.
+- REST/gRPC private result ORAM `read_buckets`와 `commit`의 unsupported request signature algorithm 오류 응답도 submitted algorithm, session/root, signature key/body, bucket ciphertext sentinel을 반사하지 않는다.
 - REST/gRPC manifest upload는 signature key lookup 전에 unsupported algorithm과 malformed signature body를 먼저 검증해 malformed signed request가 registry lookup 경계까지 가지 않는다. Crypto manifest signature validators도 manifest shape를 canonical message construction 전에 검증한다.
 - REST/gRPC private HNSW manifest upload/read, bucket upload, session open, snapshot restore preflight는 stored manifest signature shape와 `owner_signing_key_id` 일치를 runtime `signature_public_keys` lookup 전에 검증하므로, non-owner manifest signature key id는 configured 여부와 무관하게 owner-mismatch 오류로 fail closed 되고 submitted key id를 반사하지 않는다.
 - REST/gRPC private result ORAM manifest upload/read, bucket upload, session open, snapshot restore preflight는 stored manifest signature shape와 `owner_signing_key_id` 일치를 runtime `signature_public_keys` lookup 전에 검증하므로, non-owner manifest signature key id는 configured 여부와 무관하게 owner-mismatch 오류로 fail closed 되고 submitted key id를 반사하지 않는다.
