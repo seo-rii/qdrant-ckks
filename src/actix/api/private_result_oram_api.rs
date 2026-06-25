@@ -897,23 +897,58 @@ mod private_result_oram_rest_tests {
             )
             .await;
 
-            let request = actix_test::TestRequest::get()
-                .uri(&format!(
-                    "/collections/{collection_name}/private-result-oram/manifest"
-                ))
-                .to_request();
-            let response = actix_test::call_service(&app, request).await;
-            let status = response.status();
-            let body_bytes = actix_test::read_body(response).await;
-            let body = String::from_utf8_lossy(&body_bytes);
+            macro_rules! assert_missing_encryption {
+                ($request:expr) => {{
+                    let response = actix_test::call_service(&app, $request).await;
+                    let status = response.status();
+                    let body_bytes = actix_test::read_body(response).await;
+                    let body = String::from_utf8_lossy(&body_bytes);
 
-            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-            assert!(
-                body.contains("does not configure private result ORAM encryption"),
-                "{body}"
+                    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+                    assert!(
+                        body.contains("does not configure private result ORAM encryption"),
+                        "{body}"
+                    );
+                    assert!(!body.contains(collection_name), "{body}");
+                    assert!(!body.contains("secret"), "{body}");
+                }};
+            }
+
+            assert_missing_encryption!(
+                actix_test::TestRequest::get()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-result-oram/manifest"
+                    ))
+                    .to_request()
             );
-            assert!(!body.contains(collection_name), "{body}");
-            assert!(!body.contains("secret"), "{body}");
+
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-result-oram/manifest"
+                    ))
+                    .set_json(UploadPrivateResultOramManifestRequest {
+                        manifest: fixture.manifest.clone(),
+                        signature: fixture.signature.clone(),
+                    })
+                    .to_request()
+            );
+
+            let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-result-oram/oram/read_buckets"
+                    ))
+                    .set_json(ReadPrivateResultOramBucketsRequest {
+                        session_id: SESSION_ID.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        bucket_ids: read_bucket_ids.clone(),
+                        read_signature: fixture.read_signature(&read_bucket_ids),
+                    })
+                    .to_request()
+            );
         });
     }
 

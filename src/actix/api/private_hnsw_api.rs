@@ -947,23 +947,67 @@ mod private_hnsw_rest_tests {
             )
             .await;
 
-            let request = actix_test::TestRequest::get()
-                .uri(&format!(
-                    "/collections/{collection_name}/private-hnsw/text/manifest"
-                ))
-                .to_request();
-            let response = actix_test::call_service(&app, request).await;
-            let status = response.status();
-            let body_bytes = actix_test::read_body(response).await;
-            let body = String::from_utf8_lossy(&body_bytes);
+            macro_rules! assert_missing_encryption {
+                ($request:expr) => {{
+                    let response = actix_test::call_service(&app, $request).await;
+                    let status = response.status();
+                    let body_bytes = actix_test::read_body(response).await;
+                    let body = String::from_utf8_lossy(&body_bytes);
 
-            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-            assert!(
-                body.contains("does not configure private HNSW ORAM encryption"),
-                "{body}"
+                    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+                    assert!(
+                        body.contains("does not configure private HNSW ORAM encryption"),
+                        "{body}"
+                    );
+                    assert!(!body.contains(collection_name), "{body}");
+                    assert!(!body.contains("secret"), "{body}");
+                }};
+            }
+
+            assert_missing_encryption!(
+                actix_test::TestRequest::get()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-hnsw/text/manifest"
+                    ))
+                    .to_request()
             );
-            assert!(!body.contains(collection_name), "{body}");
-            assert!(!body.contains("secret"), "{body}");
+
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-hnsw/text/manifest"
+                    ))
+                    .set_json(UploadPrivateHnswManifestRequest {
+                        manifest: fixture.manifest.clone(),
+                        signature: fixture.manifest_signature.clone(),
+                    })
+                    .to_request()
+            );
+
+            let paths = vec![fixture.entry_leaf_label()];
+            let read_signature = fixture.sign_read_paths(&paths, 1, true);
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-hnsw/text/oram/read_paths"
+                    ))
+                    .set_json(OramReadPathsRequest {
+                        session_id: SESSION_ID.to_string(),
+                        index_epoch: fixture.encrypted_build.index_epoch,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        paths,
+                        padding: OramReadPadding {
+                            requested_paths: 1,
+                            dummy_paths_included: true,
+                        },
+                        client_signature: PrivateHnswClientSignature {
+                            alg: read_signature.alg,
+                            key_id: read_signature.key_id,
+                            sig: read_signature.sig,
+                        },
+                    })
+                    .to_request()
+            );
         });
     }
 

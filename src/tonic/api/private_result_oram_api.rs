@@ -786,24 +786,51 @@ mod private_result_oram_grpc_tests {
             let service =
                 PrivateResultOramService::new(Arc::new(dispatcher.clone()), settings.clone());
 
-            let err = PrivateResultOram::get_private_result_oram_manifest(
+            macro_rules! assert_missing_encryption {
+                ($call:expr) => {{
+                    let err = $call.await.unwrap_err();
+
+                    assert_eq!(err.code(), Code::InvalidArgument);
+                    assert!(
+                        err.message()
+                            .contains("does not configure private result ORAM encryption"),
+                        "{}",
+                        err.message()
+                    );
+                    assert!(!err.message().contains(collection_name));
+                    assert!(!err.message().contains("secret"));
+                }};
+            }
+
+            assert_missing_encryption!(PrivateResultOram::get_private_result_oram_manifest(
                 &service,
                 Request::new(grpc::GetPrivateResultOramManifestRequest {
                     collection_name: collection_name.to_string(),
                 }),
-            )
-            .await
-            .unwrap_err();
+            ));
 
-            assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("does not configure private result ORAM encryption"),
-                "{}",
-                err.message()
-            );
-            assert!(!err.message().contains(collection_name));
-            assert!(!err.message().contains("secret"));
+            assert_missing_encryption!(PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: collection_name.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.signature.clone())),
+                }),
+            ));
+
+            let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            let read_signature = fixture.read_signature(&read_bucket_ids);
+            assert_missing_encryption!(PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: collection_name.to_string(),
+                    session_id: SESSION_ID.to_string(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(read_signature)),
+                }),
+            ));
         });
     }
 

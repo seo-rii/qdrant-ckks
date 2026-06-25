@@ -976,25 +976,58 @@ mod private_hnsw_grpc_tests {
             let service =
                 PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
 
-            let err = PrivateHnswOram::get_private_hnsw_manifest(
+            macro_rules! assert_missing_encryption {
+                ($call:expr) => {{
+                    let err = $call.await.unwrap_err();
+
+                    assert_eq!(err.code(), Code::InvalidArgument);
+                    assert!(
+                        err.message()
+                            .contains("does not configure private HNSW ORAM encryption"),
+                        "{}",
+                        err.message()
+                    );
+                    assert!(!err.message().contains(collection_name));
+                    assert!(!err.message().contains("secret"));
+                }};
+            }
+
+            assert_missing_encryption!(PrivateHnswOram::get_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::GetPrivateHnswManifestRequest {
                     collection_name: collection_name.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
                 }),
-            )
-            .await
-            .unwrap_err();
+            ));
 
-            assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("does not configure private HNSW ORAM encryption"),
-                "{}",
-                err.message()
-            );
-            assert!(!err.message().contains(collection_name));
-            assert!(!err.message().contains("secret"));
+            assert_missing_encryption!(PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateHnswManifestRequest {
+                    collection_name: collection_name.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+                }),
+            ));
+
+            let paths = vec![fixture.entry_leaf_label()];
+            let read_signature = fixture.sign_read_paths(&paths, 1, true);
+            assert_missing_encryption!(PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: collection_name.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: SESSION_ID.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(read_signature)),
+                }),
+            ));
         });
     }
 
