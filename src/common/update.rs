@@ -4245,7 +4245,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM create payload index must fail closed"),
-                "cannot create payload index on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4266,7 +4266,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM internal create payload index must fail closed"),
-                "cannot create payload index on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -4279,7 +4279,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC create payload index must fail closed"),
-                "cannot create payload index on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -4292,7 +4292,7 @@ esac
                 .expect_err(
                     "private result ORAM gRPC internal create payload index must fail closed",
                 ),
-                "cannot create payload index on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4311,7 +4311,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM delete payload index must fail closed"),
-                "cannot delete payload index on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_write_error(
@@ -4329,7 +4329,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM internal delete payload index must fail closed"),
-                "cannot delete payload index on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -4341,7 +4341,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC delete payload index must fail closed"),
-                "cannot delete payload index on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_grpc_write_error(
@@ -4354,7 +4354,7 @@ esac
                 .expect_err(
                     "private result ORAM gRPC internal delete payload index must fail closed",
                 ),
-                "cannot delete payload index on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             let unauthorized_create_index = do_create_index(
@@ -14336,7 +14336,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM zero-limit facet must fail closed"),
-                "cannot facet on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_grpc_predicate_error(
@@ -14357,7 +14357,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC facet must fail closed"),
-                "cannot facet on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_predicate_error(
@@ -14381,7 +14381,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM filter must fail closed"),
-                "cannot filter on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_grpc_predicate_error(
@@ -14406,7 +14406,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC filter must fail closed"),
-                "cannot filter on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_predicate_error(
@@ -14425,7 +14425,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM count filter must fail closed"),
-                "cannot filter on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_grpc_predicate_error(
@@ -14445,7 +14445,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC count filter must fail closed"),
-                "cannot filter on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_predicate_error(
@@ -14542,7 +14542,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM formula condition must fail closed"),
-                "cannot use formula condition on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_grpc_predicate_error(
@@ -14573,7 +14573,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC formula condition must fail closed"),
-                "cannot use formula condition on private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_predicate_error(
@@ -14599,7 +14599,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM order_by must fail closed"),
-                "cannot order by private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_grpc_predicate_error(
@@ -14628,7 +14628,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC order_by must fail closed"),
-                "cannot order by private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_predicate_error(
@@ -14658,7 +14658,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM search group_by must fail closed"),
-                "cannot group by private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_grpc_predicate_error(
@@ -14690,7 +14690,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC search group_by must fail closed"),
-                "cannot group by private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_predicate_error(
@@ -14723,7 +14723,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM query group_by must fail closed"),
-                "cannot group by private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
 
             assert_private_result_grpc_predicate_error(
@@ -14756,7 +14756,7 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC query group_by must fail closed"),
-                "cannot group by private result ORAM payload field",
+                "cannot use private result ORAM payload field",
             );
         });
     }

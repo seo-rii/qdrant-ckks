@@ -119,7 +119,6 @@ fn ensure_facet_key_does_not_touch_encrypted_payload(
                         if encryption_rule_uses_private_result_oram(rule) {
                             return Err(CollectionError::bad_input(
                                 private_result_oram_payload_selector_overlap_message(
-                                    "facet on",
                                     key,
                                     encrypted_path,
                                 ),
@@ -188,7 +187,7 @@ mod tests {
             let err = ensure_facet_key_does_not_touch_encrypted_payload(&key, &encryption)
                 .expect_err("private result ORAM payload facets must fail closed");
             let message = err.to_string();
-            assert!(message.contains("cannot facet on private result ORAM payload field"));
+            assert!(message.contains("cannot use private result ORAM payload field"));
             assert!(!message.contains("document.body"));
             assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
             assert!(message.contains("/private-result-oram/session"));

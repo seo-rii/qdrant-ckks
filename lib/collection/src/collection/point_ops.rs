@@ -3307,7 +3307,6 @@ impl Collection {
                             if encryption_rule_uses_private_result_oram(rule) {
                                 return Err(CollectionError::bad_input(
                                     private_result_oram_payload_selector_overlap_message(
-                                        "filter on",
                                         filter_path,
                                         encrypted_path,
                                     ),
@@ -3394,7 +3393,6 @@ impl Collection {
                             if encryption_rule_uses_private_result_oram(rule) {
                                 return Err(CollectionError::bad_input(
                                     private_result_oram_payload_selector_overlap_message(
-                                        "order by",
                                         &order_by.key,
                                         encrypted_path,
                                     ),
@@ -3466,7 +3464,6 @@ impl Collection {
                             if encryption_rule_uses_private_result_oram(rule) {
                                 return Err(CollectionError::bad_input(
                                     private_result_oram_payload_selector_overlap_message(
-                                        "group by",
                                         group_by,
                                         encrypted_path,
                                     ),
@@ -3557,7 +3554,6 @@ impl Collection {
                             if encryption_rule_uses_private_result_oram(rule) {
                                 return Err(CollectionError::bad_input(
                                     private_result_oram_payload_selector_overlap_message(
-                                        "use",
                                         formula_path,
                                         encrypted_path,
                                     ),
@@ -3576,7 +3572,6 @@ impl Collection {
                             if encryption_rule_uses_private_result_oram(rule) {
                                 return Err(CollectionError::bad_input(
                                     private_result_oram_payload_selector_overlap_message(
-                                        "use formula condition on",
                                         condition_path,
                                         encrypted_path,
                                     ),

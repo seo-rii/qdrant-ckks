@@ -423,41 +423,39 @@ mod ckks_tests {
 
     #[test]
     fn private_result_oram_payload_overlap_message_redacts_paths() {
-        for operation in [
+        let message = private_result_oram_payload_selector_overlap_message(
+            "document.body.lang",
+            "document.body",
+        );
+
+        assert!(
+            message.contains("cannot use private result ORAM payload field"),
+            "{message}"
+        );
+        for reflected_label in [
             "filter on",
             "order by",
             "group by",
             "facet on",
             "create payload index on",
-            "use",
-            "use formula condition on",
+            "formula condition",
+            "private-result-selector-operation-sentinel",
         ] {
-            let message = private_result_oram_payload_selector_overlap_message(
-                operation,
-                "document.body.lang",
-                "document.body",
-            );
-
-            assert!(
-                message.contains(&format!(
-                    "cannot {operation} private result ORAM payload field"
-                )),
-                "{message}"
-            );
-            assert!(
-                message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
-                "{message}"
-            );
-            assert!(
-                message.contains("/private-result-oram/session"),
-                "{message}"
-            );
-            assert!(!message.contains("document.body"), "{message}");
-            assert!(!message.contains("document"), "{message}");
-            assert!(!message.contains("body"), "{message}");
-            assert!(!message.contains("lang"), "{message}");
-            assert!(!message.contains("blind index"), "{message}");
+            assert!(!message.contains(reflected_label), "{message}");
         }
+        assert!(
+            message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+            "{message}"
+        );
+        assert!(
+            message.contains("/private-result-oram/session"),
+            "{message}"
+        );
+        assert!(!message.contains("document.body"), "{message}");
+        assert!(!message.contains("document"), "{message}");
+        assert!(!message.contains("body"), "{message}");
+        assert!(!message.contains("lang"), "{message}");
+        assert!(!message.contains("blind index"), "{message}");
     }
 
     #[test]
@@ -2513,12 +2511,11 @@ pub fn private_result_oram_api_required_message(_payload_path: &str) -> String {
 }
 
 pub fn private_result_oram_payload_selector_overlap_message(
-    operation: &str,
     _requested_path: impl std::fmt::Display,
     payload_path: &str,
 ) -> String {
     format!(
-        "cannot {operation} private result ORAM payload field because it overlaps a private result ORAM path; {}",
+        "cannot use private result ORAM payload field because it overlaps a private result ORAM path; {}",
         private_result_oram_api_required_message(payload_path),
     )
 }

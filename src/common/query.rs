@@ -3995,7 +3995,6 @@ fn ensure_group_path_does_not_touch_encrypted_crypto_selectors(
                         if encryption_rule_uses_private_result_oram(rule) {
                             return Err(StorageError::bad_input(
                                 private_result_oram_payload_selector_overlap_message(
-                                    "group by",
                                     group_by,
                                     encrypted_path,
                                 ),
@@ -12298,7 +12297,7 @@ mod tests {
             .expect_err("private result ORAM grouping must fail closed");
             let message = err.to_string();
             assert!(
-                message.contains("cannot group by private result ORAM payload field"),
+                message.contains("cannot use private result ORAM payload field"),
                 "unexpected error for {group_by}: {err}",
             );
             assert!(

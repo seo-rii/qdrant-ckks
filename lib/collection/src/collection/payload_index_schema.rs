@@ -69,10 +69,8 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
             for field_name in &field_names {
                 if field_name.compatible(&encrypted_json_path) {
                     if encryption_rule_uses_private_result_oram(rule) {
-                        let private_result_action_label = format!("{action_label} on");
                         return Err(CollectionError::bad_input(
                             private_result_oram_payload_selector_overlap_message(
-                                &private_result_action_label,
                                 field_name,
                                 encrypted_path,
                             ),
