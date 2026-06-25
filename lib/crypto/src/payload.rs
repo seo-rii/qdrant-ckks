@@ -1490,7 +1490,7 @@ impl Debug for ClientPayloadSignature {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ClientPayloadSignature")
             .field("alg", &self.alg)
-            .field("key_id", &self.key_id)
+            .field("key_id", &"[redacted]")
             .field("sig", &"[redacted]")
             .field("sig_len", &self.sig.len())
             .finish()
@@ -1828,6 +1828,7 @@ mod tests {
 
         let signature_debug = format!("{:?}", envelope.signature.as_ref().unwrap());
         assert!(signature_debug.contains("sig_len"));
+        assert!(!signature_debug.contains("tenant-a:signing"));
         assert!(!signature_debug.contains(&BASE64URL_NOPAD.encode(&[3_u8; 64])));
     }
 

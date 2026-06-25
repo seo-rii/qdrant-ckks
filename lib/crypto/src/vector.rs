@@ -1120,7 +1120,7 @@ impl Debug for ClientCkksVectorSignature {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("ClientCkksVectorSignature")
             .field("alg", &self.alg)
-            .field("key_id", &self.key_id)
+            .field("key_id", &"[redacted]")
             .field("sig", &"[redacted]")
             .field("sig_len", &self.sig.len())
             .finish()
@@ -1881,4 +1881,23 @@ fn vector_metadata_aad(version: u8, scheme: &str) -> Vec<u8> {
     aad.extend_from_slice(&(scheme.len() as u32).to_be_bytes());
     aad.extend_from_slice(scheme.as_bytes());
     aad
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_ckks_vector_signature_debug_redacts_key_id_and_signature() {
+        let signature = ClientCkksVectorSignature {
+            alg: "ed25519".to_string(),
+            key_id: "CLIENT-CKKS-SIGNING-KEY-SENTINEL".to_string(),
+            sig: "CLIENT-CKKS-SIGNATURE-SENTINEL".to_string(),
+        };
+        let rendered = format!("{signature:?}");
+
+        assert!(rendered.contains("sig_len"));
+        assert!(!rendered.contains("CLIENT-CKKS-SIGNING-KEY-SENTINEL"));
+        assert!(!rendered.contains("CLIENT-CKKS-SIGNATURE-SENTINEL"));
+    }
 }
