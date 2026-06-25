@@ -1275,7 +1275,7 @@ impl PrivateHnswOramUploadBundle {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateHnswManifestBuildContext<'a> {
     pub collection_id: &'a str,
     pub vector_name: &'a str,
@@ -1290,6 +1290,26 @@ pub struct PrivateHnswManifestBuildContext<'a> {
     pub result_privacy: ResultPrivacyMode,
     pub owner_signing_key_id: &'a str,
     pub created_at_unix: u64,
+}
+
+impl Debug for PrivateHnswManifestBuildContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswManifestBuildContext")
+            .field("collection_id", &self.collection_id)
+            .field("vector_name", &self.vector_name)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("dim", &self.dim)
+            .field("distance", &self.distance)
+            .field("hnsw", &self.hnsw)
+            .field("oram", &self.oram)
+            .field("fixed_budget", &self.fixed_budget)
+            .field("result_privacy", &self.result_privacy)
+            .field("owner_signing_key_id", &"[redacted]")
+            .field("created_at_unix", &self.created_at_unix)
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -4538,6 +4558,7 @@ fn read_array_32(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], PrivateHn
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OramKind;
     use crate::private_result_oram::PrivateResultOramTokenFetchAccess;
 
     #[test]
@@ -5534,6 +5555,38 @@ mod tests {
             rk_epoch: 7,
             signing_key_id: "HNSW-SIGN-CONTEXT-SIGNING-KEY-SENTINEL",
         };
+        let manifest_build_context = PrivateHnswManifestBuildContext {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "HNSW-MANIFEST-BUILD-KEY-SENTINEL",
+            rk_id: "HNSW-MANIFEST-BUILD-RK-SENTINEL",
+            rk_epoch: 7,
+            dim: 2,
+            distance: DistanceKind::Cosine,
+            hnsw: PrivateHnswParams {
+                m: 1,
+                ef_construction: 2,
+                max_layers: 1,
+                fixed_neighbor_slots: 2,
+            },
+            oram: OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: 2,
+                block_size_bytes: 512,
+                tree_height: 3,
+                path_batch_size: 2,
+            },
+            fixed_budget: FixedBudgetParams {
+                enabled: true,
+                upper_layer_steps: 1,
+                base_layer_steps: 2,
+                paths_per_round: 2,
+                fixed_result_k: 1,
+            },
+            result_privacy: ResultPrivacyMode::IdsVisible,
+            owner_signing_key_id: "HNSW-MANIFEST-BUILD-OWNER-SIGNING-SENTINEL",
+            created_at_unix: 1_770_000_000,
+        };
 
         let rendered = [
             format!("{block:?}"),
@@ -5565,6 +5618,7 @@ mod tests {
             format!("{bucket_aead_base_context:?}"),
             format!("{client_state_aead_context:?}"),
             format!("{commit_signature_context:?}"),
+            format!("{manifest_build_context:?}"),
         ]
         .join("\n");
         for epoch_redacted in [
@@ -5621,6 +5675,9 @@ mod tests {
             "HNSW-SIGN-CONTEXT-KEY-SENTINEL".to_string(),
             "HNSW-SIGN-CONTEXT-RK-SENTINEL".to_string(),
             "HNSW-SIGN-CONTEXT-SIGNING-KEY-SENTINEL".to_string(),
+            "HNSW-MANIFEST-BUILD-KEY-SENTINEL".to_string(),
+            "HNSW-MANIFEST-BUILD-RK-SENTINEL".to_string(),
+            "HNSW-MANIFEST-BUILD-OWNER-SIGNING-SENTINEL".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }
