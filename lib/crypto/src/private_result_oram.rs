@@ -633,7 +633,7 @@ impl Debug for PrivateResultOramClientKeys {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramBucketAeadContext<'a> {
     pub collection_id: &'a str,
     pub key_id: &'a str,
@@ -643,7 +643,20 @@ pub struct PrivateResultOramBucketAeadContext<'a> {
     pub index_epoch: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateResultOramBucketAeadContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramBucketAeadContext")
+            .field("collection_id", &self.collection_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("bucket_id", &"[redacted]")
+            .field("index_epoch", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramBucketAeadBaseContext<'a> {
     pub collection_id: &'a str,
     pub key_id: &'a str,
@@ -651,7 +664,18 @@ pub struct PrivateResultOramBucketAeadBaseContext<'a> {
     pub rk_epoch: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateResultOramBucketAeadBaseContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramBucketAeadBaseContext")
+            .field("collection_id", &self.collection_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramClientStateAeadContext<'a> {
     pub collection_id: &'a str,
     pub key_id: &'a str,
@@ -659,6 +683,19 @@ pub struct PrivateResultOramClientStateAeadContext<'a> {
     pub rk_epoch: u64,
     pub index_epoch: u64,
     pub root_hash: &'a str,
+}
+
+impl Debug for PrivateResultOramClientStateAeadContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramClientStateAeadContext")
+            .field("collection_id", &self.collection_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("index_epoch", &"[redacted]")
+            .field("root_hash", &"[redacted]")
+            .finish()
+    }
 }
 
 impl<'a> PrivateResultOramBucketAeadBaseContext<'a> {
@@ -1002,7 +1039,7 @@ impl PrivateResultOramBucketValidationContext {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramBucketCommitmentContext<'a> {
     pub collection_id: &'a str,
     pub key_id: &'a str,
@@ -1010,6 +1047,19 @@ pub struct PrivateResultOramBucketCommitmentContext<'a> {
     pub rk_epoch: u64,
     pub bucket_id: u64,
     pub index_epoch: u64,
+}
+
+impl Debug for PrivateResultOramBucketCommitmentContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramBucketCommitmentContext")
+            .field("collection_id", &self.collection_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("bucket_id", &"[redacted]")
+            .field("index_epoch", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -4283,6 +4333,36 @@ mod tests {
             rk_epoch: 7,
             signing_key_id: "RESULT-READ-CONTEXT-SIGNING-KEY-SENTINEL",
         };
+        let bucket_aead_context = PrivateResultOramBucketAeadContext {
+            collection_id: "collection-uuid-1",
+            key_id: "RESULT-AEAD-BUCKET-KEY-SENTINEL",
+            rk_id: "RESULT-AEAD-BUCKET-RK-SENTINEL",
+            rk_epoch: 7,
+            bucket_id: 888_223,
+            index_epoch: 777_223,
+        };
+        let bucket_aead_base_context = PrivateResultOramBucketAeadBaseContext {
+            collection_id: "collection-uuid-1",
+            key_id: "RESULT-AEAD-BASE-KEY-SENTINEL",
+            rk_id: "RESULT-AEAD-BASE-RK-SENTINEL",
+            rk_epoch: 7,
+        };
+        let client_state_aead_context = PrivateResultOramClientStateAeadContext {
+            collection_id: "collection-uuid-1",
+            key_id: "RESULT-AEAD-STATE-KEY-SENTINEL",
+            rk_id: "RESULT-AEAD-STATE-RK-SENTINEL",
+            rk_epoch: 7,
+            index_epoch: 777_224,
+            root_hash: "RESULT-AEAD-STATE-ROOT-SENTINEL",
+        };
+        let bucket_commitment_context = PrivateResultOramBucketCommitmentContext {
+            collection_id: "collection-uuid-1",
+            key_id: "RESULT-COMMITMENT-CONTEXT-KEY-SENTINEL",
+            rk_id: "RESULT-COMMITMENT-CONTEXT-RK-SENTINEL",
+            rk_epoch: 7,
+            bucket_id: 888_224,
+            index_epoch: 777_225,
+        };
 
         let rendered = [
             format!("{block:?}"),
@@ -4305,6 +4385,10 @@ mod tests {
             format!("{validation_context:?}"),
             format!("{commit_signature_context:?}"),
             format!("{read_signature_context:?}"),
+            format!("{bucket_aead_context:?}"),
+            format!("{bucket_aead_base_context:?}"),
+            format!("{client_state_aead_context:?}"),
+            format!("{bucket_commitment_context:?}"),
         ]
         .join("\n");
         for epoch_redacted in [
@@ -4358,6 +4442,20 @@ mod tests {
             "RESULT-READ-CONTEXT-KEY-SENTINEL".to_string(),
             "RESULT-READ-CONTEXT-RK-SENTINEL".to_string(),
             "RESULT-READ-CONTEXT-SIGNING-KEY-SENTINEL".to_string(),
+            "RESULT-AEAD-BUCKET-KEY-SENTINEL".to_string(),
+            "RESULT-AEAD-BUCKET-RK-SENTINEL".to_string(),
+            "888223".to_string(),
+            "777223".to_string(),
+            "RESULT-AEAD-BASE-KEY-SENTINEL".to_string(),
+            "RESULT-AEAD-BASE-RK-SENTINEL".to_string(),
+            "RESULT-AEAD-STATE-KEY-SENTINEL".to_string(),
+            "RESULT-AEAD-STATE-RK-SENTINEL".to_string(),
+            "777224".to_string(),
+            "RESULT-AEAD-STATE-ROOT-SENTINEL".to_string(),
+            "RESULT-COMMITMENT-CONTEXT-KEY-SENTINEL".to_string(),
+            "RESULT-COMMITMENT-CONTEXT-RK-SENTINEL".to_string(),
+            "888224".to_string(),
+            "777225".to_string(),
             "RESULT-ROOT-SENTINEL".to_string(),
             "RESULT-STATE-CIPHERTEXT-SENTINEL".to_string(),
             "RESULT-STATE-SHA-SENTINEL".to_string(),

@@ -420,7 +420,7 @@ impl Debug for PrivateHnswNodeBlockPlaintext {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswBucketAeadContext<'a> {
     pub collection_id: &'a str,
     pub vector_name: &'a str,
@@ -431,7 +431,21 @@ pub struct PrivateHnswBucketAeadContext<'a> {
     pub index_epoch: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateHnswBucketAeadContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswBucketAeadContext")
+            .field("collection_id", &self.collection_id)
+            .field("vector_name", &self.vector_name)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("bucket_id", &"[redacted]")
+            .field("index_epoch", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswBucketAeadBaseContext<'a> {
     pub collection_id: &'a str,
     pub vector_name: &'a str,
@@ -440,7 +454,19 @@ pub struct PrivateHnswBucketAeadBaseContext<'a> {
     pub rk_epoch: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for PrivateHnswBucketAeadBaseContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswBucketAeadBaseContext")
+            .field("collection_id", &self.collection_id)
+            .field("vector_name", &self.vector_name)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswClientStateAeadContext<'a> {
     pub collection_id: &'a str,
     pub vector_name: &'a str,
@@ -449,6 +475,20 @@ pub struct PrivateHnswClientStateAeadContext<'a> {
     pub rk_epoch: u64,
     pub index_epoch: u64,
     pub root_hash: &'a str,
+}
+
+impl Debug for PrivateHnswClientStateAeadContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswClientStateAeadContext")
+            .field("collection_id", &self.collection_id)
+            .field("vector_name", &self.vector_name)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("index_epoch", &"[redacted]")
+            .field("root_hash", &"[redacted]")
+            .finish()
+    }
 }
 
 impl<'a> PrivateHnswBucketAeadBaseContext<'a> {
@@ -1302,7 +1342,7 @@ impl PrivateHnswClientCommitPlan {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswCommitSignatureContext<'a> {
     pub collection_id: &'a str,
     pub vector_name: &'a str,
@@ -1310,6 +1350,19 @@ pub struct PrivateHnswCommitSignatureContext<'a> {
     pub rk_id: &'a str,
     pub rk_epoch: u64,
     pub signing_key_id: &'a str,
+}
+
+impl Debug for PrivateHnswCommitSignatureContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswCommitSignatureContext")
+            .field("collection_id", &self.collection_id)
+            .field("vector_name", &self.vector_name)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("signing_key_id", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -5448,6 +5501,39 @@ mod tests {
             signature_alg: "ed25519",
             signature_key_id: "tenant-a/private-hnsw-signing-v1",
         };
+        let bucket_aead_context = PrivateHnswBucketAeadContext {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "HNSW-AEAD-BUCKET-KEY-SENTINEL",
+            rk_id: "HNSW-AEAD-BUCKET-RK-SENTINEL",
+            rk_epoch: 7,
+            bucket_id: 888_123,
+            index_epoch: 777_123,
+        };
+        let bucket_aead_base_context = PrivateHnswBucketAeadBaseContext {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "HNSW-AEAD-BASE-KEY-SENTINEL",
+            rk_id: "HNSW-AEAD-BASE-RK-SENTINEL",
+            rk_epoch: 7,
+        };
+        let client_state_aead_context = PrivateHnswClientStateAeadContext {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "HNSW-AEAD-STATE-KEY-SENTINEL",
+            rk_id: "HNSW-AEAD-STATE-RK-SENTINEL",
+            rk_epoch: 7,
+            index_epoch: 777_124,
+            root_hash: "HNSW-AEAD-STATE-ROOT-SENTINEL",
+        };
+        let commit_signature_context = PrivateHnswCommitSignatureContext {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "HNSW-SIGN-CONTEXT-KEY-SENTINEL",
+            rk_id: "HNSW-SIGN-CONTEXT-RK-SENTINEL",
+            rk_epoch: 7,
+            signing_key_id: "HNSW-SIGN-CONTEXT-SIGNING-KEY-SENTINEL",
+        };
 
         let rendered = [
             format!("{block:?}"),
@@ -5475,6 +5561,10 @@ mod tests {
             format!("{commit_plan:?}"),
             format!("{commit_signature_input:?}"),
             format!("{read_signature_input:?}"),
+            format!("{bucket_aead_context:?}"),
+            format!("{bucket_aead_base_context:?}"),
+            format!("{client_state_aead_context:?}"),
+            format!("{commit_signature_context:?}"),
         ]
         .join("\n");
         for epoch_redacted in [
@@ -5518,6 +5608,19 @@ mod tests {
             "HNSW-OLD-ROOT-SENTINEL".to_string(),
             "HNSW-NEW-ROOT-SENTINEL".to_string(),
             "HNSW-MANIFEST-ROOT-SENTINEL".to_string(),
+            "HNSW-AEAD-BUCKET-KEY-SENTINEL".to_string(),
+            "HNSW-AEAD-BUCKET-RK-SENTINEL".to_string(),
+            "888123".to_string(),
+            "777123".to_string(),
+            "HNSW-AEAD-BASE-KEY-SENTINEL".to_string(),
+            "HNSW-AEAD-BASE-RK-SENTINEL".to_string(),
+            "HNSW-AEAD-STATE-KEY-SENTINEL".to_string(),
+            "HNSW-AEAD-STATE-RK-SENTINEL".to_string(),
+            "777124".to_string(),
+            "HNSW-AEAD-STATE-ROOT-SENTINEL".to_string(),
+            "HNSW-SIGN-CONTEXT-KEY-SENTINEL".to_string(),
+            "HNSW-SIGN-CONTEXT-RK-SENTINEL".to_string(),
+            "HNSW-SIGN-CONTEXT-SIGNING-KEY-SENTINEL".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }
