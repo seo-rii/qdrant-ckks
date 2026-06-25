@@ -5513,6 +5513,272 @@ esac
     }
 
     #[test]
+    fn private_hnsw_oram_ordinary_reads_and_queries_require_session_api() {
+        let runtime = Runtime::new().unwrap();
+        let storage_dir = Builder::new()
+            .prefix("private-hnsw-ordinary-read-guard")
+            .tempdir()
+            .unwrap();
+        let storage_config = update_test_storage_config(storage_dir.path());
+        let toc = update_test_toc(&storage_config);
+        let dispatcher = Dispatcher::new(toc.clone());
+        let auth = Auth::new_internal(Access::full("For test"));
+        let collection_name = "private_hnsw_read_docs";
+        let private_vector_name = "embedding";
+
+        runtime.block_on(async {
+            dispatcher
+                .submit_collection_meta_op(
+                    CollectionMetaOperations::CreateCollection(
+                        CreateCollectionOperation::new(
+                            collection_name.to_string(),
+                            CreateCollection {
+                                vectors: collection::operations::types::VectorsConfig::Multi(
+                                    BTreeMap::from([(
+                                        private_vector_name.to_string(),
+                                        VectorParamsBuilder::new(2, Distance::Dot).build(),
+                                    )]),
+                                ),
+                                sparse_vectors: None,
+                                hnsw_config: None,
+                                wal_config: None,
+                                optimizers_config: None,
+                                shard_number: Some(1),
+                                on_disk_payload: None,
+                                replication_factor: None,
+                                write_consistency_factor: None,
+                                quantization_config: None,
+                                sharding_method: None,
+                                encryption: Some(CollectionEncryptionConfig {
+                                    version: 1,
+                                    key_id: Some("tenant-a/vector-private-rk".to_string()),
+                                    crypto_schema_version: 1,
+                                    encryption_epoch: 7,
+                                    migration_state: CryptoMigrationState::Active,
+                                    rules: vec![EncryptionRuleRef {
+                                        id: "embedding_private_hnsw".to_string(),
+                                        selector: EncryptionSelector::VectorNames {
+                                            names: vec![private_vector_name.to_string()],
+                                        },
+                                        instance: "docs_private_hnsw_v1".to_string(),
+                                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                                    }],
+                                }),
+                                strict_mode_config: None,
+                                uuid: Some(Uuid::from_u128(0x4234567890abcdef1234567890abcdef)),
+                                metadata: None,
+                            },
+                        )
+                        .unwrap(),
+                    ),
+                    auth.clone(),
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let assert_private_hnsw_read_error = |err: StorageError| {
+                let message = err.to_string();
+                assert!(
+                    message.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("/private-hnsw/{vector}/session"),
+                    "{message}"
+                );
+                assert!(!message.contains(private_vector_name), "{message}");
+                assert!(!message.contains(collection_name), "{message}");
+                assert!(!message.contains("runtime CKKS sidecar"), "{message}");
+                assert!(!message.contains("payload sidecar only"), "{message}");
+            };
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_get_points(
+                    &toc,
+                    collection_name,
+                    PointRequestInternal {
+                        ids: vec![1.into()],
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: WithVector::Bool(true),
+                    },
+                    None,
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_get_points(
+                    &toc,
+                    collection_name,
+                    PointRequestInternal {
+                        ids: vec![1.into()],
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: WithVector::Selector(vec![private_vector_name.to_string()]),
+                    },
+                    None,
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_scroll_points(
+                    &toc,
+                    collection_name,
+                    shard::scroll::ScrollRequestInternal {
+                        offset: None,
+                        limit: Some(1),
+                        filter: None,
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: WithVector::Bool(true),
+                        order_by: None,
+                    },
+                    None,
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_core_search_points(
+                    &toc,
+                    collection_name,
+                    CoreSearchRequest {
+                        query: QueryEnum::Nearest(NamedQuery::new(
+                            VectorInternal::Dense(vec![0.0, 0.0]),
+                            private_vector_name,
+                        )),
+                        filter: None,
+                        params: None,
+                        limit: 1,
+                        offset: 0,
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        score_threshold: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_query_points(
+                    &toc,
+                    collection_name,
+                    CollectionQueryRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                        ))),
+                        using: private_vector_name.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        offset: 0,
+                        params: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(false),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_query_points(
+                    &toc,
+                    collection_name,
+                    CollectionQueryRequest {
+                        prefetch: vec![CollectionPrefetch {
+                            prefetch: Vec::new(),
+                            query: Some(Query::Vector(VectorQuery::Nearest(
+                                VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            ))),
+                            using: private_vector_name.to_string(),
+                            filter: None,
+                            score_threshold: None,
+                            limit: 1,
+                            params: None,
+                            lookup_from: None,
+                        }],
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                        ))),
+                        using: private_vector_name.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        offset: 0,
+                        params: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(false),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_search_points_matrix(
+                    &toc,
+                    collection_name,
+                    collection::collection::distance_matrix::CollectionSearchMatrixRequest {
+                        filter: None,
+                        sample_size: 2,
+                        limit_per_sample: 1,
+                        using: private_vector_name.to_string(),
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+        });
+    }
+
+    #[test]
     fn encrypted_vector_update_rejects_multi_point_sidecar_fanout() {
         let err = ensure_encrypted_vector_update_sidecar_fanout_is_atomic("docs", 2)
             .expect_err("multi-point encrypted vector sidecar fanout must be rejected");
