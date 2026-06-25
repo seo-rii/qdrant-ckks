@@ -5870,6 +5870,35 @@ esac
                 .unwrap_err(),
             );
 
+            assert_private_hnsw_read_error(
+                crate::common::query::do_search_point_groups(
+                    &toc,
+                    collection_name,
+                    SearchGroupsRequestInternal {
+                        vector: rest_named_dense_vector(),
+                        filter: None,
+                        params: None,
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vector: Some(WithVector::Bool(false)),
+                        score_threshold: None,
+                        group_request: BaseGroupRequest {
+                            group_by: "group".parse().unwrap(),
+                            group_size: 1,
+                            limit: 1,
+                            with_lookup: None,
+                        },
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
             assert_private_hnsw_grpc_read_error(
                 crate::tonic::api::query_common::search(
                     UncheckedTocProvider::new_unchecked(&toc),
@@ -5886,6 +5915,37 @@ esac
                         HwMeasurementAcc::disposable(),
                         false,
                     ),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::search_groups(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::SearchPointGroups {
+                        collection_name: collection_name.to_string(),
+                        vector: vec![0.0, 0.0],
+                        filter: None,
+                        limit: 1,
+                        with_payload: None,
+                        params: None,
+                        score_threshold: None,
+                        vector_name: Some(private_vector_name.to_string()),
+                        with_vectors: None,
+                        group_by: "group".to_string(),
+                        group_size: 1,
+                        read_consistency: None,
+                        with_lookup: None,
+                        timeout: None,
+                        shard_key_selector: None,
+                        sparse_indices: None,
+                        ckks_encrypted_query: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
                     None,
                 )
                 .await
@@ -5913,6 +5973,70 @@ esac
                     auth.clone(),
                     None,
                     request_hw_counter(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_query_point_groups(
+                    &toc,
+                    collection_name,
+                    CollectionQueryGroupsRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                        ))),
+                        using: private_vector_name.to_string(),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(false),
+                        lookup_from: None,
+                        group_by: "group".parse().unwrap(),
+                        group_size: 1,
+                        limit: 1,
+                        with_lookup: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::query_groups(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::QueryPointGroups {
+                        collection_name: collection_name.to_string(),
+                        prefetch: Vec::new(),
+                        query: Some(grpc_nearest_query()),
+                        using: Some(private_vector_name.to_string()),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        with_payload: None,
+                        with_vectors: None,
+                        lookup_from: None,
+                        limit: Some(1),
+                        group_size: Some(1),
+                        group_by: "group".to_string(),
+                        read_consistency: None,
+                        with_lookup: None,
+                        timeout: None,
+                        shard_key_selector: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    InferenceParams::default(),
                     None,
                 )
                 .await
