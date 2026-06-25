@@ -800,6 +800,34 @@ mod tests {
         }
     }
 
+    fn private_oram_encrypted_config() -> CollectionEncryptionConfig {
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a/private-oram-rk-sentinel".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![
+                EncryptionRuleRef {
+                    id: "docs_text_private_hnsw_sentinel".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["private-hnsw-vector-sentinel".to_string()],
+                    },
+                    instance: "docs_private_hnsw_instance_sentinel".to_string(),
+                    binding: Some("private-hnsw-oram/v1".to_string()),
+                },
+                EncryptionRuleRef {
+                    id: "docs_body_private_result_sentinel".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["document.private-result-path-sentinel".to_string()],
+                    },
+                    instance: "docs_private_result_instance_sentinel".to_string(),
+                    binding: Some("private-result-oram/v1".to_string()),
+                },
+            ],
+        }
+    }
+
     #[test]
     fn encrypted_create_collection_gets_stable_uuid() {
         let operation = CreateCollectionOperation::new(
@@ -979,6 +1007,38 @@ mod tests {
             "{log_line}"
         );
         assert!(log_line.contains("checkpoint_count: 1"), "{log_line}");
+    }
+
+    #[test]
+    fn collection_meta_log_projection_redacts_private_oram_collection_encryption() {
+        let operation = CollectionMetaOperations::CreateCollection(
+            CreateCollectionOperation::new(
+                "docs".to_string(),
+                create_collection(Some(private_oram_encrypted_config())),
+            )
+            .unwrap(),
+        );
+
+        let log_line = format!("{:?}", operation.redacted_log());
+
+        assert!(log_line.contains("has_encryption: true"), "{log_line}");
+        assert!(log_line.contains("has_uuid: true"), "{log_line}");
+        for sentinel in [
+            "private-oram-rk-sentinel",
+            "docs_text_private_hnsw_sentinel",
+            "private-hnsw-vector-sentinel",
+            "docs_private_hnsw_instance_sentinel",
+            "private-hnsw-oram/v1",
+            "docs_body_private_result_sentinel",
+            "document.private-result-path-sentinel",
+            "docs_private_result_instance_sentinel",
+            "private-result-oram/v1",
+        ] {
+            assert!(
+                !log_line.contains(sentinel),
+                "collection meta redacted log leaked private ORAM sentinel `{sentinel}`: {log_line}",
+            );
+        }
     }
 
     #[test]
