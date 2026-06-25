@@ -4126,6 +4126,71 @@ esac
             );
 
             assert_private_result_write_error(
+                do_upsert_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                        points: vec![api::rest::PointStruct {
+                            id: 3.into(),
+                            vector: api::rest::VectorStruct::Single(vec![0.5, 0.6]),
+                            payload: Some(segment::types::Payload(
+                                json!({ "title": "ordinary public-looking payload" })
+                                    .as_object()
+                                    .unwrap()
+                                    .clone(),
+                            )),
+                        }],
+                        shard_key: None,
+                        update_filter: None,
+                        update_mode: None,
+                    }),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM public-looking upsert must fail closed"),
+                "cannot upsert points for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_upsert_points(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    "private_result_write_docs".to_string(),
+                    PointInsertOperations::PointsList(api::rest::schema::PointsList {
+                        points: vec![api::rest::PointStruct {
+                            id: 4.into(),
+                            vector: api::rest::VectorStruct::Single(vec![0.7, 0.8]),
+                            payload: None,
+                        }],
+                        shard_key: None,
+                        update_filter: None,
+                        update_mode: None,
+                    }),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    InferenceParams::default(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM payload-less upsert must fail closed"),
+                "cannot upsert points for private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
                 do_set_payload(
                     UncheckedTocProvider::new_unchecked(&toc),
                     "private_result_write_docs".to_string(),
