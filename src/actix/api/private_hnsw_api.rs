@@ -40,7 +40,7 @@ impl Debug for PrivateHnswClientSignature {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswClientSignature")
             .field("alg", &self.alg)
-            .field("key_id", &self.key_id)
+            .field("key_id", &"[redacted]")
             .field("sig", &"[redacted]")
             .finish()
     }
@@ -582,7 +582,7 @@ mod private_hnsw_rest_tests {
             },
             client_signature: PrivateHnswClientSignature {
                 alg: "ed25519".to_string(),
-                key_id: SIGNING_KEY_ID.to_string(),
+                key_id: "HNSW-REST-READ-KEY-ID-SENTINEL".to_string(),
                 sig: client_signature.sig.clone(),
             },
         };
@@ -597,7 +597,7 @@ mod private_hnsw_rest_tests {
             updated_buckets: search_run.updated_buckets,
             commit_signature: PrivateHnswClientSignature {
                 alg: commit_signature.alg,
-                key_id: commit_signature.key_id,
+                key_id: "HNSW-REST-COMMIT-KEY-ID-SENTINEL".to_string(),
                 sig: commit_signature.sig.clone(),
             },
         };
@@ -632,6 +632,8 @@ mod private_hnsw_rest_tests {
             fixture.encrypted_build.buckets[0].ciphertext.clone(),
             client_signature.sig,
             commit_signature.sig,
+            "HNSW-REST-READ-KEY-ID-SENTINEL".to_string(),
+            "HNSW-REST-COMMIT-KEY-ID-SENTINEL".to_string(),
             entry_leaf_label,
             "HNSW-REST-PROOF-SENTINEL".to_string(),
             "private-hnsw-rest-client-id-sentinel".to_string(),
