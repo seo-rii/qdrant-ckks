@@ -6062,9 +6062,12 @@ async fn preflight_private_result_oram_raw_payload_read(
     ))
 }
 
-fn private_result_oram_raw_payload_read_error(operation: &str, payload_path: &str) -> StorageError {
+fn private_result_oram_raw_payload_read_error(
+    _operation: &str,
+    payload_path: &str,
+) -> StorageError {
     StorageError::bad_input(format!(
-        "cannot {operation} private result ORAM payload field through ordinary collection payload reads; {}",
+        "cannot read private result ORAM payload field through ordinary collection payload reads; {}",
         private_result_oram_api_required_message(payload_path),
     ))
 }
@@ -12618,16 +12621,16 @@ mod tests {
             "query",
             "query grouped results",
             "query group lookup",
+            "private-result-read-operation-sentinel",
         ] {
             let message =
                 private_result_oram_raw_payload_read_error(operation, "document.body").to_string();
 
             assert!(
-                message.contains(&format!(
-                    "cannot {operation} private result ORAM payload field"
-                )),
+                message.contains("cannot read private result ORAM payload field"),
                 "{message}"
             );
+            assert!(!message.contains(operation), "{message}");
             assert!(
                 message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
                 "{message}"

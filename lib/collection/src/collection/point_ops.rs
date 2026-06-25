@@ -3720,7 +3720,7 @@ impl Collection {
     pub(crate) async fn ensure_private_result_oram_payload_read_is_not_raw(
         &self,
         with_payload: Option<&WithPayloadInterface>,
-        operation: &str,
+        _operation: &str,
     ) -> CollectionResult<()> {
         let Some(with_payload) = with_payload else {
             return Ok(());
@@ -3741,7 +3741,7 @@ impl Collection {
         };
 
         Err(CollectionError::bad_input(format!(
-            "cannot {operation} private result ORAM payload field through ordinary collection payload reads; {}",
+            "cannot read private result ORAM payload field through ordinary collection payload reads; {}",
             private_result_oram_api_required_message(payload_path),
         )))
     }
@@ -4788,7 +4788,7 @@ mod tests {
                 &protected_path
             ));
             let message = format!(
-                "cannot retrieve private result ORAM payload field through ordinary collection payload reads; {}",
+                "cannot read private result ORAM payload field through ordinary collection payload reads; {}",
                 private_result_oram_api_required_message(violation.unwrap()),
             );
             assert!(

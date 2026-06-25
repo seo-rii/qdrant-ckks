@@ -387,6 +387,7 @@
   - Private HNSW/result ORAM active-session epoch/root mismatch guard는 `read_paths`/`read_buckets`/`commit` 같은 operation label을 오류에 반사하지 않고 고정 active-session mismatch 메시지만 반환한다.
   - Private HNSW/result ORAM initial upload epoch mismatch guard는 store helper에 전달되는 `upload bundle` operation label을 오류에 반사하지 않고 고정 initial-epoch mismatch 메시지만 반환한다.
   - Private HNSW ORAM initial upload bucket commitment context guard는 `initial upload` operation label을 오류에 반사하지 않고 고정 bucket commitment mismatch 메시지만 반환한다.
+  - Private result ORAM ordinary payload read guards는 retrieve/search/query/group lookup 같은 operation label을 오류에 반사하지 않고 고정 payload-read mismatch 메시지만 반환한다.
 
 테스트:
 
