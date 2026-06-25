@@ -4093,6 +4093,72 @@ esac
                     assert!(!message.contains("body"), "{message}");
                     assert!(!message.contains("title"), "{message}");
                 };
+            let assert_private_result_grpc_write_error =
+                |err: tonic::Status, expected_operation: &str| {
+                    let message = err.message();
+                    assert!(message.contains(expected_operation), "{message}");
+                    assert!(
+                        message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                        "{message}"
+                    );
+                    assert!(
+                        message.contains("/private-result-oram/session"),
+                        "{message}"
+                    );
+                    assert!(!message.contains("payload encryption runtime"), "{message}");
+                    assert!(!message.contains("ordinary"), "{message}");
+                    assert!(!message.contains("body"), "{message}");
+                    assert!(!message.contains("title"), "{message}");
+                };
+            let request_hw_counter = || {
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                )
+            };
+            let grpc_payload = |payload: Value| {
+                api::conversions::json::payload_to_proto(segment::types::Payload(
+                    payload.as_object().unwrap().clone(),
+                ))
+            };
+            let grpc_result_vectors = || api::grpc::qdrant::Vectors {
+                vectors_options: Some(api::grpc::qdrant::vectors::VectorsOptions::Vector(
+                    api::grpc::qdrant::Vector {
+                        vector: Some(api::grpc::qdrant::vector::Vector::Dense(
+                            api::grpc::qdrant::DenseVector {
+                                data: vec![0.1, 0.2],
+                            },
+                        )),
+                        ..Default::default()
+                    },
+                )),
+            };
+            let grpc_result_point_struct = || api::grpc::qdrant::PointStruct {
+                id: Some(segment::types::PointIdType::from(1).into()),
+                payload: grpc_payload(json!({ "body": "grpc result secret" })),
+                vectors: Some(grpc_result_vectors()),
+            };
+            let grpc_points_selector = || api::grpc::qdrant::PointsSelector {
+                points_selector_one_of: Some(
+                    api::grpc::qdrant::points_selector::PointsSelectorOneOf::Points(
+                        api::grpc::qdrant::PointsIdsList {
+                            ids: vec![segment::types::PointIdType::from(1).into()],
+                        },
+                    ),
+                ),
+            };
+            let grpc_update_batch =
+                |operation: api::grpc::qdrant::points_update_operation::Operation| {
+                    api::grpc::qdrant::UpdateBatchPoints {
+                        collection_name: "private_result_write_docs".to_string(),
+                        wait: Some(true),
+                        operations: vec![api::grpc::qdrant::PointsUpdateOperation {
+                            operation: Some(operation),
+                        }],
+                        ordering: None,
+                        timeout: None,
+                    }
+                };
 
             assert_private_result_write_error(
                 do_upsert_points(
@@ -4763,6 +4829,143 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM batch delete points must fail closed"),
+                "cannot delete points for private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::update_batch(
+                    &dispatcher,
+                    grpc_update_batch(api::grpc::qdrant::points_update_operation::Operation::Upsert(
+                        api::grpc::qdrant::points_update_operation::PointStructList {
+                            points: vec![grpc_result_point_struct()],
+                            shard_key_selector: None,
+                            update_filter: None,
+                            update_mode: None,
+                        },
+                    )),
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC batch upsert must fail closed"),
+                "cannot upsert points for private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::update_batch(
+                    &dispatcher,
+                    grpc_update_batch(
+                        api::grpc::qdrant::points_update_operation::Operation::SetPayload(
+                            api::grpc::qdrant::points_update_operation::SetPayload {
+                                payload: grpc_payload(json!({ "body": "grpc set secret" })),
+                                points_selector: Some(grpc_points_selector()),
+                                shard_key_selector: None,
+                                key: None,
+                            },
+                        ),
+                    ),
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC batch set_payload must fail closed"),
+                "cannot set payload for private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::update_batch(
+                    &dispatcher,
+                    grpc_update_batch(
+                        api::grpc::qdrant::points_update_operation::Operation::OverwritePayload(
+                            api::grpc::qdrant::points_update_operation::OverwritePayload {
+                                payload: grpc_payload(json!({ "body": "grpc overwrite secret" })),
+                                points_selector: Some(grpc_points_selector()),
+                                shard_key_selector: None,
+                                key: None,
+                            },
+                        ),
+                    ),
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC batch overwrite_payload must fail closed"),
+                "cannot overwrite payload for private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::update_batch(
+                    &dispatcher,
+                    grpc_update_batch(
+                        api::grpc::qdrant::points_update_operation::Operation::DeletePayload(
+                            api::grpc::qdrant::points_update_operation::DeletePayload {
+                                keys: vec!["body".to_string()],
+                                points_selector: Some(grpc_points_selector()),
+                                shard_key_selector: None,
+                            },
+                        ),
+                    ),
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC batch delete_payload must fail closed"),
+                "cannot delete payload for private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::update_batch(
+                    &dispatcher,
+                    grpc_update_batch(
+                        api::grpc::qdrant::points_update_operation::Operation::ClearPayload(
+                            api::grpc::qdrant::points_update_operation::ClearPayload {
+                                points: Some(grpc_points_selector()),
+                                shard_key_selector: None,
+                            },
+                        ),
+                    ),
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC batch clear_payload must fail closed"),
+                "cannot clear payload for private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::update_batch(
+                    &dispatcher,
+                    grpc_update_batch(
+                        api::grpc::qdrant::points_update_operation::Operation::DeletePoints(
+                            api::grpc::qdrant::points_update_operation::DeletePoints {
+                                points: Some(grpc_points_selector()),
+                                shard_key_selector: None,
+                            },
+                        ),
+                    ),
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC batch delete points must fail closed"),
                 "cannot delete points for private result ORAM payload field",
             );
         });
