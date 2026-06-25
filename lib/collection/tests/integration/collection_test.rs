@@ -3023,6 +3023,40 @@ async fn private_result_oram_payload_writes_require_session_api_in_collection_op
         "34567.5",
         "-45678.75",
     ];
+    collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+                payload: public_payload.clone(),
+                points: None,
+                filter: Some(Filter::new()),
+                key: None,
+            })),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .expect("public payload merge must stay on the ordinary update path");
+    collection
+        .update_from_client_simple(
+            CollectionUpdateOperations::PayloadOperation(PayloadOps::SetPayload(SetPayloadOp {
+                payload: serde_json::from_value(serde_json::json!({
+                    "value": "public title",
+                }))
+                .unwrap(),
+                points: None,
+                filter: Some(Filter::new()),
+                key: Some("document.title".parse().unwrap()),
+            })),
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .expect("public sibling payload path must stay on the ordinary update path");
+
     let operations = [
         (
             CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
