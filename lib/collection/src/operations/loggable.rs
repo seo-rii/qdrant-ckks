@@ -336,8 +336,20 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "client_state"
                         | "client_state_snapshot"
                         | "client_state_snapshots"
+                        | "client_state_ciphertext"
+                        | "client_state_ciphertexts"
+                        | "client_state_ciphertext_hash"
+                        | "client_state_ciphertext_hashes"
+                        | "client_state_ciphertext_sha256"
+                        | "client_state_ciphertexts_sha256"
                         | "encrypted_client_state_snapshot"
                         | "encrypted_client_state_snapshots"
+                        | "encrypted_client_state_ciphertext"
+                        | "encrypted_client_state_ciphertexts"
+                        | "encrypted_client_state_ciphertext_hash"
+                        | "encrypted_client_state_ciphertext_hashes"
+                        | "encrypted_client_state_ciphertext_sha256"
+                        | "encrypted_client_state_ciphertexts_sha256"
                         | "position_map"
                         | "position_maps"
                         | "position_map_snapshot"
@@ -442,6 +454,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "clientid"
                         | "sessionid"
                         | "clientsecret"
+                        | "clientstateciphertext"
+                        | "clientstateciphertexts"
+                        | "clientstateciphertexthash"
+                        | "clientstateciphertexthashes"
+                        | "clientstateciphertextsha256"
+                        | "clientstateciphertextssha256"
                         | "privatekey"
                         | "privatekeyb64"
                         | "secretkey"
@@ -566,6 +584,18 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "clientstatesnapshots"
                         | "encryptedclientstatesnapshot"
                         | "encryptedclientstatesnapshots"
+                        | "encryptedclientstateciphertext"
+                        | "encryptedclientstateciphertexts"
+                        | "encryptedclientstateciphertexthash"
+                        | "encryptedclientstateciphertexthashes"
+                        | "encryptedclientstateciphertextsha256"
+                        | "encryptedclientstateciphertextssha256"
+                        | "stateciphertext"
+                        | "stateciphertexts"
+                        | "stateciphertexthash"
+                        | "stateciphertexthashes"
+                        | "stateciphertextsha256"
+                        | "stateciphertextssha256"
                         | "positionmap"
                         | "positionmaps"
                         | "positionmapsnapshot"
@@ -1891,6 +1921,12 @@ mod tests {
             "position_maps": ["qdrant-sec-private-oram-position-maps-alias-log-sentinel"],
             "positionMap": "qdrant-sec-private-oram-camel-position-map-alias-log-sentinel",
             "positionMaps": ["qdrant-sec-private-oram-camel-position-maps-alias-log-sentinel"],
+            "client_state_ciphertext": "qdrant-sec-private-oram-client-state-ciphertext-alias-log-sentinel",
+            "clientStateCiphertext": "qdrant-sec-private-oram-camel-client-state-ciphertext-alias-log-sentinel",
+            "clientStateCiphertextHash": "qdrant-sec-private-oram-camel-client-state-ciphertext-hash-alias-log-sentinel",
+            "encryptedClientStateCiphertext": "qdrant-sec-private-oram-camel-encrypted-client-state-ciphertext-alias-log-sentinel",
+            "stateCiphertext": "qdrant-sec-private-oram-camel-state-ciphertext-alias-log-sentinel",
+            "stateCiphertextSha256": "qdrant-sec-private-oram-camel-state-ciphertext-sha256-alias-log-sentinel",
             "oram_position_maps": ["qdrant-sec-private-oram-oram-position-maps-alias-log-sentinel"],
             "oramPositionMaps": ["qdrant-sec-private-oram-camel-oram-position-maps-alias-log-sentinel"],
             "token_position_maps": ["qdrant-sec-private-oram-token-position-maps-alias-log-sentinel"],
@@ -1905,6 +1941,12 @@ mod tests {
             "qdrant-sec-private-oram-position-maps-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-position-map-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-position-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-client-state-ciphertext-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-client-state-ciphertext-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-client-state-ciphertext-hash-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-encrypted-client-state-ciphertext-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-state-ciphertext-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-state-ciphertext-sha256-alias-log-sentinel",
             "qdrant-sec-private-oram-oram-position-maps-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-oram-position-maps-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-maps-alias-log-sentinel",
@@ -2031,6 +2073,8 @@ mod tests {
                     "leaf_hash": "leaf-hash-a",
                     "siblings": [{ "hash": "sibling-hash-a" }]
                 },
+                "client_state_ciphertext": "client-state-ciphertext-a",
+                "state_ciphertext_hash": "client-state-ciphertext-hash-a",
                 "token_position_map": { "fetch-token-a": 99 },
                 "position_maps": [{ "node-a": 1 }]
             }
@@ -2060,6 +2104,8 @@ mod tests {
                     "leaf_hash": "leaf-hash-b",
                     "siblings": [{ "hash": "sibling-hash-b" }]
                 },
+                "client_state_ciphertext": "client-state-ciphertext-b",
+                "state_ciphertext_hash": "client-state-ciphertext-hash-b",
                 "token_position_map": { "fetch-token-b": 17 },
                 "position_maps": [{ "node-b": 2 }]
             }
@@ -2099,6 +2145,9 @@ mod tests {
                     "leafHash": "private-oram-camel-leaf-hash-a",
                     "siblings": [{ "hash": "private-oram-camel-sibling-hash-a" }]
                 },
+                "clientStateCiphertext": "private-oram-camel-client-state-ciphertext-a",
+                "clientStateCiphertextHash": "private-oram-camel-client-state-ciphertext-hash-a",
+                "stateCiphertext": "private-oram-camel-state-ciphertext-a",
                 "payloadFetchToken": "private-oram-camel-payload-fetch-token-a",
                 "positionMap": { "private-oram-camel-node-a": 31 },
                 "positionMaps": [{ "private-oram-camel-node-a": 32 }],
@@ -2135,6 +2184,9 @@ mod tests {
                     "leafHash": "private-oram-camel-leaf-hash-b",
                     "siblings": [{ "hash": "private-oram-camel-sibling-hash-b" }]
                 },
+                "clientStateCiphertext": "private-oram-camel-client-state-ciphertext-b",
+                "clientStateCiphertextHash": "private-oram-camel-client-state-ciphertext-hash-b",
+                "stateCiphertext": "private-oram-camel-state-ciphertext-b",
                 "payloadFetchToken": "private-oram-camel-payload-fetch-token-b",
                 "positionMap": { "private-oram-camel-node-b": 41 },
                 "positionMaps": [{ "private-oram-camel-node-b": 42 }],
