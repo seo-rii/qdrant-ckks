@@ -1224,6 +1224,8 @@ mod tests {
         });
         let mut private_result_oram = json!({
             "private_result_oram": {
+                "client_id": "qdrant-sec-private-result-client-id-log-sentinel",
+                "clientId": "qdrant-sec-private-result-camel-client-id-log-sentinel",
                 "session_id": "qdrant-sec-private-result-session-id-log-sentinel",
                 "sessionId": "qdrant-sec-private-result-camel-session-id-log-sentinel",
                 "root_hash": "qdrant-sec-private-result-root-hash-log-sentinel",
@@ -1750,6 +1752,8 @@ mod tests {
             "qdrant-sec-private-hnsw-camel-payload-token-log-sentinel",
             "qdrant-sec-private-oram-unknown-field-log-sentinel",
             "qdrant-sec-private-oram-camel-unknown-field-log-sentinel",
+            "qdrant-sec-private-result-client-id-log-sentinel",
+            "qdrant-sec-private-result-camel-client-id-log-sentinel",
             "qdrant-sec-private-result-session-id-log-sentinel",
             "qdrant-sec-private-result-camel-session-id-log-sentinel",
             "qdrant-sec-private-result-root-hash-log-sentinel",
