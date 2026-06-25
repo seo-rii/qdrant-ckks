@@ -861,7 +861,7 @@ fn collection_params_require_crypto_runtime_transfer_parity(params: &CollectionP
 }
 
 fn reject_private_oram_shard_transfer_until_supported(
-    collection_id: &str,
+    _collection_id: &str,
     params: &CollectionParams,
     transfer_operation: &ShardTransferOperations,
 ) -> Result<(), StorageError> {
@@ -872,7 +872,7 @@ fn reject_private_oram_shard_transfer_until_supported(
     }
 
     Err(StorageError::bad_input(format!(
-        "private ORAM shard transfer is not supported for collection {collection_id}: \
+        "private ORAM shard transfer is not supported for private ORAM collections: \
          encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are not \
          implemented; abort the transfer or keep the private ORAM collection on the current shard \
          owner",
@@ -880,7 +880,7 @@ fn reject_private_oram_shard_transfer_until_supported(
 }
 
 fn reject_private_oram_resharding_until_supported(
-    collection_id: &str,
+    _collection_id: &str,
     params: &CollectionParams,
     operation: &ReshardingOperation,
 ) -> Result<(), StorageError> {
@@ -891,14 +891,14 @@ fn reject_private_oram_resharding_until_supported(
     }
 
     Err(StorageError::bad_input(format!(
-        "private ORAM resharding is not supported for collection {collection_id}: \
+        "private ORAM resharding is not supported for private ORAM collections: \
          encrypted ORAM bucket migration and consensus-backed epoch/root ownership are not \
          implemented; keep the private ORAM collection on the current shard layout",
     )))
 }
 
 fn reject_private_oram_resharding_replica_state_until_supported(
-    collection_id: &str,
+    _collection_id: &str,
     params: &CollectionParams,
     operation: &SetShardReplicaState,
 ) -> Result<(), StorageError> {
@@ -909,10 +909,10 @@ fn reject_private_oram_resharding_replica_state_until_supported(
     }
 
     Err(StorageError::bad_input(format!(
-        "private ORAM resharding replica state progress is not supported for collection \
-         {collection_id}: encrypted ORAM bucket migration and consensus-backed epoch/root \
-         ownership are not implemented; abort resharding or keep the private ORAM collection on \
-         the current shard layout",
+        "private ORAM resharding replica state progress is not supported for private ORAM \
+         collections: encrypted ORAM bucket migration and consensus-backed epoch/root ownership \
+         are not implemented; abort resharding or keep the private ORAM collection on the \
+         current shard layout",
     )))
 }
 
@@ -927,7 +927,7 @@ fn replica_state_operation_touches_resharding_state(operation: &SetShardReplicaS
 }
 
 fn reject_private_oram_shard_key_change_until_supported(
-    collection_id: &str,
+    _collection_id: &str,
     params: &CollectionParams,
     operation: &str,
 ) -> Result<(), StorageError> {
@@ -936,14 +936,14 @@ fn reject_private_oram_shard_key_change_until_supported(
     }
 
     Err(StorageError::bad_input(format!(
-        "private ORAM {operation} is not supported for collection {collection_id}: \
+        "private ORAM {operation} is not supported for private ORAM collections: \
          collection-local ORAM bucket migration and consensus-backed epoch/root ownership are not \
          implemented for shard-key layout changes",
     )))
 }
 
 fn reject_private_oram_replica_remove_until_supported(
-    collection_id: &str,
+    _collection_id: &str,
     params: &CollectionParams,
     replica_changes: Option<&[replica_set::Change]>,
 ) -> Result<(), StorageError> {
@@ -954,7 +954,7 @@ fn reject_private_oram_replica_remove_until_supported(
     }
 
     Err(StorageError::bad_input(format!(
-        "private ORAM replica removal is not supported for collection {collection_id}: \
+        "private ORAM replica removal is not supported for private ORAM collections: \
          collection-local ORAM bucket migration and consensus-backed epoch/root ownership are not \
          implemented for replica removal",
     )))
@@ -1114,6 +1114,7 @@ mod tests {
 
     fn assert_private_oram_consensus_guard_redacts_config(rendered: &str) {
         for sentinel in [
+            "docs",
             "tenant-a/vector-private-rk",
             "text_private_hnsw",
             "docs_private_hnsw_v1",

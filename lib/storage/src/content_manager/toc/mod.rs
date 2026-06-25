@@ -877,7 +877,7 @@ impl TableOfContent {
 }
 
 fn reject_private_oram_receiving_shard_until_supported(
-    collection_name: &str,
+    _collection_name: &str,
     private_oram_bucket_store_collection: bool,
 ) -> Result<(), StorageError> {
     if !private_oram_bucket_store_collection {
@@ -885,7 +885,7 @@ fn reject_private_oram_receiving_shard_until_supported(
     }
 
     Err(StorageError::bad_request(format!(
-        "cannot initiate receiving shard for private ORAM collection {collection_name}: \
+        "cannot initiate receiving shard for private ORAM collections: \
          encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are not \
          implemented for shard transfer",
     )))
@@ -945,8 +945,9 @@ mod tests {
 
         let err = reject_private_oram_receiving_shard_until_supported("docs", true).unwrap_err();
         let rendered = err.to_string();
-        assert!(rendered.contains("private ORAM collection docs"));
+        assert!(rendered.contains("private ORAM collections"));
         assert!(rendered.contains("encrypted ORAM bucket transfer"));
+        assert!(!rendered.contains("docs"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains("private_result_oram"));
     }

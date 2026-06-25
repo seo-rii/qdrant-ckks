@@ -526,7 +526,7 @@ fn validate_private_oram_snapshot_restore_layouts(
 }
 
 fn reject_private_oram_replica_priority_snapshot_recovery_until_supported(
-    collection_name: &str,
+    _collection_name: &str,
     params: &CollectionParams,
 ) -> Result<(), StorageError> {
     if !collection_params_use_private_oram_bucket_store(params) {
@@ -534,7 +534,7 @@ fn reject_private_oram_replica_priority_snapshot_recovery_until_supported(
     }
 
     Err(StorageError::bad_request(format!(
-        "replica-priority snapshot recovery for private ORAM collection {collection_name} \
+        "replica-priority snapshot recovery for private ORAM collections \
          is disabled until encrypted ORAM bucket transfer and consensus-backed epoch/root \
          ownership are implemented; use snapshot priority or no-sync recovery with collection \
          snapshot restore preflight",
@@ -1033,8 +1033,9 @@ mod tests {
             .expect_err("private ORAM replica-priority recovery must fail closed")
             .to_string();
 
-            assert!(err.contains("private ORAM collection docs"));
+            assert!(err.contains("private ORAM collections"));
             assert!(err.contains("encrypted ORAM bucket transfer"));
+            assert!(!err.contains("docs"));
             assert!(!err.contains(PRIVATE_HNSW_ORAM_BINDING));
             assert!(!err.contains(PRIVATE_RESULT_ORAM_BINDING));
         }
