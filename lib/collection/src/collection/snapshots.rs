@@ -3088,6 +3088,7 @@ mod tests {
             "shard snapshot streaming",
             "shard snapshot download",
             "shard snapshot recovery",
+            "shard snapshot upload recovery",
             "partial shard snapshot recovery",
             "partial shard snapshot manifest",
         ] {

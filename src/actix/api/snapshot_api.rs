@@ -652,18 +652,21 @@ async fn upload_shard_snapshot(
         let collection_pass = multipass.issue_pass(&collection);
 
         let cancel_safe = async {
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await?;
+            collection.assert_shard_exists(shard).await?;
+            collection
+                .validate_private_oram_shard_snapshot_allowed("shard snapshot upload recovery")
+                .await?;
+
             if let Some(checksum) = checksum {
                 let snapshot_checksum = sha_256::hash_file(form.snapshot.file.path()).await?;
                 if !sha_256::hashes_equal(&snapshot_checksum, &checksum) {
                     return Err(StorageError::checksum_mismatch(snapshot_checksum, checksum));
                 }
             }
-
-            let collection = dispatcher
-                .toc(&auth, &pass)
-                .get_collection(&collection_pass)
-                .await?;
-            collection.assert_shard_exists(shard).await?;
 
             Ok(collection)
         };

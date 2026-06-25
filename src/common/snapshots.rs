@@ -451,6 +451,13 @@ pub async fn recover_shard_snapshot_impl(
         .measure_scope();
 
     let config = collection.config_snapshot().await;
+    collection
+        .validate_private_oram_shard_snapshot_allowed(if recovery_type.is_partial() {
+            "partial shard snapshot recovery"
+        } else {
+            "shard snapshot recovery"
+        })
+        .await?;
     validate_shard_snapshot_recovery_crypto_runtime(runtime_settings, collection.name(), &config)?;
 
     // `Collection::restore_shard_snapshot` and `activate_shard` calls *have to* be executed as a
