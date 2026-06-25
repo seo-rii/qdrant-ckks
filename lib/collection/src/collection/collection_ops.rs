@@ -9,7 +9,7 @@ use semver::Version;
 use shard::count::CountRequestInternal;
 use shard::operations::optimization::{OptimizationsRequestOptions, OptimizationsResponse};
 
-use super::Collection;
+use super::{Collection, collection_encryption_uses_private_oram_bucket_store};
 use crate::config::CryptoMigrationPlan;
 use crate::operations::config_diff::*;
 use crate::operations::shard_selector_internal::ShardSelectorInternal;
@@ -305,6 +305,9 @@ impl Collection {
             return Ok(());
         }
 
+        self.validate_private_oram_replica_remove_until_supported(&replica_changes)
+            .await?;
+
         let shard_holder = self.shards_holder.read().await;
 
         for change in replica_changes {
@@ -586,5 +589,68 @@ impl Collection {
         for warning in warnings {
             log::warn!("Collection {}: {}", self.name(), warning.message);
         }
+    }
+}
+
+impl Collection {
+    async fn validate_private_oram_replica_remove_until_supported(
+        &self,
+        replica_changes: &[Change],
+    ) -> CollectionResult<()> {
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
+
+        validate_private_oram_replica_remove_until_supported(
+            replica_changes,
+            private_oram_bucket_store_collection,
+        )
+    }
+}
+
+fn validate_private_oram_replica_remove_until_supported(
+    replica_changes: &[Change],
+    private_oram_bucket_store_collection: bool,
+) -> CollectionResult<()> {
+    if !private_oram_bucket_store_collection
+        || !replica_changes
+            .iter()
+            .any(|change| matches!(change, Change::Remove(_, _)))
+    {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(
+        "cannot drop shard replica for private ORAM collections: collection-local encrypted ORAM \
+         buckets cannot be moved or deleted by replica removal until ORAM bucket migration and \
+         consensus-backed epoch/root ownership are implemented",
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_oram_replica_remove_guard_redacts_collection_details() {
+        let changes = [Change::Remove(1, 2)];
+
+        validate_private_oram_replica_remove_until_supported(&changes, false).unwrap();
+
+        let err = validate_private_oram_replica_remove_until_supported(&changes, true).unwrap_err();
+        let rendered = format!("{err:?}");
+
+        assert!(rendered.contains("cannot drop shard replica for private ORAM collections"));
+        assert!(rendered.contains("collection-local encrypted ORAM buckets"));
+        assert!(rendered.contains("consensus-backed epoch/root"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("private_result_oram"));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
     }
 }
