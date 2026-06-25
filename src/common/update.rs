@@ -5607,6 +5607,38 @@ esac
                 assert!(!message.contains("runtime CKKS sidecar"), "{message}");
                 assert!(!message.contains("payload sidecar only"), "{message}");
             };
+            let request_hw_counter = || {
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                )
+            };
+            let rest_named_dense_vector = || {
+                api::rest::NamedVectorStruct::Dense(segment::data_types::vectors::NamedVector {
+                    name: private_vector_name.parse().unwrap(),
+                    vector: vec![0.0, 0.0],
+                })
+            };
+            let grpc_dense_vector = || api::grpc::qdrant::Vector {
+                vector: Some(api::grpc::qdrant::vector::Vector::Dense(
+                    api::grpc::qdrant::DenseVector {
+                        data: vec![0.0, 0.0],
+                    },
+                )),
+                ..Default::default()
+            };
+            let grpc_dense_input = || api::grpc::qdrant::VectorInput {
+                variant: Some(api::grpc::qdrant::vector_input::Variant::Dense(
+                    api::grpc::qdrant::DenseVector {
+                        data: vec![0.0, 0.0],
+                    },
+                )),
+            };
+            let grpc_nearest_query = || api::grpc::qdrant::Query {
+                variant: Some(api::grpc::qdrant::query::Variant::Nearest(
+                    grpc_dense_input(),
+                )),
+            };
 
             assert_private_hnsw_read_error(
                 crate::common::query::do_get_points(
@@ -5766,6 +5798,63 @@ esac
                 .unwrap_err(),
             );
 
+            assert_private_hnsw_read_error(
+                crate::common::query::do_search_batch_points(
+                    &toc,
+                    collection_name,
+                    vec![(
+                        CoreSearchRequest {
+                            query: QueryEnum::Nearest(NamedQuery::new(
+                                VectorInternal::Dense(vec![0.0, 0.0]),
+                                private_vector_name,
+                            )),
+                            filter: None,
+                            params: None,
+                            limit: 1,
+                            offset: 0,
+                            with_payload: Some(WithPayloadInterface::Bool(false)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            score_threshold: None,
+                        },
+                        ShardSelectorInternal::All,
+                    )],
+                    None,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_search_batch_points_from_rest(
+                    &toc,
+                    collection_name,
+                    vec![(
+                        SearchRequestInternal {
+                            vector: rest_named_dense_vector(),
+                            with_payload: Some(WithPayloadInterface::Bool(false)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            filter: None,
+                            params: None,
+                            limit: 1,
+                            offset: None,
+                            score_threshold: None,
+                        },
+                        ShardSelectorInternal::All,
+                    )],
+                    None,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
             assert_private_hnsw_grpc_read_error(
                 crate::tonic::api::query_common::search(
                     UncheckedTocProvider::new_unchecked(&toc),
@@ -5782,6 +5871,33 @@ esac
                         HwMeasurementAcc::disposable(),
                         false,
                     ),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::search_batch_from_grpc(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    collection_name,
+                    vec![(
+                        api::rest::SearchRequestInternal::try_from(
+                            api::grpc::qdrant::SearchPoints {
+                                collection_name: collection_name.to_string(),
+                                vector: vec![0.0, 0.0],
+                                limit: 1,
+                                vector_name: Some(private_vector_name.to_string()),
+                                ..Default::default()
+                            },
+                        )
+                        .unwrap(),
+                        ShardSelectorInternal::All,
+                    )],
+                    None,
+                    auth.clone(),
+                    None,
+                    request_hw_counter(),
                     None,
                 )
                 .await
@@ -5860,6 +5976,70 @@ esac
             );
 
             assert_private_hnsw_read_error(
+                crate::common::query::do_query_batch_points(
+                    &toc,
+                    collection_name,
+                    vec![(
+                        CollectionQueryRequest {
+                            prefetch: Vec::new(),
+                            query: Some(Query::Vector(VectorQuery::Nearest(
+                                VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            ))),
+                            using: private_vector_name.to_string(),
+                            filter: None,
+                            score_threshold: None,
+                            limit: 1,
+                            offset: 0,
+                            params: None,
+                            with_vector: WithVector::Bool(false),
+                            with_payload: WithPayloadInterface::Bool(false),
+                            lookup_from: None,
+                        },
+                        ShardSelectorInternal::All,
+                    )],
+                    None,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::query_batch(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    collection_name,
+                    vec![api::grpc::qdrant::QueryPoints {
+                        collection_name: collection_name.to_string(),
+                        prefetch: Vec::new(),
+                        query: Some(grpc_nearest_query()),
+                        using: Some(private_vector_name.to_string()),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        limit: Some(1),
+                        offset: None,
+                        with_vectors: None,
+                        with_payload: None,
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        lookup_from: None,
+                        timeout: None,
+                    }],
+                    None,
+                    auth.clone(),
+                    None,
+                    request_hw_counter(),
+                    InferenceParams::default(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
                 crate::common::query::do_recommend_points(
                     &toc,
                     collection_name,
@@ -5890,6 +6070,39 @@ esac
                 .unwrap_err(),
             );
 
+            assert_private_hnsw_read_error(
+                crate::common::query::do_recommend_batch_points(
+                    &toc,
+                    collection_name,
+                    vec![(
+                        RecommendRequestInternal {
+                            positive: vec![RecommendExample::Dense(vec![0.0, 0.0])],
+                            negative: Vec::new(),
+                            strategy: Some(api::rest::RecommendStrategy::AverageVector),
+                            filter: None,
+                            params: None,
+                            limit: 1,
+                            offset: None,
+                            with_payload: Some(WithPayloadInterface::Bool(false)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            score_threshold: None,
+                            using: Some(collection::operations::types::UsingVector::Name(
+                                private_vector_name.to_string(),
+                            )),
+                            lookup_from: None,
+                        },
+                        ShardSelectorInternal::All,
+                    )],
+                    None,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
             assert_private_hnsw_grpc_read_error(
                 crate::tonic::api::query_common::recommend(
                     UncheckedTocProvider::new_unchecked(&toc),
@@ -5908,14 +6121,7 @@ esac
                         lookup_from: None,
                         read_consistency: None,
                         strategy: None,
-                        positive_vectors: vec![api::grpc::qdrant::Vector {
-                            vector: Some(api::grpc::qdrant::vector::Vector::Dense(
-                                api::grpc::qdrant::DenseVector {
-                                    data: vec![0.0, 0.0],
-                                },
-                            )),
-                            ..Default::default()
-                        }],
+                        positive_vectors: vec![grpc_dense_vector()],
                         negative_vectors: Vec::new(),
                         timeout: None,
                         shard_key_selector: None,
@@ -5925,6 +6131,40 @@ esac
                         HwMeasurementAcc::disposable(),
                         false,
                     ),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::recommend_batch(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    collection_name,
+                    vec![api::grpc::qdrant::RecommendPoints {
+                        collection_name: collection_name.to_string(),
+                        positive: Vec::new(),
+                        negative: Vec::new(),
+                        filter: None,
+                        limit: 1,
+                        with_payload: None,
+                        params: None,
+                        score_threshold: None,
+                        offset: None,
+                        using: Some(private_vector_name.to_string()),
+                        with_vectors: None,
+                        lookup_from: None,
+                        read_consistency: None,
+                        strategy: None,
+                        positive_vectors: vec![grpc_dense_vector()],
+                        negative_vectors: Vec::new(),
+                        timeout: None,
+                        shard_key_selector: None,
+                    }],
+                    None,
+                    auth.clone(),
+                    None,
+                    request_hw_counter(),
                     None,
                 )
                 .await
@@ -5986,14 +6226,7 @@ esac
                         read_consistency: None,
                         with_lookup: None,
                         strategy: None,
-                        positive_vectors: vec![api::grpc::qdrant::Vector {
-                            vector: Some(api::grpc::qdrant::vector::Vector::Dense(
-                                api::grpc::qdrant::DenseVector {
-                                    data: vec![0.0, 0.0],
-                                },
-                            )),
-                            ..Default::default()
-                        }],
+                        positive_vectors: vec![grpc_dense_vector()],
                         negative_vectors: Vec::new(),
                         timeout: None,
                         shard_key_selector: None,
@@ -6038,6 +6271,37 @@ esac
                 .unwrap_err(),
             );
 
+            assert_private_hnsw_read_error(
+                crate::common::query::do_discover_batch_points(
+                    &toc,
+                    collection_name,
+                    vec![(
+                        DiscoverRequestInternal {
+                            target: Some(RecommendExample::Dense(vec![0.0, 0.0])),
+                            context: None,
+                            filter: None,
+                            params: None,
+                            limit: 1,
+                            offset: None,
+                            with_payload: Some(WithPayloadInterface::Bool(false)),
+                            with_vector: Some(WithVector::Bool(false)),
+                            using: Some(collection::operations::types::UsingVector::Name(
+                                private_vector_name.to_string(),
+                            )),
+                            lookup_from: None,
+                        },
+                        ShardSelectorInternal::All,
+                    )],
+                    None,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
             assert_private_hnsw_grpc_read_error(
                 crate::tonic::api::query_common::discover(
                     UncheckedTocProvider::new_unchecked(&toc),
@@ -6048,16 +6312,7 @@ esac
                                 api::grpc::qdrant::VectorExample {
                                     example: Some(
                                         api::grpc::qdrant::vector_example::Example::Vector(
-                                            api::grpc::qdrant::Vector {
-                                                vector: Some(
-                                                    api::grpc::qdrant::vector::Vector::Dense(
-                                                        api::grpc::qdrant::DenseVector {
-                                                            data: vec![0.0, 0.0],
-                                                        },
-                                                    ),
-                                                ),
-                                                ..Default::default()
-                                            },
+                                            grpc_dense_vector(),
                                         ),
                                     ),
                                 },
@@ -6081,6 +6336,46 @@ esac
                         HwMeasurementAcc::disposable(),
                         false,
                     ),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::discover_batch(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    collection_name,
+                    vec![api::grpc::qdrant::DiscoverPoints {
+                        collection_name: collection_name.to_string(),
+                        target: Some(api::grpc::qdrant::TargetVector {
+                            target: Some(api::grpc::qdrant::target_vector::Target::Single(
+                                api::grpc::qdrant::VectorExample {
+                                    example: Some(
+                                        api::grpc::qdrant::vector_example::Example::Vector(
+                                            grpc_dense_vector(),
+                                        ),
+                                    ),
+                                },
+                            )),
+                        }),
+                        context: Vec::new(),
+                        filter: None,
+                        limit: 1,
+                        with_payload: None,
+                        params: None,
+                        offset: None,
+                        using: Some(private_vector_name.to_string()),
+                        with_vectors: None,
+                        lookup_from: None,
+                        read_consistency: None,
+                        timeout: None,
+                        shard_key_selector: None,
+                    }],
+                    None,
+                    auth.clone(),
+                    None,
+                    request_hw_counter(),
                     None,
                 )
                 .await
