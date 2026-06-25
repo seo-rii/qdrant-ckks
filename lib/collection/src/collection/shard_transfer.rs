@@ -468,10 +468,25 @@ impl Collection {
         // TODO: Ensure cancel safety!
 
         let shards_holder = self.shards_holder.clone();
+        let collection_config = self.collection_config.clone();
+        let collection_name = self.name().to_string();
 
         let collection_path = self.path.clone();
 
         async move {
+            let private_oram_bucket_store_collection = {
+                let config = collection_config.read().await;
+                config
+                    .params
+                    .effective_encryption()
+                    .as_ref()
+                    .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+            };
+            validate_private_oram_transfer_task_start_until_supported(
+                &collection_name,
+                private_oram_bucket_store_collection,
+            )?;
+
             let shards_holder_guard = shards_holder.clone().read_owned().await;
 
             let Some(replica_set) = shards_holder_guard.get_shard(shard_id) else {
