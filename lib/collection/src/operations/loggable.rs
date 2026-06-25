@@ -1979,8 +1979,13 @@ mod tests {
         assert!(serialized.contains("[redacted]"));
 
         let mut read_paths_aliases = json!({
+            "read_path": ["qdrant-sec-private-hnsw-single-read-path-log-sentinel"],
+            "readPath": ["qdrant-sec-private-hnsw-camel-single-read-path-log-sentinel"],
             "read_paths": ["qdrant-sec-private-hnsw-read-path-log-sentinel"],
             "readPaths": ["qdrant-sec-private-hnsw-camel-read-path-log-sentinel"],
+            "read_path_label": "qdrant-sec-private-hnsw-read-path-label-log-sentinel",
+            "readPathLabel": "qdrant-sec-private-hnsw-camel-single-read-path-label-log-sentinel",
+            "read_path_labels": ["qdrant-sec-private-hnsw-read-path-labels-log-sentinel"],
             "read_bucket": "qdrant-sec-private-result-read-bucket-log-sentinel",
             "read_bucket_id": "qdrant-sec-private-result-single-read-bucket-alias-log-sentinel",
             "read_bucket_ids": ["qdrant-sec-private-result-read-bucket-id-alias-log-sentinel"],
@@ -2004,9 +2009,28 @@ mod tests {
         });
         redact_sensitive_log_fields(&mut read_paths_aliases);
         let read_paths_serialized = serde_json::to_string(&read_paths_aliases).unwrap();
+        assert!(
+            !read_paths_serialized
+                .contains("qdrant-sec-private-hnsw-single-read-path-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized
+                .contains("qdrant-sec-private-hnsw-camel-single-read-path-log-sentinel")
+        );
         assert!(!read_paths_serialized.contains("qdrant-sec-private-hnsw-read-path-log-sentinel"));
         assert!(
             !read_paths_serialized.contains("qdrant-sec-private-hnsw-camel-read-path-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized.contains("qdrant-sec-private-hnsw-read-path-label-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized
+                .contains("qdrant-sec-private-hnsw-camel-single-read-path-label-log-sentinel")
+        );
+        assert!(
+            !read_paths_serialized
+                .contains("qdrant-sec-private-hnsw-read-path-labels-log-sentinel")
         );
         assert!(
             !read_paths_serialized.contains("qdrant-sec-private-result-read-bucket-log-sentinel")
