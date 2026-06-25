@@ -2005,9 +2005,7 @@ fn current_unix_secs() -> StorageResult<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
-        .map_err(|err| {
-            StorageError::service_error(format!("system clock before UNIX epoch: {err}"))
-        })
+        .map_err(|_| StorageError::service_error("system clock before UNIX epoch"))
 }
 
 fn session_lease_expires_unix(now_unix: u64) -> StorageResult<u64> {
