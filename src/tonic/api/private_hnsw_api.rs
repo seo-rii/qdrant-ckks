@@ -1519,7 +1519,9 @@ mod private_hnsw_grpc_tests {
 
             let mut mismatched_dim_manifest = fixture.manifest.clone();
             mismatched_dim_manifest.dim += 1;
+            let mismatched_dim_value = mismatched_dim_manifest.dim.to_string();
             let mismatched_dim_signature = fixture.sign_manifest(&mismatched_dim_manifest);
+            let mismatched_dim_signature_sig = mismatched_dim_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -1533,11 +1535,14 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("request validation failed"));
+            assert!(!err.message().contains(&mismatched_dim_value));
+            assert!(!err.message().contains(&mismatched_dim_signature_sig));
 
             let mut mismatched_distance_manifest = fixture.manifest.clone();
             mismatched_distance_manifest.distance = DistanceKind::Cosine;
             let mismatched_distance_signature =
                 fixture.sign_manifest(&mismatched_distance_manifest);
+            let mismatched_distance_signature_sig = mismatched_distance_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -1553,6 +1558,7 @@ mod private_hnsw_grpc_tests {
             assert!(err.message().contains("request validation failed"));
             assert!(!err.message().contains("Cosine"));
             assert!(!err.message().contains("cosine"));
+            assert!(!err.message().contains(&mismatched_distance_signature_sig));
 
             let mut mismatched_bucket_count_manifest = fixture.manifest.clone();
             mismatched_bucket_count_manifest.bucket_count -= 1;
