@@ -2418,6 +2418,34 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("signature algorithm must be ed25519"));
         assert!(!rendered.contains(signature_alg_sentinel), "{rendered}");
+        assert!(
+            !rendered.contains(&bad_alg_bundle.manifest_signature.key_id),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&bad_alg_bundle.manifest_signature.sig),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&bad_alg_bundle.manifest.root_hash),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&bad_alg_bundle.buckets[0].ciphertext),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&bad_alg_bundle.buckets[0].ciphertext_sha256),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&bad_alg_bundle.buckets[0].bucket_commitment),
+            "{rendered}"
+        );
+        assert!(
+            !store.root_path().exists(),
+            "invalid unsigned upload must not create private result ORAM layout"
+        );
 
         let epoch = store.write_initial_upload_bundle(&bundle, 128).unwrap();
 
@@ -2495,6 +2523,11 @@ mod tests {
             .to_string();
         assert!(rendered.contains("manifest signature verification failed"));
         assert!(!rendered.contains(&tampered.manifest_signature.sig));
+        assert!(!rendered.contains(&tampered.manifest_signature.key_id));
+        assert!(!rendered.contains(&tampered.manifest.root_hash));
+        assert!(!rendered.contains(&tampered.buckets[0].ciphertext));
+        assert!(!rendered.contains(&tampered.buckets[0].ciphertext_sha256));
+        assert!(!rendered.contains(&tampered.buckets[0].bucket_commitment));
         assert!(
             !store.root_path().exists(),
             "invalid signed upload must not create private result ORAM layout"

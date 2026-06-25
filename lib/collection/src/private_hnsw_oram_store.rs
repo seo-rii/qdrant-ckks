@@ -2324,6 +2324,45 @@ mod tests {
 
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
+
+        let mut bad_alg_bundle = bundle.clone();
+        let signature_alg_sentinel = "private-hnsw-signature-alg-sentinel";
+        bad_alg_bundle.manifest_signature.alg = signature_alg_sentinel.to_string();
+        let rendered = store
+            .write_initial_upload_bundle(&bad_alg_bundle, 4096)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("manifest signature context"));
+        assert!(!rendered.contains(signature_alg_sentinel), "{rendered}");
+        assert!(
+            !rendered.contains(&bad_alg_bundle.manifest_signature.key_id),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&bad_alg_bundle.manifest_signature.sig),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&bad_alg_bundle.manifest.root_hash),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&bad_alg_bundle.buckets[0].ciphertext),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&bad_alg_bundle.buckets[0].ciphertext_sha256),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&bad_alg_bundle.buckets[0].bucket_commitment),
+            "{rendered}"
+        );
+        assert!(
+            !store.root_path().exists(),
+            "invalid unsigned upload must not create private HNSW ORAM layout"
+        );
+
         let epoch = store
             .write_initial_upload_bundle_with_signature(
                 &bundle,
@@ -2351,6 +2390,9 @@ mod tests {
             .to_string();
         assert!(rendered.contains("does not match existing manifest"));
         assert!(!rendered.contains(&mismatched_signature.manifest_signature.sig));
+        assert!(!rendered.contains(&mismatched_signature.manifest.root_hash));
+        assert!(!rendered.contains(&mismatched_signature.buckets[0].ciphertext));
+        assert!(!rendered.contains(&mismatched_signature.buckets[0].bucket_commitment));
 
         let mut tampered = bundle.clone();
         tampered.manifest_signature.sig = BASE64URL_NOPAD.encode(&[8; 64]);
@@ -2366,6 +2408,11 @@ mod tests {
             .to_string();
         assert!(rendered.contains("manifest signature context"));
         assert!(!rendered.contains(&tampered.manifest_signature.sig));
+        assert!(!rendered.contains(&tampered.manifest_signature.key_id));
+        assert!(!rendered.contains(&tampered.manifest.root_hash));
+        assert!(!rendered.contains(&tampered.buckets[0].ciphertext));
+        assert!(!rendered.contains(&tampered.buckets[0].ciphertext_sha256));
+        assert!(!rendered.contains(&tampered.buckets[0].bucket_commitment));
         assert!(
             !store.root_path().exists(),
             "invalid signed upload must not create private HNSW ORAM layout"
