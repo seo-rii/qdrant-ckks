@@ -4,6 +4,7 @@ use std::time::Instant;
 use api::grpc::qdrant as grpc;
 use api::grpc::qdrant::private_hnsw_oram_server::PrivateHnswOram;
 use collection::operations::verification::new_unchecked_verification_pass;
+use common::validation::validate_collection_name_legacy;
 use qdrant_sec::{
     DistanceKind, FixedBudgetParams, OramKind, OramParams, PrivateHnswOramBucket,
     PrivateHnswOramManifest, PrivateHnswOramSignature, PrivateHnswParams, ResultPrivacyMode,
@@ -282,6 +283,8 @@ fn validate_collection_and_vector(collection_name: &str, vector_name: &str) -> R
             "collection_name must be non-empty and at most 255 bytes",
         ));
     }
+    validate_collection_name_legacy(collection_name)
+        .map_err(|_| Status::invalid_argument("collection_name is invalid"))?;
     if vector_name.is_empty() || vector_name.len() > 128 {
         return Err(Status::invalid_argument(
             "vector_name must be non-empty and at most 128 bytes",
@@ -718,6 +721,25 @@ mod private_hnsw_grpc_tests {
         assert!(err.message().contains("vector_name"));
         assert!(!err.message().contains(vector_sentinel));
         assert!(!err.message().contains(&oversized_vector));
+    }
+
+    #[test]
+    fn route_param_validation_rejects_malformed_collection_without_reflecting_it() {
+        for malformed_collection in [
+            "hnsw-grpc-collection-route-sentinel/child",
+            "hnsw-grpc-collection-route-sentinel\0child",
+        ] {
+            let err =
+                validate_collection_and_vector(malformed_collection, VECTOR_NAME).unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("collection_name"));
+            assert!(!err.message().contains(malformed_collection));
+            assert!(
+                !err.message()
+                    .contains("hnsw-grpc-collection-route-sentinel")
+            );
+            assert!(!err.message().contains("child"));
+        }
     }
 
     #[test]

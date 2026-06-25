@@ -4,6 +4,7 @@ use std::time::Instant;
 use api::grpc::qdrant as grpc;
 use api::grpc::qdrant::private_result_oram_server::PrivateResultOram;
 use collection::operations::verification::new_unchecked_verification_pass;
+use common::validation::validate_collection_name_legacy;
 use qdrant_sec::{
     OramKind, OramParams, PrivateResultOramBucket, PrivateResultOramManifest,
     PrivateResultOramSignature,
@@ -265,6 +266,8 @@ fn validate_collection(collection_name: &str) -> Result<(), Status> {
             "collection_name must be non-empty and at most 255 bytes",
         ));
     }
+    validate_collection_name_legacy(collection_name)
+        .map_err(|_| Status::invalid_argument("collection_name is invalid"))?;
     Ok(())
 }
 
@@ -860,6 +863,24 @@ mod private_result_oram_grpc_tests {
         assert!(err.message().contains("collection_name"));
         assert!(!err.message().contains(collection_sentinel));
         assert!(!err.message().contains(&oversized_collection));
+    }
+
+    #[test]
+    fn route_param_validation_rejects_malformed_collection_without_reflecting_it() {
+        for malformed_collection in [
+            "result-grpc-collection-route-sentinel/child",
+            "result-grpc-collection-route-sentinel\0child",
+        ] {
+            let err = validate_collection(malformed_collection).unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("collection_name"));
+            assert!(!err.message().contains(malformed_collection));
+            assert!(
+                !err.message()
+                    .contains("result-grpc-collection-route-sentinel")
+            );
+            assert!(!err.message().contains("child"));
+        }
     }
 
     #[test]
