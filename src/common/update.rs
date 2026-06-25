@@ -4116,6 +4116,22 @@ esac
                     false,
                 )
             };
+            let private_result_create_index = || CreateFieldIndex {
+                field_name: "body".parse().unwrap(),
+                field_schema: Some(PayloadFieldSchema::FieldType(
+                    segment::types::PayloadSchemaType::Keyword,
+                )),
+            };
+            let grpc_private_result_create_index =
+                || api::grpc::qdrant::CreateFieldIndexCollection {
+                    collection_name: "private_result_write_docs".to_string(),
+                    wait: Some(true),
+                    field_name: "body".to_string(),
+                    field_type: Some(api::grpc::qdrant::FieldType::Keyword as i32),
+                    field_index_params: None,
+                    ordering: None,
+                    timeout: None,
+                };
             let grpc_payload = |payload: Value| {
                 api::conversions::json::payload_to_proto(segment::types::Payload(
                     payload.as_object().unwrap().clone(),
@@ -4171,6 +4187,72 @@ esac
                         timeout: None,
                     }
                 };
+
+            assert_private_result_write_error(
+                do_create_index(
+                    dispatcher.clone().into(),
+                    "private_result_write_docs".to_string(),
+                    private_result_create_index(),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM create payload index must fail closed"),
+                "cannot create payload index on private result ORAM payload field",
+            );
+
+            assert_private_result_write_error(
+                do_create_index_internal(
+                    toc.clone(),
+                    "private_result_write_docs".to_string(),
+                    "body".parse().unwrap(),
+                    Some(PayloadFieldSchema::FieldType(
+                        segment::types::PayloadSchemaType::Keyword,
+                    )),
+                    InternalUpdateParams::default(),
+                    UpdateParams {
+                        wait: true,
+                        ordering: WriteOrdering::default(),
+                        timeout: None,
+                    },
+                    HwMeasurementAcc::disposable(),
+                )
+                .await
+                .expect_err("private result ORAM internal create payload index must fail closed"),
+                "cannot create payload index on private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::create_field_index(
+                    dispatcher.clone().into(),
+                    grpc_private_result_create_index(),
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    request_hw_counter(),
+                )
+                .await
+                .expect_err("private result ORAM gRPC create payload index must fail closed"),
+                "cannot create payload index on private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::create_field_index_internal(
+                    toc.clone(),
+                    grpc_private_result_create_index(),
+                    InternalUpdateParams::default(),
+                )
+                .await
+                .expect_err(
+                    "private result ORAM gRPC internal create payload index must fail closed",
+                ),
+                "cannot create payload index on private result ORAM payload field",
+            );
 
             assert_private_result_write_error(
                 do_upsert_points(
