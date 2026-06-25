@@ -720,6 +720,36 @@ mod tests {
     }
 
     #[test]
+    fn distributed_telemetry_private_oram_mismatch_summary_reports_only_peer_ids() {
+        let base_fingerprint = "private-oram-base-fingerprint-sentinel";
+        let peer_fingerprint = "private-oram-peer-fingerprint-sentinel";
+        let verifier_key = "private-oram-verifier-public-key-sentinel";
+        let distributed = DistributedTelemetryData::resolve_telemetries(
+            &Access::full("test"),
+            vec![
+                telemetry_for_peer(1, 2, 10, base_fingerprint),
+                telemetry_for_peer(2, 1, 9, &format!("{peer_fingerprint}:{verifier_key}")),
+            ],
+            Vec::new(),
+        )
+        .unwrap();
+
+        let cluster = distributed.cluster.expect("cluster telemetry");
+        assert_eq!(
+            cluster.crypto_runtime_capability_mismatches.as_deref(),
+            Some([2].as_slice()),
+        );
+
+        let rendered = format!("{:?}", cluster.crypto_runtime_capability_mismatches);
+        for sentinel in [base_fingerprint, peer_fingerprint, verifier_key] {
+            assert!(
+                !rendered.contains(sentinel),
+                "distributed private ORAM parity summary must not expose fingerprint material: {rendered}",
+            );
+        }
+    }
+
+    #[test]
     fn distributed_telemetry_omits_crypto_runtime_mismatches_when_peers_match() {
         let distributed = DistributedTelemetryData::resolve_telemetries(
             &Access::full("test"),
