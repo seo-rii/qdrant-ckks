@@ -14012,6 +14012,70 @@ esac
                         using: DEFAULT_VECTOR_NAME.to_string(),
                         filter: None,
                         score_threshold: None,
+                        limit: 1,
+                        offset: 0,
+                        params: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Encrypted(
+                            PayloadEncryptedReadPolicy {
+                                encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                            },
+                        ),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM decrypted universal query must fail closed"),
+            );
+
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::query(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::QueryPoints {
+                        collection_name: "private_result_docs".to_string(),
+                        prefetch: Vec::new(),
+                        query: Some(grpc_nearest_query()),
+                        using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        limit: Some(1),
+                        offset: None,
+                        with_vectors: None,
+                        with_payload: Some(grpc_payload_decrypted()),
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        lookup_from: None,
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    InferenceParams::default(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC decrypted query must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_query_points(
+                    &toc,
+                    "private_result_docs",
+                    CollectionQueryRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Nearest(
+                            VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                        ))),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
+                        filter: None,
+                        score_threshold: None,
                         limit: 0,
                         offset: 0,
                         params: None,
