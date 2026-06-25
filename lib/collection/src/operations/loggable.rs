@@ -243,6 +243,10 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "resource_key_b64"
                         | "wrapping_key"
                         | "wrapping_key_b64"
+                        | "owner_signing_key_id"
+                        | "owner_signing_key_ids"
+                        | "signing_key_id"
+                        | "signing_key_ids"
                         | "authorization"
                         | "api_key"
                         | "x_api_key"
@@ -443,6 +447,10 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "accesskeyid"
                         | "secretaccesskey"
                         | "bearertoken"
+                        | "ownersigningkeyid"
+                        | "ownersigningkeyids"
+                        | "signingkeyid"
+                        | "signingkeyids"
                         | "idtoken"
                         | "sessiontoken"
                         | "vaulttoken"
@@ -1279,6 +1287,22 @@ mod tests {
         });
         for (key, field_value) in [
             (
+                "owner_signing_key_id",
+                json!("qdrant-sec-private-hnsw-owner-signing-key-id-log-sentinel"),
+            ),
+            (
+                "ownerSigningKeyId",
+                json!("qdrant-sec-private-hnsw-camel-owner-signing-key-id-log-sentinel"),
+            ),
+            (
+                "signing_key_id",
+                json!("qdrant-sec-private-hnsw-signing-key-id-log-sentinel"),
+            ),
+            (
+                "signingKeyId",
+                json!("qdrant-sec-private-hnsw-camel-signing-key-id-log-sentinel"),
+            ),
+            (
                 "bucket_plaintext",
                 json!("qdrant-sec-private-oram-bucket-plaintext-log-sentinel"),
             ),
@@ -1482,6 +1506,22 @@ mod tests {
         }
         for (key, field_value) in [
             (
+                "owner_signing_key_id",
+                json!("qdrant-sec-private-result-owner-signing-key-id-log-sentinel"),
+            ),
+            (
+                "ownerSigningKeyId",
+                json!("qdrant-sec-private-result-camel-owner-signing-key-id-log-sentinel"),
+            ),
+            (
+                "signing_key_id",
+                json!("qdrant-sec-private-result-signing-key-id-log-sentinel"),
+            ),
+            (
+                "signingKeyId",
+                json!("qdrant-sec-private-result-camel-signing-key-id-log-sentinel"),
+            ),
+            (
                 "payload_bytes",
                 json!("qdrant-sec-private-result-payload-bytes-log-sentinel"),
             ),
@@ -1629,6 +1669,10 @@ mod tests {
         for sentinel in [
             "qdrant-sec-private-hnsw-client-id-log-sentinel",
             "qdrant-sec-private-hnsw-session-id-log-sentinel",
+            "qdrant-sec-private-hnsw-owner-signing-key-id-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-owner-signing-key-id-log-sentinel",
+            "qdrant-sec-private-hnsw-signing-key-id-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-signing-key-id-log-sentinel",
             "qdrant-sec-private-hnsw-path-log-sentinel",
             "qdrant-sec-private-hnsw-access-path-log-sentinel",
             "qdrant-sec-private-hnsw-camel-access-path-log-sentinel",
@@ -1756,6 +1800,10 @@ mod tests {
             "qdrant-sec-private-result-camel-client-id-log-sentinel",
             "qdrant-sec-private-result-session-id-log-sentinel",
             "qdrant-sec-private-result-camel-session-id-log-sentinel",
+            "qdrant-sec-private-result-owner-signing-key-id-log-sentinel",
+            "qdrant-sec-private-result-camel-owner-signing-key-id-log-sentinel",
+            "qdrant-sec-private-result-signing-key-id-log-sentinel",
+            "qdrant-sec-private-result-camel-signing-key-id-log-sentinel",
             "qdrant-sec-private-result-root-hash-log-sentinel",
             "qdrant-sec-private-result-camel-root-hash-log-sentinel",
             "qdrant-sec-private-result-camel-old-root-hash-log-sentinel",
