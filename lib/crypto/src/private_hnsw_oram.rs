@@ -235,8 +235,8 @@ impl Debug for PrivateHnswOramBucket {
         f.debug_struct("PrivateHnswOramBucket")
             .field("version", &self.version)
             .field("bucket_id", &"[redacted]")
-            .field("index_epoch", &self.index_epoch)
-            .field("ciphertext_len", &self.ciphertext.len())
+            .field("index_epoch", &"[redacted]")
+            .field("ciphertext_len", &"[redacted]")
             .field("ciphertext_sha256", &"[redacted]")
             .field("bucket_commitment", &"[redacted]")
             .finish()
@@ -1120,6 +1120,13 @@ mod tests {
             format!("{read_paths_signature_input:?}"),
         ]
         .join("\n");
+        let encrypted_bucket_rendered = format!("{encrypted_bucket:?}");
+        assert!(!encrypted_bucket_rendered.contains("987654"));
+        assert!(!encrypted_bucket_rendered.contains("42"));
+        assert!(
+            !encrypted_bucket_rendered.contains(&encrypted_bucket.ciphertext.len().to_string()),
+            "{encrypted_bucket_rendered}"
+        );
         for leaked in [
             "987654",
             "HNSW-CIPHERTEXT-SENTINEL",

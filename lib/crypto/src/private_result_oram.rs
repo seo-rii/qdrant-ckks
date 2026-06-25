@@ -232,8 +232,8 @@ impl Debug for PrivateResultOramBucket {
         f.debug_struct("PrivateResultOramBucket")
             .field("version", &self.version)
             .field("bucket_id", &"[redacted]")
-            .field("index_epoch", &self.index_epoch)
-            .field("ciphertext_len", &self.ciphertext.len())
+            .field("index_epoch", &"[redacted]")
+            .field("ciphertext_len", &"[redacted]")
             .field("ciphertext_sha256", &"[redacted]")
             .field("bucket_commitment", &"[redacted]")
             .finish()
@@ -4233,6 +4233,13 @@ mod tests {
             format!("{read_signature_input:?}"),
         ]
         .join("\n");
+        let encrypted_bucket_rendered = format!("{encrypted_bucket:?}");
+        assert!(!encrypted_bucket_rendered.contains("123456"));
+        assert!(!encrypted_bucket_rendered.contains("42"));
+        assert!(
+            !encrypted_bucket_rendered.contains(&encrypted_bucket.ciphertext.len().to_string()),
+            "{encrypted_bucket_rendered}"
+        );
         for leaked in [
             BASE64URL_NOPAD.encode(&[44; 32]),
             BASE64URL_NOPAD.encode(&[64; 32]),
