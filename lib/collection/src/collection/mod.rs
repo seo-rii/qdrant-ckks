@@ -1479,19 +1479,18 @@ fn collection_encryption_uses_private_oram_bucket_store(
 }
 
 fn validate_private_oram_automatic_transfer_recovery_until_supported(
-    collection_name: &str,
-    shard_id: ShardId,
+    _collection_name: &str,
+    _shard_id: ShardId,
     private_oram_bucket_store_collection: bool,
 ) -> CollectionResult<()> {
     if !private_oram_bucket_store_collection {
         return Ok(());
     }
 
-    Err(CollectionError::bad_input(format!(
-        "automatic shard transfer recovery for private ORAM collection {collection_name} \
-         shard {shard_id} is disabled until encrypted ORAM bucket transfer and \
-         consensus-backed epoch/root ownership are implemented",
-    )))
+    Err(CollectionError::bad_input(
+        "automatic shard transfer recovery for private ORAM collections is disabled until \
+         encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are implemented",
+    ))
 }
 
 struct CollectionVersion;
@@ -1699,15 +1698,25 @@ mod tests {
 
     #[test]
     fn private_hnsw_automatic_transfer_recovery_fails_closed_until_bucket_transfer_supported() {
-        validate_private_oram_automatic_transfer_recovery_until_supported("docs", 3, false)
-            .unwrap();
+        let collection_name = "private-oram-recovery-secret-collection";
+        validate_private_oram_automatic_transfer_recovery_until_supported(
+            collection_name,
+            3,
+            false,
+        )
+        .unwrap();
 
-        let err =
-            validate_private_oram_automatic_transfer_recovery_until_supported("docs", 3, true)
-                .unwrap_err();
+        let err = validate_private_oram_automatic_transfer_recovery_until_supported(
+            collection_name,
+            3,
+            true,
+        )
+        .unwrap_err();
         let rendered = format!("{err:?}");
-        assert!(rendered.contains("private ORAM collection docs"));
+        assert!(rendered.contains("private ORAM collections"));
         assert!(rendered.contains("encrypted ORAM bucket transfer"));
+        assert!(!rendered.contains(collection_name));
+        assert!(!rendered.contains("shard 3"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains("private_result_oram"));
     }
