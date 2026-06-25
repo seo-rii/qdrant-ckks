@@ -1727,6 +1727,8 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(!err.message().contains(&fixture.manifest_signature.sig));
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
 
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
@@ -1753,6 +1755,8 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(!err.message().contains(&fixture.manifest_signature.sig));
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
 
             let manifest_signature_sentinel = "manifest-signature!sentinel";
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
@@ -1783,6 +1787,7 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
 
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
@@ -1806,6 +1811,7 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
 
             let mut bad_manifest_signature = fixture.manifest_signature.clone();
             let replacement = if bad_manifest_signature.sig.starts_with('A') {
@@ -1814,6 +1820,7 @@ mod private_hnsw_grpc_tests {
                 "A"
             };
             bad_manifest_signature.sig.replace_range(0..1, replacement);
+            let bad_manifest_signature_sig = bad_manifest_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -1827,6 +1834,8 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("request validation failed"));
+            assert!(!err.message().contains(&bad_manifest_signature_sig));
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
 
             let manifest_epoch = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,

@@ -1720,6 +1720,14 @@ mod private_hnsw_rest_tests {
                 !unknown_key_malformed_alg_error.contains(manifest_signature_alg_sentinel),
                 "{unknown_key_malformed_alg_error}"
             );
+            assert!(
+                !unknown_key_malformed_alg_error.contains(&fixture.manifest_signature.sig),
+                "{unknown_key_malformed_alg_error}"
+            );
+            assert!(
+                !unknown_key_malformed_alg_error.contains(&fixture.manifest.root_hash),
+                "{unknown_key_malformed_alg_error}"
+            );
 
             let malformed_manifest_alg_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
@@ -1736,6 +1744,14 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !malformed_manifest_alg_error.contains(manifest_signature_alg_sentinel),
+                "{malformed_manifest_alg_error}"
+            );
+            assert!(
+                !malformed_manifest_alg_error.contains(&fixture.manifest_signature.sig),
+                "{malformed_manifest_alg_error}"
+            );
+            assert!(
+                !malformed_manifest_alg_error.contains(&fixture.manifest.root_hash),
                 "{malformed_manifest_alg_error}"
             );
 
@@ -1762,6 +1778,10 @@ mod private_hnsw_rest_tests {
                 !unknown_key_malformed_signature_error.contains(manifest_signature_sentinel),
                 "{unknown_key_malformed_signature_error}"
             );
+            assert!(
+                !unknown_key_malformed_signature_error.contains(&fixture.manifest.root_hash),
+                "{unknown_key_malformed_signature_error}"
+            );
 
             let malformed_manifest_signature_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
@@ -1780,6 +1800,10 @@ mod private_hnsw_rest_tests {
                 !malformed_manifest_signature_error.contains(manifest_signature_sentinel),
                 "{malformed_manifest_signature_error}"
             );
+            assert!(
+                !malformed_manifest_signature_error.contains(&fixture.manifest.root_hash),
+                "{malformed_manifest_signature_error}"
+            );
 
             let mut bad_manifest_signature = fixture.manifest_signature.clone();
             let replacement = if bad_manifest_signature.sig.starts_with('A') {
@@ -1788,7 +1812,8 @@ mod private_hnsw_rest_tests {
                 "A"
             };
             bad_manifest_signature.sig.replace_range(0..1, replacement);
-            post_json_error_contains!(
+            let bad_manifest_signature_sig = bad_manifest_signature.sig.clone();
+            let bad_manifest_signature_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
                     manifest: fixture.manifest.clone(),
@@ -1796,6 +1821,14 @@ mod private_hnsw_rest_tests {
                 },
                 StatusCode::BAD_REQUEST,
                 "request validation failed"
+            );
+            assert!(
+                !bad_manifest_signature_error.contains(&bad_manifest_signature_sig),
+                "{bad_manifest_signature_error}"
+            );
+            assert!(
+                !bad_manifest_signature_error.contains(&fixture.manifest.root_hash),
+                "{bad_manifest_signature_error}"
             );
 
             let manifest_result = post_json_ok!(

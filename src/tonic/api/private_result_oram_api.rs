@@ -1253,6 +1253,8 @@ mod private_result_oram_grpc_tests {
             let unsupported_manifest_alg_sentinel = "rsa-pss-result-manifest-sentinel";
             let mut unsupported_alg_manifest_signature = fixture.signature.clone();
             unsupported_alg_manifest_signature.alg = unsupported_manifest_alg_sentinel.to_string();
+            let unsupported_alg_manifest_key_id = unsupported_alg_manifest_signature.key_id.clone();
+            let unsupported_alg_manifest_sig = unsupported_alg_manifest_signature.sig.clone();
             let unsupported_manifest_alg = PrivateResultOram::upload_private_result_oram_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateResultOramManifestRequest {
@@ -1273,6 +1275,27 @@ mod private_result_oram_grpc_tests {
                 !unsupported_manifest_alg
                     .message()
                     .contains(unsupported_manifest_alg_sentinel),
+                "{}",
+                unsupported_manifest_alg.message()
+            );
+            assert!(
+                !unsupported_manifest_alg
+                    .message()
+                    .contains(&unsupported_alg_manifest_key_id),
+                "{}",
+                unsupported_manifest_alg.message()
+            );
+            assert!(
+                !unsupported_manifest_alg
+                    .message()
+                    .contains(&unsupported_alg_manifest_sig),
+                "{}",
+                unsupported_manifest_alg.message()
+            );
+            assert!(
+                !unsupported_manifest_alg
+                    .message()
+                    .contains(&fixture.manifest.root_hash),
                 "{}",
                 unsupported_manifest_alg.message()
             );
