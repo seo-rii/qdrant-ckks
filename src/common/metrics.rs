@@ -1586,6 +1586,10 @@ mod tests {
                 "/collections/{collection_name}/private-hnsw/{vector_name}/session",
             ),
             (
+                "/collections/docs/private-hnsw/text/session/client-state-backup-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/session",
+            ),
+            (
                 "/collections/docs/private-hnsw/text/session/session-id-sentinel/close",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
             ),
@@ -1595,6 +1599,10 @@ mod tests {
             ),
             (
                 "/collections/docs/private-result-oram/session/token-position-map-sentinel",
+                "/collections/{collection_name}/private-result-oram/session",
+            ),
+            (
+                "/collections/docs/private-result-oram/session/token-position-map-backup-sentinel",
                 "/collections/{collection_name}/private-result-oram/session",
             ),
             (
@@ -1635,9 +1643,11 @@ mod tests {
                 "hnsw-query-leaf-sentinel",
                 "updated-bucket-sentinel",
                 "client-state-sentinel",
+                "client-state-backup-sentinel",
                 "session-id-sentinel",
                 "hnsw-session-id-sentinel",
                 "token-position-map-sentinel",
+                "token-position-map-backup-sentinel",
                 "result-bucket-id-sentinel",
                 "result-root-hash-sentinel",
                 "result-query-bucket-sentinel",
@@ -1675,6 +1685,10 @@ mod tests {
                 "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
             ),
             (
+                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/client-state-backup-sentinel",
+                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
+            ),
+            (
                 "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets/hnsw-bucket-id-sentinel",
                 "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets",
             ),
@@ -1707,6 +1721,10 @@ mod tests {
                 "/qdrant.PrivateResultOram/OpenPrivateResultOramSession",
             ),
             (
+                "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/token-position-map-backup-sentinel",
+                "/qdrant.PrivateResultOram/OpenPrivateResultOramSession",
+            ),
+            (
                 "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets/result-bucket-id-sentinel",
                 "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets",
             ),
@@ -1729,6 +1747,7 @@ mod tests {
             assert_eq!(label, canonical);
             for leaked in [
                 "client-state-sentinel",
+                "client-state-backup-sentinel",
                 "hnsw-bucket-id-sentinel",
                 "leaf-label-sentinel",
                 "root-hash-sentinel",
@@ -1736,6 +1755,7 @@ mod tests {
                 "session-id-sentinel",
                 "result-updated-bucket-sentinel",
                 "token-position-map-sentinel",
+                "token-position-map-backup-sentinel",
                 "result-bucket-id-sentinel",
                 "result-root-hash-sentinel",
                 "result-session-id-sentinel",
@@ -2093,6 +2113,7 @@ mod tests {
             "POST /collections/docs/private-hnsw/text/oram/read_paths/leaf-label-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths?paths=hnsw-query-leaf-sentinel",
             "POST /collections/docs/private-hnsw/text/session/client-state-sentinel",
+            "POST /collections/docs/private-hnsw/text/session/client-state-backup-sentinel",
             "POST /collections/docs/private-hnsw/text/session/session-id-sentinel/close",
             "POST /collections/docs/private-hnsw/text/session/bad/hnsw-session-id-sentinel/close",
             "POST /collections/docs/private-result-oram/buckets/result-bucket-id-sentinel",
@@ -2101,6 +2122,7 @@ mod tests {
             "POST /collections/docs/private-result-oram/oram/read_buckets/result-bucket-id-sentinel",
             "POST /collections/docs/private-result-oram/oram/read_buckets?bucket_ids=result-query-bucket-sentinel",
             "POST /collections/docs/private-result-oram/session/token-position-map-sentinel",
+            "POST /collections/docs/private-result-oram/session/token-position-map-backup-sentinel",
             "POST /collections/docs/private-result-oram/session/result-session-id-sentinel/close",
             "POST /collections/docs/private-result-oram/session/bad/result-session-id-sentinel/close",
         ];
@@ -2143,6 +2165,7 @@ mod tests {
         let redacted_sentinels = [
             "bucket-id-sentinel",
             "client-state-sentinel",
+            "client-state-backup-sentinel",
             "hnsw-query-leaf-sentinel",
             "hnsw-session-id-sentinel",
             "leaf-label-sentinel",
@@ -2154,6 +2177,7 @@ mod tests {
             "root-hash-sentinel",
             "session-id-sentinel",
             "token-position-map-sentinel",
+            "token-position-map-backup-sentinel",
             "updated-bucket-sentinel",
         ];
         for sentinel in redacted_sentinels {
@@ -2189,12 +2213,14 @@ mod tests {
             "/qdrant.PrivateHnswOram/ClosePrivateHnswSession/session-id-sentinel",
             "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths/updated-bucket-sentinel",
             "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/client-state-sentinel",
+            "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/client-state-backup-sentinel",
             "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths/leaf-label-sentinel",
             "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets/bucket-id-sentinel",
             "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest/root-hash-sentinel",
             "/qdrant.PrivateResultOram/ClosePrivateResultOramSession/result-session-id-sentinel",
             "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets/result-updated-bucket-sentinel",
             "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/token-position-map-sentinel",
+            "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/token-position-map-backup-sentinel",
             "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets/result-bucket-id-sentinel",
             "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets/result-bucket-id-sentinel",
             "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest/result-root-hash-sentinel",
