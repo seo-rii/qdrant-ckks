@@ -192,9 +192,12 @@ mod tests {
         let status = tonic::Status::invalid_argument(
             "private ORAM read failed for session_id=session-sentinel \
              sessionId=session-camel-sentinel \
+             session_ids=session-list-sentinel \
+             sessionIds=session-list-camel-sentinel \
              paths=raw-path-sentinel \
              accessPath=access-path-camel-sentinel \
              read_paths=read-path-sentinel \
+             read_path_labels=read-path-labels-snake-sentinel \
              read_buckets=read-bucket-sentinel \
              readBuckets=read-bucket-camel-sentinel \
              read_bucket_id=single-read-bucket-sentinel \
@@ -219,7 +222,9 @@ mod tests {
              old_root_hashes=old-root-hashes-snake-sentinel \
              new_root_hash=new-root-hash-sentinel \
              newRootHashes=new-root-hashes-camel-sentinel \
-             path_label=leaf-sentinel candidate_heap=candidate-sentinel \
+             path_label=leaf-sentinel pathLabel=path-label-camel-sentinel \
+             leaf_label=leaf-label-snake-sentinel \
+             candidate_heap=candidate-sentinel \
              candidateNodes=candidate-node-camel-sentinel \
              candidateScores=candidate-scores-camel-sentinel \
              candidate_distance=candidate-distance-sentinel \
@@ -303,9 +308,12 @@ mod tests {
         assert!(rendered.contains("redacted"));
         assert!(!rendered.contains("session-sentinel"));
         assert!(!rendered.contains("session-camel-sentinel"));
+        assert!(!rendered.contains("session-list-sentinel"));
+        assert!(!rendered.contains("session-list-camel-sentinel"));
         assert!(!rendered.contains("raw-path-sentinel"));
         assert!(!rendered.contains("access-path-camel-sentinel"));
         assert!(!rendered.contains("read-path-sentinel"));
+        assert!(!rendered.contains("read-path-labels-snake-sentinel"));
         assert!(!rendered.contains("read-bucket-sentinel"));
         assert!(!rendered.contains("read-bucket-camel-sentinel"));
         assert!(!rendered.contains("single-read-bucket-sentinel"));
@@ -331,6 +339,8 @@ mod tests {
         assert!(!rendered.contains("new-root-hash-sentinel"));
         assert!(!rendered.contains("new-root-hashes-camel-sentinel"));
         assert!(!rendered.contains("leaf-sentinel"));
+        assert!(!rendered.contains("path-label-camel-sentinel"));
+        assert!(!rendered.contains("leaf-label-snake-sentinel"));
         assert!(!rendered.contains("candidate-node-camel-sentinel"));
         assert!(!rendered.contains("candidate-scores-camel-sentinel"));
         assert!(!rendered.contains("candidate-distance-sentinel"));
