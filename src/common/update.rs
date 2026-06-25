@@ -5639,6 +5639,21 @@ esac
                     grpc_dense_input(),
                 )),
             };
+            let grpc_context_query = || api::grpc::qdrant::Query {
+                variant: Some(api::grpc::qdrant::query::Variant::Context(
+                    api::grpc::qdrant::ContextInput {
+                        pairs: vec![api::grpc::qdrant::ContextInputPair {
+                            positive: Some(grpc_dense_input()),
+                            negative: Some(grpc_dense_input()),
+                        }],
+                    },
+                )),
+            };
+            let grpc_fusion_query = || api::grpc::qdrant::Query {
+                variant: Some(api::grpc::qdrant::query::Variant::Fusion(
+                    api::grpc::qdrant::Fusion::Rrf as i32,
+                )),
+            };
 
             assert_private_hnsw_read_error(
                 crate::common::query::do_get_points(
@@ -5939,6 +5954,45 @@ esac
                     &toc,
                     collection_name,
                     CollectionQueryRequest {
+                        prefetch: Vec::new(),
+                        query: Some(Query::Vector(VectorQuery::Context(
+                            segment::vector_storage::query::ContextQuery::new(vec![
+                                segment::vector_storage::query::ContextPair {
+                                    positive: VectorInputInternal::Vector(VectorInternal::Dense(
+                                        vec![0.0, 0.0],
+                                    )),
+                                    negative: VectorInputInternal::Vector(VectorInternal::Dense(
+                                        vec![1.0, 0.0],
+                                    )),
+                                },
+                            ]),
+                        ))),
+                        using: private_vector_name.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        offset: 0,
+                        params: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(false),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_query_points(
+                    &toc,
+                    collection_name,
+                    CollectionQueryRequest {
                         prefetch: vec![CollectionPrefetch {
                             prefetch: Vec::new(),
                             query: Some(Query::Vector(VectorQuery::Nearest(
@@ -5955,6 +6009,48 @@ esac
                             VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
                         ))),
                         using: private_vector_name.to_string(),
+                        filter: None,
+                        score_threshold: None,
+                        limit: 1,
+                        offset: 0,
+                        params: None,
+                        with_vector: WithVector::Bool(false),
+                        with_payload: WithPayloadInterface::Bool(false),
+                        lookup_from: None,
+                    },
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    None,
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_read_error(
+                crate::common::query::do_query_points(
+                    &toc,
+                    collection_name,
+                    CollectionQueryRequest {
+                        prefetch: vec![CollectionPrefetch {
+                            prefetch: Vec::new(),
+                            query: Some(Query::Vector(VectorQuery::Nearest(
+                                VectorInputInternal::Vector(VectorInternal::Dense(vec![0.0, 0.0])),
+                            ))),
+                            using: private_vector_name.to_string(),
+                            filter: None,
+                            score_threshold: None,
+                            limit: 1,
+                            params: None,
+                            lookup_from: None,
+                        }],
+                        query: Some(Query::Fusion(FusionInternal::Rrf {
+                            k: 2,
+                            weights: None,
+                        })),
+                        using: DEFAULT_VECTOR_NAME.to_string(),
                         filter: None,
                         score_threshold: None,
                         limit: 1,
@@ -6001,6 +6097,79 @@ esac
                     auth.clone(),
                     None,
                     HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::query_batch(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    collection_name,
+                    vec![api::grpc::qdrant::QueryPoints {
+                        collection_name: collection_name.to_string(),
+                        prefetch: Vec::new(),
+                        query: Some(grpc_context_query()),
+                        using: Some(private_vector_name.to_string()),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        limit: Some(1),
+                        offset: None,
+                        with_vectors: None,
+                        with_payload: None,
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        lookup_from: None,
+                        timeout: None,
+                    }],
+                    None,
+                    auth.clone(),
+                    None,
+                    request_hw_counter(),
+                    InferenceParams::default(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::query_batch(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    collection_name,
+                    vec![api::grpc::qdrant::QueryPoints {
+                        collection_name: collection_name.to_string(),
+                        prefetch: vec![api::grpc::qdrant::PrefetchQuery {
+                            prefetch: Vec::new(),
+                            query: Some(grpc_nearest_query()),
+                            using: Some(private_vector_name.to_string()),
+                            filter: None,
+                            params: None,
+                            score_threshold: None,
+                            limit: Some(1),
+                            lookup_from: None,
+                        }],
+                        query: Some(grpc_fusion_query()),
+                        using: None,
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        limit: Some(1),
+                        offset: None,
+                        with_vectors: None,
+                        with_payload: None,
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        lookup_from: None,
+                        timeout: None,
+                    }],
+                    None,
+                    auth.clone(),
+                    None,
+                    request_hw_counter(),
+                    InferenceParams::default(),
                     None,
                 )
                 .await
