@@ -200,6 +200,8 @@ fn redact_audit_error(error: &str) -> String {
         "nodedistance",
         "orampath",
         "orampositionmap",
+        "ownersigningkeyid",
+        "ownersigningkeyids",
         "pathlabel",
         "payloadbytes",
         "payloadfetchtoken",
@@ -222,6 +224,10 @@ fn redact_audit_error(error: &str) -> String {
         "roothash",
         "score",
         "sessionid",
+        "signaturepublickey",
+        "signaturepublickeys",
+        "signingkeyid",
+        "signingkeyids",
         "siblinghash",
         "stash",
         "tokenpositionmap",
@@ -315,6 +321,12 @@ mod tests {
             "private result ORAM read failed tokenPositionMap=private-token-position-sentinel",
             "private ORAM proof failed sibling_hash=private-sibling-hash-sentinel",
             "private ORAM commit failed updatedBucket=private-updated-bucket-sentinel",
+            "private ORAM signature failed owner_signing_key_id=private-owner-signing-key-sentinel",
+            "private ORAM signature failed ownerSigningKeyIds=private-owner-signing-key-camel-sentinel",
+            "private ORAM signature failed signing_key_id=private-signing-key-sentinel",
+            "private ORAM signature failed signingKeyIds=private-signing-key-camel-sentinel",
+            "private ORAM signature failed signature_public_keys=private-signature-public-keys-sentinel",
+            "private ORAM signature failed signaturePublicKeys=private-signature-public-keys-camel-sentinel",
         ] {
             let redacted = redact_audit_error(error);
 

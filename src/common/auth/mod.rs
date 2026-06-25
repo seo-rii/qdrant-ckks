@@ -14,6 +14,7 @@ use storage::rbac::Access;
 
 use self::claims::{Claims, ValueExists};
 use self::jwt_parser::JwtParser;
+use super::error_reporting::redact_crypto_material_for_report;
 use super::strings::ct_eq;
 use crate::common::inference::api_keys::InferenceToken;
 use crate::settings::ServiceConfig;
@@ -83,10 +84,14 @@ pub fn log_denied_auth(
             collection: None,
             tracing_id,
             result: AuditResult::Denied,
-            error: Some(error.to_string()),
+            error: Some(redacted_denied_auth_error(error)),
             metadata: Default::default(),
         });
     }
+}
+
+fn redacted_denied_auth_error(error: &AuthError) -> String {
+    redact_crypto_material_for_report(&error.to_string())
 }
 
 impl AuthKeys {
@@ -257,5 +262,37 @@ impl AuthKeys {
             .as_ref()
             .is_some_and(|alt_rw_key| ct_eq(alt_rw_key, key));
         can_write || alt_can_write
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AuthError, redacted_denied_auth_error};
+
+    #[test]
+    fn denied_auth_audit_error_redacts_private_oram_key_ids() {
+        let error = AuthError::Forbidden(
+            "private ORAM signature failed owner_signing_key_id=owner-signing-key-sentinel \
+             signingKeyIds=signing-key-camel-sentinel \
+             signature_public_keys=signature-public-keys-sentinel"
+                .to_string(),
+        );
+
+        let redacted = redacted_denied_auth_error(&error);
+
+        assert!(redacted.contains("crypto material omitted"), "{redacted}");
+        assert!(!redacted.contains("owner-signing-key-sentinel"));
+        assert!(!redacted.contains("signing-key-camel-sentinel"));
+        assert!(!redacted.contains("signature-public-keys-sentinel"));
+    }
+
+    #[test]
+    fn denied_auth_audit_error_preserves_ordinary_denials() {
+        let error = AuthError::Forbidden("collection access denied".to_string());
+
+        assert_eq!(
+            redacted_denied_auth_error(&error),
+            "Forbidden: collection access denied",
+        );
     }
 }
