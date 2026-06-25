@@ -2894,6 +2894,22 @@ mod private_result_oram_tests {
         registry
             .open(fixture_session("session-1", 20), now)
             .unwrap();
+        assert!(
+            ensure_no_active_private_result_oram_collection_session_in_registry(
+                &mut registry,
+                "collection-private-result-test-suffix",
+                now,
+            )
+            .is_ok()
+        );
+        assert!(
+            ensure_private_result_oram_write_window_in_registry(
+                &mut registry,
+                "collection-private-result-test-suffix",
+                now,
+            )
+            .is_ok()
+        );
         let err = ensure_private_result_oram_write_window_in_registry(
             &mut registry,
             "collection-private-result-test",

@@ -4450,6 +4450,22 @@ mod private_hnsw_tests {
             )
             .is_ok()
         );
+        assert!(
+            ensure_no_active_private_hnsw_collection_session_in_registry(
+                &mut registry,
+                "collection-uuid-10",
+                now,
+            )
+            .is_ok()
+        );
+        assert!(
+            ensure_no_active_private_hnsw_collection_session_in_registry(
+                &mut registry,
+                "collection-uuid-1-suffix",
+                now,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
