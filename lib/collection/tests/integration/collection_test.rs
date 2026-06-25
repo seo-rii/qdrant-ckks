@@ -7735,6 +7735,40 @@ async fn private_hnsw_vector_rejects_plaintext_vector_writes_with_session_api_me
         ],
     );
 
+    let conditional_point_id = 765_432_111_u64;
+    let conditional_vector_sentinel = vec![13579.125_f32, -24680.25, 35791.5, -46802.75];
+    let conditional_plaintext_point = CollectionUpdateOperations::PointOperation(
+        PointOperations::UpsertPointsConditional(ConditionalInsertOperationInternal {
+            points_op: PointInsertOperationsInternal::PointsList(vec![PointStructPersisted {
+                id: conditional_point_id.into(),
+                vector: VectorStructPersisted::from(conditional_vector_sentinel.clone()),
+                payload: None,
+            }]),
+            condition: Filter::new(),
+            update_mode: None,
+        }),
+    );
+    let err = collection
+        .update_from_client_simple(
+            conditional_plaintext_point,
+            true,
+            None,
+            WriteOrdering::default(),
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap_err();
+    assert_private_hnsw_session_api_error_without(
+        err,
+        &[
+            "765432111",
+            "13579.125",
+            "-24680.25",
+            "35791.5",
+            "-46802.75",
+        ],
+    );
+
     let update_point_id = 876_543_210_u64;
     let update_vector_sentinel = vec![54321.5_f32, -65432.75, 76543.875, -87654.125];
     let plaintext_vector_update = CollectionUpdateOperations::VectorOperation(
