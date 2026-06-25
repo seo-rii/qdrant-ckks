@@ -116,17 +116,13 @@ fn plaintext_vector_write_error_for_encryption_rule(
 fn private_hnsw_oram_read_only_point_operation_violation<'a>(
     operation: &CollectionUpdateOperations,
     encryption: &'a CollectionEncryptionConfig,
-) -> Option<(&'a str, &'static str)> {
-    let operation_kind = match operation {
-        CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints { .. }) => {
-            "delete points"
-        }
-        CollectionUpdateOperations::PointOperation(PointOperations::DeletePointsByFilter(_)) => {
-            "delete points by filter"
-        }
-        CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(_)) => "sync points",
+) -> Option<&'a str> {
+    match operation {
+        CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints { .. })
+        | CollectionUpdateOperations::PointOperation(PointOperations::DeletePointsByFilter(_))
+        | CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(_)) => {}
         _ => return None,
-    };
+    }
 
     encryption
         .rules
@@ -138,7 +134,6 @@ fn private_hnsw_oram_read_only_point_operation_violation<'a>(
                 None
             }
         })
-        .map(|vector_name| (vector_name, operation_kind))
 }
 
 fn reject_private_hnsw_oram_read_only_point_operation(
@@ -146,16 +141,16 @@ fn reject_private_hnsw_oram_read_only_point_operation(
     encryption: &CollectionEncryptionConfig,
     peer_update: bool,
 ) -> CollectionResult<()> {
-    let Some((vector_name, operation_kind)) =
+    let Some(vector_name) =
         private_hnsw_oram_read_only_point_operation_violation(operation, encryption)
     else {
         return Ok(());
     };
 
     let prefix = if peer_update {
-        format!("peer update cannot {operation_kind} for read-only private HNSW ORAM vector")
+        "peer update cannot modify read-only private HNSW ORAM vector"
     } else {
-        format!("cannot {operation_kind} for read-only private HNSW ORAM vector")
+        "cannot modify read-only private HNSW ORAM vector"
     };
     Err(CollectionError::bad_input(format!(
         "{prefix}; {}",
@@ -4501,7 +4496,11 @@ mod tests {
                 reject_private_hnsw_oram_read_only_point_operation(&operation, &encryption, false)
                     .unwrap_err();
             let message = format!("{err}");
-            assert!(message.contains(expected_kind), "{message}");
+            assert!(
+                message.contains("cannot modify read-only private HNSW ORAM vector"),
+                "{message}"
+            );
+            assert!(!message.contains(expected_kind), "{message}");
             assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
             assert!(message.contains("/private-hnsw/{vector}/session"));
             assert!(!message.contains("embedding"), "{message}");
@@ -4511,7 +4510,11 @@ mod tests {
                     .unwrap_err();
             let peer_message = format!("{peer_err}");
             assert!(peer_message.contains("peer update"), "{peer_message}");
-            assert!(peer_message.contains(expected_kind), "{peer_message}");
+            assert!(
+                peer_message.contains("cannot modify read-only private HNSW ORAM vector"),
+                "{peer_message}"
+            );
+            assert!(!peer_message.contains(expected_kind), "{peer_message}");
             assert!(peer_message.contains("/private-hnsw/{vector}/session"));
             assert!(!peer_message.contains("embedding"), "{peer_message}");
         }
