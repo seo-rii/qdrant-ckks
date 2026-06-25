@@ -1300,6 +1300,82 @@ mod private_result_oram_grpc_tests {
                 unsupported_manifest_alg.message()
             );
 
+            let manifest_signature_sentinel = "result-manifest-signature!sentinel";
+            let malformed_manifest_signature =
+                PrivateResultOram::upload_private_result_oram_manifest(
+                    &service,
+                    Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                        signature: Some(grpc::PrivateResultOramSignature {
+                            alg: "ed25519".to_string(),
+                            key_id: SIGNING_KEY_ID.to_string(),
+                            sig: manifest_signature_sentinel.to_string(),
+                        }),
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(malformed_manifest_signature.code(), Code::InvalidArgument);
+            assert!(
+                malformed_manifest_signature
+                    .message()
+                    .contains("request validation failed")
+            );
+            assert!(
+                !malformed_manifest_signature
+                    .message()
+                    .contains(manifest_signature_sentinel),
+                "{}",
+                malformed_manifest_signature.message()
+            );
+            assert!(
+                !malformed_manifest_signature
+                    .message()
+                    .contains(&fixture.manifest.root_hash),
+                "{}",
+                malformed_manifest_signature.message()
+            );
+
+            let mut bad_manifest_signature = fixture.signature.clone();
+            let replacement = if bad_manifest_signature.sig.starts_with('A') {
+                "B"
+            } else {
+                "A"
+            };
+            bad_manifest_signature.sig.replace_range(0..1, replacement);
+            let bad_manifest_signature_sig = bad_manifest_signature.sig.clone();
+            let bad_manifest_signature = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(bad_manifest_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(bad_manifest_signature.code(), Code::InvalidArgument);
+            assert!(
+                bad_manifest_signature
+                    .message()
+                    .contains("manifest signature verification failed")
+            );
+            assert!(
+                !bad_manifest_signature
+                    .message()
+                    .contains(&bad_manifest_signature_sig),
+                "{}",
+                bad_manifest_signature.message()
+            );
+            assert!(
+                !bad_manifest_signature
+                    .message()
+                    .contains(&fixture.manifest.root_hash),
+                "{}",
+                bad_manifest_signature.message()
+            );
+
             let mut alt_manifest_signature = fixture.signature.clone();
             alt_manifest_signature.key_id = ALT_SIGNING_KEY_ID.to_string();
             let alt_manifest_key = PrivateResultOram::upload_private_result_oram_manifest(

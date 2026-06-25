@@ -1484,6 +1484,55 @@ mod private_result_oram_rest_tests {
                 "{unsupported_manifest_alg_error}"
             );
 
+            let manifest_signature_sentinel = "result-manifest-signature!sentinel";
+            let malformed_manifest_signature_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: qdrant_sec::PrivateResultOramSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: manifest_signature_sentinel.to_string(),
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "request validation failed"
+            );
+            assert!(
+                !malformed_manifest_signature_error.contains(manifest_signature_sentinel),
+                "{malformed_manifest_signature_error}"
+            );
+            assert!(
+                !malformed_manifest_signature_error.contains(&fixture.manifest.root_hash),
+                "{malformed_manifest_signature_error}"
+            );
+
+            let mut bad_manifest_signature = fixture.signature.clone();
+            let replacement = if bad_manifest_signature.sig.starts_with('A') {
+                "B"
+            } else {
+                "A"
+            };
+            bad_manifest_signature.sig.replace_range(0..1, replacement);
+            let bad_manifest_signature_sig = bad_manifest_signature.sig.clone();
+            let bad_manifest_signature_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: bad_manifest_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "manifest signature verification failed"
+            );
+            assert!(
+                !bad_manifest_signature_error.contains(&bad_manifest_signature_sig),
+                "{bad_manifest_signature_error}"
+            );
+            assert!(
+                !bad_manifest_signature_error.contains(&fixture.manifest.root_hash),
+                "{bad_manifest_signature_error}"
+            );
+
             let mut alt_manifest_signature = fixture.signature.clone();
             alt_manifest_signature.key_id = ALT_SIGNING_KEY_ID.to_string();
             let alt_manifest_key_error = post_json_error_contains!(
