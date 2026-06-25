@@ -274,16 +274,21 @@ mod tests {
              resultIds=result-id-camel-sentinel \
              point_tokens=point-token-snake-sentinel \
              clientState=client-state-camel-sentinel \
+             clientStateBackup=client-state-backup-camel-sentinel \
              encryptedClientState=encrypted-client-state-camel-sentinel \
+             encryptedClientStateBackup=encrypted-client-state-backup-camel-sentinel \
              clientStateCiphertext=client-state-ciphertext-camel-sentinel \
              clientStateCiphertextHash=client-state-ciphertext-hash-camel-sentinel \
              encryptedClientStateCiphertext=encrypted-client-state-ciphertext-camel-sentinel \
              stateCiphertext=state-ciphertext-camel-sentinel \
              position_map=position-map-snake-sentinel \
              positionMap=position-map-camel-sentinel \
+             positionMapBackup=position-map-backup-camel-sentinel \
              positionMaps=position-maps-camel-sentinel \
              stash=stash-sentinel \
+             stashBackup=stash-backup-sentinel \
              tokenPositionMap=token-position-map-camel-sentinel \
+             tokenPositionMapBackup=token-position-map-backup-camel-sentinel \
              updated_bucket=updated-bucket-singular-sentinel \
              updated_bucket_id=updated-bucket-id-snake-sentinel \
              updatedBucketId=updated-bucket-id-camel-sentinel \
@@ -404,16 +409,21 @@ mod tests {
         assert!(!rendered.contains("result-id-camel-sentinel"));
         assert!(!rendered.contains("point-token-snake-sentinel"));
         assert!(!rendered.contains("client-state-camel-sentinel"));
+        assert!(!rendered.contains("client-state-backup-camel-sentinel"));
         assert!(!rendered.contains("encrypted-client-state-camel-sentinel"));
+        assert!(!rendered.contains("encrypted-client-state-backup-camel-sentinel"));
         assert!(!rendered.contains("client-state-ciphertext-camel-sentinel"));
         assert!(!rendered.contains("client-state-ciphertext-hash-camel-sentinel"));
         assert!(!rendered.contains("encrypted-client-state-ciphertext-camel-sentinel"));
         assert!(!rendered.contains("state-ciphertext-camel-sentinel"));
         assert!(!rendered.contains("position-map-snake-sentinel"));
         assert!(!rendered.contains("position-map-camel-sentinel"));
+        assert!(!rendered.contains("position-map-backup-camel-sentinel"));
         assert!(!rendered.contains("position-maps-camel-sentinel"));
         assert!(!rendered.contains("stash-sentinel"));
+        assert!(!rendered.contains("stash-backup-sentinel"));
         assert!(!rendered.contains("token-position-map-camel-sentinel"));
+        assert!(!rendered.contains("token-position-map-backup-camel-sentinel"));
         assert!(!rendered.contains("updated-bucket-singular-sentinel"));
         assert!(!rendered.contains("updated-bucket-id-snake-sentinel"));
         assert!(!rendered.contains("updated-bucket-id-camel-sentinel"));

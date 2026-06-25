@@ -932,25 +932,37 @@ fn private_oram_snapshot_compact_entry_is_client_owned_state(compact_name: &str)
     matches!(
         compact_name,
         "clientstate"
+            | "clientstatebackup"
+            | "clientstatebackups"
             | "clientstatesnapshot"
             | "clientstatesnapshots"
             | "encryptedclientstate"
             | "encryptedclientstates"
+            | "encryptedclientstatebackup"
+            | "encryptedclientstatebackups"
             | "encryptedclientstatesnapshot"
             | "encryptedclientstatesnapshots"
             | "positionmap"
+            | "positionmapbackup"
+            | "positionmapbackups"
             | "positionmaps"
             | "positionmapsnapshot"
             | "positionmapsnapshots"
             | "orampositionmap"
+            | "orampositionmapbackup"
+            | "orampositionmapbackups"
             | "orampositionmaps"
             | "orampositionmapsnapshot"
             | "orampositionmapsnapshots"
             | "tokenpositionmap"
+            | "tokenpositionmapbackup"
+            | "tokenpositionmapbackups"
             | "tokenpositionmaps"
             | "tokenpositionmapsnapshot"
             | "tokenpositionmapsnapshots"
             | "stash"
+            | "stashbackup"
+            | "stashbackups"
             | "stashsnapshot"
             | "stashsnapshots"
     )
@@ -2784,6 +2796,8 @@ mod tests {
             "client-state.json",
             "client.state",
             "client.state.json",
+            "client_state_backup.bin",
+            "clientStateBackups.json",
             "client_state_snapshot.bin",
             "client.state.snapshot",
             "client.state.snapshot.bin",
@@ -2792,6 +2806,8 @@ mod tests {
             "encrypted.client.state",
             "encrypted.client.state.bin",
             "encryptedClientStates.json",
+            "encrypted_client_state_backup.bin",
+            "encryptedClientStateBackups.json",
             "encrypted_client_state_snapshot.bin",
             "encrypted.client.state.snapshot",
             "encrypted.client.state.snapshot.bin",
@@ -2800,6 +2816,8 @@ mod tests {
             "positionMap.json",
             "position.map",
             "position.map.json",
+            "position_map_backup.bin",
+            "positionMapBackups.json",
             "position-maps.json",
             "position_map_snapshot.bin",
             "position.map.snapshot",
@@ -2808,13 +2826,19 @@ mod tests {
             "oram_position_map.bin",
             "oram.position.map",
             "oram.position.map.bin",
+            "oram_position_map_backup.bin",
+            "oramPositionMapBackup.json",
             "oramPositionMapSnapshot.json",
             "token_position_map.bin",
             "token.position.map",
+            "token_position_map_backup.bin",
+            "tokenPositionMapBackups.json",
             "token.position.map.snapshot",
             "token.position.map.snapshot.bin",
             "tokenPositionMapSnapshots.json",
             "stash",
+            "stash_backup.bin",
+            "stashBackup.json",
             "stash.snapshot",
             "stash_snapshot.bin",
             "stash.snapshot.bin",

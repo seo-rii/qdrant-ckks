@@ -1471,25 +1471,37 @@ fn compact_path_component_is_client_owned_oram_state_alias(value: &str) -> bool 
     matches!(
         value,
         "clientstate"
+            | "clientstatebackup"
+            | "clientstatebackups"
             | "clientstatesnapshot"
             | "clientstatesnapshots"
             | "encryptedclientstate"
             | "encryptedclientstates"
+            | "encryptedclientstatebackup"
+            | "encryptedclientstatebackups"
             | "encryptedclientstatesnapshot"
             | "encryptedclientstatesnapshots"
             | "positionmap"
+            | "positionmapbackup"
+            | "positionmapbackups"
             | "positionmaps"
             | "positionmapsnapshot"
             | "positionmapsnapshots"
             | "orampositionmap"
+            | "orampositionmapbackup"
+            | "orampositionmapbackups"
             | "orampositionmaps"
             | "orampositionmapsnapshot"
             | "orampositionmapsnapshots"
             | "tokenpositionmap"
+            | "tokenpositionmapbackup"
+            | "tokenpositionmapbackups"
             | "tokenpositionmaps"
             | "tokenpositionmapsnapshot"
             | "tokenpositionmapsnapshots"
             | "stash"
+            | "stashbackup"
+            | "stashbackups"
             | "stashsnapshot"
             | "stashsnapshots"
     )
@@ -1814,14 +1826,22 @@ mod tests {
             "client-state",
             "client.state",
             "client_state.json",
+            "client_state_backup",
+            "clientStateBackups.json",
             "encrypted_client_state",
             "encrypted.client.state",
             "encryptedClientStates.json",
+            "encrypted_client_state_backup",
+            "encryptedClientStateBackup.json",
             "position_map",
+            "position_map_backup",
             "position.map",
             "oram-position-map",
+            "oramPositionMapBackup",
             "token.position.map",
+            "token_position_map_backup",
             "stash",
+            "stash_backup",
             "stash.snapshot",
             &"x".repeat(129),
         ] {
