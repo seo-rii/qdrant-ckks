@@ -312,17 +312,17 @@ impl Collection {
 }
 
 fn validate_private_oram_resharding_until_supported(
-    operation_name: &str,
+    _operation_name: &str,
     private_oram_bucket_store_collection: bool,
 ) -> CollectionResult<()> {
     if !private_oram_bucket_store_collection {
         return Ok(());
     }
 
-    Err(CollectionError::bad_input(format!(
-        "cannot {operation_name} for private ORAM collections: encrypted ORAM bucket migration \
+    Err(CollectionError::bad_input(
+        "cannot proceed with resharding for private ORAM collections: encrypted ORAM bucket migration \
          and consensus-backed epoch/root ownership are not implemented for resharding",
-    )))
+    ))
 }
 
 #[cfg(test)]
@@ -333,16 +333,25 @@ mod tests {
     fn private_oram_resharding_operation_guard_redacts_collection_details() {
         validate_private_oram_resharding_until_supported("start resharding", false).unwrap();
 
-        let err =
-            validate_private_oram_resharding_until_supported("start resharding", true).unwrap_err();
-        let rendered = format!("{err:?}");
+        for operation_name in [
+            "start resharding",
+            "commit read hash ring",
+            "private-resharding-operation-sentinel",
+        ] {
+            let err =
+                validate_private_oram_resharding_until_supported(operation_name, true).unwrap_err();
+            let rendered = format!("{err:?}");
 
-        assert!(rendered.contains("cannot start resharding for private ORAM collections"));
-        assert!(rendered.contains("encrypted ORAM bucket migration"));
-        assert!(rendered.contains("consensus-backed epoch/root"));
-        assert!(!rendered.contains("private_hnsw_oram"));
-        assert!(!rendered.contains("private_result_oram"));
-        assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
-        assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+            assert!(
+                rendered.contains("cannot proceed with resharding for private ORAM collections")
+            );
+            assert!(rendered.contains("encrypted ORAM bucket migration"));
+            assert!(rendered.contains("consensus-backed epoch/root"));
+            assert!(!rendered.contains(operation_name));
+            assert!(!rendered.contains("private_hnsw_oram"));
+            assert!(!rendered.contains("private_result_oram"));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+        }
     }
 }
