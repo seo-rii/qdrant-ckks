@@ -2297,21 +2297,27 @@ mod private_result_oram_tests {
 
     #[test]
     fn private_result_oram_store_error_mapping_redacts_store_details() {
-        let sentinel = "qdrant-sec-private-result-store-detail-sentinel";
-        let rendered =
-            private_result_oram_manifest_store_error(CollectionError::bad_request(sentinel))
-                .to_string();
-        assert!(rendered.contains("manifest store validation failed"));
-        assert!(!rendered.contains(sentinel), "{rendered}");
+        let sentinels = [
+            "qdrant-sec-private-result-store-detail-sentinel",
+            "private_result_oram/buckets/00000000.bucket",
+            "private-result-bucket-ciphertext-sentinel",
+        ];
+        for sentinel in sentinels {
+            let rendered =
+                private_result_oram_manifest_store_error(CollectionError::bad_request(sentinel))
+                    .to_string();
+            assert!(rendered.contains("manifest store validation failed"));
+            assert!(!rendered.contains(sentinel), "{rendered}");
 
-        let rendered =
-            private_result_oram_upload_store_error(CollectionError::bad_request(sentinel))
-                .to_string();
-        assert!(rendered.contains("encrypted bucket store validation failed"));
-        assert!(!rendered.contains(sentinel), "{rendered}");
+            let rendered =
+                private_result_oram_upload_store_error(CollectionError::bad_request(sentinel))
+                    .to_string();
+            assert!(rendered.contains("encrypted bucket store validation failed"));
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
 
         let unexpected = || CollectionError::BadInput {
-            description: sentinel.to_string(),
+            description: sentinels.join(" "),
         };
         let rendered_errors = [
             private_result_oram_manifest_read_store_error(unexpected()).to_string(),
@@ -2323,7 +2329,9 @@ mod private_result_oram_tests {
         ];
         for rendered in rendered_errors {
             assert!(rendered.contains("private result ORAM"));
-            assert!(!rendered.contains(sentinel), "{rendered}");
+            for sentinel in sentinels {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
         }
     }
 

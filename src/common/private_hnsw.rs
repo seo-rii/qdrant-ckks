@@ -3418,19 +3418,26 @@ mod private_hnsw_tests {
 
     #[test]
     fn private_hnsw_store_error_mapping_redacts_store_details() {
-        let sentinel = "qdrant-sec-private-hnsw-store-detail-sentinel";
-        let rendered =
-            private_hnsw_manifest_store_error(CollectionError::bad_request(sentinel)).to_string();
-        assert!(rendered.contains("manifest store validation failed"));
-        assert!(!rendered.contains(sentinel), "{rendered}");
+        let sentinels = [
+            "qdrant-sec-private-hnsw-store-detail-sentinel",
+            "private_hnsw_oram/text/buckets/00000000.bucket",
+            "private-hnsw-bucket-ciphertext-sentinel",
+        ];
+        for sentinel in sentinels {
+            let rendered =
+                private_hnsw_manifest_store_error(CollectionError::bad_request(sentinel))
+                    .to_string();
+            assert!(rendered.contains("manifest store validation failed"));
+            assert!(!rendered.contains(sentinel), "{rendered}");
 
-        let rendered =
-            private_hnsw_upload_store_error(CollectionError::bad_request(sentinel)).to_string();
-        assert!(rendered.contains("encrypted bucket store validation failed"));
-        assert!(!rendered.contains(sentinel), "{rendered}");
+            let rendered =
+                private_hnsw_upload_store_error(CollectionError::bad_request(sentinel)).to_string();
+            assert!(rendered.contains("encrypted bucket store validation failed"));
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
 
         let unexpected = || CollectionError::BadInput {
-            description: sentinel.to_string(),
+            description: sentinels.join(" "),
         };
         let rendered_errors = [
             private_hnsw_manifest_read_store_error(unexpected()).to_string(),
@@ -3443,7 +3450,9 @@ mod private_hnsw_tests {
         ];
         for rendered in rendered_errors {
             assert!(rendered.contains("private HNSW ORAM"));
-            assert!(!rendered.contains(sentinel), "{rendered}");
+            for sentinel in sentinels {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
         }
     }
 
