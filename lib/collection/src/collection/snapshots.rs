@@ -397,6 +397,13 @@ impl Collection {
         shard_id: ShardId,
         cancel: cancel::CancellationToken,
     ) -> CollectionResult<bool> {
+        self.validate_private_oram_shard_snapshot_allowed(if recovery_type.is_partial() {
+            "partial shard snapshot recovery"
+        } else {
+            "shard snapshot recovery"
+        })
+        .await?;
+
         // TODO:
         //   Check that shard snapshot is compatible with the collection
         //   (see `VectorsConfig::check_compatible_with_segment_config`)
