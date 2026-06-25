@@ -284,6 +284,7 @@ mod tests {
              position_map=position-map-snake-sentinel \
              positionMap=position-map-camel-sentinel \
              positionMapBackup=position-map-backup-camel-sentinel \
+             oramPositionMapBackup=oram-position-map-backup-camel-sentinel \
              positionMaps=position-maps-camel-sentinel \
              stash=stash-sentinel \
              stashBackup=stash-backup-sentinel \
@@ -419,6 +420,7 @@ mod tests {
         assert!(!rendered.contains("position-map-snake-sentinel"));
         assert!(!rendered.contains("position-map-camel-sentinel"));
         assert!(!rendered.contains("position-map-backup-camel-sentinel"));
+        assert!(!rendered.contains("oram-position-map-backup-camel-sentinel"));
         assert!(!rendered.contains("position-maps-camel-sentinel"));
         assert!(!rendered.contains("stash-sentinel"));
         assert!(!rendered.contains("stash-backup-sentinel"));
