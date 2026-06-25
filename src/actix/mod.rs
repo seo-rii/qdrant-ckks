@@ -529,6 +529,10 @@ mod tests {
                 .route(
                     "/collections/{collection_name}/ordinary/session",
                     web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/private-hnswish/{vector_name}/session",
+                    web::post().to(private_oram_validation_test_endpoint),
                 ),
         )
         .await;
@@ -575,6 +579,31 @@ mod tests {
             "{private_result_body}"
         );
 
+        let malformed_body_sentinel = "qdrant-sec-private-oram-malformed-json-body-sentinel";
+        let malformed_private_request = actix_test::TestRequest::post()
+            .uri("/collections/docs/private-hnsw/text/session")
+            .insert_header((actix_web::http::header::CONTENT_TYPE, "application/json"))
+            .set_payload(format!(
+                "{{\"_known\":\"ok\",\"bad\":\"{malformed_body_sentinel}\""
+            ))
+            .to_request();
+        let malformed_private_response =
+            actix_test::call_service(&app, malformed_private_request).await;
+        assert_eq!(
+            malformed_private_response.status(),
+            actix_web::http::StatusCode::BAD_REQUEST
+        );
+        let malformed_private_body = actix_test::read_body(malformed_private_response).await;
+        let malformed_private_body = String::from_utf8_lossy(&malformed_private_body);
+        assert!(
+            malformed_private_body.contains("Invalid JSON body for private ORAM request"),
+            "{malformed_private_body}"
+        );
+        assert!(
+            !malformed_private_body.contains(malformed_body_sentinel),
+            "{malformed_private_body}"
+        );
+
         let ordinary_request = actix_test::TestRequest::post()
             .uri("/collections/docs/ordinary/session")
             .set_json(body_with_unknown_field(
@@ -590,6 +619,22 @@ mod tests {
         let ordinary_body = actix_test::read_body(ordinary_response).await;
         let ordinary_body = String::from_utf8_lossy(&ordinary_body);
         assert!(ordinary_body.contains(sentinel), "{ordinary_body}");
+
+        let lookalike_request = actix_test::TestRequest::post()
+            .uri("/collections/docs/private-hnswish/text/session")
+            .set_json(body_with_unknown_field(
+                sentinel,
+                "lookalike-errors-still-render-field",
+            ))
+            .to_request();
+        let lookalike_response = actix_test::call_service(&app, lookalike_request).await;
+        assert_eq!(
+            lookalike_response.status(),
+            actix_web::http::StatusCode::BAD_REQUEST
+        );
+        let lookalike_body = actix_test::read_body(lookalike_response).await;
+        let lookalike_body = String::from_utf8_lossy(&lookalike_body);
+        assert!(lookalike_body.contains(sentinel), "{lookalike_body}");
     }
 
     #[test]
