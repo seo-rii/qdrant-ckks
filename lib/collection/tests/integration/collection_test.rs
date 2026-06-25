@@ -3282,6 +3282,110 @@ async fn private_result_oram_raw_payload_reads_require_session_api_in_collection
         .await
         .unwrap_err();
     assert_private_result_oram_read_error_without(err, "query", &forbidden);
+
+    let err = recommend_by(
+        RecommendRequestInternal {
+            positive: vec![RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])],
+            negative: vec![],
+            strategy: None,
+            filter: None,
+            params: None,
+            limit: 1,
+            offset: None,
+            with_payload: Some(raw_private_selector()),
+            with_vector: Some(WithVector::Bool(false)),
+            score_threshold: None,
+            using: None,
+            lookup_from: None,
+        },
+        &collection,
+        |_name| async { None },
+        None,
+        ShardSelectorInternal::All,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_result_oram_read_error_without(err, "recommend", &forbidden);
+
+    let err = recommend_batch_by(
+        vec![(
+            RecommendRequestInternal {
+                positive: vec![RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])],
+                negative: vec![],
+                strategy: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                with_payload: Some(raw_private_selector()),
+                with_vector: Some(WithVector::Bool(false)),
+                score_threshold: None,
+                using: None,
+                lookup_from: None,
+            },
+            ShardSelectorInternal::All,
+        )],
+        &collection,
+        |_name| async { None },
+        None,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_result_oram_read_error_without(err, "recommend", &forbidden);
+
+    let err = discover(
+        DiscoverRequestInternal {
+            target: Some(RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])),
+            context: None,
+            filter: None,
+            params: None,
+            limit: 1,
+            offset: None,
+            with_payload: Some(raw_private_selector()),
+            with_vector: Some(WithVector::Bool(false)),
+            using: None,
+            lookup_from: None,
+        },
+        &collection,
+        |_name| async { None },
+        None,
+        ShardSelectorInternal::All,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_result_oram_read_error_without(err, "discover", &forbidden);
+
+    let err = discover_batch(
+        vec![(
+            DiscoverRequestInternal {
+                target: Some(RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])),
+                context: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                with_payload: Some(raw_private_selector()),
+                with_vector: Some(WithVector::Bool(false)),
+                using: None,
+                lookup_from: None,
+            },
+            ShardSelectorInternal::All,
+        )],
+        &collection,
+        |_name| async { None },
+        None,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_result_oram_read_error_without(err, "discover", &forbidden);
 }
 
 #[tokio::test(flavor = "multi_thread")]
