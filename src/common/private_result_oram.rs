@@ -2941,6 +2941,67 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn upload_write_window_uses_exact_private_result_collection() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+
+        registry
+            .begin_upload("collection-private-result-test-suffix", now)
+            .unwrap();
+        ensure_private_result_oram_write_window_in_registry(
+            &mut registry,
+            "collection-private-result-test",
+            now,
+        )
+        .unwrap();
+        registry
+            .begin_upload("collection-private-result-test", now)
+            .unwrap();
+
+        let err = registry
+            .begin_upload("collection-private-result-test", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("upload requires no active upload"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
+        assert!(
+            !rendered.contains("collection-private-result-test"),
+            "{rendered}"
+        );
+
+        registry.release_upload("collection-private-result-test");
+        registry.release_upload("collection-private-result-test-suffix");
+
+        registry
+            .begin_collection_snapshot("collection-private-result-test-suffix", now)
+            .unwrap();
+        ensure_private_result_oram_write_window_in_registry(
+            &mut registry,
+            "collection-private-result-test",
+            now,
+        )
+        .unwrap();
+        registry.release_collection_snapshot("collection-private-result-test-suffix");
+
+        registry
+            .begin_collection_snapshot("collection-private-result-test", now)
+            .unwrap();
+        let err = ensure_private_result_oram_write_window_in_registry(
+            &mut registry,
+            "collection-private-result-test",
+            now,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("upload requires no active collection snapshot"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
+        assert!(
+            !rendered.contains("collection-private-result-test"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn session_registry_snapshot_refcounts_and_upload_marker_cleanup_fail_closed() {
         let now = 10;
         let mut registry = PrivateResultOramSessionRegistry::default();
