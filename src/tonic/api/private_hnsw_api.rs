@@ -935,32 +935,42 @@ mod private_hnsw_grpc_tests {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
         let (_temp, dispatcher) = test_dispatcher();
-        let unsafe_vector_name = "secret vector sentinel";
         actix_web::rt::System::new().block_on(async {
             create_private_hnsw_collection(&dispatcher).await;
             let service =
                 PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
 
-            let err = PrivateHnswOram::get_private_hnsw_manifest(
-                &service,
-                Request::new(grpc::GetPrivateHnswManifestRequest {
-                    collection_name: COLLECTION_NAME.to_string(),
-                    vector_name: unsafe_vector_name.to_string(),
-                }),
-            )
-            .await
-            .unwrap_err();
+            for unsafe_vector_name in [
+                "secret vector sentinel",
+                "text/private",
+                "client.state",
+                "position.map",
+                "stash.backup",
+            ] {
+                let err = PrivateHnswOram::get_private_hnsw_manifest(
+                    &service,
+                    Request::new(grpc::GetPrivateHnswManifestRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: unsafe_vector_name.to_string(),
+                    }),
+                )
+                .await
+                .unwrap_err();
 
-            assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message().contains("client-led private ORAM sessions"),
-                "{}",
-                err.message()
-            );
-            assert!(!err.message().contains(unsafe_vector_name));
-            assert!(!err.message().contains("secret"));
-            assert!(!err.message().contains("private_hnsw_oram"));
-            assert!(!err.message().contains("/tmp"));
+                assert_eq!(err.code(), Code::InvalidArgument);
+                assert!(
+                    err.message().contains("client-led private ORAM sessions"),
+                    "{}",
+                    err.message()
+                );
+                assert!(!err.message().contains(unsafe_vector_name));
+                assert!(!err.message().contains("secret"));
+                assert!(!err.message().contains("client.state"));
+                assert!(!err.message().contains("position.map"));
+                assert!(!err.message().contains("stash.backup"));
+                assert!(!err.message().contains("private_hnsw_oram"));
+                assert!(!err.message().contains("/tmp"));
+            }
         });
     }
 
