@@ -8962,7 +8962,7 @@ mod tests {
     use super::*;
     use crate::common::private_hnsw_wire_fixture::{
         COLLECTION_NAME, PrivateHnswRouteWireFixture, VECTOR_NAME, create_private_hnsw_collection,
-        test_dispatcher,
+        create_private_hnsw_collection_with_private_result_oram, test_dispatcher,
     };
     use crate::settings::{
         CryptoBackendConfig, CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings,
@@ -12354,6 +12354,95 @@ mod tests {
         assert!(!err.contains(secret_path), "{err}");
         assert!(!err.contains("private-result-group-secret"), "{err}");
         assert!(!err.contains("JsonPath"), "{err}");
+    }
+
+    #[test]
+    fn private_result_oram_rest_group_lookup_preflight_rejects_raw_payload_reads() {
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("private result ORAM group lookup test"));
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            create_private_hnsw_collection_with_private_result_oram(&dispatcher).await;
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+
+            let collection_lookup = Some(api::rest::WithLookupInterface::Collection(
+                COLLECTION_NAME.to_string(),
+            ));
+            let err = preflight_rest_group_lookup_private_result_oram_raw_payload_read(
+                &toc,
+                &collection_lookup,
+                "search group lookup",
+                &auth,
+            )
+            .await
+            .expect_err(
+                "collection shorthand lookup must fail closed for raw private result payload",
+            );
+            let message = err.to_string();
+            assert!(
+                message.contains("cannot search group lookup private result ORAM payload field")
+            );
+            assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+            assert!(message.contains("/private-result-oram/session"));
+            assert!(!message.contains("body"), "{message}");
+
+            let explicit_raw_lookup = Some(api::rest::WithLookupInterface::WithLookup(
+                api::rest::WithLookup {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    with_payload: Some(WithPayloadInterface::Fields(vec![
+                        "body.lang".parse().unwrap(),
+                    ])),
+                    with_vectors: Some(WithVector::Bool(false)),
+                },
+            ));
+            let err = preflight_rest_group_lookup_private_result_oram_raw_payload_read(
+                &toc,
+                &explicit_raw_lookup,
+                "recommend group lookup",
+                &auth,
+            )
+            .await
+            .expect_err("explicit lookup payload path must fail closed for private result payload");
+            let message = err.to_string();
+            assert!(
+                message.contains("cannot recommend group lookup private result ORAM payload field")
+            );
+            assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+            assert!(message.contains("/private-result-oram/session"));
+            assert!(!message.contains("body.lang"), "{message}");
+            assert!(!message.contains("body"), "{message}");
+
+            for allowed_lookup in [
+                None,
+                Some(api::rest::WithLookupInterface::WithLookup(
+                    api::rest::WithLookup {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        with_payload: Some(WithPayloadInterface::Bool(false)),
+                        with_vectors: Some(WithVector::Bool(false)),
+                    },
+                )),
+                Some(api::rest::WithLookupInterface::WithLookup(
+                    api::rest::WithLookup {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        with_payload: Some(WithPayloadInterface::Encrypted(
+                            PayloadEncryptedReadPolicy {
+                                encrypted_payload: EncryptedPayloadReadMode::Redacted,
+                            },
+                        )),
+                        with_vectors: Some(WithVector::Bool(false)),
+                    },
+                )),
+            ] {
+                preflight_rest_group_lookup_private_result_oram_raw_payload_read(
+                    &toc,
+                    &allowed_lookup,
+                    "query group lookup",
+                    &auth,
+                )
+                .await
+                .unwrap();
+            }
+        });
     }
 
     #[test]
