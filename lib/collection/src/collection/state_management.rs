@@ -60,6 +60,19 @@ impl Collection {
         this_peer_id: PeerId,
         mut abort_transfer: impl FnMut(ShardTransfer),
     ) -> CollectionResult<()> {
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
+        validate_private_oram_apply_shard_transfers_until_supported(
+            &shard_transfers,
+            private_oram_bucket_store_collection,
+        )?;
+
         let old_transfers = self
             .shards_holder
             .read()
@@ -338,6 +351,21 @@ fn validate_private_oram_apply_reshard_state_until_supported(
     ))
 }
 
+fn validate_private_oram_apply_shard_transfers_until_supported(
+    shard_transfers: &HashSet<ShardTransfer>,
+    private_oram_bucket_store_collection: bool,
+) -> CollectionResult<()> {
+    if !private_oram_bucket_store_collection || shard_transfers.is_empty() {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(
+        "cannot apply shard transfer state for private ORAM collections: encrypted ORAM bucket \
+         transfer and consensus-backed epoch/root ownership are not implemented for consensus \
+         snapshot apply",
+    ))
+}
+
 fn validate_private_oram_apply_shard_info_until_supported(
     shards: &AHashMap<ShardId, ShardInfo>,
     shards_key_mapping: &ShardKeyMapping,
@@ -385,6 +413,7 @@ mod tests {
     use super::*;
     use crate::operations::cluster_ops::ReshardingDirection;
     use crate::shards::replica_set::replica_set_state::ReplicaState;
+    use crate::shards::transfer::ShardTransferMethod;
 
     #[test]
     fn private_oram_apply_reshard_state_guard_redacts_collection_details() {
@@ -409,6 +438,40 @@ mod tests {
         assert!(rendered.contains("collection-local encrypted ORAM buckets"));
         assert!(rendered.contains("consensus-backed epoch/root"));
         assert!(!rendered.contains("tenant-secret-shard-key"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("private_result_oram"));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+    }
+
+    #[test]
+    fn private_oram_apply_shard_transfers_guard_redacts_collection_details() {
+        let transfers = HashSet::from([ShardTransfer {
+            shard_id: 9,
+            to_shard_id: Some(10),
+            from: 1001,
+            to: 2002,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            filter: None,
+        }]);
+
+        validate_private_oram_apply_shard_transfers_until_supported(&HashSet::new(), true).unwrap();
+        validate_private_oram_apply_shard_transfers_until_supported(&transfers, false).unwrap();
+
+        let err = validate_private_oram_apply_shard_transfers_until_supported(&transfers, true)
+            .unwrap_err();
+        let rendered = format!("{err:?}");
+
+        assert!(
+            rendered.contains("cannot apply shard transfer state for private ORAM collections")
+        );
+        assert!(rendered.contains("encrypted ORAM bucket transfer"));
+        assert!(rendered.contains("consensus-backed epoch/root"));
+        assert!(!rendered.contains("shard 9"));
+        assert!(!rendered.contains("1001"));
+        assert!(!rendered.contains("2002"));
+        assert!(!rendered.contains("StreamRecords"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
