@@ -5594,6 +5594,8 @@ mod tests {
             vector: vec![1.25, 2.5],
             payload_fetch_token: block.payload_fetch_token,
         };
+        let mut node_cache = PrivateHnswClientNodeCache::new();
+        node_cache.insert(block.clone());
         let encrypted_bucket = PrivateHnswOramBucket {
             version: 1,
             bucket_id: 123_456,
@@ -5782,6 +5784,7 @@ mod tests {
             format!("{traversal:?}"),
             format!("{directional:?}"),
             format!("{build_point:?}"),
+            format!("{node_cache:?}"),
             format!("{encrypted_bucket:?}"),
             format!("{signature:?}"),
             format!("{state_snapshot:?}"),
