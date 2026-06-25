@@ -769,6 +769,9 @@ mod private_result_oram_rest_tests {
             read_signature: read_signature.clone(),
         };
         let (updated_bucket, mut commit_signature, new_root_hash) = fixture.commit_bucket();
+        let updated_bucket_ciphertext = updated_bucket.ciphertext.clone();
+        let updated_bucket_ciphertext_sha256 = updated_bucket.ciphertext_sha256.clone();
+        let updated_bucket_commitment = updated_bucket.bucket_commitment.clone();
         commit_signature.key_id = "RESULT-REST-COMMIT-KEY-ID-SENTINEL".to_string();
         let commit_request = CommitPrivateResultOramBucketsRequest {
             session_id: SESSION_ID.to_string(),
@@ -809,11 +812,15 @@ mod private_result_oram_rest_tests {
             fixture.manifest.root_hash.clone(),
             new_root_hash,
             fixture.buckets[0].ciphertext.clone(),
+            updated_bucket_ciphertext,
+            updated_bucket_ciphertext_sha256,
+            updated_bucket_commitment,
             read_signature.key_id,
             read_signature.sig,
             commit_signature.key_id,
             commit_signature.sig,
             "987654".to_string(),
+            "987655".to_string(),
             "RESULT-REST-PROOF-SENTINEL".to_string(),
             "private-result-rest-client-id-sentinel".to_string(),
         ] {

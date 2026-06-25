@@ -588,12 +588,15 @@ mod private_hnsw_rest_tests {
         };
         let search_run = fixture.run_single_search_collect_writeback();
         let commit_signature = search_run.commit_signature.clone();
+        let commit_old_root_hash = search_run.commit_plan.old_root_hash.clone();
+        let commit_new_root_hash = search_run.commit_plan.new_root_hash.clone();
+        let updated_bucket = search_run.updated_buckets[0].clone();
         let commit_request = OramCommitRequest {
             session_id: SESSION_ID.to_string(),
             old_epoch: BASE_EPOCH,
             new_epoch: NEXT_EPOCH,
-            old_root_hash: search_run.commit_plan.old_root_hash,
-            new_root_hash: search_run.commit_plan.new_root_hash,
+            old_root_hash: commit_old_root_hash.clone(),
+            new_root_hash: commit_new_root_hash.clone(),
             updated_buckets: search_run.updated_buckets,
             commit_signature: PrivateHnswClientSignature {
                 alg: commit_signature.alg,
@@ -629,7 +632,12 @@ mod private_hnsw_rest_tests {
         for leaked in [
             SESSION_ID.to_string(),
             fixture.encrypted_build.root_hash.clone(),
+            commit_old_root_hash,
+            commit_new_root_hash,
             fixture.encrypted_build.buckets[0].ciphertext.clone(),
+            updated_bucket.ciphertext,
+            updated_bucket.ciphertext_sha256,
+            updated_bucket.bucket_commitment,
             client_signature.sig,
             commit_signature.sig,
             "HNSW-REST-READ-KEY-ID-SENTINEL".to_string(),
