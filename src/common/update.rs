@@ -5263,6 +5263,43 @@ esac
                         && !description.contains("embedding")
             ));
 
+            let err = do_upsert_points(
+                UncheckedTocProvider::new_unchecked(&toc),
+                "private_hnsw_docs".to_string(),
+                PointInsertOperations::PointsBatch(api::rest::schema::PointsBatch {
+                    batch: api::rest::schema::Batch {
+                        ids: vec![3.into()],
+                        vectors: api::rest::schema::BatchVectorStruct::Named(HashMap::from([(
+                            "embedding".to_string(),
+                            vec![api::rest::Vector::Dense(vec![0.7, 0.8])],
+                        )])),
+                        payloads: None,
+                    },
+                    shard_key: None,
+                    update_filter: None,
+                    update_mode: None,
+                }),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                auth.clone(),
+                InferenceParams::default(),
+                HwMeasurementAcc::disposable(),
+                Some(&settings),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(
+                err,
+                StorageError::BadInput { description }
+                    if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
+                        && description.contains("/private-hnsw/{vector}/session")
+                        && !description.contains("embedding")
+            ));
+
             let err = do_update_vectors(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "private_hnsw_docs".to_string(),
