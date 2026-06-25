@@ -1368,6 +1368,12 @@ pub async fn do_delete_index(
         field_name: index_name.clone(),
     });
 
+    auth.check_collection_access(
+        &collection_name,
+        AccessRequirements::new().write().extras(),
+        "delete_payload_index",
+    )?;
+
     let pass = new_unchecked_verification_pass();
 
     let toc = dispatcher.toc(&auth, &pass).clone();
@@ -4343,6 +4349,40 @@ esac
                     "private result ORAM gRPC internal delete payload index must fail closed",
                 ),
                 "cannot delete payload index on private result ORAM payload field",
+            );
+
+            let unauthorized_delete_index = do_delete_index(
+                dispatcher.clone().into(),
+                "private_result_write_docs".to_string(),
+                "body".parse().unwrap(),
+                InternalUpdateParams::default(),
+                UpdateParams {
+                    wait: true,
+                    ordering: WriteOrdering::default(),
+                    timeout: None,
+                },
+                Auth::new_internal(Access::full_ro("For test")),
+                HwMeasurementAcc::disposable(),
+            )
+            .await
+            .expect_err("private result ORAM delete payload index must check auth first");
+            let unauthorized_delete_index_message = unauthorized_delete_index.to_string();
+            assert!(
+                matches!(unauthorized_delete_index, StorageError::Forbidden { .. }),
+                "{unauthorized_delete_index_message}"
+            );
+            assert!(
+                !unauthorized_delete_index_message
+                    .contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                "{unauthorized_delete_index_message}"
+            );
+            assert!(
+                !unauthorized_delete_index_message.contains("/private-result-oram/session"),
+                "{unauthorized_delete_index_message}"
+            );
+            assert!(
+                !unauthorized_delete_index_message.contains("body"),
+                "{unauthorized_delete_index_message}"
             );
 
             assert_private_result_write_error(
