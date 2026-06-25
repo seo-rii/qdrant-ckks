@@ -12268,6 +12268,32 @@ esac
                     "{message}"
                 );
             };
+            let assert_private_result_grpc_session_error = |err: tonic::Status| {
+                let message = err.message();
+                assert!(
+                    message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("/private-result-oram/session"),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("ordinary collection payload reads"),
+                    "{message}"
+                );
+            };
+            let request_hw_counter = || {
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                )
+            };
+            let grpc_payload_enabled = || api::grpc::qdrant::WithPayloadSelector {
+                selector_options: Some(
+                    api::grpc::qdrant::with_payload_selector::SelectorOptions::Enable(true),
+                ),
+            };
             let collection_pass = auth
                 .check_collection_access("private_result_docs", AccessRequirements::new(), "test")
                 .unwrap();
@@ -12311,6 +12337,27 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM empty retrieve must fail closed"),
+            );
+
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::get(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::GetPoints {
+                        collection_name: "private_result_docs".to_string(),
+                        ids: vec![segment::types::PointIdType::from(1).into()],
+                        with_payload: Some(grpc_payload_enabled()),
+                        with_vectors: None,
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC retrieve must fail closed"),
             );
 
             assert_private_result_session_error(
@@ -12375,6 +12422,30 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM zero-limit scroll must fail closed"),
+            );
+
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::scroll(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::ScrollPoints {
+                        collection_name: "private_result_docs".to_string(),
+                        filter: None,
+                        offset: None,
+                        limit: Some(1),
+                        with_payload: Some(grpc_payload_enabled()),
+                        with_vectors: None,
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        order_by: None,
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC scroll must fail closed"),
             );
 
             assert_private_result_session_error(
