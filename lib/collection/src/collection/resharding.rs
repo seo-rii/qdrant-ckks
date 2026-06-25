@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use futures::Future;
 
-use super::Collection;
+use super::{Collection, collection_encryption_uses_private_oram_bucket_store};
 use crate::config::ShardingMethod;
 use crate::hash_ring::HashRingRouter;
 use crate::operations::cluster_ops::ReshardingDirection;
@@ -37,6 +37,9 @@ impl Collection {
         T: Future<Output = ()> + Send + 'static,
         F: Future<Output = ()> + Send + 'static,
     {
+        self.validate_private_oram_resharding_operation_until_supported("start resharding")
+            .await?;
+
         {
             let mut shard_holder = self.shards_holder.write().await;
 
@@ -95,6 +98,9 @@ impl Collection {
     }
 
     pub async fn commit_read_hashring(&self, resharding_key: &ReshardKey) -> CollectionResult<()> {
+        self.validate_private_oram_resharding_operation_until_supported("commit read hash ring")
+            .await?;
+
         let mut shards_holder = self.shards_holder.write().await;
 
         shards_holder.commit_read_hashring(resharding_key)?;
@@ -128,6 +134,9 @@ impl Collection {
     }
 
     pub async fn commit_write_hashring(&self, resharding_key: &ReshardKey) -> CollectionResult<()> {
+        self.validate_private_oram_resharding_operation_until_supported("commit write hash ring")
+            .await?;
+
         self.shards_holder
             .write()
             .await
@@ -135,6 +144,9 @@ impl Collection {
     }
 
     pub async fn finish_resharding(&self, resharding_key: ReshardKey) -> CollectionResult<()> {
+        self.validate_private_oram_resharding_operation_until_supported("finish resharding")
+            .await?;
+
         let mut shard_holder = self.shards_holder.write().await;
 
         shard_holder.check_finish_resharding(&resharding_key)?;
@@ -278,5 +290,59 @@ impl Collection {
         }
 
         Ok(())
+    }
+
+    async fn validate_private_oram_resharding_operation_until_supported(
+        &self,
+        operation_name: &str,
+    ) -> CollectionResult<()> {
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
+        validate_private_oram_resharding_until_supported(
+            operation_name,
+            private_oram_bucket_store_collection,
+        )
+    }
+}
+
+fn validate_private_oram_resharding_until_supported(
+    operation_name: &str,
+    private_oram_bucket_store_collection: bool,
+) -> CollectionResult<()> {
+    if !private_oram_bucket_store_collection {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(format!(
+        "cannot {operation_name} for private ORAM collections: encrypted ORAM bucket migration \
+         and consensus-backed epoch/root ownership are not implemented for resharding",
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_oram_resharding_operation_guard_redacts_collection_details() {
+        validate_private_oram_resharding_until_supported("start resharding", false).unwrap();
+
+        let err =
+            validate_private_oram_resharding_until_supported("start resharding", true).unwrap_err();
+        let rendered = format!("{err:?}");
+
+        assert!(rendered.contains("cannot start resharding for private ORAM collections"));
+        assert!(rendered.contains("encrypted ORAM bucket migration"));
+        assert!(rendered.contains("consensus-backed epoch/root"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("private_result_oram"));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
     }
 }
