@@ -904,7 +904,6 @@ mod private_hnsw_rest_tests {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
         let (_temp, dispatcher) = test_dispatcher();
-        let unsafe_vector_name = "secret vector sentinel";
         actix_web::rt::System::new().block_on(async {
             create_private_hnsw_collection(&dispatcher).await;
             let app = actix_test::init_service(
@@ -916,20 +915,34 @@ mod private_hnsw_rest_tests {
             )
             .await;
 
-            let request = actix_test::TestRequest::get()
-                .uri("/collections/docs/private-hnsw/secret%20vector%20sentinel/manifest")
-                .to_request();
-            let response = actix_test::call_service(&app, request).await;
-            let status = response.status();
-            let body_bytes = actix_test::read_body(response).await;
-            let body = String::from_utf8_lossy(&body_bytes);
+            for (route_vector_name, unsafe_vector_name) in [
+                ("secret%20vector%20sentinel", "secret vector sentinel"),
+                ("text%2Fprivate", "text/private"),
+                ("client.state", "client.state"),
+                ("position.map", "position.map"),
+                ("stash.backup", "stash.backup"),
+            ] {
+                let request = actix_test::TestRequest::get()
+                    .uri(&format!(
+                        "/collections/docs/private-hnsw/{route_vector_name}/manifest"
+                    ))
+                    .to_request();
+                let response = actix_test::call_service(&app, request).await;
+                let status = response.status();
+                let body_bytes = actix_test::read_body(response).await;
+                let body = String::from_utf8_lossy(&body_bytes);
 
-            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-            assert!(body.contains("client-led private ORAM sessions"), "{body}");
-            assert!(!body.contains(unsafe_vector_name), "{body}");
-            assert!(!body.contains("secret"), "{body}");
-            assert!(!body.contains("private_hnsw_oram"), "{body}");
-            assert!(!body.contains("/tmp"), "{body}");
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+                assert!(body.contains("client-led private ORAM sessions"), "{body}");
+                assert!(!body.contains(unsafe_vector_name), "{body}");
+                assert!(!body.contains(route_vector_name), "{body}");
+                assert!(!body.contains("secret"), "{body}");
+                assert!(!body.contains("client.state"), "{body}");
+                assert!(!body.contains("position.map"), "{body}");
+                assert!(!body.contains("stash.backup"), "{body}");
+                assert!(!body.contains("private_hnsw_oram"), "{body}");
+                assert!(!body.contains("/tmp"), "{body}");
+            }
         });
     }
 
