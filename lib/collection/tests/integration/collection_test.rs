@@ -24,9 +24,9 @@ use collection::operations::point_ops::{
 };
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
 use collection::operations::types::{
-    CollectionError, CollectionUpdateProvenance, CountRequestInternal, DiscoverRequestInternal,
-    PointRequestInternal, RecommendExample, RecommendRequestInternal, ScrollRequestInternal,
-    UpdateStatus, ckks_vector_sidecar_delete_target,
+    CollectionError, CollectionUpdateProvenance, ContextExamplePair, CountRequestInternal,
+    DiscoverRequestInternal, PointRequestInternal, RecommendExample, RecommendRequestInternal,
+    ScrollRequestInternal, UpdateStatus, ckks_vector_sidecar_delete_target,
 };
 use collection::operations::universal_query::collection_query::{
     CollectionPrefetch, CollectionQueryRequest, Query, VectorInputInternal, VectorQuery,
@@ -8694,6 +8694,33 @@ async fn private_hnsw_vector_rejects_direct_search_paths_with_session_api_messag
         DiscoverRequestInternal {
             target: Some(RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])),
             context: None,
+            filter: None,
+            params: None,
+            limit: 1,
+            offset: None,
+            with_payload: None,
+            with_vector: None,
+            using: None,
+            lookup_from: None,
+        },
+        &collection,
+        |_name| async { None },
+        None,
+        ShardSelectorInternal::All,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
+    let err = discover(
+        DiscoverRequestInternal {
+            target: None,
+            context: Some(vec![ContextExamplePair {
+                positive: RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0]),
+                negative: RecommendExample::Dense(vec![0.0, 1.0, 0.0, 0.0]),
+            }]),
             filter: None,
             params: None,
             limit: 1,
