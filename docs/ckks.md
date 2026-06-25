@@ -81,7 +81,7 @@ contract:
 | Normal Qdrant reads/writes | Dense vector upsert/update, `with_vector` reads, ordinary search/query/recommend/discover, grouped paths, search matrix, and `lookup_from`/point-id reference-vector resolution fail closed for the private vector; clients must use the private HNSW session APIs. | Point create/replace/delete, full payload replacement/clear, protected-path payload writes, indexes, filters, ordering, grouping, facets, formulas, and raw payload reads fail closed for the private result path; public non-overlapping payload merges remain ordinary. |
 | Dedicated APIs | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_paths`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_buckets`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. |
 | Snapshot/restore | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and paired result ORAM policy before accepting a restored store. | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and configured binding/runtime policy before accepting a restored store. |
-| Cluster mode | Session open fails closed in distributed mode until consensus-backed ORAM epoch/root ownership is implemented; layout movement operations are blocked before shard transfer or resharding proceeds. | Session open fails closed in distributed mode until consensus-backed ORAM epoch/root ownership is implemented; result ORAM bucket movement follows the same cluster guard policy. |
+| Cluster mode | Manifest upload, bucket upload, session open, `read_paths`, and commit fail closed in distributed mode until consensus-backed ORAM epoch/root ownership is implemented; layout movement operations are blocked before shard transfer or resharding proceeds. | Manifest upload, bucket upload, session open, `read_buckets`, and commit fail closed in distributed mode until consensus-backed ORAM epoch/root ownership is implemented; result ORAM bucket movement follows the same cluster guard policy. |
 
 ## Payload text
 
@@ -1274,8 +1274,10 @@ collections are rejected before the local transfer task starts moving shard data
 the transfer progresses replica state, or resharding commits hash-ring or
 replica-state progress. `Abort` remains allowed so unsupported transfer and
 resharding records can be cleaned up without moving encrypted ORAM buckets.
-Distributed private HNSW ORAM sessions themselves fail closed in this MVP until
-epoch/root CAS is backed by consensus rather than node-local files.
+Distributed private ORAM epoch operations themselves fail closed in this MVP:
+manifest upload, bucket upload, session open, session-bound reads, and commits
+do not proceed until epoch/root CAS is backed by consensus rather than
+node-local files.
 
 The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
 preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`
