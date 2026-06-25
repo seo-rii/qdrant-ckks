@@ -171,7 +171,7 @@ impl PrivateResultOramStore {
             root_hash: bundle.manifest.root_hash.clone(),
         };
 
-        match self.initial_epoch_status(&epoch, "upload bundle")? {
+        match self.initial_epoch_status(&epoch)? {
             InitialEpochStatus::Absent => {}
             InitialEpochStatus::Matching => {
                 self.validate_existing_initial_upload_bundle(
@@ -213,7 +213,6 @@ impl PrivateResultOramStore {
     fn initial_epoch_status(
         &self,
         epoch: &PrivateResultOramEpochState,
-        _operation: &str,
     ) -> CollectionResult<InitialEpochStatus> {
         self.ensure_layout()?;
         match self.read_current_epoch() {

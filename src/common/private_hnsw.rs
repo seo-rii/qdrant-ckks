@@ -1029,7 +1029,6 @@ pub async fn do_read_private_hnsw_paths(
                 &store,
                 session.index_epoch,
                 &session.root_hash,
-                "read_paths",
             )?;
             let (buckets, proof) = store
                 .read_bucket_batch_with_proof(
@@ -1150,12 +1149,7 @@ pub async fn do_commit_private_hnsw_paths(
         }
 
         let store = PrivateHnswOramStore::new(&session.collection_path, vector_name)?;
-        ensure_private_hnsw_active_session_current_epoch(
-            &store,
-            old_epoch,
-            &old_root_hash,
-            "commit",
-        )?;
+        ensure_private_hnsw_active_session_current_epoch(&store, old_epoch, &old_root_hash)?;
         let old = PrivateHnswOramEpochState {
             index_epoch: old_epoch,
             root_hash: old_root_hash,
@@ -1983,7 +1977,6 @@ fn ensure_private_hnsw_active_session_current_epoch(
     store: &PrivateHnswOramStore,
     expected_epoch: u64,
     expected_root_hash: &str,
-    _operation: &str,
 ) -> StorageResult<()> {
     let current = store
         .read_current_epoch()
@@ -2147,7 +2140,7 @@ fn validate_initial_private_hnsw_upload_bundle(
     }
     let leaf_commitments =
         ordered_initial_bucket_commitments(buckets, index_epoch, manifest.bucket_count)?;
-    validate_bucket_commitment_context(manifest, index_epoch, buckets, "initial upload")?;
+    validate_bucket_commitment_context(manifest, index_epoch, buckets)?;
     let computed_root = PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments)?;
     if computed_root != root_hash {
         return Err(StorageError::bad_request(
@@ -2161,7 +2154,6 @@ fn validate_bucket_commitment_context(
     manifest: &PrivateHnswOramManifest,
     index_epoch: u64,
     buckets: &[PrivateHnswOramBucket],
-    _operation: &str,
 ) -> StorageResult<()> {
     for bucket in buckets {
         let expected_commitment = private_hnsw_bucket_commitment(
@@ -3757,16 +3749,15 @@ mod private_hnsw_tests {
         store.write_initial_epoch(&old).unwrap();
         store.compare_and_swap_epoch(&old, &stale_current).unwrap();
 
-        for operation in ["commit", "read_paths", "private-hnsw-operation-sentinel"] {
-            let err = ensure_private_hnsw_active_session_current_epoch(
-                &store,
-                old.index_epoch,
-                &old.root_hash,
-                operation,
-            )
-            .unwrap_err()
-            .to_string();
+        let err = ensure_private_hnsw_active_session_current_epoch(
+            &store,
+            old.index_epoch,
+            &old.root_hash,
+        )
+        .unwrap_err()
+        .to_string();
 
+        for operation in ["commit", "read_paths", "private-hnsw-operation-sentinel"] {
             assert!(err.contains("current epoch/root does not match active session"));
             assert!(!err.contains(operation), "{err}");
         }

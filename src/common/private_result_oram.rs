@@ -832,7 +832,6 @@ pub async fn do_read_private_result_oram_buckets(
                 &store,
                 session.index_epoch,
                 &session.root_hash,
-                "read_buckets",
             )?;
             let (buckets, proof) = store
                 .read_bucket_batch_with_proof(
@@ -958,7 +957,6 @@ pub async fn do_commit_private_result_oram_buckets(
                 &store,
                 old_epoch,
                 &old_root_hash,
-                "commit",
             )?;
             let old = PrivateResultOramEpochState {
                 index_epoch: old_epoch,
@@ -1382,7 +1380,6 @@ fn ensure_private_result_oram_active_session_current_epoch(
     store: &PrivateResultOramStore,
     expected_epoch: u64,
     expected_root_hash: &str,
-    _operation: &str,
 ) -> StorageResult<()> {
     let current = store
         .read_current_epoch()
@@ -3397,20 +3394,19 @@ mod private_result_oram_tests {
         store.write_initial_epoch(&old).unwrap();
         store.compare_and_swap_epoch(&old, &stale_current).unwrap();
 
+        let err = ensure_private_result_oram_active_session_current_epoch(
+            &store,
+            old.index_epoch,
+            &old.root_hash,
+        )
+        .unwrap_err()
+        .to_string();
+
         for operation in [
             "commit",
             "read_buckets",
             "private-result-operation-sentinel",
         ] {
-            let err = ensure_private_result_oram_active_session_current_epoch(
-                &store,
-                old.index_epoch,
-                &old.root_hash,
-                operation,
-            )
-            .unwrap_err()
-            .to_string();
-
             assert!(err.contains("current epoch/root does not match active session"));
             assert!(!err.contains(operation), "{err}");
             assert!(!err.contains("42"), "{err}");
