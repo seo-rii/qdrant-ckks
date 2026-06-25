@@ -934,6 +934,32 @@ mod private_result_oram_rest_tests {
                     .to_request()
             );
 
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-result-oram/buckets"
+                    ))
+                    .set_json(UploadPrivateResultOramBucketsRequest {
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        buckets: fixture.buckets.clone(),
+                    })
+                    .to_request()
+            );
+
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-result-oram/session"
+                    ))
+                    .set_json(OpenPrivateResultOramSessionRequest {
+                        client_id: "tenant-a/sdk-instance-1".to_string(),
+                        desired_epoch: BASE_EPOCH,
+                        fixed_budget: true,
+                    })
+                    .to_request()
+            );
+
             let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
             assert_missing_encryption!(
                 actix_test::TestRequest::post()
@@ -947,6 +973,32 @@ mod private_result_oram_rest_tests {
                         bucket_ids: read_bucket_ids.clone(),
                         read_signature: fixture.read_signature(&read_bucket_ids),
                     })
+                    .to_request()
+            );
+
+            let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-result-oram/oram/commit"
+                    ))
+                    .set_json(CommitPrivateResultOramBucketsRequest {
+                        session_id: SESSION_ID.to_string(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: fixture.manifest.root_hash.clone(),
+                        new_root_hash,
+                        updated_buckets: vec![updated_bucket],
+                        commit_signature,
+                    })
+                    .to_request()
+            );
+
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-result-oram/session/{SESSION_ID}/close"
+                    ))
                     .to_request()
             );
         });

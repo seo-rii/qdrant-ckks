@@ -1010,6 +1010,35 @@ mod private_hnsw_grpc_tests {
                 }),
             ));
 
+            assert_missing_encryption!(PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                    collection_name: collection_name.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: fixture
+                        .encrypted_build
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            ));
+
+            assert_missing_encryption!(PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                Request::new(grpc::OpenPrivateHnswSessionRequest {
+                    collection_name: collection_name.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    client_id: "tenant-a/sdk-instance-1".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                }),
+            ));
+
             let paths = vec![fixture.entry_leaf_label()];
             let read_signature = fixture.sign_read_paths(&paths, 1, true);
             assert_missing_encryption!(PrivateHnswOram::read_private_hnsw_paths(
@@ -1026,6 +1055,35 @@ mod private_hnsw_grpc_tests {
                         dummy_paths_included: true,
                     }),
                     client_signature: Some(signature_to_proto(read_signature)),
+                }),
+            ));
+
+            let search_run = fixture.run_single_search_collect_writeback();
+            assert_missing_encryption!(PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: collection_name.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: SESSION_ID.to_string(),
+                    old_epoch: search_run.commit_plan.old_epoch,
+                    new_epoch: search_run.commit_plan.new_epoch,
+                    old_root_hash: search_run.commit_plan.old_root_hash,
+                    new_root_hash: search_run.commit_plan.new_root_hash,
+                    updated_buckets: search_run
+                        .updated_buckets
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(search_run.commit_signature)),
+                }),
+            ));
+
+            assert_missing_encryption!(PrivateHnswOram::close_private_hnsw_session(
+                &service,
+                Request::new(grpc::ClosePrivateHnswSessionRequest {
+                    collection_name: collection_name.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: SESSION_ID.to_string(),
                 }),
             ));
         });

@@ -984,6 +984,33 @@ mod private_hnsw_rest_tests {
                     .to_request()
             );
 
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-hnsw/text/buckets"
+                    ))
+                    .set_json(UploadPrivateHnswBucketsRequest {
+                        index_epoch: fixture.encrypted_build.index_epoch,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        buckets: fixture.encrypted_build.buckets.clone(),
+                    })
+                    .to_request()
+            );
+
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-hnsw/text/session"
+                    ))
+                    .set_json(OpenPrivateHnswSessionRequest {
+                        client_id: "tenant-a/sdk-instance-1".to_string(),
+                        desired_epoch: BASE_EPOCH,
+                        fixed_budget: true,
+                        result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                    })
+                    .to_request()
+            );
+
             let paths = vec![fixture.entry_leaf_label()];
             let read_signature = fixture.sign_read_paths(&paths, 1, true);
             assert_missing_encryption!(
@@ -1006,6 +1033,37 @@ mod private_hnsw_rest_tests {
                             sig: read_signature.sig,
                         },
                     })
+                    .to_request()
+            );
+
+            let search_run = fixture.run_single_search_collect_writeback();
+            let commit_signature = search_run.commit_signature.clone();
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-hnsw/text/oram/commit"
+                    ))
+                    .set_json(OramCommitRequest {
+                        session_id: SESSION_ID.to_string(),
+                        old_epoch: search_run.commit_plan.old_epoch,
+                        new_epoch: search_run.commit_plan.new_epoch,
+                        old_root_hash: search_run.commit_plan.old_root_hash,
+                        new_root_hash: search_run.commit_plan.new_root_hash,
+                        updated_buckets: search_run.updated_buckets,
+                        commit_signature: PrivateHnswClientSignature {
+                            alg: commit_signature.alg,
+                            key_id: commit_signature.key_id,
+                            sig: commit_signature.sig,
+                        },
+                    })
+                    .to_request()
+            );
+
+            assert_missing_encryption!(
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/{collection_name}/private-hnsw/text/session/{SESSION_ID}/close"
+                    ))
                     .to_request()
             );
         });

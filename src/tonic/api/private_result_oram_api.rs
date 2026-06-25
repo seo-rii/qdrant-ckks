@@ -818,6 +818,31 @@ mod private_result_oram_grpc_tests {
                 }),
             ));
 
+            assert_missing_encryption!(PrivateResultOram::upload_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                    collection_name: collection_name.to_string(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: fixture
+                        .buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            ));
+
+            assert_missing_encryption!(PrivateResultOram::open_private_result_oram_session(
+                &service,
+                Request::new(grpc::OpenPrivateResultOramSessionRequest {
+                    collection_name: collection_name.to_string(),
+                    client_id: "tenant-a/sdk-instance-1".to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                }),
+            ));
+
             let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
             let read_signature = fixture.read_signature(&read_bucket_ids);
             assert_missing_encryption!(PrivateResultOram::read_private_result_oram_buckets(
@@ -829,6 +854,29 @@ mod private_result_oram_grpc_tests {
                     root_hash: fixture.manifest.root_hash.clone(),
                     bucket_ids: read_bucket_ids.clone(),
                     read_signature: Some(signature_to_proto(read_signature)),
+                }),
+            ));
+
+            let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+            assert_missing_encryption!(PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: collection_name.to_string(),
+                    session_id: SESSION_ID.to_string(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash,
+                    updated_buckets: vec![bucket_to_proto(updated_bucket)],
+                    commit_signature: Some(signature_to_proto(commit_signature)),
+                }),
+            ));
+
+            assert_missing_encryption!(PrivateResultOram::close_private_result_oram_session(
+                &service,
+                Request::new(grpc::ClosePrivateResultOramSessionRequest {
+                    collection_name: collection_name.to_string(),
+                    session_id: SESSION_ID.to_string(),
                 }),
             ));
         });
