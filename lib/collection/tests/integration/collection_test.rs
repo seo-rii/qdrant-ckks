@@ -8786,6 +8786,35 @@ async fn private_hnsw_vector_rejects_direct_search_paths_with_session_api_messag
     .unwrap_err();
     assert_private_hnsw_session_api_error(err);
 
+    let err = discover_batch(
+        vec![(
+            DiscoverRequestInternal {
+                target: None,
+                context: Some(vec![ContextExamplePair {
+                    positive: RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0]),
+                    negative: RecommendExample::Dense(vec![0.0, 1.0, 0.0, 0.0]),
+                }]),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                with_payload: None,
+                with_vector: None,
+                using: None,
+                lookup_from: None,
+            },
+            ShardSelectorInternal::All,
+        )],
+        &collection,
+        |_name| async { None },
+        None,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
     let err = GroupBy::new(
         GroupRequest {
             source: SourceRequest::Search(SearchRequestInternal {
