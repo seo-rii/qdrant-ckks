@@ -1667,8 +1667,20 @@ mod tests {
 
         let grpc_cases = [
             (
+                "/qdrant.PrivateHnswOram/GetPrivateHnswManifest/root-hash-sentinel",
+                "/qdrant.PrivateHnswOram/GetPrivateHnswManifest",
+            ),
+            (
                 "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/client-state-sentinel",
                 "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
+            ),
+            (
+                "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets/hnsw-bucket-id-sentinel",
+                "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets",
+            ),
+            (
+                "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest/root-hash-sentinel",
+                "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest",
             ),
             (
                 "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths/leaf-label-sentinel",
@@ -1685,6 +1697,10 @@ mod tests {
             (
                 "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets/result-updated-bucket-sentinel",
                 "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets",
+            ),
+            (
+                "/qdrant.PrivateResultOram/GetPrivateResultOramManifest/result-root-hash-sentinel",
+                "/qdrant.PrivateResultOram/GetPrivateResultOramManifest",
             ),
             (
                 "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/token-position-map-sentinel",
@@ -1713,7 +1729,9 @@ mod tests {
             assert_eq!(label, canonical);
             for leaked in [
                 "client-state-sentinel",
+                "hnsw-bucket-id-sentinel",
                 "leaf-label-sentinel",
+                "root-hash-sentinel",
                 "updated-bucket-sentinel",
                 "session-id-sentinel",
                 "result-updated-bucket-sentinel",
