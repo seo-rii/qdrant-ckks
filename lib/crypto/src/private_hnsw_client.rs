@@ -59,7 +59,7 @@ pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 #[derive(Error, PartialEq, Eq)]
 pub enum PrivateHnswClientError {
     #[error("private HNSW client encryption failed")]
-    Encryption(#[from] EncryptionError),
+    Encryption(EncryptionError),
     #[error("private HNSW node block has invalid neighbor shape")]
     InvalidNeighborShape,
     #[error("private HNSW node block has too many neighbors")]
@@ -204,6 +204,12 @@ impl Debug for PrivateHnswClientError {
         f.debug_tuple("PrivateHnswClientError")
             .field(&self.to_string())
             .finish()
+    }
+}
+
+impl From<EncryptionError> for PrivateHnswClientError {
+    fn from(error: EncryptionError) -> Self {
+        Self::Encryption(error)
     }
 }
 
@@ -4785,6 +4791,17 @@ mod tests {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
         }
+    }
+
+    #[test]
+    fn private_hnsw_client_encryption_wrapper_does_not_expose_source_error() {
+        let err = PrivateHnswClientError::Encryption(EncryptionError::UnsupportedAlgorithm(
+            "aead-source-sentinel".to_string(),
+        ));
+
+        assert!(std::error::Error::source(&err).is_none());
+        assert!(!err.to_string().contains("aead-source-sentinel"));
+        assert!(!format!("{err:?}").contains("aead-source-sentinel"));
     }
 
     fn test_keys() -> PrivateHnswClientKeys {

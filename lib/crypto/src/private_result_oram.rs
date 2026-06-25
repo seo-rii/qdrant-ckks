@@ -57,7 +57,7 @@ const PRIVATE_RESULT_ORAM_BUCKET_PLAINTEXT_VERSION: u16 = 1;
 #[derive(Error, PartialEq, Eq)]
 pub enum PrivateResultOramError {
     #[error("private result ORAM client encryption failed")]
-    Encryption(#[from] EncryptionError),
+    Encryption(EncryptionError),
     #[error("private result ORAM manifest uses unsupported version")]
     UnsupportedManifestVersion(u16),
     #[error("private result ORAM manifest provider is invalid")]
@@ -179,6 +179,12 @@ impl Debug for PrivateResultOramError {
         f.debug_tuple("PrivateResultOramError")
             .field(&self.to_string())
             .finish()
+    }
+}
+
+impl From<EncryptionError> for PrivateResultOramError {
+    fn from(error: EncryptionError) -> Self {
+        Self::Encryption(error)
     }
 }
 
@@ -3828,6 +3834,17 @@ mod tests {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
         }
+    }
+
+    #[test]
+    fn private_result_oram_encryption_wrapper_does_not_expose_source_error() {
+        let err = PrivateResultOramError::Encryption(EncryptionError::UnsupportedAlgorithm(
+            "aead-source-sentinel".to_string(),
+        ));
+
+        assert!(std::error::Error::source(&err).is_none());
+        assert!(!err.to_string().contains("aead-source-sentinel"));
+        assert!(!format!("{err:?}").contains("aead-source-sentinel"));
     }
 
     fn fixture_manifest() -> PrivateResultOramManifest {
