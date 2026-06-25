@@ -26,6 +26,9 @@ impl Collection {
         replicas: &[PeerId],
         init_state: Option<ReplicaState>,
     ) -> CollectionResult<ShardReplicaSet> {
+        self.validate_private_oram_replica_set_creation_until_supported()
+            .await?;
+
         let is_local = replicas.contains(&self.this_peer_id);
 
         let peers = replicas
@@ -297,6 +300,22 @@ impl Collection {
             private_oram_bucket_store_collection,
         )
     }
+
+    async fn validate_private_oram_replica_set_creation_until_supported(
+        &self,
+    ) -> CollectionResult<()> {
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
+        validate_private_oram_replica_set_creation_until_supported(
+            private_oram_bucket_store_collection,
+        )
+    }
 }
 
 async fn cleanup_unadded_replica_set(replica_set: ShardReplicaSet) -> CollectionResult<()> {
@@ -334,6 +353,20 @@ fn validate_private_oram_shard_key_change_until_supported(
     )))
 }
 
+fn validate_private_oram_replica_set_creation_until_supported(
+    private_oram_bucket_store_collection: bool,
+) -> CollectionResult<()> {
+    if !private_oram_bucket_store_collection {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(
+        "cannot create replica set for private ORAM collections: collection-local encrypted ORAM \
+         buckets cannot be assigned to new shard replicas until ORAM bucket migration and \
+         consensus-backed epoch/root ownership are implemented",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -347,6 +380,22 @@ mod tests {
         let rendered = format!("{err:?}");
 
         assert!(rendered.contains("cannot create shard key for private ORAM collections"));
+        assert!(rendered.contains("collection-local encrypted ORAM buckets"));
+        assert!(rendered.contains("consensus-backed epoch/root"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("private_result_oram"));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+    }
+
+    #[test]
+    fn private_oram_replica_set_creation_guard_redacts_collection_details() {
+        validate_private_oram_replica_set_creation_until_supported(false).unwrap();
+
+        let err = validate_private_oram_replica_set_creation_until_supported(true).unwrap_err();
+        let rendered = format!("{err:?}");
+
+        assert!(rendered.contains("cannot create replica set for private ORAM collections"));
         assert!(rendered.contains("collection-local encrypted ORAM buckets"));
         assert!(rendered.contains("consensus-backed epoch/root"));
         assert!(!rendered.contains("private_hnsw_oram"));
