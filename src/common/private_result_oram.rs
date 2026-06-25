@@ -1382,15 +1382,15 @@ fn ensure_private_result_oram_active_session_current_epoch(
     store: &PrivateResultOramStore,
     expected_epoch: u64,
     expected_root_hash: &str,
-    operation: &str,
+    _operation: &str,
 ) -> StorageResult<()> {
     let current = store
         .read_current_epoch()
         .map_err(private_result_oram_epoch_store_error)?;
     if current.index_epoch != expected_epoch || current.root_hash != expected_root_hash {
-        return Err(StorageError::bad_request(format!(
-            "private result ORAM {operation} current epoch/root does not match active session"
-        )));
+        return Err(StorageError::bad_request(
+            "private result ORAM current epoch/root does not match active session",
+        ));
     }
     Ok(())
 }
@@ -3397,35 +3397,27 @@ mod private_result_oram_tests {
         store.write_initial_epoch(&old).unwrap();
         store.compare_and_swap_epoch(&old, &stale_current).unwrap();
 
-        let err = ensure_private_result_oram_active_session_current_epoch(
-            &store,
-            old.index_epoch,
-            &old.root_hash,
+        for operation in [
             "commit",
-        )
-        .unwrap_err()
-        .to_string();
-
-        assert!(err.contains("commit current epoch/root does not match active session"));
-        assert!(!err.contains("42"), "{err}");
-        assert!(!err.contains("43"), "{err}");
-        assert!(!err.contains(&old.root_hash), "{err}");
-        assert!(!err.contains(&stale_current.root_hash), "{err}");
-
-        let err = ensure_private_result_oram_active_session_current_epoch(
-            &store,
-            old.index_epoch,
-            &old.root_hash,
             "read_buckets",
-        )
-        .unwrap_err()
-        .to_string();
+            "private-result-operation-sentinel",
+        ] {
+            let err = ensure_private_result_oram_active_session_current_epoch(
+                &store,
+                old.index_epoch,
+                &old.root_hash,
+                operation,
+            )
+            .unwrap_err()
+            .to_string();
 
-        assert!(err.contains("read_buckets current epoch/root does not match active session"));
-        assert!(!err.contains("42"), "{err}");
-        assert!(!err.contains("43"), "{err}");
-        assert!(!err.contains(&old.root_hash), "{err}");
-        assert!(!err.contains(&stale_current.root_hash), "{err}");
+            assert!(err.contains("current epoch/root does not match active session"));
+            assert!(!err.contains(operation), "{err}");
+            assert!(!err.contains("42"), "{err}");
+            assert!(!err.contains("43"), "{err}");
+            assert!(!err.contains(&old.root_hash), "{err}");
+            assert!(!err.contains(&stale_current.root_hash), "{err}");
+        }
     }
 
     #[test]

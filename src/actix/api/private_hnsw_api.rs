@@ -3109,7 +3109,12 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "read_paths current epoch/root does not match active session"
+                "current epoch/root does not match active session"
+            );
+            assert!(
+                !stale_current_read_error
+                    .contains("read_paths current epoch/root does not match active session"),
+                "{stale_current_read_error}"
             );
             assert!(
                 !stale_current_read_error.contains(&stale_current_read_root_hash),
@@ -3170,7 +3175,12 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "commit current epoch/root does not match active session"
+                "current epoch/root does not match active session"
+            );
+            assert!(
+                !stale_current_commit_error
+                    .contains("commit current epoch/root does not match active session"),
+                "{stale_current_commit_error}"
             );
             assert!(
                 !stale_current_commit_error.contains(&stale_current_commit_old_root_hash),

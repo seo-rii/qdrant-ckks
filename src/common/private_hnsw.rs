@@ -1983,15 +1983,15 @@ fn ensure_private_hnsw_active_session_current_epoch(
     store: &PrivateHnswOramStore,
     expected_epoch: u64,
     expected_root_hash: &str,
-    operation: &str,
+    _operation: &str,
 ) -> StorageResult<()> {
     let current = store
         .read_current_epoch()
         .map_err(private_hnsw_epoch_store_error)?;
     if current.index_epoch != expected_epoch || current.root_hash != expected_root_hash {
-        return Err(StorageError::bad_request(format!(
-            "private HNSW ORAM {operation} current epoch/root does not match active session"
-        )));
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM current epoch/root does not match active session",
+        ));
     }
     Ok(())
 }
@@ -3758,30 +3758,19 @@ mod private_hnsw_tests {
         store.write_initial_epoch(&old).unwrap();
         store.compare_and_swap_epoch(&old, &stale_current).unwrap();
 
-        let err = ensure_private_hnsw_active_session_current_epoch(
-            &store,
-            old.index_epoch,
-            &old.root_hash,
-            "commit",
-        )
-        .unwrap_err();
+        for operation in ["commit", "read_paths", "private-hnsw-operation-sentinel"] {
+            let err = ensure_private_hnsw_active_session_current_epoch(
+                &store,
+                old.index_epoch,
+                &old.root_hash,
+                operation,
+            )
+            .unwrap_err()
+            .to_string();
 
-        assert!(
-            err.to_string()
-                .contains("commit current epoch/root does not match active session")
-        );
-        let err = ensure_private_hnsw_active_session_current_epoch(
-            &store,
-            old.index_epoch,
-            &old.root_hash,
-            "read_paths",
-        )
-        .unwrap_err();
-
-        assert!(
-            err.to_string()
-                .contains("read_paths current epoch/root does not match active session")
-        );
+            assert!(err.contains("current epoch/root does not match active session"));
+            assert!(!err.contains(operation), "{err}");
+        }
     }
 
     #[test]

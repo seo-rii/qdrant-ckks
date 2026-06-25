@@ -384,6 +384,7 @@
   - Private ORAM resharding/shard-key guards는 consensus submit과 collection-local layout 변경 경계 모두에서 호출자가 넘긴 operation label을 오류에 반사하지 않고 고정 resharding/shard-key layout 메시지만 반환한다.
   - 수동 shard snapshot 생성/stream/download/recovery와 partial snapshot manifest 조회도 private ORAM bucket store collection에서는 fail closed 한다. partial snapshot recovery는 recovery lock 상태를 관찰하기 전에 같은 guard로 먼저 닫는다. guard 오류는 호출자가 넘긴 operation label, private ORAM key id, rule id, instance id, binding id, collection-local store directory name을 반사하지 않는다. 현재 private index는 collection-local `private_hnsw_oram/` 또는 `private_result_oram/` bucket store이므로 shard snapshot만으로는 epoch/root parity를 보존할 수 없다.
   - distributed private ORAM epoch operations는 consensus-backed epoch/root CAS가 구현될 때까지 fail closed 한다. 현재 MVP의 ORAM commit CAS는 node-local 파일 상태만 원자화하므로 manifest upload, bucket upload, session open, session-bound read, commit은 cluster mode에서 진행하지 않는다. REST/gRPC route fixtures도 manifest upload, bucket upload, session open, session-bound read, commit이 모두 같은 consensus-backed CAS guard에서 거부되는지 검증한다.
+  - Private HNSW/result ORAM active-session epoch/root mismatch guard는 `read_paths`/`read_buckets`/`commit` 같은 operation label을 오류에 반사하지 않고 고정 active-session mismatch 메시지만 반환한다.
 
 테스트:
 
