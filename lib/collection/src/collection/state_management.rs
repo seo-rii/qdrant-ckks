@@ -5,7 +5,7 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use futures::StreamExt as _;
 use futures::stream::FuturesUnordered;
 
-use crate::collection::Collection;
+use super::{Collection, collection_encryption_uses_private_oram_bucket_store};
 use crate::collection::payload_index_schema::PayloadIndexSchema;
 use crate::collection_state::{ShardInfo, State};
 use crate::config::CollectionConfigInternal;
@@ -97,6 +97,19 @@ impl Collection {
     }
 
     async fn apply_reshard_state(&self, resharding: Option<ReshardState>) -> CollectionResult<()> {
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
+        validate_private_oram_apply_reshard_state_until_supported(
+            resharding.as_ref(),
+            private_oram_bucket_store_collection,
+        )?;
+
         // We don't have to explicitly abort resharding or bump shard replica states, because:
         // - peers are not driving resharding themselves
         // - ongoing (resharding) shard transfers are explicitly updated
@@ -275,5 +288,57 @@ impl Collection {
             .await?;
 
         results.into_iter().sum()
+    }
+}
+
+fn validate_private_oram_apply_reshard_state_until_supported(
+    resharding: Option<&ReshardState>,
+    private_oram_bucket_store_collection: bool,
+) -> CollectionResult<()> {
+    if !private_oram_bucket_store_collection || resharding.is_none() {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(
+        "cannot apply resharding state for private ORAM collections: collection-local encrypted \
+         ORAM buckets cannot be moved by consensus snapshot apply until ORAM bucket migration and \
+         consensus-backed epoch/root ownership are implemented",
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::operations::cluster_ops::ReshardingDirection;
+
+    #[test]
+    fn private_oram_apply_reshard_state_guard_redacts_collection_details() {
+        let resharding = ReshardState::new(
+            Uuid::nil(),
+            ReshardingDirection::Up,
+            2,
+            3,
+            Some("tenant-secret-shard-key".into()),
+        );
+
+        validate_private_oram_apply_reshard_state_until_supported(None, true).unwrap();
+        validate_private_oram_apply_reshard_state_until_supported(Some(&resharding), false)
+            .unwrap();
+
+        let err =
+            validate_private_oram_apply_reshard_state_until_supported(Some(&resharding), true)
+                .unwrap_err();
+        let rendered = format!("{err:?}");
+
+        assert!(rendered.contains("cannot apply resharding state for private ORAM collections"));
+        assert!(rendered.contains("collection-local encrypted ORAM buckets"));
+        assert!(rendered.contains("consensus-backed epoch/root"));
+        assert!(!rendered.contains("tenant-secret-shard-key"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("private_result_oram"));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
     }
 }
