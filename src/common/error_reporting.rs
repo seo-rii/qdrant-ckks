@@ -79,6 +79,8 @@ pub(crate) fn redact_crypto_material_for_report(value: &str) -> String {
         "valueb64",
         "nonceb64",
         "signatureb64",
+        "signaturepublickey",
+        "signaturepublickeys",
         "signaturesig",
         "sigb64",
         "privatekey",
@@ -157,6 +159,8 @@ pub(crate) fn redact_crypto_material_for_report(value: &str) -> String {
         "orampath",
         "orampaths",
         "orampositionmap",
+        "ownersigningkeyid",
+        "ownersigningkeyids",
         "payloadbytes",
         "payloadplaintext",
         "payloadplaintexts",
@@ -207,6 +211,8 @@ pub(crate) fn redact_crypto_material_for_report(value: &str) -> String {
         "score",
         "scores",
         "sessionid",
+        "signingkeyid",
+        "signingkeyids",
         "sibling",
         "siblings",
         "siblinghash",
@@ -495,6 +501,27 @@ mod tests {
             "unknownField=private-unknown-field-camel-sentinel",
         ] {
             let payload = ErrorReporter::build_report_payload(secret, "node-6", Some(secret));
+
+            assert!(payload.contains("crypto material omitted"), "{payload}");
+            assert!(!payload.contains("sentinel"), "{payload}");
+        }
+    }
+
+    #[test]
+    fn test_build_report_payload_redacts_private_oram_signing_key_identifiers() {
+        for secret in [
+            "owner_signing_key_id=private-owner-signing-key-id-sentinel",
+            "ownerSigningKeyId=private-owner-signing-key-id-camel-sentinel",
+            "owner_signing_key_ids=[private-owner-signing-key-ids-sentinel]",
+            "ownerSigningKeyIds=[private-owner-signing-key-ids-camel-sentinel]",
+            "signing_key_id=private-signing-key-id-sentinel",
+            "signingKeyId=private-signing-key-id-camel-sentinel",
+            "signing_key_ids=[private-signing-key-ids-sentinel]",
+            "signingKeyIds=[private-signing-key-ids-camel-sentinel]",
+            "signature_public_keys={private-signing-key-registry-sentinel: public-key-sentinel}",
+            "signaturePublicKeys={private-signing-key-registry-camel-sentinel: public-key-sentinel}",
+        ] {
+            let payload = ErrorReporter::build_report_payload(secret, "node-7", Some(secret));
 
             assert!(payload.contains("crypto material omitted"), "{payload}");
             assert!(!payload.contains("sentinel"), "{payload}");
