@@ -8690,6 +8690,25 @@ async fn private_hnsw_vector_rejects_direct_search_paths_with_session_api_messag
     .unwrap_err();
     assert_private_hnsw_session_api_error(err);
 
+    let err = recommend_batch_by(
+        vec![(
+            RecommendRequestInternal {
+                positive: vec![RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])],
+                limit: 1,
+                ..Default::default()
+            },
+            ShardSelectorInternal::All,
+        )],
+        &collection,
+        |_name| async { None },
+        None,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
     let err = discover(
         DiscoverRequestInternal {
             target: Some(RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])),
@@ -8707,6 +8726,32 @@ async fn private_hnsw_vector_rejects_direct_search_paths_with_session_api_messag
         |_name| async { None },
         None,
         ShardSelectorInternal::All,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_hnsw_session_api_error(err);
+
+    let err = discover_batch(
+        vec![(
+            DiscoverRequestInternal {
+                target: Some(RecommendExample::Dense(vec![1.0, 0.0, 0.0, 0.0])),
+                context: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                with_payload: None,
+                with_vector: None,
+                using: None,
+                lookup_from: None,
+            },
+            ShardSelectorInternal::All,
+        )],
+        &collection,
+        |_name| async { None },
+        None,
         None,
         HwMeasurementAcc::new(),
     )
