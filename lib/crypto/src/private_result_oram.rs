@@ -201,8 +201,8 @@ impl Debug for PrivateResultOramManifest {
             .field("provider", &self.provider)
             .field("binding", &self.binding)
             .field("collection_id", &self.collection_id)
-            .field("key_id", &self.key_id)
-            .field("rk_id", &self.rk_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
             .field("oram", &self.oram)
             .field("index_epoch", &self.index_epoch)
@@ -210,7 +210,7 @@ impl Debug for PrivateResultOramManifest {
             .field("bucket_count", &self.bucket_count)
             .field("logical_result_count", &self.logical_result_count)
             .field("dummy_result_count", &self.dummy_result_count)
-            .field("owner_signing_key_id", &self.owner_signing_key_id)
+            .field("owner_signing_key_id", &"[redacted]")
             .field("created_at_unix", &self.created_at_unix)
             .finish()
     }
@@ -4266,6 +4266,9 @@ mod tests {
             }],
         };
         let mut manifest = fixture_manifest();
+        manifest.key_id = "RESULT-MANIFEST-KEY-SENTINEL".to_string();
+        manifest.rk_id = "RESULT-MANIFEST-RK-SENTINEL".to_string();
+        manifest.owner_signing_key_id = "RESULT-MANIFEST-OWNER-SIGNING-KEY-SENTINEL".to_string();
         manifest.root_hash = "RESULT-MANIFEST-ROOT-SENTINEL".to_string();
         let upload_bundle = PrivateResultOramUploadBundle {
             manifest: manifest.clone(),
@@ -4479,6 +4482,9 @@ mod tests {
             "RESULT-PROOF-VALUE-SENTINEL".to_string(),
             "RESULT-OLD-ROOT-SENTINEL".to_string(),
             "RESULT-NEW-ROOT-SENTINEL".to_string(),
+            "RESULT-MANIFEST-KEY-SENTINEL".to_string(),
+            "RESULT-MANIFEST-RK-SENTINEL".to_string(),
+            "RESULT-MANIFEST-OWNER-SIGNING-KEY-SENTINEL".to_string(),
             "RESULT-MANIFEST-ROOT-SENTINEL".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");

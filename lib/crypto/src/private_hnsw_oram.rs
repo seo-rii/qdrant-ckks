@@ -199,8 +199,8 @@ impl Debug for PrivateHnswOramManifest {
             .field("binding", &self.binding)
             .field("collection_id", &self.collection_id)
             .field("vector_name", &self.vector_name)
-            .field("key_id", &self.key_id)
-            .field("rk_id", &self.rk_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
             .field("dim", &self.dim)
             .field("distance", &self.distance)
@@ -213,7 +213,7 @@ impl Debug for PrivateHnswOramManifest {
             .field("logical_node_count", &self.logical_node_count)
             .field("dummy_node_count", &self.dummy_node_count)
             .field("result_privacy", &self.result_privacy)
-            .field("owner_signing_key_id", &self.owner_signing_key_id)
+            .field("owner_signing_key_id", &"[redacted]")
             .field("created_at_unix", &self.created_at_unix)
             .finish()
     }
@@ -1110,6 +1110,9 @@ mod tests {
             sig: "HNSW-SIGNATURE-SENTINEL".to_string(),
         };
         let mut manifest = fixture_manifest();
+        manifest.key_id = "HNSW-MANIFEST-KEY-SENTINEL".to_string();
+        manifest.rk_id = "HNSW-MANIFEST-RK-SENTINEL".to_string();
+        manifest.owner_signing_key_id = "HNSW-MANIFEST-OWNER-SIGNING-KEY-SENTINEL".to_string();
         manifest.root_hash = "HNSW-MANIFEST-ROOT-SENTINEL".to_string();
         let commit_refs = [PrivateHnswOramCommitBucketRef {
             bucket_id: 987_654,
@@ -1199,6 +1202,9 @@ mod tests {
             "HNSW-CONTEXT-SIGNATURE-KEY-SENTINEL",
             "[99, 99, 99",
             "[77, 77, 77",
+            "HNSW-MANIFEST-KEY-SENTINEL",
+            "HNSW-MANIFEST-RK-SENTINEL",
+            "HNSW-MANIFEST-OWNER-SIGNING-KEY-SENTINEL",
             "HNSW-MANIFEST-ROOT-SENTINEL",
             "HNSW-OLD-ROOT-SENTINEL",
             "HNSW-NEW-ROOT-SENTINEL",
