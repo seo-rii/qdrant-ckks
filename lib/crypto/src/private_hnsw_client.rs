@@ -7423,6 +7423,28 @@ mod tests {
             ))
         );
 
+        let padded_plan = plan_private_hnsw_private_result_fetch_tokens(
+            ResultPrivacyMode::PrivatePayloadOramRequired,
+            &result,
+            2,
+            &[[99; 32]],
+        )
+        .unwrap()
+        .unwrap();
+        let wrong_dummy_token = PrivateResultOramTokenFetchResult {
+            accesses: vec![
+                result_token_access([11; 32], [21; 32], vec![1]),
+                result_token_access([100; 32], [199; 32], vec![2]),
+            ],
+            updated_buckets: Vec::new(),
+        };
+        assert_eq!(
+            finalize_private_hnsw_private_result_fetch(&result, &padded_plan, &wrong_dummy_token),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "payload_fetch_tokens"
+            ))
+        );
+
         let mut wrong_real_result_count = plan.clone();
         wrong_real_result_count.real_result_count = 0;
         assert_eq!(
