@@ -5638,6 +5638,25 @@ esac
             );
 
             assert_private_hnsw_grpc_write_error(
+                crate::tonic::api::update_common::delete(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::DeletePoints {
+                        collection_name: "private_hnsw_docs".to_string(),
+                        wait: Some(true),
+                        points: Some(grpc_points_selector()),
+                        ordering: None,
+                        shard_key_selector: None,
+                        timeout: None,
+                    },
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    request_hw_counter(),
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_write_error(
                 crate::tonic::api::update_common::update_batch(
                     &dispatcher,
                     api::grpc::qdrant::UpdateBatchPoints {
