@@ -15,6 +15,8 @@ use collection::config::{
 use collection::discovery::{discover, discover_batch};
 use collection::grouping::GroupBy;
 use collection::grouping::group_by::{GroupRequest, SourceRequest};
+use collection::lookup::types::PseudoId;
+use collection::lookup::{WithLookup, lookup_ids};
 use collection::operations::config_diff::CollectionParamsDiff;
 use collection::operations::payload_ops::{DeletePayloadOp, PayloadOps, SetPayloadOp};
 use collection::operations::point_ops::{
@@ -3186,12 +3188,14 @@ async fn private_result_oram_payload_writes_require_session_api_in_collection_op
 #[tokio::test(flavor = "multi_thread")]
 async fn private_result_oram_raw_payload_reads_require_session_api_in_collection_ops() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
-    let collection = encrypted_collection_fixture(
-        collection_dir.path(),
-        1,
-        private_result_oram_encryption_config(),
-    )
-    .await;
+    let collection = Arc::new(
+        encrypted_collection_fixture(
+            collection_dir.path(),
+            1,
+            private_result_oram_encryption_config(),
+        )
+        .await,
+    );
     let private_point_id = 987_654_321_u64;
     let raw_private_selector =
         || WithPayloadInterface::Fields(vec!["document.body.lang".parse().unwrap()]);
@@ -3298,7 +3302,7 @@ async fn private_result_oram_raw_payload_reads_require_session_api_in_collection
             using: None,
             lookup_from: None,
         },
-        &collection,
+        collection.as_ref(),
         |_name| async { None },
         None,
         ShardSelectorInternal::All,
@@ -3327,7 +3331,7 @@ async fn private_result_oram_raw_payload_reads_require_session_api_in_collection
             },
             ShardSelectorInternal::All,
         )],
-        &collection,
+        collection.as_ref(),
         |_name| async { None },
         None,
         None,
@@ -3350,7 +3354,7 @@ async fn private_result_oram_raw_payload_reads_require_session_api_in_collection
             using: None,
             lookup_from: None,
         },
-        &collection,
+        collection.as_ref(),
         |_name| async { None },
         None,
         ShardSelectorInternal::All,
@@ -3377,7 +3381,7 @@ async fn private_result_oram_raw_payload_reads_require_session_api_in_collection
             },
             ShardSelectorInternal::All,
         )],
-        &collection,
+        collection.as_ref(),
         |_name| async { None },
         None,
         None,
@@ -3386,6 +3390,27 @@ async fn private_result_oram_raw_payload_reads_require_session_api_in_collection
     .await
     .unwrap_err();
     assert_private_result_oram_read_error_without(err, "discover", &forbidden);
+
+    let lookup_collection = Arc::clone(&collection);
+    let err = lookup_ids(
+        WithLookup {
+            collection_name: "test".to_string(),
+            with_payload: Some(raw_private_selector()),
+            with_vectors: Some(WithVector::Bool(false)),
+        },
+        Vec::<PseudoId>::new(),
+        move |_name| {
+            let lookup_collection = Arc::clone(&lookup_collection);
+            async move { Some(lookup_collection) }
+        },
+        None,
+        &ShardSelectorInternal::All,
+        None,
+        HwMeasurementAcc::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_private_result_oram_read_error_without(err, "group lookup", &forbidden);
 }
 
 #[tokio::test(flavor = "multi_thread")]
