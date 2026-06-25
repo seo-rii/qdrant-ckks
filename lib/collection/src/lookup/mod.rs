@@ -48,10 +48,7 @@ where
             what: format!("Collection {}", request.collection_name),
         })?;
     collection
-        .ensure_private_result_oram_payload_read_is_not_raw(
-            request.with_payload.as_ref(),
-            "group lookup",
-        )
+        .ensure_private_result_oram_payload_read_is_not_raw(request.with_payload.as_ref())
         .await?;
 
     let ids = values

@@ -167,10 +167,7 @@ where
         .ensure_vector_search_does_not_touch_encrypted_vector(&vector_name, "recommend")
         .await?;
     collection
-        .ensure_private_result_oram_payload_read_is_not_raw(
-            request.with_payload.as_ref(),
-            "recommend",
-        )
+        .ensure_private_result_oram_payload_read_is_not_raw(request.with_payload.as_ref())
         .await?;
     if request.limit == 0 {
         return Ok(vec![]);
@@ -284,10 +281,7 @@ where
             .ensure_vector_search_does_not_touch_encrypted_vector(&vector_name, "recommend")
             .await?;
         collection
-            .ensure_private_result_oram_payload_read_is_not_raw(
-                request.with_payload.as_ref(),
-                "recommend",
-            )
+            .ensure_private_result_oram_payload_read_is_not_raw(request.with_payload.as_ref())
             .await?;
     }
 

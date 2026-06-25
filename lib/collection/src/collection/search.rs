@@ -130,11 +130,8 @@ impl Collection {
             }
         }
         for search in &request.searches {
-            self.ensure_private_result_oram_payload_read_is_not_raw(
-                search.with_payload.as_ref(),
-                "search",
-            )
-            .await?;
+            self.ensure_private_result_oram_payload_read_is_not_raw(search.with_payload.as_ref())
+                .await?;
         }
         // shortcuts batch if all requests with limit=0
         if request.searches.iter().all(|s| s.limit == 0) {

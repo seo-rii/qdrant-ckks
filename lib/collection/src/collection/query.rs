@@ -660,11 +660,8 @@ impl Collection {
             ensure_encrypted_payload_read_mode_is_supported(mode)?;
         }
         for request in requests_batch {
-            self.ensure_private_result_oram_payload_read_is_not_raw(
-                Some(&request.with_payload),
-                "query",
-            )
-            .await?;
+            self.ensure_private_result_oram_payload_read_is_not_raw(Some(&request.with_payload))
+                .await?;
         }
 
         Ok(())

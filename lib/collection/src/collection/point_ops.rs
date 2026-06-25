@@ -3012,11 +3012,8 @@ impl Collection {
             .map(WithPayloadInterface::encrypted_payload_read_mode)
             .unwrap_or(EncryptedPayloadReadMode::Raw);
         ensure_encrypted_payload_read_mode_is_supported(encrypted_payload_read_mode)?;
-        self.ensure_private_result_oram_payload_read_is_not_raw(
-            request.with_payload.as_ref(),
-            "scroll",
-        )
-        .await?;
+        self.ensure_private_result_oram_payload_read_is_not_raw(request.with_payload.as_ref())
+            .await?;
         if limit == 0 {
             return Err(CollectionError::BadRequest {
                 description: "Limit cannot be 0".to_string(),
@@ -3199,11 +3196,8 @@ impl Collection {
             .unwrap_or(&WithPayloadInterface::Bool(false));
         let encrypted_payload_read_mode = with_payload_interface.encrypted_payload_read_mode();
         ensure_encrypted_payload_read_mode_is_supported(encrypted_payload_read_mode)?;
-        self.ensure_private_result_oram_payload_read_is_not_raw(
-            request.with_payload.as_ref(),
-            "retrieve",
-        )
-        .await?;
+        self.ensure_private_result_oram_payload_read_is_not_raw(request.with_payload.as_ref())
+            .await?;
         if request.ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -3720,7 +3714,6 @@ impl Collection {
     pub(crate) async fn ensure_private_result_oram_payload_read_is_not_raw(
         &self,
         with_payload: Option<&WithPayloadInterface>,
-        _operation: &str,
     ) -> CollectionResult<()> {
         let Some(with_payload) = with_payload else {
             return Ok(());
