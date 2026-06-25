@@ -5890,6 +5890,47 @@ esac
                 .unwrap_err(),
             );
 
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::recommend(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::RecommendPoints {
+                        collection_name: collection_name.to_string(),
+                        positive: Vec::new(),
+                        negative: Vec::new(),
+                        filter: None,
+                        limit: 1,
+                        with_payload: None,
+                        params: None,
+                        score_threshold: None,
+                        offset: None,
+                        using: Some(private_vector_name.to_string()),
+                        with_vectors: None,
+                        lookup_from: None,
+                        read_consistency: None,
+                        strategy: None,
+                        positive_vectors: vec![api::grpc::qdrant::Vector {
+                            vector: Some(api::grpc::qdrant::vector::Vector::Dense(
+                                api::grpc::qdrant::DenseVector {
+                                    data: vec![0.0, 0.0],
+                                },
+                            )),
+                            ..Default::default()
+                        }],
+                        negative_vectors: Vec::new(),
+                        timeout: None,
+                        shard_key_selector: None,
+                    },
+                    auth.clone(),
+                    storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                        HwMeasurementAcc::disposable(),
+                        false,
+                    ),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
             assert_private_hnsw_read_error(
                 crate::common::query::do_recommend_point_groups(
                     &toc,
@@ -5925,6 +5966,49 @@ esac
                 .unwrap_err(),
             );
 
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::recommend_groups(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::RecommendPointGroups {
+                        collection_name: collection_name.to_string(),
+                        positive: Vec::new(),
+                        negative: Vec::new(),
+                        filter: None,
+                        limit: 1,
+                        with_payload: None,
+                        params: None,
+                        score_threshold: None,
+                        using: Some(private_vector_name.to_string()),
+                        with_vectors: None,
+                        lookup_from: None,
+                        group_by: "group".to_string(),
+                        group_size: 1,
+                        read_consistency: None,
+                        with_lookup: None,
+                        strategy: None,
+                        positive_vectors: vec![api::grpc::qdrant::Vector {
+                            vector: Some(api::grpc::qdrant::vector::Vector::Dense(
+                                api::grpc::qdrant::DenseVector {
+                                    data: vec![0.0, 0.0],
+                                },
+                            )),
+                            ..Default::default()
+                        }],
+                        negative_vectors: Vec::new(),
+                        timeout: None,
+                        shard_key_selector: None,
+                    },
+                    auth.clone(),
+                    storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                        HwMeasurementAcc::disposable(),
+                        false,
+                    ),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
             assert_private_hnsw_read_error(
                 crate::common::query::do_discover_points(
                     &toc,
@@ -5948,6 +6032,55 @@ esac
                     auth.clone(),
                     None,
                     HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_read_error(
+                crate::tonic::api::query_common::discover(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::DiscoverPoints {
+                        collection_name: collection_name.to_string(),
+                        target: Some(api::grpc::qdrant::TargetVector {
+                            target: Some(api::grpc::qdrant::target_vector::Target::Single(
+                                api::grpc::qdrant::VectorExample {
+                                    example: Some(
+                                        api::grpc::qdrant::vector_example::Example::Vector(
+                                            api::grpc::qdrant::Vector {
+                                                vector: Some(
+                                                    api::grpc::qdrant::vector::Vector::Dense(
+                                                        api::grpc::qdrant::DenseVector {
+                                                            data: vec![0.0, 0.0],
+                                                        },
+                                                    ),
+                                                ),
+                                                ..Default::default()
+                                            },
+                                        ),
+                                    ),
+                                },
+                            )),
+                        }),
+                        context: Vec::new(),
+                        filter: None,
+                        limit: 1,
+                        with_payload: None,
+                        params: None,
+                        offset: None,
+                        using: Some(private_vector_name.to_string()),
+                        with_vectors: None,
+                        lookup_from: None,
+                        read_consistency: None,
+                        timeout: None,
+                        shard_key_selector: None,
+                    },
+                    auth.clone(),
+                    storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                        HwMeasurementAcc::disposable(),
+                        false,
+                    ),
                     None,
                 )
                 .await
