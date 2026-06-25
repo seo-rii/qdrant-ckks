@@ -574,6 +574,31 @@ mod tests {
         )
         .unwrap();
 
+        for state_only_update in [
+            ReplicaState::Dead,
+            ReplicaState::Partial,
+            ReplicaState::Initializing,
+            ReplicaState::Listener,
+            ReplicaState::PartialSnapshot,
+            ReplicaState::Recovery,
+            ReplicaState::ActiveRead,
+            ReplicaState::ManualRecovery,
+        ] {
+            validate_private_oram_apply_shard_info_until_supported(
+                &shard_info_fixture(1, [(7, state_only_update)]),
+                &current_mapping,
+                &current_shard_ids,
+                &current_mapping,
+                &current_replica_peers,
+                true,
+            )
+            .unwrap_or_else(|err| {
+                panic!(
+                    "private ORAM consensus apply must allow non-resharding state-only sync for {state_only_update:?}: {err}"
+                )
+            });
+        }
+
         for (shards, mapping) in [
             (
                 shard_info_fixture(2, [(7, ReplicaState::Active)]),
