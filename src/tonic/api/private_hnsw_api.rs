@@ -946,6 +946,8 @@ mod private_hnsw_grpc_tests {
                 "client.state",
                 "position.map",
                 "stash.backup",
+                "clientStateBackups.json",
+                "tokenPositionMapBackups.json",
             ] {
                 let err = PrivateHnswOram::get_private_hnsw_manifest(
                     &service,
@@ -968,6 +970,8 @@ mod private_hnsw_grpc_tests {
                 assert!(!err.message().contains("client.state"));
                 assert!(!err.message().contains("position.map"));
                 assert!(!err.message().contains("stash.backup"));
+                assert!(!err.message().contains("clientStateBackups"));
+                assert!(!err.message().contains("tokenPositionMapBackups"));
                 assert!(!err.message().contains("private_hnsw_oram"));
                 assert!(!err.message().contains("/tmp"));
             }

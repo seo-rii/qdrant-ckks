@@ -921,6 +921,11 @@ mod private_hnsw_rest_tests {
                 ("client.state", "client.state"),
                 ("position.map", "position.map"),
                 ("stash.backup", "stash.backup"),
+                ("clientStateBackups.json", "clientStateBackups.json"),
+                (
+                    "tokenPositionMapBackups.json",
+                    "tokenPositionMapBackups.json",
+                ),
             ] {
                 let request = actix_test::TestRequest::get()
                     .uri(&format!(
@@ -940,6 +945,8 @@ mod private_hnsw_rest_tests {
                 assert!(!body.contains("client.state"), "{body}");
                 assert!(!body.contains("position.map"), "{body}");
                 assert!(!body.contains("stash.backup"), "{body}");
+                assert!(!body.contains("clientStateBackups"), "{body}");
+                assert!(!body.contains("tokenPositionMapBackups"), "{body}");
                 assert!(!body.contains("private_hnsw_oram"), "{body}");
                 assert!(!body.contains("/tmp"), "{body}");
             }
