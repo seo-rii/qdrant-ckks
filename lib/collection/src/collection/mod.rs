@@ -1742,7 +1742,7 @@ mod tests {
     }
 
     #[test]
-    fn private_hnsw_automatic_transfer_recovery_fails_closed_until_bucket_transfer_supported() {
+    fn private_oram_automatic_transfer_recovery_fails_closed_until_bucket_transfer_supported() {
         let collection_name = "private-oram-recovery-secret-collection";
         validate_private_oram_automatic_transfer_recovery_until_supported(
             collection_name,
@@ -1765,6 +1765,8 @@ mod tests {
         assert!(!rendered.contains("shard 3"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains("private_result_oram"));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+        assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
     }
 
     #[test]
