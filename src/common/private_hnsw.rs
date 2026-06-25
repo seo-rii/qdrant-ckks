@@ -2161,7 +2161,7 @@ fn validate_bucket_commitment_context(
     manifest: &PrivateHnswOramManifest,
     index_epoch: u64,
     buckets: &[PrivateHnswOramBucket],
-    operation: &str,
+    _operation: &str,
 ) -> StorageResult<()> {
     for bucket in buckets {
         let expected_commitment = private_hnsw_bucket_commitment(
@@ -2177,14 +2177,12 @@ fn validate_bucket_commitment_context(
             &bucket.ciphertext_sha256,
         )
         .map_err(|_| {
-            StorageError::bad_request(format!(
-                "private HNSW ORAM {operation} bucket commitment context mismatch",
-            ))
+            StorageError::bad_request("private HNSW ORAM bucket commitment context mismatch")
         })?;
         if expected_commitment != bucket.bucket_commitment {
-            return Err(StorageError::bad_request(format!(
-                "private HNSW ORAM {operation} bucket commitment context mismatch",
-            )));
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM bucket commitment context mismatch",
+            ));
         }
     }
     Ok(())
@@ -3124,6 +3122,7 @@ mod private_hnsw_tests {
             err.to_string()
                 .contains("bucket commitment context mismatch")
         );
+        assert!(!err.to_string().contains("initial upload"));
 
         let first_leaf = encode_private_hnsw_oram_leaf_label(0, config.tree_height).unwrap();
         assert_eq!(

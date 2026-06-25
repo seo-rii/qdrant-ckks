@@ -2032,7 +2032,12 @@ mod private_hnsw_rest_tests {
                     buckets: merkle_mismatch_buckets,
                 },
                 StatusCode::BAD_REQUEST,
-                "initial upload bucket commitment context mismatch"
+                "bucket commitment context mismatch"
+            );
+            assert!(
+                !commitment_context_mismatch_error
+                    .contains("initial upload bucket commitment context mismatch"),
+                "{commitment_context_mismatch_error}"
             );
             assert!(
                 !commitment_context_mismatch_error.contains(&computed_mismatch_root),

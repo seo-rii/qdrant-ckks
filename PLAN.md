@@ -386,6 +386,7 @@
   - distributed private ORAM epoch operations는 consensus-backed epoch/root CAS가 구현될 때까지 fail closed 한다. 현재 MVP의 ORAM commit CAS는 node-local 파일 상태만 원자화하므로 manifest upload, bucket upload, session open, session-bound read, commit은 cluster mode에서 진행하지 않는다. REST/gRPC route fixtures도 manifest upload, bucket upload, session open, session-bound read, commit이 모두 같은 consensus-backed CAS guard에서 거부되는지 검증한다.
   - Private HNSW/result ORAM active-session epoch/root mismatch guard는 `read_paths`/`read_buckets`/`commit` 같은 operation label을 오류에 반사하지 않고 고정 active-session mismatch 메시지만 반환한다.
   - Private HNSW/result ORAM initial upload epoch mismatch guard는 store helper에 전달되는 `upload bundle` operation label을 오류에 반사하지 않고 고정 initial-epoch mismatch 메시지만 반환한다.
+  - Private HNSW ORAM initial upload bucket commitment context guard는 `initial upload` operation label을 오류에 반사하지 않고 고정 bucket commitment mismatch 메시지만 반환한다.
 
 테스트:
 
