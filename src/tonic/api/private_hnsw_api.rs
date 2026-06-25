@@ -4488,7 +4488,7 @@ mod private_hnsw_grpc_tests {
     }
 
     #[test]
-    fn open_session_grpc_route_rejects_distributed_epoch_mode() {
+    fn private_hnsw_grpc_routes_reject_distributed_epoch_operations() {
         let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
@@ -4498,60 +4498,130 @@ mod private_hnsw_grpc_tests {
             let service =
                 PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
 
-            PrivateHnswOram::upload_private_hnsw_manifest(
-                &service,
-                Request::new(grpc::UploadPrivateHnswManifestRequest {
-                    collection_name: COLLECTION_NAME.to_string(),
-                    vector_name: VECTOR_NAME.to_string(),
-                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
-                    signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
-                }),
-            )
-            .await
-            .unwrap();
-
-            PrivateHnswOram::upload_private_hnsw_buckets(
-                &service,
-                Request::new(grpc::UploadPrivateHnswBucketsRequest {
-                    collection_name: COLLECTION_NAME.to_string(),
-                    vector_name: VECTOR_NAME.to_string(),
-                    index_epoch: fixture.encrypted_build.index_epoch,
-                    root_hash: fixture.encrypted_build.root_hash.clone(),
-                    buckets: fixture
-                        .encrypted_build
-                        .buckets
-                        .clone()
-                        .into_iter()
-                        .map(bucket_to_proto)
-                        .collect(),
-                }),
-            )
-            .await
-            .unwrap();
+            macro_rules! assert_distributed_status {
+                ($result:expr, [$($secret:expr),* $(,)?] $(,)?) => {{
+                    let err = ($result).await.unwrap_err();
+                    assert_eq!(err.code(), Code::InvalidArgument);
+                    assert!(err.message().contains("consensus-backed epoch/root CAS"));
+                    $(assert!(!err.message().contains($secret), "{}", err.message());)*
+                }};
+            }
 
             let distributed_client_id = "tenant-a/distributed-sdk-instance";
-            let err = PrivateHnswOram::open_private_hnsw_session(
-                &service,
-                Request::new(grpc::OpenPrivateHnswSessionRequest {
-                    collection_name: COLLECTION_NAME.to_string(),
-                    vector_name: VECTOR_NAME.to_string(),
-                    client_id: distributed_client_id.to_string(),
-                    desired_epoch: BASE_EPOCH,
-                    fixed_budget: true,
-                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
-                }),
-            )
-            .await
-            .unwrap_err();
-            assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("consensus-backed epoch/root CAS"));
-            assert!(!err.message().contains(distributed_client_id));
-            assert!(!err.message().contains(&fixture.manifest.root_hash));
-            assert!(!err.message().contains(&fixture.manifest_signature.sig));
-            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
-            assert!(
-                !err.message()
-                    .contains(&fixture.encrypted_build.buckets[0].ciphertext)
+            let entry_leaf_label = fixture.entry_leaf_label();
+            let read_signature = fixture.client_signature();
+            let search_run = fixture.run_single_search_collect_writeback();
+            let commit_old_root_hash = search_run.commit_plan.old_root_hash.clone();
+            let commit_new_root_hash = search_run.commit_plan.new_root_hash.clone();
+            let commit_signature_sig = search_run.commit_signature.sig.clone();
+            let commit_bucket_ciphertext = search_run.updated_buckets[0].ciphertext.clone();
+
+            assert_distributed_status!(
+                PrivateHnswOram::upload_private_hnsw_manifest(
+                    &service,
+                    Request::new(grpc::UploadPrivateHnswManifestRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                        signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+                    }),
+                ),
+                [
+                    &fixture.manifest.root_hash,
+                    &fixture.manifest_signature.sig,
+                    &fixture.encrypted_build.buckets[0].ciphertext,
+                ],
+            );
+            assert_distributed_status!(
+                PrivateHnswOram::upload_private_hnsw_buckets(
+                    &service,
+                    Request::new(grpc::UploadPrivateHnswBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        index_epoch: fixture.encrypted_build.index_epoch,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        buckets: fixture
+                            .encrypted_build
+                            .buckets
+                            .clone()
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    }),
+                ),
+                [
+                    &fixture.encrypted_build.root_hash,
+                    &fixture.encrypted_build.buckets[0].ciphertext,
+                ],
+            );
+            assert_distributed_status!(
+                PrivateHnswOram::open_private_hnsw_session(
+                    &service,
+                    Request::new(grpc::OpenPrivateHnswSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        client_id: distributed_client_id.to_string(),
+                        desired_epoch: BASE_EPOCH,
+                        fixed_budget: true,
+                        result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                    }),
+                ),
+                [
+                    distributed_client_id,
+                    &fixture.manifest.root_hash,
+                    &fixture.manifest_signature.sig,
+                ],
+            );
+            assert_distributed_status!(
+                PrivateHnswOram::read_private_hnsw_paths(
+                    &service,
+                    Request::new(grpc::OramReadPathsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        session_id: SESSION_ID.to_string(),
+                        index_epoch: BASE_EPOCH,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        paths: vec![entry_leaf_label.clone()],
+                        padding: Some(grpc::OramReadPadding {
+                            requested_paths: 1,
+                            dummy_paths_included: true,
+                        }),
+                        client_signature: Some(signature_to_proto(read_signature.clone())),
+                    }),
+                ),
+                [
+                    SESSION_ID,
+                    &fixture.encrypted_build.root_hash,
+                    &entry_leaf_label,
+                    &read_signature.sig,
+                ],
+            );
+            assert_distributed_status!(
+                PrivateHnswOram::commit_private_hnsw_paths(
+                    &service,
+                    Request::new(grpc::OramCommitRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        session_id: SESSION_ID.to_string(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: commit_old_root_hash.clone(),
+                        new_root_hash: commit_new_root_hash.clone(),
+                        updated_buckets: search_run
+                            .updated_buckets
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                        commit_signature: Some(signature_to_proto(search_run.commit_signature)),
+                    }),
+                ),
+                [
+                    SESSION_ID,
+                    &commit_old_root_hash,
+                    &commit_new_root_hash,
+                    &commit_signature_sig,
+                    &commit_bucket_ciphertext,
+                ],
             );
         });
     }

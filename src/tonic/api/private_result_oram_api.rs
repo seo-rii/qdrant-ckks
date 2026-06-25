@@ -439,6 +439,7 @@ mod private_result_oram_grpc_tests {
     const UNCONFIGURED_SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v3";
     const BASE_EPOCH: u64 = 42;
     const NEXT_EPOCH: u64 = 43;
+    const SESSION_ID: &str = "session-1";
 
     struct PrivateResultRouteFixture {
         manifest: PrivateResultOramManifest,
@@ -3482,7 +3483,7 @@ mod private_result_oram_grpc_tests {
     }
 
     #[test]
-    fn open_session_grpc_route_rejects_distributed_epoch_mode() {
+    fn private_result_oram_grpc_routes_reject_distributed_epoch_operations() {
         let _guard = route_e2e_guard();
         let fixture = PrivateResultRouteFixture::build();
         let settings = fixture.settings();
@@ -3495,47 +3496,110 @@ mod private_result_oram_grpc_tests {
             let manifest_signature = fixture.signature.sig.clone();
             let first_bucket_ciphertext = fixture.buckets[0].ciphertext.clone();
 
-            PrivateResultOram::upload_private_result_oram_manifest(
-                &service,
-                Request::new(grpc::UploadPrivateResultOramManifestRequest {
-                    collection_name: COLLECTION_NAME.to_string(),
-                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
-                    signature: Some(signature_to_proto(fixture.signature)),
-                }),
-            )
-            .await
-            .unwrap();
-
-            PrivateResultOram::upload_private_result_oram_buckets(
-                &service,
-                Request::new(grpc::UploadPrivateResultOramBucketsRequest {
-                    collection_name: COLLECTION_NAME.to_string(),
-                    index_epoch: fixture.manifest.index_epoch,
-                    root_hash: fixture.manifest.root_hash.clone(),
-                    buckets: fixture.buckets.into_iter().map(bucket_to_proto).collect(),
-                }),
-            )
-            .await
-            .unwrap();
+            macro_rules! assert_distributed_status {
+                ($result:expr, [$($secret:expr),* $(,)?] $(,)?) => {{
+                    let err = ($result).await.unwrap_err();
+                    assert_eq!(err.code(), Code::InvalidArgument);
+                    assert!(err.message().contains("consensus-backed epoch/root CAS"));
+                    $(assert!(!err.message().contains($secret), "{}", err.message());)*
+                }};
+            }
 
             let distributed_client_id = "tenant-a/distributed-result-sdk-instance";
-            let err = PrivateResultOram::open_private_result_oram_session(
-                &service,
-                Request::new(grpc::OpenPrivateResultOramSessionRequest {
-                    collection_name: COLLECTION_NAME.to_string(),
-                    client_id: distributed_client_id.to_string(),
-                    desired_epoch: BASE_EPOCH,
-                    fixed_budget: true,
-                }),
-            )
-            .await
-            .unwrap_err();
-            assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("consensus-backed epoch/root CAS"));
-            assert!(!err.message().contains(distributed_client_id));
-            assert!(!err.message().contains(&manifest_root_hash));
-            assert!(!err.message().contains(&manifest_signature));
-            assert!(!err.message().contains(&first_bucket_ciphertext));
+            let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            let read_signature = fixture.read_signature(&read_bucket_ids);
+            let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+            let updated_bucket_ciphertext = updated_bucket.ciphertext.clone();
+
+            assert_distributed_status!(
+                PrivateResultOram::upload_private_result_oram_manifest(
+                    &service,
+                    Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                        signature: Some(signature_to_proto(fixture.signature.clone())),
+                    }),
+                ),
+                [
+                    &manifest_root_hash,
+                    &manifest_signature,
+                    &first_bucket_ciphertext
+                ],
+            );
+            assert_distributed_status!(
+                PrivateResultOram::upload_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        buckets: fixture
+                            .buckets
+                            .clone()
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    }),
+                ),
+                [&manifest_root_hash, &first_bucket_ciphertext],
+            );
+            assert_distributed_status!(
+                PrivateResultOram::open_private_result_oram_session(
+                    &service,
+                    Request::new(grpc::OpenPrivateResultOramSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        client_id: distributed_client_id.to_string(),
+                        desired_epoch: BASE_EPOCH,
+                        fixed_budget: true,
+                    }),
+                ),
+                [
+                    distributed_client_id,
+                    &manifest_root_hash,
+                    &manifest_signature
+                ],
+            );
+            assert_distributed_status!(
+                PrivateResultOram::read_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: SESSION_ID.to_string(),
+                        index_epoch: BASE_EPOCH,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        bucket_ids: read_bucket_ids.clone(),
+                        read_signature: Some(signature_to_proto(read_signature.clone())),
+                    }),
+                ),
+                [
+                    SESSION_ID,
+                    &manifest_root_hash,
+                    &read_signature.sig,
+                    &first_bucket_ciphertext
+                ],
+            );
+            assert_distributed_status!(
+                PrivateResultOram::commit_private_result_oram_buckets(
+                    &service,
+                    Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: SESSION_ID.to_string(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: fixture.manifest.root_hash.clone(),
+                        new_root_hash: new_root_hash.clone(),
+                        updated_buckets: vec![bucket_to_proto(updated_bucket)],
+                        commit_signature: Some(signature_to_proto(commit_signature.clone())),
+                    }),
+                ),
+                [
+                    SESSION_ID,
+                    &manifest_root_hash,
+                    &new_root_hash,
+                    &commit_signature.sig,
+                    &updated_bucket_ciphertext,
+                ],
+            );
         });
     }
 

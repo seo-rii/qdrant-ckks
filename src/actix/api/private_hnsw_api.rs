@@ -4038,7 +4038,7 @@ mod private_hnsw_rest_tests {
     }
 
     #[test]
-    fn open_session_rest_route_rejects_distributed_epoch_mode() {
+    fn private_hnsw_rest_routes_reject_distributed_epoch_operations() {
         let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
@@ -4054,8 +4054,29 @@ mod private_hnsw_rest_tests {
             )
             .await;
 
-            let manifest_response = actix_test::call_service(
-                &app,
+            macro_rules! assert_distributed_rejection {
+                ($request:expr, [$($secret:expr),* $(,)?] $(,)?) => {{
+                    let response = actix_test::call_service(&app, $request).await;
+                    let status = response.status();
+                    let body_bytes = actix_test::read_body(response).await;
+                    let body = String::from_utf8_lossy(&body_bytes);
+                    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+                    assert!(body.contains("consensus-backed epoch/root CAS"), "{body}");
+                    $(assert!(!body.contains($secret), "{body}");)*
+                }};
+            }
+
+            let distributed_client_id = "tenant-a/distributed-sdk-instance";
+            let entry_leaf_label = fixture.entry_leaf_label();
+            let read_signature = fixture.client_signature();
+            let read_signature_sig = read_signature.sig.clone();
+            let search_run = fixture.run_single_search_collect_writeback();
+            let commit_old_root_hash = search_run.commit_plan.old_root_hash.clone();
+            let commit_new_root_hash = search_run.commit_plan.new_root_hash.clone();
+            let commit_signature_sig = search_run.commit_signature.sig.clone();
+            let commit_bucket_ciphertext = search_run.updated_buckets[0].ciphertext.clone();
+
+            assert_distributed_rejection!(
                 actix_test::TestRequest::post()
                     .uri("/collections/docs/private-hnsw/text/manifest")
                     .set_json(&UploadPrivateHnswManifestRequest {
@@ -4063,12 +4084,13 @@ mod private_hnsw_rest_tests {
                         signature: fixture.manifest_signature.clone(),
                     })
                     .to_request(),
-            )
-            .await;
-            assert_eq!(manifest_response.status(), StatusCode::OK);
-
-            let bucket_response = actix_test::call_service(
-                &app,
+                [
+                    &fixture.manifest.root_hash,
+                    &fixture.manifest_signature.sig,
+                    &fixture.encrypted_build.buckets[0].ciphertext,
+                ],
+            );
+            assert_distributed_rejection!(
                 actix_test::TestRequest::post()
                     .uri("/collections/docs/private-hnsw/text/buckets")
                     .set_json(&UploadPrivateHnswBucketsRequest {
@@ -4077,13 +4099,12 @@ mod private_hnsw_rest_tests {
                         buckets: fixture.encrypted_build.buckets.clone(),
                     })
                     .to_request(),
-            )
-            .await;
-            assert_eq!(bucket_response.status(), StatusCode::OK);
-
-            let distributed_client_id = "tenant-a/distributed-sdk-instance";
-            let response = actix_test::call_service(
-                &app,
+                [
+                    &fixture.encrypted_build.root_hash,
+                    &fixture.encrypted_build.buckets[0].ciphertext,
+                ],
+            );
+            assert_distributed_rejection!(
                 actix_test::TestRequest::post()
                     .uri("/collections/docs/private-hnsw/text/session")
                     .set_json(&OpenPrivateHnswSessionRequest {
@@ -4093,20 +4114,62 @@ mod private_hnsw_rest_tests {
                         result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
                     })
                     .to_request(),
-            )
-            .await;
-            let status = response.status();
-            let body_bytes = actix_test::read_body(response).await;
-            let body = String::from_utf8_lossy(&body_bytes);
-            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-            assert!(body.contains("consensus-backed epoch/root CAS"), "{body}");
-            assert!(!body.contains(distributed_client_id), "{body}");
-            assert!(!body.contains(&fixture.manifest.root_hash), "{body}");
-            assert!(!body.contains(&fixture.manifest_signature.sig), "{body}");
-            assert!(!body.contains(&fixture.encrypted_build.root_hash), "{body}");
-            assert!(
-                !body.contains(&fixture.encrypted_build.buckets[0].ciphertext),
-                "{body}"
+                [
+                    distributed_client_id,
+                    &fixture.manifest.root_hash,
+                    &fixture.manifest_signature.sig,
+                ],
+            );
+            assert_distributed_rejection!(
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-hnsw/text/oram/read_paths")
+                    .set_json(&OramReadPathsRequest {
+                        session_id: SESSION_ID.to_string(),
+                        index_epoch: BASE_EPOCH,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        paths: vec![entry_leaf_label.clone()],
+                        padding: OramReadPadding {
+                            requested_paths: 1,
+                            dummy_paths_included: true,
+                        },
+                        client_signature: PrivateHnswClientSignature {
+                            alg: read_signature.alg.clone(),
+                            key_id: read_signature.key_id.clone(),
+                            sig: read_signature_sig.clone(),
+                        },
+                    })
+                    .to_request(),
+                [
+                    SESSION_ID,
+                    &fixture.encrypted_build.root_hash,
+                    &entry_leaf_label,
+                    &read_signature_sig,
+                ],
+            );
+            assert_distributed_rejection!(
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-hnsw/text/oram/commit")
+                    .set_json(&OramCommitRequest {
+                        session_id: SESSION_ID.to_string(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: commit_old_root_hash.clone(),
+                        new_root_hash: commit_new_root_hash.clone(),
+                        updated_buckets: search_run.updated_buckets,
+                        commit_signature: PrivateHnswClientSignature {
+                            alg: search_run.commit_signature.alg,
+                            key_id: search_run.commit_signature.key_id,
+                            sig: commit_signature_sig.clone(),
+                        },
+                    })
+                    .to_request(),
+                [
+                    SESSION_ID,
+                    &commit_old_root_hash,
+                    &commit_new_root_hash,
+                    &commit_signature_sig,
+                    &commit_bucket_ciphertext,
+                ],
             );
         });
     }

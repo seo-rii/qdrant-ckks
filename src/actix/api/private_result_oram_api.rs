@@ -3329,7 +3329,7 @@ mod private_result_oram_rest_tests {
     }
 
     #[test]
-    fn open_session_rest_route_rejects_distributed_epoch_mode() {
+    fn private_result_oram_rest_routes_reject_distributed_epoch_operations() {
         let _guard = route_e2e_guard();
         let fixture = PrivateResultRouteFixture::build();
         let settings = fixture.settings();
@@ -3345,8 +3345,26 @@ mod private_result_oram_rest_tests {
             )
             .await;
 
-            let manifest_response = actix_test::call_service(
-                &app,
+            macro_rules! assert_distributed_rejection {
+                ($request:expr, [$($secret:expr),* $(,)?] $(,)?) => {{
+                    let response = actix_test::call_service(&app, $request).await;
+                    let status = response.status();
+                    let body_bytes = actix_test::read_body(response).await;
+                    let body = String::from_utf8_lossy(&body_bytes);
+                    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+                    assert!(body.contains("consensus-backed epoch/root CAS"), "{body}");
+                    $(assert!(!body.contains($secret), "{body}");)*
+                }};
+            }
+
+            let distributed_client_id = "tenant-a/distributed-result-sdk-instance";
+            let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            let read_signature = fixture.read_signature(&read_bucket_ids);
+            let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+            let first_bucket_ciphertext = fixture.buckets[0].ciphertext.clone();
+            let updated_bucket_ciphertext = updated_bucket.ciphertext.clone();
+
+            assert_distributed_rejection!(
                 actix_test::TestRequest::post()
                     .uri("/collections/docs/private-result-oram/manifest")
                     .set_json(&UploadPrivateResultOramManifestRequest {
@@ -3354,15 +3372,13 @@ mod private_result_oram_rest_tests {
                         signature: fixture.signature.clone(),
                     })
                     .to_request(),
-            )
-            .await;
-            let manifest_status = manifest_response.status();
-            let manifest_body_bytes = actix_test::read_body(manifest_response).await;
-            let manifest_body = String::from_utf8_lossy(&manifest_body_bytes);
-            assert_eq!(manifest_status, StatusCode::OK, "{manifest_body}");
-
-            let bucket_response = actix_test::call_service(
-                &app,
+                [
+                    &fixture.manifest.root_hash,
+                    &fixture.signature.sig,
+                    &first_bucket_ciphertext,
+                ],
+            );
+            assert_distributed_rejection!(
                 actix_test::TestRequest::post()
                     .uri("/collections/docs/private-result-oram/buckets")
                     .set_json(&UploadPrivateResultOramBucketsRequest {
@@ -3371,16 +3387,9 @@ mod private_result_oram_rest_tests {
                         buckets: fixture.buckets.clone(),
                     })
                     .to_request(),
-            )
-            .await;
-            let bucket_status = bucket_response.status();
-            let bucket_body_bytes = actix_test::read_body(bucket_response).await;
-            let bucket_body = String::from_utf8_lossy(&bucket_body_bytes);
-            assert_eq!(bucket_status, StatusCode::OK, "{bucket_body}");
-
-            let distributed_client_id = "tenant-a/distributed-result-sdk-instance";
-            let session_response = actix_test::call_service(
-                &app,
+                [&fixture.manifest.root_hash, &first_bucket_ciphertext],
+            );
+            assert_distributed_rejection!(
                 actix_test::TestRequest::post()
                     .uri("/collections/docs/private-result-oram/session")
                     .set_json(&OpenPrivateResultOramSessionRequest {
@@ -3389,17 +3398,51 @@ mod private_result_oram_rest_tests {
                         fixed_budget: true,
                     })
                     .to_request(),
-            )
-            .await;
-            let status = session_response.status();
-            let body_bytes = actix_test::read_body(session_response).await;
-            let body = String::from_utf8_lossy(&body_bytes);
-            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
-            assert!(body.contains("consensus-backed epoch/root CAS"), "{body}");
-            assert!(!body.contains(distributed_client_id), "{body}");
-            assert!(!body.contains(&fixture.manifest.root_hash), "{body}");
-            assert!(!body.contains(&fixture.signature.sig), "{body}");
-            assert!(!body.contains(&fixture.buckets[0].ciphertext), "{body}");
+                [
+                    distributed_client_id,
+                    &fixture.manifest.root_hash,
+                    &fixture.signature.sig
+                ],
+            );
+            assert_distributed_rejection!(
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-result-oram/oram/read_buckets")
+                    .set_json(&ReadPrivateResultOramBucketsRequest {
+                        session_id: SESSION_ID.to_string(),
+                        index_epoch: BASE_EPOCH,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        bucket_ids: read_bucket_ids.clone(),
+                        read_signature: read_signature.clone(),
+                    })
+                    .to_request(),
+                [
+                    SESSION_ID,
+                    &fixture.manifest.root_hash,
+                    &read_signature.sig,
+                    &first_bucket_ciphertext,
+                ],
+            );
+            assert_distributed_rejection!(
+                actix_test::TestRequest::post()
+                    .uri("/collections/docs/private-result-oram/oram/commit")
+                    .set_json(&CommitPrivateResultOramBucketsRequest {
+                        session_id: SESSION_ID.to_string(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: fixture.manifest.root_hash.clone(),
+                        new_root_hash: new_root_hash.clone(),
+                        updated_buckets: vec![updated_bucket],
+                        commit_signature: commit_signature.clone(),
+                    })
+                    .to_request(),
+                [
+                    SESSION_ID,
+                    &fixture.manifest.root_hash,
+                    &new_root_hash,
+                    &commit_signature.sig,
+                    &updated_bucket_ciphertext,
+                ],
+            );
         });
     }
 }
