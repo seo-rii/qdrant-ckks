@@ -1518,6 +1518,7 @@ mod private_result_oram_grpc_tests {
                 err.message(),
                 &mismatched_bucket_count_signature_sig
             );
+            assert!(!err.message().contains("bucket_count"));
 
             let mut mismatched_oram_manifest = fixture.manifest.clone();
             mismatched_oram_manifest.oram.bucket_size = 4;
@@ -1539,6 +1540,7 @@ mod private_result_oram_grpc_tests {
                     .contains("manifest oram does not match runtime instance")
             );
             assert_manifest_mismatch_error_redacts!(err.message(), &mismatched_oram_signature_sig);
+            assert!(!err.message().contains("bucket_size"));
 
             let manifest_epoch = PrivateResultOram::upload_private_result_oram_manifest(
                 &service,

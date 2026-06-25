@@ -1653,6 +1653,10 @@ mod private_result_oram_rest_tests {
                 mismatched_bucket_count_error,
                 &mismatched_bucket_count_signature_sig
             );
+            assert!(
+                !mismatched_bucket_count_error.contains("bucket_count"),
+                "{mismatched_bucket_count_error}"
+            );
 
             let mut mismatched_oram_manifest = fixture.manifest.clone();
             mismatched_oram_manifest.oram.bucket_size = 4;
@@ -1670,6 +1674,10 @@ mod private_result_oram_rest_tests {
             assert_manifest_mismatch_error_redacts!(
                 mismatched_oram_error,
                 &mismatched_oram_signature_sig
+            );
+            assert!(
+                !mismatched_oram_error.contains("bucket_size"),
+                "{mismatched_oram_error}"
             );
 
             let manifest_result = post_json_ok!(
