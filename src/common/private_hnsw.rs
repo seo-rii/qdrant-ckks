@@ -3271,7 +3271,29 @@ mod private_hnsw_tests {
 
     #[test]
     fn signature_public_key_shape_rejects_oversized_or_malformed_values_without_reflecting_value() {
-        decode_signature_public_key(&BASE64URL_NOPAD.encode(&[7; 32])).unwrap();
+        let signing_key_id = "tenant-a/private-hnsw-signing-v1";
+        let valid = BASE64URL_NOPAD.encode(&[7; 32]);
+        decode_signature_public_key(&valid).unwrap();
+        let instance = CryptoInstanceConfig {
+            provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+            materials: HashMap::new(),
+            backend_ref: None,
+            options: serde_json::json!({
+                SIGNATURE_PUBLIC_KEYS_OPTION: {
+                    signing_key_id: valid,
+                },
+            }),
+        };
+        assert_eq!(
+            signature_public_key(&instance, signing_key_id).unwrap(),
+            [7; 32]
+        );
+
+        let missing_key_id = "tenant-a/missing-hnsw-key-sentinel";
+        let err = signature_public_key(&instance, missing_key_id).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature key id is not configured"));
+        assert!(!rendered.contains(missing_key_id), "{rendered}");
 
         let oversized = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 32]), "A".repeat(64));
         let err = decode_signature_public_key(&oversized).unwrap_err();
