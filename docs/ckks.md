@@ -992,6 +992,8 @@ The public gRPC `GetPoints`, `ScrollPoints`, `SearchPoints`, grouped search,
 `RecommendPoints`, grouped recommend, `DiscoverPoints`, `QueryPoints`, and
 grouped query wrappers follow the same fail-closed read guard before returning
 raw protected payload bytes.
+Grouped gRPC `with_lookup` payload requests use the same guard when the lookup
+collection is bound to `private-result-oram/v1`.
 Callers may omit payloads or request redacted encrypted payload output, but raw
 result payload bytes require the private result ORAM session/read/commit APIs.
 Trusted-bridge CKKS sidecar fallback paths, including point-id query resolution,
