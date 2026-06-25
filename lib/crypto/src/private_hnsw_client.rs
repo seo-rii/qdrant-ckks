@@ -56,7 +56,7 @@ const CLIENT_STATE_SNAPSHOT_VERSION: u16 = 1;
 const CLIENT_STATE_AEAD_VERSION: u16 = 1;
 pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, PartialEq, Eq)]
 pub enum PrivateHnswClientError {
     #[error("private HNSW client encryption failed")]
     Encryption(#[from] EncryptionError),
@@ -197,6 +197,14 @@ pub enum PrivateHnswClientError {
     InvalidMerkleProofJson,
     #[error("private HNSW ORAM Merkle proof does not match buckets/root")]
     MerkleProofMismatch,
+}
+
+impl Debug for PrivateHnswClientError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("PrivateHnswClientError")
+            .field(&self.to_string())
+            .finish()
+    }
 }
 
 pub struct PrivateHnswClientKeys {
@@ -4637,6 +4645,79 @@ mod tests {
             for leaked in [
                 "77", "55", "99", "88", "123", "4096", "2048", "66", "777", "44", "33", "456",
                 "42", "43", "22", "314", "271",
+            ] {
+                assert!(!rendered.contains(leaked), "{rendered}");
+            }
+        }
+    }
+
+    #[test]
+    fn private_hnsw_client_error_debug_does_not_reflect_structured_values() {
+        let cases = [
+            format!(
+                "{:?}",
+                PrivateHnswClientError::Encryption(EncryptionError::UnsupportedAlgorithm(
+                    "aead-alg-sentinel".to_string(),
+                ))
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::TooManyNeighbors {
+                    actual: 77,
+                    limit: 55,
+                }
+            ),
+            format!("{:?}", PrivateHnswClientError::UnsupportedBlockVersion(99)),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidBucketContext("bucket-context-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::BucketCiphertextSizeMismatch {
+                    bucket_id: 123,
+                    expected_bytes: 4096,
+                    actual_bytes: 2048,
+                }
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidSearchConfig("search-config-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::FixedBudgetNotExhausted {
+                    completed_steps: 314,
+                    fixed_steps: 271,
+                }
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::StaleBucketEpoch {
+                    bucket_id: 123,
+                    expected_epoch: 42,
+                    actual_epoch: 43,
+                }
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidManifestSignatureContext(
+                    "manifest-signature-context-sentinel"
+                )
+            ),
+        ];
+
+        for rendered in cases {
+            assert!(!rendered.contains("aead-alg-sentinel"), "{rendered}");
+            for leaked in [
+                "bucket-context-sentinel",
+                "search-config-sentinel",
+                "manifest-signature-context-sentinel",
+            ] {
+                assert!(!rendered.contains(leaked), "{rendered}");
+            }
+            for leaked in [
+                "77", "55", "99", "123", "4096", "2048", "314", "271", "42", "43",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
