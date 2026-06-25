@@ -3070,6 +3070,101 @@ async fn private_result_oram_raw_payload_reads_require_session_api_in_collection
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn private_result_oram_redacted_payload_reads_remain_allowed_in_collection_ops() {
+    let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
+    let collection = encrypted_collection_fixture(
+        collection_dir.path(),
+        1,
+        private_result_oram_encryption_config(),
+    )
+    .await;
+    let redacted_selector = || {
+        WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+            encrypted_payload: EncryptedPayloadReadMode::Redacted,
+        })
+    };
+
+    let retrieved = collection
+        .retrieve(
+            PointRequestInternal {
+                ids: vec![987_654_321_u64.into()],
+                with_payload: Some(redacted_selector()),
+                with_vector: false.into(),
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    assert!(retrieved.is_empty());
+
+    let scrolled = collection
+        .scroll_by(
+            ScrollRequestInternal {
+                offset: None,
+                limit: Some(10),
+                filter: None,
+                with_payload: Some(redacted_selector()),
+                with_vector: false.into(),
+                order_by: None,
+            },
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    assert!(scrolled.points.is_empty());
+
+    let searched = collection
+        .search(
+            SearchRequestInternal {
+                vector: vec![1.0, 0.0, 0.0, 0.0].into(),
+                with_payload: Some(redacted_selector()),
+                with_vector: None,
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                score_threshold: None,
+            }
+            .into(),
+            None,
+            &ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    assert!(searched.is_empty());
+
+    let queried = collection
+        .query(
+            ShardQueryRequest {
+                prefetches: vec![],
+                query: Some(ScoringQuery::Sample(SampleInternal::Random)),
+                filter: None,
+                score_threshold: None,
+                limit: 1,
+                offset: 0,
+                params: None,
+                with_vector: WithVector::Bool(false),
+                with_payload: redacted_selector(),
+            },
+            None,
+            ShardSelectorInternal::All,
+            None,
+            HwMeasurementAcc::new(),
+        )
+        .await
+        .unwrap();
+    assert!(queried.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn private_result_oram_payload_selectors_require_session_api_in_collection_ops() {
     let collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
     let collection = encrypted_collection_fixture(
