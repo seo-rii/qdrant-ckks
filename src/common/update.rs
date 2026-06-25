@@ -5841,6 +5841,24 @@ esac
                 .await
                 .unwrap_err(),
             );
+
+            assert_private_hnsw_grpc_write_error(
+                crate::tonic::api::update_common::update_batch(
+                    &dispatcher,
+                    grpc_update_batch(
+                        api::grpc::qdrant::points_update_operation::Operation::DeleteDeprecated(
+                            grpc_points_selector(),
+                        ),
+                    ),
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
         });
     }
 
