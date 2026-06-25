@@ -1274,6 +1274,13 @@ collections are rejected before the local transfer task starts moving shard data
 the transfer progresses replica state, or resharding commits hash-ring or
 replica-state progress. `Abort` remains allowed so unsupported transfer and
 resharding records can be cleaned up without moving encrypted ORAM buckets.
+Consensus snapshot apply uses the same fail-closed stance. Incoming shard
+transfer state and non-empty resharding state are rejected for private ORAM
+collections, while empty cleanup state remains allowed. Incoming shard-info
+state must preserve the current shard id set, shard-key mapping, and replica
+membership, and must not introduce resharding replica states; otherwise snapshot
+apply fails before it can create, remove, or reassign local shard data without a
+private ORAM bucket migration protocol.
 Distributed private ORAM epoch operations themselves fail closed in this MVP:
 manifest upload, bucket upload, session open, session-bound reads, and commits
 do not proceed until epoch/root CAS is backed by consensus rather than
