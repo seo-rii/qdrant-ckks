@@ -4232,6 +4232,29 @@ mod tests {
     }
 
     #[test]
+    fn private_result_restore_bucket_contract_rejects_oversized_encoded_bucket_before_decode() {
+        let uuid = Uuid::from_u128(7);
+        let manifest = private_result_manifest(uuid.to_string());
+        let mut bucket = private_result_snapshot_bucket(&manifest, 0);
+        bucket
+            .ciphertext
+            .push_str("private-result-restore-oversized-ciphertext-sentinel");
+        let err = validate_private_result_restore_bucket_contract(
+            &manifest,
+            &bucket,
+            private_result_restore_expected_bucket_ciphertext_bytes(&manifest).unwrap(),
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("fixed ciphertext size"));
+        assert!(
+            !rendered.contains("private-result-restore-oversized-ciphertext-sentinel"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+    }
+
+    #[test]
     fn private_result_oram_restore_preflight_rejects_bucket_commitment_context_mismatch() {
         let temp_dir = tempfile::Builder::new()
             .prefix("private-result-restore-bad-bucket-context")
