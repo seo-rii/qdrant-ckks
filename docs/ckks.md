@@ -78,7 +78,7 @@ contract:
 | --- | --- | --- |
 | Runtime profile | Strict zero-trust compatible. Server materials and backends are forbidden, RK epoch must be pinned, fixed-budget search is required, and signing verifiers are mandatory. | Strict zero-trust compatible. Server materials and backends are forbidden, RK epoch must be pinned, Path ORAM policy is allowlisted, and signing verifiers are mandatory. |
 | Collection binding | One vector name per `private-hnsw-oram/v1` rule. It cannot overlap `vector/openfhe-ckks@v1` or `vector/client-ckks@v1` on the same vector name. | One `private-result-oram/v1` payload binding in v1. It is required when a private HNSW manifest uses `result_privacy: private_payload_oram_required`. |
-| Normal Qdrant reads/writes | Dense vector upsert/update and ordinary search/query/recommend/discover fail closed for the private vector; clients must use the private HNSW session APIs. | Ordinary payload writes, deletes, indexes, filters, ordering, grouping, facets, formulas, and raw payload reads fail closed for the private result path; clients must use result ORAM session APIs. |
+| Normal Qdrant reads/writes | Dense vector upsert/update and ordinary search/query/recommend/discover fail closed for the private vector; clients must use the private HNSW session APIs. | Point create/replace/delete, full payload replacement/clear, protected-path payload writes, indexes, filters, ordering, grouping, facets, formulas, and raw payload reads fail closed for the private result path; public non-overlapping payload merges remain ordinary. |
 | Dedicated APIs | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_paths`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_buckets`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. |
 | Snapshot/restore | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and paired result ORAM policy before accepting a restored store. | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and configured binding/runtime policy before accepting a restored store. |
 | Cluster mode | Session open fails closed in distributed mode until consensus-backed ORAM epoch/root ownership is implemented; layout movement operations are blocked before shard transfer or resharding proceeds. | Session open fails closed in distributed mode until consensus-backed ORAM epoch/root ownership is implemented; result ORAM bucket movement follows the same cluster guard policy. |
@@ -980,7 +980,9 @@ path: key-less `overwrite_payload` is treated as a full payload replacement,
 key-less `set_payload` rejects parent/child path overlap, and `delete_payload`
 or payload clear operations that touch the protected path direct callers to the
 private result ORAM session APIs instead of falling through to the regular
-server/client payload envelope write path.
+server/client payload envelope write path. Non-overlapping public payload merges
+and explicit sibling paths, such as a `document.title` write beside protected
+`document.body`, stay on the ordinary update path.
 Ordinary raw payload reads through retrieve, scroll, search, or query also fail
 closed when `with_payload` would return a `private-result-oram/v1` payload path.
 Callers may omit payloads or request redacted encrypted payload output, but raw
