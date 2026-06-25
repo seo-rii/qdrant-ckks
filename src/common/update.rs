@@ -13556,6 +13556,8 @@ esac
                     "secret".to_string().into(),
                 )))
             };
+            let private_body_grpc_filter =
+                || api::grpc::qdrant::Filter::from(private_body_filter());
             let assert_private_result_predicate_error =
                 |err: StorageError, expected_operation: &str| {
                     let message = err.to_string();
@@ -13569,6 +13571,42 @@ esac
                         "{message}"
                     );
                 };
+            let assert_private_result_grpc_predicate_error =
+                |err: tonic::Status, expected_operation: &str| {
+                    let message = err.message();
+                    assert!(message.contains(expected_operation), "{message}");
+                    assert!(
+                        message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+                        "{message}"
+                    );
+                    assert!(
+                        message.contains("/private-result-oram/session"),
+                        "{message}"
+                    );
+                };
+            let request_hw_counter = || {
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                )
+            };
+            let grpc_payload_disabled = || api::grpc::qdrant::WithPayloadSelector {
+                selector_options: Some(
+                    api::grpc::qdrant::with_payload_selector::SelectorOptions::Enable(false),
+                ),
+            };
+            let grpc_dense_input = || api::grpc::qdrant::VectorInput {
+                variant: Some(api::grpc::qdrant::vector_input::Variant::Dense(
+                    api::grpc::qdrant::DenseVector {
+                        data: vec![0.1, 0.2],
+                    },
+                )),
+            };
+            let grpc_nearest_query = || api::grpc::qdrant::Query {
+                variant: Some(api::grpc::qdrant::query::Variant::Nearest(
+                    grpc_dense_input(),
+                )),
+            };
 
             assert_private_result_predicate_error(
                 toc.facet(
@@ -13587,6 +13625,27 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM zero-limit facet must fail closed"),
+                "cannot facet on private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_predicate_error(
+                crate::tonic::api::query_common::facet(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::FacetCounts {
+                        collection_name: "private_result_predicate_docs".to_string(),
+                        key: "body".to_string(),
+                        filter: None,
+                        limit: Some(1),
+                        exact: Some(false),
+                        timeout: None,
+                        read_consistency: None,
+                        shard_key_selector: None,
+                    },
+                    auth.clone(),
+                    request_hw_counter(),
+                )
+                .await
+                .expect_err("private result ORAM gRPC facet must fail closed"),
                 "cannot facet on private result ORAM payload field",
             );
 
@@ -13611,6 +13670,31 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM filter must fail closed"),
+                "cannot filter on private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_predicate_error(
+                crate::tonic::api::query_common::scroll(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::ScrollPoints {
+                        collection_name: "private_result_predicate_docs".to_string(),
+                        filter: Some(private_body_grpc_filter()),
+                        offset: None,
+                        limit: Some(1),
+                        with_payload: Some(grpc_payload_disabled()),
+                        with_vectors: None,
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        order_by: None,
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC filter must fail closed"),
                 "cannot filter on private result ORAM payload field",
             );
 
@@ -13725,6 +13809,35 @@ esac
                 "cannot order by private result ORAM payload field",
             );
 
+            assert_private_result_grpc_predicate_error(
+                crate::tonic::api::query_common::scroll(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::ScrollPoints {
+                        collection_name: "private_result_predicate_docs".to_string(),
+                        filter: None,
+                        offset: None,
+                        limit: Some(1),
+                        with_payload: Some(grpc_payload_disabled()),
+                        with_vectors: None,
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        order_by: Some(api::grpc::qdrant::OrderBy {
+                            key: "body".to_string(),
+                            direction: None,
+                            start_from: None,
+                        }),
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC order_by must fail closed"),
+                "cannot order by private result ORAM payload field",
+            );
+
             assert_private_result_predicate_error(
                 crate::common::query::do_search_point_groups(
                     &toc,
@@ -13752,6 +13865,38 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM search group_by must fail closed"),
+                "cannot group by private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_predicate_error(
+                crate::tonic::api::query_common::search_groups(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::SearchPointGroups {
+                        collection_name: "private_result_predicate_docs".to_string(),
+                        vector: vec![0.1, 0.2],
+                        filter: None,
+                        limit: 1,
+                        with_payload: Some(grpc_payload_disabled()),
+                        params: None,
+                        score_threshold: None,
+                        vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        with_vectors: None,
+                        group_by: "body".to_string(),
+                        group_size: 1,
+                        read_consistency: None,
+                        with_lookup: None,
+                        timeout: None,
+                        shard_key_selector: None,
+                        sparse_indices: None,
+                        ckks_encrypted_query: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC search group_by must fail closed"),
                 "cannot group by private result ORAM payload field",
             );
 
@@ -13785,6 +13930,39 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM query group_by must fail closed"),
+                "cannot group by private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_predicate_error(
+                crate::tonic::api::query_common::query_groups(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::QueryPointGroups {
+                        collection_name: "private_result_predicate_docs".to_string(),
+                        prefetch: Vec::new(),
+                        query: Some(grpc_nearest_query()),
+                        using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        with_payload: Some(grpc_payload_disabled()),
+                        with_vectors: None,
+                        lookup_from: None,
+                        limit: Some(1),
+                        group_size: Some(1),
+                        group_by: "body".to_string(),
+                        read_consistency: None,
+                        with_lookup: None,
+                        timeout: None,
+                        shard_key_selector: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    InferenceParams::default(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC query group_by must fail closed"),
                 "cannot group by private result ORAM payload field",
             );
         });

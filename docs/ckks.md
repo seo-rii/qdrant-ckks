@@ -1005,6 +1005,8 @@ Ordinary server-side selectors that would inspect a private result ORAM payload
 path, including filters, order-by, group-by, facets, and formula payload
 variables/conditions, fail closed with the same private result ORAM session API
 guidance rather than suggesting a blind-index fallback.
+The gRPC facet, scroll filter/order-by, grouped search, and grouped query
+wrappers enforce the same selector guard after converting their payload paths.
 Payload index/schema creation on a `private-result-oram/v1` payload path is also
 rejected by the encrypted payload index guard.
 Result ORAM snapshot restore preflight is open for configured
