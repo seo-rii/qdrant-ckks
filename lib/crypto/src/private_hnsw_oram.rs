@@ -305,10 +305,19 @@ impl Debug for PrivateHnswManifestValidationContext<'_> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswEpoch {
     pub epoch: u64,
     pub root_hash: [u8; 32],
+}
+
+impl Debug for PrivateHnswEpoch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswEpoch")
+            .field("epoch", &self.epoch)
+            .field("root_hash", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1149,6 +1158,10 @@ mod tests {
                 public_key: &[99; 32],
             },
         };
+        let epoch = PrivateHnswEpoch {
+            epoch: 42,
+            root_hash: [77; 32],
+        };
 
         let rendered = [
             format!("{encrypted_bucket:?}"),
@@ -1158,6 +1171,7 @@ mod tests {
             format!("{commit_signature_input:?}"),
             format!("{read_paths_signature_input:?}"),
             format!("{validation_context:?}"),
+            format!("{epoch:?}"),
         ]
         .join("\n");
         let encrypted_bucket_rendered = format!("{encrypted_bucket:?}");
@@ -1184,6 +1198,7 @@ mod tests {
             "HNSW-CONTEXT-RK-SENTINEL",
             "HNSW-CONTEXT-SIGNATURE-KEY-SENTINEL",
             "[99, 99, 99",
+            "[77, 77, 77",
             "HNSW-MANIFEST-ROOT-SENTINEL",
             "HNSW-OLD-ROOT-SENTINEL",
             "HNSW-NEW-ROOT-SENTINEL",

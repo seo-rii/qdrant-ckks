@@ -933,10 +933,19 @@ impl PrivateResultOramUploadBundle {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramEpoch {
     pub epoch: u64,
     pub root_hash: [u8; 32],
+}
+
+impl Debug for PrivateResultOramEpoch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramEpoch")
+            .field("epoch", &self.epoch)
+            .field("root_hash", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -4363,6 +4372,10 @@ mod tests {
             bucket_id: 888_224,
             index_epoch: 777_225,
         };
+        let epoch = PrivateResultOramEpoch {
+            epoch: 42,
+            root_hash: [66; 32],
+        };
 
         let rendered = [
             format!("{block:?}"),
@@ -4389,6 +4402,7 @@ mod tests {
             format!("{bucket_aead_base_context:?}"),
             format!("{client_state_aead_context:?}"),
             format!("{bucket_commitment_context:?}"),
+            format!("{epoch:?}"),
         ]
         .join("\n");
         for epoch_redacted in [
@@ -4456,6 +4470,7 @@ mod tests {
             "RESULT-COMMITMENT-CONTEXT-RK-SENTINEL".to_string(),
             "888224".to_string(),
             "777225".to_string(),
+            "[66, 66, 66".to_string(),
             "RESULT-ROOT-SENTINEL".to_string(),
             "RESULT-STATE-CIPHERTEXT-SENTINEL".to_string(),
             "RESULT-STATE-SHA-SENTINEL".to_string(),
