@@ -812,6 +812,8 @@ mod private_result_oram_rest_tests {
             fixture.manifest.root_hash.clone(),
             new_root_hash,
             fixture.buckets[0].ciphertext.clone(),
+            fixture.buckets[0].ciphertext_sha256.clone(),
+            fixture.buckets[0].bucket_commitment.clone(),
             updated_bucket_ciphertext,
             updated_bucket_ciphertext_sha256,
             updated_bucket_commitment,
