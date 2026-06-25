@@ -5002,6 +5002,68 @@ esac
                 .await
                 .unwrap();
 
+            let assert_private_hnsw_grpc_write_error = |err: tonic::Status| {
+                let message = err.message();
+                assert!(
+                    message.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER),
+                    "{message}"
+                );
+                assert!(
+                    message.contains("/private-hnsw/{vector}/session"),
+                    "{message}"
+                );
+                assert!(!message.contains("embedding"), "{message}");
+                assert!(
+                    !message.contains("CKKS vector encryption runtime"),
+                    "{message}"
+                );
+                assert!(!message.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD), "{message}");
+            };
+            let request_hw_counter = || {
+                storage::content_manager::toc::request_hw_counter::RequestHwCounter::new(
+                    HwMeasurementAcc::disposable(),
+                    false,
+                )
+            };
+            let grpc_private_vectors = || api::grpc::qdrant::Vectors {
+                vectors_options: Some(api::grpc::qdrant::vectors::VectorsOptions::Vectors(
+                    api::grpc::qdrant::NamedVectors {
+                        vectors: HashMap::from([(
+                            "embedding".to_string(),
+                            api::grpc::qdrant::Vector {
+                                vector: Some(api::grpc::qdrant::vector::Vector::Dense(
+                                    api::grpc::qdrant::DenseVector {
+                                        data: vec![0.1, 0.2],
+                                    },
+                                )),
+                                ..Default::default()
+                            },
+                        )]),
+                    },
+                )),
+            };
+            let grpc_point_struct = || api::grpc::qdrant::PointStruct {
+                id: Some(segment::types::PointIdType::from(1).into()),
+                payload: HashMap::new(),
+                vectors: Some(grpc_private_vectors()),
+            };
+            let grpc_point_vectors = || api::grpc::qdrant::PointVectors {
+                id: Some(segment::types::PointIdType::from(1).into()),
+                vectors: Some(grpc_private_vectors()),
+            };
+            let grpc_points_selector = || api::grpc::qdrant::PointsSelector {
+                points_selector_one_of: Some(
+                    api::grpc::qdrant::points_selector::PointsSelectorOneOf::Points(
+                        api::grpc::qdrant::PointsIdsList {
+                            ids: vec![segment::types::PointIdType::from(1).into()],
+                        },
+                    ),
+                ),
+            };
+            let grpc_vectors_selector = || api::grpc::qdrant::VectorsSelector {
+                names: vec!["embedding".to_string()],
+            };
+
             let err = do_upsert_points(
                 UncheckedTocProvider::new_unchecked(&toc),
                 "private_hnsw_docs".to_string(),
@@ -5509,6 +5571,101 @@ esac
                         && !description.contains("embedding")
                         && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
             ));
+
+            assert_private_hnsw_grpc_write_error(
+                crate::tonic::api::update_common::upsert(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::UpsertPoints {
+                        collection_name: "private_hnsw_docs".to_string(),
+                        wait: Some(true),
+                        points: vec![grpc_point_struct()],
+                        ordering: None,
+                        shard_key_selector: None,
+                        update_filter: None,
+                        timeout: None,
+                        update_mode: None,
+                    },
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_write_error(
+                crate::tonic::api::update_common::update_vectors(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::UpdatePointVectors {
+                        collection_name: "private_hnsw_docs".to_string(),
+                        wait: Some(true),
+                        points: vec![grpc_point_vectors()],
+                        ordering: None,
+                        shard_key_selector: None,
+                        update_filter: None,
+                        timeout: None,
+                    },
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_write_error(
+                crate::tonic::api::update_common::delete_vectors(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::DeletePointVectors {
+                        collection_name: "private_hnsw_docs".to_string(),
+                        wait: Some(true),
+                        points_selector: Some(grpc_points_selector()),
+                        vectors: Some(grpc_vectors_selector()),
+                        ordering: None,
+                        shard_key_selector: None,
+                        timeout: None,
+                    },
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    request_hw_counter(),
+                )
+                .await
+                .unwrap_err(),
+            );
+
+            assert_private_hnsw_grpc_write_error(
+                crate::tonic::api::update_common::update_batch(
+                    &dispatcher,
+                    api::grpc::qdrant::UpdateBatchPoints {
+                        collection_name: "private_hnsw_docs".to_string(),
+                        wait: Some(true),
+                        operations: vec![api::grpc::qdrant::PointsUpdateOperation {
+                            operation: Some(
+                                api::grpc::qdrant::points_update_operation::Operation::UpdateVectors(
+                                    api::grpc::qdrant::points_update_operation::UpdateVectors {
+                                        points: vec![grpc_point_vectors()],
+                                        shard_key_selector: None,
+                                        update_filter: None,
+                                    },
+                                ),
+                            ),
+                        }],
+                        ordering: None,
+                        timeout: None,
+                    },
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .unwrap_err(),
+            );
         });
     }
 

@@ -14,7 +14,10 @@ mod collections_common;
 mod query_common;
 #[cfg(test)]
 pub(crate) mod query_common;
+#[cfg(not(test))]
 mod update_common;
+#[cfg(test)]
+pub(crate) mod update_common;
 
 use collection::operations::validation;
 use tonic::Status;
