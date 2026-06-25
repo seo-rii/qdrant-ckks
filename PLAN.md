@@ -391,6 +391,7 @@
   - Private result ORAM payload selector overlap guards는 filter/order/group/facet/index/formula 같은 operation label을 오류에 반사하지 않고 고정 selector-overlap 메시지만 반환한다.
   - Private result ORAM payload write guards는 upsert/set/overwrite/delete/clear 같은 operation label을 오류에 반사하지 않고 고정 payload-write mismatch 메시지만 반환한다.
   - Private HNSW ORAM read-only vector write guards는 delete/sync 같은 operation label을 오류에 반사하지 않고 고정 read-only vector write 메시지만 반환한다.
+  - Private HNSW ORAM point-level vector read guards는 retrieve/scroll 같은 operation label을 오류에 반사하지 않고 고정 point-level vector read 메시지만 반환한다.
 
 테스트:
 

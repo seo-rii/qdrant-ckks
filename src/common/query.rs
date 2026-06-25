@@ -6463,7 +6463,7 @@ async fn ensure_with_vector_does_not_request_encrypted_vectors(
             let vector_name = request.vector_name();
             if encrypted_vector_return_request_is_private_hnsw_oram(&encryption, vector_name) {
                 return Err(StorageError::bad_input(format!(
-                    "{} Point-level vector reads through {operation} are not exposed for this provider.",
+                    "{} Point-level vector reads are not exposed for this provider.",
                     private_hnsw_oram_api_required_message(vector_name),
                 )));
             }
@@ -9846,6 +9846,7 @@ mod tests {
             .unwrap_err();
 
             assert_private_hnsw_api_required_storage_error(&err);
+            assert!(!err.to_string().contains("retrieve"), "{err}");
 
             let err = do_scroll_points(
                 &toc,
@@ -9869,6 +9870,7 @@ mod tests {
             .unwrap_err();
 
             assert_private_hnsw_api_required_storage_error(&err);
+            assert!(!err.to_string().contains("scroll"), "{err}");
         });
     }
 
