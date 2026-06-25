@@ -296,6 +296,24 @@ mod tests {
     }
 
     #[test]
+    fn denied_auth_audit_error_redacts_private_oram_access_pattern_aliases() {
+        let error = AuthError::Forbidden(
+            "private HNSW read failed readPath=read-path-camel-sentinel \
+             readPathLabel=read-path-label-camel-sentinel"
+                .to_string(),
+        );
+
+        let redacted = redacted_denied_auth_error(&error);
+
+        assert_eq!(
+            redacted,
+            "[redacted: crypto material omitted from audit error]"
+        );
+        assert!(!redacted.contains("read-path-camel-sentinel"));
+        assert!(!redacted.contains("read-path-label-camel-sentinel"));
+    }
+
+    #[test]
     fn denied_auth_audit_error_preserves_ordinary_denials() {
         let error = AuthError::Forbidden("collection access denied".to_string());
 
