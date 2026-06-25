@@ -196,7 +196,11 @@ mod tests {
              sessionIds=session-list-camel-sentinel \
              paths=raw-path-sentinel \
              accessPath=access-path-camel-sentinel \
+             read_path=single-read-path-snake-sentinel \
+             readPath=single-read-path-camel-sentinel \
              read_paths=read-path-sentinel \
+             read_path_label=read-path-label-snake-sentinel \
+             readPathLabel=read-path-label-camel-sentinel \
              read_path_labels=read-path-labels-snake-sentinel \
              read_buckets=read-bucket-sentinel \
              readBuckets=read-bucket-camel-sentinel \
@@ -329,7 +333,11 @@ mod tests {
         assert!(!rendered.contains("session-list-camel-sentinel"));
         assert!(!rendered.contains("raw-path-sentinel"));
         assert!(!rendered.contains("access-path-camel-sentinel"));
+        assert!(!rendered.contains("single-read-path-snake-sentinel"));
+        assert!(!rendered.contains("single-read-path-camel-sentinel"));
         assert!(!rendered.contains("read-path-sentinel"));
+        assert!(!rendered.contains("read-path-label-snake-sentinel"));
+        assert!(!rendered.contains("read-path-label-camel-sentinel"));
         assert!(!rendered.contains("read-path-labels-snake-sentinel"));
         assert!(!rendered.contains("read-bucket-sentinel"));
         assert!(!rendered.contains("read-bucket-camel-sentinel"));
