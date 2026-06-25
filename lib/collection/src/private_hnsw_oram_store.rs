@@ -3383,6 +3383,16 @@ mod tests {
             !rendered.contains(&unsupported_alg_signature.alg),
             "{rendered}"
         );
+        for sentinel in [
+            unsupported_alg_signature.key_id.as_str(),
+            unsupported_alg_signature.sig.as_str(),
+            old.root_hash.as_str(),
+            new.root_hash.as_str(),
+            updated_bucket.ciphertext.as_str(),
+            updated_bucket.bucket_commitment.as_str(),
+        ] {
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
         assert_eq!(unsupported_alg_store.read_current_epoch().unwrap(), old);
         assert_eq!(
             unsupported_alg_store
