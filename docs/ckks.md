@@ -1963,11 +1963,16 @@ payload/result tokens; snake_case and camelCase singular/plural aliases are
 covered for private ORAM access-pattern, bucket, commitment, signature, query,
 candidate, score/distance, client-state, and token fields.
 Collection telemetry has sentinel coverage so decrypted plaintext is not
-intentionally emitted there. Audit events never include request bodies; denied
-audit errors also redact qdrant-sec envelope markers and secret-like crypto
-fields before serialization, including private ORAM path/root/bucket/node,
+intentionally emitted there, and app telemetry serializes only the runtime
+capability fingerprint rather than private ORAM key ids, verifier key ids, or
+`signature_public_keys` registry entries. Panic telemetry, health-check panic
+messages, gRPC status logging, and denied-auth audit errors apply the same
+redaction helper before serialization; they redact qdrant-sec envelope markers,
+secret-like crypto fields, private ORAM owner/signing key id aliases,
+signature-public-key registry aliases, and private ORAM path/root/bucket/node,
 query vector/embedding/plaintext, score/distance, candidate/node score,
-candidate/node distance, token, client-state, and proof aliases.
+candidate/node distance, token, client-state, and proof aliases. Audit events
+never include request bodies.
 Prometheus request metrics may include fixed REST/gRPC endpoint labels and the
 collection label for private ORAM manifest, session, read, and commit APIs, but
 they do not include path labels, bucket ids, session ids, ciphertext bodies, or
