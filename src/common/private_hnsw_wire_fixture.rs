@@ -563,6 +563,45 @@ pub(crate) async fn create_private_hnsw_collection(dispatcher: &Dispatcher) {
     create_private_hnsw_collection_with_result_oram_rule(dispatcher, VECTOR_NAME, false).await
 }
 
+pub(crate) async fn create_plain_collection(dispatcher: &Dispatcher, collection_name: &str) {
+    dispatcher
+        .submit_collection_meta_op(
+            CollectionMetaOperations::CreateCollection(
+                CreateCollectionOperation::new(
+                    collection_name.to_string(),
+                    CreateCollection {
+                        vectors: collection::operations::types::VectorsConfig::Multi(
+                            BTreeMap::from([(
+                                VECTOR_NAME.to_string(),
+                                VectorParamsBuilder::new(2, segment::types::Distance::Euclid)
+                                    .build(),
+                            )]),
+                        ),
+                        sparse_vectors: None,
+                        hnsw_config: None,
+                        wal_config: None,
+                        optimizers_config: None,
+                        shard_number: Some(1),
+                        on_disk_payload: None,
+                        replication_factor: None,
+                        write_consistency_factor: None,
+                        quantization_config: None,
+                        sharding_method: None,
+                        encryption: None,
+                        strict_mode_config: None,
+                        uuid: Some(Uuid::from_u128(0xfeed_face_cafe_beef_dead_beef_0000_0001)),
+                        metadata: None,
+                    },
+                )
+                .unwrap(),
+            ),
+            Auth::new_internal(Access::full("private ORAM plain route test")),
+            None,
+        )
+        .await
+        .unwrap();
+}
+
 pub(crate) async fn create_private_hnsw_collection_with_private_result_oram(
     dispatcher: &Dispatcher,
 ) {

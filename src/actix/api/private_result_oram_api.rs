@@ -409,7 +409,7 @@ mod private_result_oram_rest_tests {
 
     use super::*;
     use crate::common::private_hnsw_wire_fixture::{
-        route_e2e_guard, test_dispatcher, test_distributed_dispatcher,
+        create_plain_collection, route_e2e_guard, test_dispatcher, test_distributed_dispatcher,
     };
     use crate::settings::{CryptoInstanceConfig, CryptoSettings};
 
@@ -877,6 +877,44 @@ mod private_result_oram_rest_tests {
             )
             .await
             .unwrap();
+    }
+
+    #[test]
+    fn rest_rejects_private_result_missing_collection_encryption_without_reflecting_collection() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateResultRouteFixture::build();
+        let settings = fixture.settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let collection_name = "private-result-missing-encryption-secret-collection";
+        actix_web::rt::System::new().block_on(async {
+            create_plain_collection(&dispatcher, collection_name).await;
+            let app = actix_test::init_service(
+                App::new()
+                    .app_data(web::Data::new(dispatcher.clone()))
+                    .app_data(web::Data::new(settings.clone()))
+                    .app_data(actix_web_validator::JsonConfig::default().limit(1024 * 1024))
+                    .configure(config_private_result_oram_api),
+            )
+            .await;
+
+            let request = actix_test::TestRequest::get()
+                .uri(&format!(
+                    "/collections/{collection_name}/private-result-oram/manifest"
+                ))
+                .to_request();
+            let response = actix_test::call_service(&app, request).await;
+            let status = response.status();
+            let body_bytes = actix_test::read_body(response).await;
+            let body = String::from_utf8_lossy(&body_bytes);
+
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert!(
+                body.contains("does not configure private result ORAM encryption"),
+                "{body}"
+            );
+            assert!(!body.contains(collection_name), "{body}");
+            assert!(!body.contains("secret"), "{body}");
+        });
     }
 
     #[test]

@@ -64,6 +64,8 @@ const PRIVATE_HNSW_ORAM_WRITEBACK_BUCKETS_MAX: usize =
     PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX * (PRIVATE_HNSW_ORAM_TREE_HEIGHT_MAX + 1);
 const PRIVATE_HNSW_ORAM_UPLOAD_BUCKETS_MAX: usize =
     (1usize << PRIVATE_HNSW_ORAM_TREE_HEIGHT_MAX) * 2 - 1;
+const PRIVATE_HNSW_ORAM_ENCRYPTION_REQUIRED: &str =
+    "collection does not configure private HNSW ORAM encryption";
 
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateHnswManifestRecord {
@@ -666,11 +668,10 @@ pub async fn do_get_private_hnsw_manifest(
         &collection_crypto_id,
         &config.params,
     )?;
-    let encryption = config.params.effective_encryption().ok_or_else(|| {
-        StorageError::bad_request(format!(
-            "collection {collection_name} does not configure private HNSW ORAM encryption",
-        ))
-    })?;
+    let encryption = config
+        .params
+        .effective_encryption()
+        .ok_or_else(|| StorageError::bad_request(PRIVATE_HNSW_ORAM_ENCRYPTION_REQUIRED))?;
     let rule = private_hnsw_rule(&encryption, vector_name)?;
     let instance = private_hnsw_instance(settings, rule)?;
     let store = PrivateHnswOramStore::new(collection.path(), vector_name)?;
@@ -731,11 +732,10 @@ pub async fn do_upload_private_hnsw_buckets(
         &collection_crypto_id,
         &config.params,
     )?;
-    let encryption = config.params.effective_encryption().ok_or_else(|| {
-        StorageError::bad_request(format!(
-            "collection {collection_name} does not configure private HNSW ORAM encryption",
-        ))
-    })?;
+    let encryption = config
+        .params
+        .effective_encryption()
+        .ok_or_else(|| StorageError::bad_request(PRIVATE_HNSW_ORAM_ENCRYPTION_REQUIRED))?;
     let rule = private_hnsw_rule(&encryption, vector_name)?;
     let instance = private_hnsw_instance(settings, rule)?;
     let store = PrivateHnswOramStore::new(collection.path(), vector_name)?;
@@ -839,11 +839,10 @@ pub async fn do_open_private_hnsw_session(
         &collection_crypto_id,
         &config.params,
     )?;
-    let encryption = config.params.effective_encryption().ok_or_else(|| {
-        StorageError::bad_request(format!(
-            "collection {collection_name} does not configure private HNSW ORAM encryption",
-        ))
-    })?;
+    let encryption = config
+        .params
+        .effective_encryption()
+        .ok_or_else(|| StorageError::bad_request(PRIVATE_HNSW_ORAM_ENCRYPTION_REQUIRED))?;
     let rule = private_hnsw_rule(&encryption, vector_name)?;
     let instance = private_hnsw_instance(settings, rule)?;
     let store = PrivateHnswOramStore::new(collection.path(), vector_name)?;
@@ -1324,11 +1323,10 @@ async fn resolve_private_hnsw_context(
         &collection_crypto_id,
         &config.params,
     )?;
-    let encryption = config.params.effective_encryption().ok_or_else(|| {
-        StorageError::bad_request(format!(
-            "collection {collection_name} does not configure private HNSW ORAM encryption",
-        ))
-    })?;
+    let encryption = config
+        .params
+        .effective_encryption()
+        .ok_or_else(|| StorageError::bad_request(PRIVATE_HNSW_ORAM_ENCRYPTION_REQUIRED))?;
     let rule = private_hnsw_rule(&encryption, vector_name)?;
     let instance = private_hnsw_instance(settings, rule)?;
     let runtime_context = manifest_context_from_runtime(
@@ -1745,11 +1743,10 @@ async fn collection_context_for_request(
         &collection_crypto_id,
         &config.params,
     )?;
-    let encryption = config.params.effective_encryption().ok_or_else(|| {
-        StorageError::bad_request(format!(
-            "collection {collection_name} does not configure private HNSW ORAM encryption",
-        ))
-    })?;
+    let encryption = config
+        .params
+        .effective_encryption()
+        .ok_or_else(|| StorageError::bad_request(PRIVATE_HNSW_ORAM_ENCRYPTION_REQUIRED))?;
     let rule = private_hnsw_rule(&encryption, vector_name)?;
     let instance = private_hnsw_instance(settings, rule)?;
     let runtime_context = manifest_context_from_runtime(
