@@ -425,6 +425,7 @@
 - REST/gRPC `read_paths`와 `commit` 오류 응답은 unknown session id sentinel을 반사하지 않는다.
 - REST/gRPC session close 오류 응답은 unknown session id sentinel을 반사하지 않는다.
 - REST/gRPC `read_paths`, `commit`, `close`는 oversized/malformed session id를 registry lookup 전에 거부하고 submitted session id를 반사하지 않는다. well-shaped unknown session id는 기존 missing/expired-session 오류로 fail closed 된다.
+- REST access log와 JSON validation boundary도 private ORAM 경로를 별도 sanitize한다. Access log는 session id, read path label, bucket/manifest/read/commit tail, private ORAM query string을 redaction하고 exact marker lookalike는 일반 경로로 유지한다. Private ORAM JSON body validation/deserialization 오류는 unknown field와 malformed body sentinel을 반사하지 않으며, gRPC route parameter length validation도 oversized collection/vector 값을 오류 메시지에 넣지 않는다.
 - REST/gRPC bucket upload, `read_paths`, `commit`은 submitted root hash를 canonical 32-byte base64url shape로 먼저 검증하고 malformed root hash를 registry/storage epoch 비교 전에 값 반사 없이 거부한다.
 - REST/gRPC `read_paths`, `commit` client signature는 fixed 64-byte Ed25519 base64url 길이를 decode/verification 전에 검증하고 oversized/malformed signature body를 반사하지 않는다.
 - private HNSW runtime verifier public key도 fixed 32-byte Ed25519 base64url 길이를 decode/verification 전에 검증하고 malformed public key body를 반사하지 않는다.
