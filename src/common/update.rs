@@ -12689,6 +12689,37 @@ esac
                 .expect_err("private result ORAM grouped search must fail closed"),
             );
 
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::search_groups(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::SearchPointGroups {
+                        collection_name: "private_result_docs".to_string(),
+                        vector: vec![0.1, 0.2],
+                        filter: None,
+                        limit: 1,
+                        with_payload: Some(grpc_payload_enabled()),
+                        params: None,
+                        score_threshold: None,
+                        vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        with_vectors: None,
+                        group_by: "group".to_string(),
+                        group_size: 1,
+                        read_consistency: None,
+                        with_lookup: None,
+                        timeout: None,
+                        shard_key_selector: None,
+                        sparse_indices: None,
+                        ckks_encrypted_query: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC grouped search must fail closed"),
+            );
+
             assert_private_result_session_error(
                 crate::common::query::do_search_point_groups(
                     &toc,
@@ -12770,6 +12801,38 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM grouped universal query must fail closed"),
+            );
+
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::query_groups(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::QueryPointGroups {
+                        collection_name: "private_result_docs".to_string(),
+                        prefetch: Vec::new(),
+                        query: Some(grpc_nearest_query()),
+                        using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        filter: None,
+                        params: None,
+                        score_threshold: None,
+                        with_payload: Some(grpc_payload_enabled()),
+                        with_vectors: None,
+                        lookup_from: None,
+                        limit: Some(1),
+                        group_size: Some(1),
+                        group_by: "group".to_string(),
+                        read_consistency: None,
+                        with_lookup: None,
+                        timeout: None,
+                        shard_key_selector: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    InferenceParams::default(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC grouped query must fail closed"),
             );
 
             assert_private_result_session_error(
@@ -12958,6 +13021,39 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM grouped recommend must fail closed"),
+            );
+
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::recommend_groups(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::RecommendPointGroups {
+                        collection_name: "private_result_docs".to_string(),
+                        positive: Vec::new(),
+                        negative: Vec::new(),
+                        filter: None,
+                        limit: 1,
+                        with_payload: Some(grpc_payload_enabled()),
+                        params: None,
+                        score_threshold: None,
+                        using: Some(DEFAULT_VECTOR_NAME.to_string()),
+                        with_vectors: None,
+                        lookup_from: None,
+                        group_by: "group".to_string(),
+                        group_size: 1,
+                        read_consistency: None,
+                        with_lookup: None,
+                        strategy: None,
+                        positive_vectors: vec![grpc_dense_vector()],
+                        negative_vectors: Vec::new(),
+                        timeout: None,
+                        shard_key_selector: None,
+                    },
+                    auth.clone(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC grouped recommend must fail closed"),
             );
 
             assert_private_result_session_error(
