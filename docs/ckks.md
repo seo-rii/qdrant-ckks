@@ -78,7 +78,7 @@ contract:
 | --- | --- | --- |
 | Runtime profile | Strict zero-trust compatible. Server materials and backends are forbidden, RK epoch must be pinned, fixed-budget search is required, and signing verifiers are mandatory. | Strict zero-trust compatible. Server materials and backends are forbidden, RK epoch must be pinned, Path ORAM policy is allowlisted, and signing verifiers are mandatory. |
 | Collection binding | One vector name per `private-hnsw-oram/v1` rule. It cannot overlap `vector/openfhe-ckks@v1` or `vector/client-ckks@v1` on the same vector name. | One `private-result-oram/v1` payload binding in v1. It is required when a private HNSW manifest uses `result_privacy: private_payload_oram_required`. |
-| Normal Qdrant reads/writes | Dense vector upsert/update and ordinary search/query/recommend/discover fail closed for the private vector; clients must use the private HNSW session APIs. | Point create/replace/delete, full payload replacement/clear, protected-path payload writes, indexes, filters, ordering, grouping, facets, formulas, and raw payload reads fail closed for the private result path; public non-overlapping payload merges remain ordinary. |
+| Normal Qdrant reads/writes | Dense vector upsert/update, `with_vector` reads, ordinary search/query/recommend/discover, grouped paths, search matrix, and `lookup_from`/point-id reference-vector resolution fail closed for the private vector; clients must use the private HNSW session APIs. | Point create/replace/delete, full payload replacement/clear, protected-path payload writes, indexes, filters, ordering, grouping, facets, formulas, and raw payload reads fail closed for the private result path; public non-overlapping payload merges remain ordinary. |
 | Dedicated APIs | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_paths`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_buckets`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. |
 | Snapshot/restore | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and paired result ORAM policy before accepting a restored store. | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and configured binding/runtime policy before accepting a restored store. |
 | Cluster mode | Session open fails closed in distributed mode until consensus-backed ORAM epoch/root ownership is implemented; layout movement operations are blocked before shard transfer or resharding proceeds. | Session open fails closed in distributed mode until consensus-backed ORAM epoch/root ownership is implemented; result ORAM bucket movement follows the same cluster guard policy. |
@@ -585,8 +585,9 @@ drift. Qdrant does not store point-level dense vectors for this provider and
 does not score, traverse HNSW, or delete point-level CKKS sidecar vectors
 server-side; normal vector writes, `delete_points`, `delete_vectors`, and
 server scoring, including legacy search/batch search, ordinary query/fusion/context/MMR,
-recommend/discover, grouped search/query, and search matrix paths, fail closed
-and direct clients to the private HNSW ORAM session APIs. Collection peer
+recommend/discover, `lookup_from` or point-id reference-vector resolution,
+grouped search/query, and search matrix paths, fail closed and direct clients
+to the private HNSW ORAM session APIs. Collection peer
 `SyncPoints` batches are also rejected for private HNSW ORAM collections because
 v1 shard transfer must preserve encrypted bucket/epoch parity instead of
 replaying point-level sync. Phase 11 implements
@@ -604,8 +605,8 @@ The same private-session guidance is returned even when runtime crypto settings
 are absent, so private HNSW ORAM vectors do not fall through to CKKS/OpenFHE
 runtime fallback messages on ordinary vector upsert/update, inference-derived
 vector writes, point delete, peer `SyncPoints`, `delete_vectors`,
-query/search/recommend/discover/group/matrix APIs, or lower-level collection
-peer/internal write guards.
+query/search/recommend/discover/group/matrix APIs, `lookup_from` source-vector
+resolution, or lower-level collection peer/internal write guards.
 Collection-internal direct query/search/search-matrix entrypoints make the same
 binding distinction: `private-hnsw-oram/v1` returns private ORAM session
 guidance, while other encrypted vector bindings keep the CKKS sidecar runtime
