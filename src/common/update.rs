@@ -5099,6 +5099,48 @@ esac
                 .expect_err("private result ORAM gRPC batch delete points must fail closed"),
                 "cannot delete points for private result ORAM payload field",
             );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::update_batch(
+                    &dispatcher,
+                    grpc_update_batch(
+                        api::grpc::qdrant::points_update_operation::Operation::DeleteDeprecated(
+                            grpc_points_selector(),
+                        ),
+                    ),
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err(
+                    "private result ORAM gRPC batch deprecated delete must fail closed",
+                ),
+                "cannot delete points for private result ORAM payload field",
+            );
+
+            assert_private_result_grpc_write_error(
+                crate::tonic::api::update_common::update_batch(
+                    &dispatcher,
+                    grpc_update_batch(
+                        api::grpc::qdrant::points_update_operation::Operation::ClearPayloadDeprecated(
+                            grpc_points_selector(),
+                        ),
+                    ),
+                    InternalUpdateParams::default(),
+                    auth.clone(),
+                    InferenceParams::default(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err(
+                    "private result ORAM gRPC batch deprecated clear_payload must fail closed",
+                ),
+                "cannot clear payload for private result ORAM payload field",
+            );
         });
     }
 
