@@ -596,6 +596,8 @@ fn debug_redacts_ckks_plaintext_and_ciphertext_material() {
         }
     );
     assert!(verified_debug.contains("ciphertext_len"));
+    assert!(!verified_debug.contains("tenant-a:ckks"));
+    assert!(!verified_debug.contains(&BASE64URL_NOPAD.encode(&[9_u8; 32])));
     assert!(!verified_debug.contains(&BASE64URL_NOPAD.encode(ciphertext)));
 }
 

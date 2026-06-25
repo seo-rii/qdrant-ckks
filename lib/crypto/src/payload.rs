@@ -204,7 +204,7 @@ pub struct ClientPayloadSignatureVerification<'a> {
     pub public_key: &'a [u8],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ClientPayloadNonceReplayKey {
     key_id: String,
     rk_id: String,
@@ -212,7 +212,18 @@ pub struct ClientPayloadNonceReplayKey {
     nonce: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+impl Debug for ClientPayloadNonceReplayKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientPayloadNonceReplayKey")
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("nonce", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ClientPayloadEnvelopeKey {
     collection_id: String,
     point_id: String,
@@ -224,6 +235,23 @@ pub struct ClientPayloadEnvelopeKey {
     ciphertext_sha256_b64: String,
     signature_key_id: String,
     signature_sha256_b64: String,
+}
+
+impl Debug for ClientPayloadEnvelopeKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientPayloadEnvelopeKey")
+            .field("collection_id", &"[redacted]")
+            .field("point_id", &"[redacted]")
+            .field("field_path", &"[redacted]")
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("nonce", &"[redacted]")
+            .field("ciphertext_sha256_b64", &"[redacted]")
+            .field("signature_key_id", &"[redacted]")
+            .field("signature_sha256_b64", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -241,10 +269,19 @@ pub struct ServerPayloadEnvelopeKey {
     ciphertext_sha256_b64: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ClientPayloadVerifiedEnvelopeKey {
     envelope_key: ClientPayloadEnvelopeKey,
     blind_indexes: Vec<ClientPayloadBlindIndexTokenKey>,
+}
+
+impl Debug for ClientPayloadVerifiedEnvelopeKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientPayloadVerifiedEnvelopeKey")
+            .field("envelope_key", &self.envelope_key)
+            .field("blind_index_count", &self.blind_indexes.len())
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -252,10 +289,19 @@ pub struct ServerPayloadVerifiedEnvelopeKey {
     envelope_key: ServerPayloadEnvelopeKey,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct ClientPayloadBlindIndexTokenKey {
     field_path: String,
     token: String,
+}
+
+impl Debug for ClientPayloadBlindIndexTokenKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientPayloadBlindIndexTokenKey")
+            .field("field_path", &"[redacted]")
+            .field("token", &"[redacted]")
+            .finish()
+    }
 }
 
 impl ClientPayloadNonceReplayKey {
@@ -1442,11 +1488,14 @@ impl Debug for ClientPayloadEnvelope {
             .field("version", &self.version)
             .field("kind", &self.kind)
             .field("algorithm", &self.algorithm)
-            .field("key_id", &self.key_id)
-            .field("rk_id", &self.rk_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
-            .field("kdf_domain", &self.kdf_domain)
-            .field("aad", &self.aad)
+            .field(
+                "kdf_domain",
+                &self.kdf_domain.as_ref().map(|_| "[redacted]"),
+            )
+            .field("aad", &"[redacted]")
             .field("nonce", &"[redacted]")
             .field("ciphertext_len", &self.ciphertext.len())
             .field("blind_index_count", &self.blind_indexes.len())
@@ -1814,7 +1863,49 @@ mod tests {
 
     #[test]
     fn client_payload_debug_redacts_ciphertext_nonce_and_signature() {
-        let value = valid_client_payload_value();
+        let mut value = valid_client_payload_value();
+        let marker = value
+            .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)
+            .and_then(Value::as_object_mut)
+            .unwrap();
+        marker.insert(
+            "key_id".to_string(),
+            Value::String("CLIENT-PAYLOAD-KEY-SENTINEL".to_string()),
+        );
+        marker.insert(
+            "rk_id".to_string(),
+            Value::String("CLIENT-PAYLOAD-RK-SENTINEL".to_string()),
+        );
+        marker.insert(
+            "kdf_domain".to_string(),
+            Value::String("CLIENT-PAYLOAD-KDF-SENTINEL".to_string()),
+        );
+        marker.insert(
+            "blind_indexes".to_string(),
+            serde_json::json!([
+                {
+                    "field_path": "CLIENT-PAYLOAD-BLIND-FIELD-SENTINEL",
+                    "token": BASE64URL_NOPAD.encode(&[8_u8; 32]),
+                }
+            ]),
+        );
+        let aad = marker
+            .get_mut("aad")
+            .and_then(Value::as_object_mut)
+            .unwrap();
+        aad.insert(
+            "collection_id".to_string(),
+            Value::String("CLIENT-PAYLOAD-COLLECTION-SENTINEL".to_string()),
+        );
+        aad.insert(
+            "point_id".to_string(),
+            Value::String("CLIENT-PAYLOAD-POINT-SENTINEL".to_string()),
+        );
+        aad.insert(
+            "field_path".to_string(),
+            Value::String("CLIENT-PAYLOAD-FIELD-SENTINEL".to_string()),
+        );
+
         let envelope = extract_client_envelope(&value, "document.body")
             .unwrap()
             .unwrap();
@@ -1825,11 +1916,49 @@ mod tests {
         assert!(!debug.contains(&BASE64URL_NOPAD.encode(&[1_u8; 12])));
         assert!(!debug.contains(&BASE64URL_NOPAD.encode(&[2_u8; 16])));
         assert!(!debug.contains(&BASE64URL_NOPAD.encode(&[3_u8; 64])));
+        assert!(!debug.contains("CLIENT-PAYLOAD-KEY-SENTINEL"));
+        assert!(!debug.contains("CLIENT-PAYLOAD-RK-SENTINEL"));
+        assert!(!debug.contains("CLIENT-PAYLOAD-KDF-SENTINEL"));
+        assert!(!debug.contains("CLIENT-PAYLOAD-COLLECTION-SENTINEL"));
+        assert!(!debug.contains("CLIENT-PAYLOAD-POINT-SENTINEL"));
+        assert!(!debug.contains("CLIENT-PAYLOAD-FIELD-SENTINEL"));
 
         let signature_debug = format!("{:?}", envelope.signature.as_ref().unwrap());
         assert!(signature_debug.contains("sig_len"));
         assert!(!signature_debug.contains("tenant-a:signing"));
         assert!(!signature_debug.contains(&BASE64URL_NOPAD.encode(&[3_u8; 64])));
+
+        let nonce_key = ClientPayloadNonceReplayKey {
+            key_id: "CLIENT-PAYLOAD-NONCE-KEY-SENTINEL".to_string(),
+            rk_id: "CLIENT-PAYLOAD-NONCE-RK-SENTINEL".to_string(),
+            rk_epoch: 3,
+            nonce: BASE64URL_NOPAD.encode(&[1_u8; 12]),
+        };
+        let nonce_key_debug = format!("{nonce_key:?}");
+        assert!(!nonce_key_debug.contains("CLIENT-PAYLOAD-NONCE-KEY-SENTINEL"));
+        assert!(!nonce_key_debug.contains("CLIENT-PAYLOAD-NONCE-RK-SENTINEL"));
+        assert!(!nonce_key_debug.contains(&BASE64URL_NOPAD.encode(&[1_u8; 12])));
+
+        let envelope_key = client_payload_envelope_key(&value, "document.body")
+            .unwrap()
+            .unwrap();
+        let blind_indexes = client_payload_blind_index_token_keys(&value, "document.body").unwrap();
+        let verified_key = ClientPayloadVerifiedEnvelopeKey {
+            envelope_key,
+            blind_indexes,
+        };
+        let verified_key_debug = format!("{verified_key:?}");
+        assert!(verified_key_debug.contains("blind_index_count"));
+        assert!(!verified_key_debug.contains("CLIENT-PAYLOAD-KEY-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-PAYLOAD-RK-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-PAYLOAD-COLLECTION-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-PAYLOAD-POINT-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-PAYLOAD-FIELD-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-PAYLOAD-BLIND-FIELD-SENTINEL"));
+        assert!(!verified_key_debug.contains(&BASE64URL_NOPAD.encode(&[1_u8; 12])));
+        assert!(!verified_key_debug.contains(&BASE64URL_NOPAD.encode(&[2_u8; 16])));
+        assert!(!verified_key_debug.contains(&BASE64URL_NOPAD.encode(&[3_u8; 64])));
+        assert!(!verified_key_debug.contains(&BASE64URL_NOPAD.encode(&[8_u8; 32])));
     }
 
     #[test]

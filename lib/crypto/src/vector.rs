@@ -540,7 +540,7 @@ pub struct CkksVectorVerifiedSidecarKey {
     envelope_key: CkksVectorSidecarEnvelopeKey,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ClientCkksVectorSidecarEnvelopeKey {
     collection_id: String,
     point_id: String,
@@ -555,9 +555,35 @@ pub struct ClientCkksVectorSidecarEnvelopeKey {
     signature_sha256_b64: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+impl Debug for ClientCkksVectorSidecarEnvelopeKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientCkksVectorSidecarEnvelopeKey")
+            .field("collection_id", &"[redacted]")
+            .field("point_id", &"[redacted]")
+            .field("vector_name", &self.vector_name)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("context_digest", &"[redacted]")
+            .field("slots", &self.slots)
+            .field("ciphertext_sha256_b64", &"[redacted]")
+            .field("signature_key_id", &"[redacted]")
+            .field("signature_sha256_b64", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ClientCkksVectorVerifiedSidecarKey {
     envelope_key: ClientCkksVectorSidecarEnvelopeKey,
+}
+
+impl Debug for ClientCkksVectorVerifiedSidecarKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientCkksVectorVerifiedSidecarKey")
+            .field("envelope_key", &self.envelope_key)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1095,12 +1121,12 @@ impl Debug for ClientCkksVectorEnvelope {
             .field("collection_id", &self.collection_id)
             .field("point_id", &self.point_id)
             .field("vector_name", &self.vector_name)
-            .field("key_id", &self.key_id)
-            .field("rk_id", &self.rk_id)
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
-            .field("context_digest", &self.context_digest)
+            .field("context_digest", &"[redacted]")
             .field("slots", &self.slots)
-            .field("ciphertext_sha256", &self.ciphertext_sha256)
+            .field("ciphertext_sha256", &"[redacted]")
             .field("ciphertext_len", &self.ciphertext.len())
             .field("signature", &self.signature)
             .finish()
@@ -1147,10 +1173,10 @@ impl Debug for VerifiedCkksVector {
         f.debug_struct("VerifiedCkksVector")
             .field("crypto_schema_version", &self.crypto_schema_version)
             .field("encryption_epoch", &self.encryption_epoch)
-            .field("key_id", &self.key_id)
+            .field("key_id", &"[redacted]")
             .field("vector_name", &self.vector_name)
             .field("slots", &self.slots)
-            .field("context_digest", &self.context_digest)
+            .field("context_digest", &"[redacted]")
             .field("ciphertext_len", &self.ciphertext.len())
             .finish()
     }
@@ -1888,7 +1914,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn client_ckks_vector_signature_debug_redacts_key_id_and_signature() {
+    fn client_ckks_vector_debug_redacts_envelope_and_sidecar_identifiers() {
         let signature = ClientCkksVectorSignature {
             alg: "ed25519".to_string(),
             key_id: "CLIENT-CKKS-SIGNING-KEY-SENTINEL".to_string(),
@@ -1899,5 +1925,58 @@ mod tests {
         assert!(rendered.contains("sig_len"));
         assert!(!rendered.contains("CLIENT-CKKS-SIGNING-KEY-SENTINEL"));
         assert!(!rendered.contains("CLIENT-CKKS-SIGNATURE-SENTINEL"));
+
+        let envelope = ClientCkksVectorEnvelope {
+            version: VERSION,
+            scheme: CKKS_SCHEME.to_string(),
+            security_profile: CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50.to_string(),
+            collection_id: "CLIENT-CKKS-COLLECTION-SENTINEL".to_string(),
+            point_id: "CLIENT-CKKS-POINT-SENTINEL".to_string(),
+            vector_name: "text".to_string(),
+            key_id: "CLIENT-CKKS-KEY-SENTINEL".to_string(),
+            rk_id: "CLIENT-CKKS-RK-SENTINEL".to_string(),
+            rk_epoch: 7,
+            context_digest: "CLIENT-CKKS-CONTEXT-SENTINEL".to_string(),
+            slots: 4,
+            ciphertext_sha256: "CLIENT-CKKS-SHA-SENTINEL".to_string(),
+            ciphertext: "CLIENT-CKKS-CIPHERTEXT-SENTINEL".to_string(),
+            signature: Some(signature),
+        };
+        let envelope_debug = format!("{envelope:?}");
+        assert!(envelope_debug.contains("ciphertext_len"));
+        assert!(!envelope_debug.contains("CLIENT-CKKS-KEY-SENTINEL"));
+        assert!(!envelope_debug.contains("CLIENT-CKKS-RK-SENTINEL"));
+        assert!(!envelope_debug.contains("CLIENT-CKKS-CONTEXT-SENTINEL"));
+        assert!(!envelope_debug.contains("CLIENT-CKKS-SHA-SENTINEL"));
+        assert!(!envelope_debug.contains("CLIENT-CKKS-CIPHERTEXT-SENTINEL"));
+        assert!(!envelope_debug.contains("CLIENT-CKKS-SIGNING-KEY-SENTINEL"));
+        assert!(!envelope_debug.contains("CLIENT-CKKS-SIGNATURE-SENTINEL"));
+
+        let sidecar_key = ClientCkksVectorSidecarEnvelopeKey {
+            collection_id: "CLIENT-CKKS-COLLECTION-SENTINEL".to_string(),
+            point_id: "CLIENT-CKKS-POINT-SENTINEL".to_string(),
+            vector_name: "text".to_string(),
+            key_id: "CLIENT-CKKS-KEY-SENTINEL".to_string(),
+            rk_id: "CLIENT-CKKS-RK-SENTINEL".to_string(),
+            rk_epoch: 7,
+            context_digest: "CLIENT-CKKS-CONTEXT-SENTINEL".to_string(),
+            slots: 4,
+            ciphertext_sha256_b64: "CLIENT-CKKS-SHA-SENTINEL".to_string(),
+            signature_key_id: "CLIENT-CKKS-SIGNING-KEY-SENTINEL".to_string(),
+            signature_sha256_b64: "CLIENT-CKKS-SIGNATURE-SHA-SENTINEL".to_string(),
+        };
+        let verified_key = ClientCkksVectorVerifiedSidecarKey {
+            envelope_key: sidecar_key,
+        };
+        let verified_key_debug = format!("{verified_key:?}");
+        assert!(verified_key_debug.contains("slots"));
+        assert!(!verified_key_debug.contains("CLIENT-CKKS-COLLECTION-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-CKKS-POINT-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-CKKS-KEY-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-CKKS-RK-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-CKKS-CONTEXT-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-CKKS-SHA-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-CKKS-SIGNING-KEY-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-CKKS-SIGNATURE-SHA-SENTINEL"));
     }
 }
