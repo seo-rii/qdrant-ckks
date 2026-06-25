@@ -303,6 +303,21 @@ fn assert_private_hnsw_session_api_error_without(err: CollectionError, forbidden
             && !description.contains("runtime CKKS"),
         "unexpected error: {description}",
     );
+    for operation_label in [
+        "retrieve",
+        "scroll",
+        "search",
+        "query",
+        "recommend",
+        "discover",
+        "delete points",
+        "delete points by filter",
+        "sync points",
+        "upsert",
+        "update vectors",
+    ] {
+        assert!(!description.contains(operation_label), "{description}");
+    }
     for value in forbidden {
         assert!(!description.contains(value), "{description}");
     }
