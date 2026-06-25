@@ -637,6 +637,8 @@ mod private_hnsw_rest_tests {
             fixture.encrypted_build.buckets[0].ciphertext.clone(),
             fixture.encrypted_build.buckets[0].ciphertext_sha256.clone(),
             fixture.encrypted_build.buckets[0].bucket_commitment.clone(),
+            fixture.manifest_signature.key_id.clone(),
+            fixture.manifest_signature.sig.clone(),
             updated_bucket.ciphertext,
             updated_bucket.ciphertext_sha256,
             updated_bucket.bucket_commitment,
