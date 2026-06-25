@@ -12423,6 +12423,75 @@ esac
                 .unwrap();
             let private_result_collection = toc.get_collection(&collection_pass).await.unwrap();
 
+            let no_payload_records = crate::common::query::do_get_points(
+                &toc,
+                "private_result_docs",
+                PointRequestInternal {
+                    ids: Vec::new(),
+                    with_payload: Some(WithPayloadInterface::Bool(false)),
+                    with_vector: WithVector::Bool(false),
+                },
+                None,
+                None,
+                ShardSelectorInternal::All,
+                auth.clone(),
+                HwMeasurementAcc::disposable(),
+                None,
+            )
+            .await
+            .expect("private result ORAM retrieve without payload must remain ordinary");
+            assert!(no_payload_records.is_empty());
+
+            let grpc_no_payload_records = crate::tonic::api::query_common::get(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::GetPoints {
+                    collection_name: "private_result_docs".to_string(),
+                    ids: Vec::new(),
+                    with_payload: Some(grpc_payload_disabled()),
+                    with_vectors: None,
+                    read_consistency: None,
+                    shard_key_selector: None,
+                    timeout: None,
+                },
+                None,
+                auth.clone(),
+                request_hw_counter(),
+                None,
+            )
+            .await
+            .expect("private result ORAM gRPC retrieve without payload must remain ordinary")
+            .into_inner();
+            assert!(grpc_no_payload_records.result.is_empty());
+
+            let grpc_no_payload_search = crate::tonic::api::query_common::search(
+                UncheckedTocProvider::new_unchecked(&toc),
+                api::grpc::qdrant::SearchPoints {
+                    collection_name: "private_result_docs".to_string(),
+                    vector: vec![0.1, 0.2],
+                    filter: None,
+                    limit: 1,
+                    with_payload: Some(grpc_payload_disabled()),
+                    params: None,
+                    score_threshold: None,
+                    offset: None,
+                    vector_name: Some(DEFAULT_VECTOR_NAME.to_string()),
+                    with_vectors: None,
+                    read_consistency: None,
+                    timeout: None,
+                    shard_key_selector: None,
+                    sparse_indices: None,
+                    ckks_encrypted_query: None,
+                },
+                None,
+                auth.clone(),
+                request_hw_counter(),
+                None,
+            )
+            .await
+            .expect("private result ORAM gRPC search without payload must remain ordinary")
+            .into_inner();
+            assert!(grpc_no_payload_search.result.is_empty());
+
             assert_private_result_session_error(
                 crate::common::query::do_get_points(
                     &toc,
