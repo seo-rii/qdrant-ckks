@@ -934,6 +934,8 @@ fn private_oram_snapshot_compact_entry_is_client_owned_state(compact_name: &str)
         "clientstate"
             | "clientstatesnapshot"
             | "clientstatesnapshots"
+            | "encryptedclientstate"
+            | "encryptedclientstates"
             | "encryptedclientstatesnapshot"
             | "encryptedclientstatesnapshots"
             | "positionmap"
@@ -2786,6 +2788,10 @@ mod tests {
             "client.state.snapshot",
             "client.state.snapshot.bin",
             "clientStateSnapshots.json",
+            "encrypted_client_state.bin",
+            "encrypted.client.state",
+            "encrypted.client.state.bin",
+            "encryptedClientStates.json",
             "encrypted_client_state_snapshot.bin",
             "encrypted.client.state.snapshot",
             "encrypted.client.state.snapshot.bin",

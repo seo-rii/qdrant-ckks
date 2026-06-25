@@ -346,6 +346,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "client_state_ciphertext_hashes"
                         | "client_state_ciphertext_sha256"
                         | "client_state_ciphertexts_sha256"
+                        | "encrypted_client_state"
+                        | "encrypted_client_states"
                         | "encrypted_client_state_snapshot"
                         | "encrypted_client_state_snapshots"
                         | "encrypted_client_state_ciphertext"
@@ -590,6 +592,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "clientstate"
                         | "clientstatesnapshot"
                         | "clientstatesnapshots"
+                        | "encryptedclientstate"
+                        | "encryptedclientstates"
                         | "encryptedclientstatesnapshot"
                         | "encryptedclientstatesnapshots"
                         | "encryptedclientstateciphertext"
@@ -1437,6 +1441,14 @@ mod tests {
                 json!("qdrant-sec-private-hnsw-camel-client-state-snapshot-log-sentinel"),
             ),
             (
+                "encrypted_client_state",
+                json!("qdrant-sec-private-hnsw-encrypted-client-state-log-sentinel"),
+            ),
+            (
+                "encryptedClientState",
+                json!("qdrant-sec-private-hnsw-camel-encrypted-client-state-log-sentinel"),
+            ),
+            (
                 "encrypted_client_state_snapshot",
                 json!("qdrant-sec-private-hnsw-encrypted-client-state-snapshot-log-sentinel"),
             ),
@@ -1556,6 +1568,10 @@ mod tests {
             (
                 "clientStateSnapshots",
                 json!(["qdrant-sec-private-result-camel-client-state-snapshots-log-sentinel"]),
+            ),
+            (
+                "encryptedClientStates",
+                json!(["qdrant-sec-private-result-camel-encrypted-client-states-log-sentinel"]),
             ),
             (
                 "encryptedClientStateSnapshots",
@@ -1742,6 +1758,8 @@ mod tests {
             "qdrant-sec-private-hnsw-camel-client-state-log-sentinel",
             "qdrant-sec-private-hnsw-client-state-snapshot-log-sentinel",
             "qdrant-sec-private-hnsw-camel-client-state-snapshot-log-sentinel",
+            "qdrant-sec-private-hnsw-encrypted-client-state-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-encrypted-client-state-log-sentinel",
             "qdrant-sec-private-hnsw-encrypted-client-state-snapshot-log-sentinel",
             "qdrant-sec-private-hnsw-camel-encrypted-client-state-snapshot-log-sentinel",
             "qdrant-sec-private-hnsw-camel-stash-snapshot-log-sentinel",
@@ -1866,6 +1884,7 @@ mod tests {
             "qdrant-sec-private-result-id-log-sentinel",
             "qdrant-sec-private-result-stash-log-sentinel",
             "qdrant-sec-private-result-camel-client-state-snapshots-log-sentinel",
+            "qdrant-sec-private-result-camel-encrypted-client-states-log-sentinel",
             "qdrant-sec-private-result-camel-encrypted-client-state-snapshots-log-sentinel",
             "qdrant-sec-private-result-stash-snapshots-log-sentinel",
         ] {

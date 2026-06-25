@@ -1473,6 +1473,8 @@ fn compact_path_component_is_client_owned_oram_state_alias(value: &str) -> bool 
         "clientstate"
             | "clientstatesnapshot"
             | "clientstatesnapshots"
+            | "encryptedclientstate"
+            | "encryptedclientstates"
             | "encryptedclientstatesnapshot"
             | "encryptedclientstatesnapshots"
             | "positionmap"
@@ -1812,6 +1814,9 @@ mod tests {
             "client-state",
             "client.state",
             "client_state.json",
+            "encrypted_client_state",
+            "encrypted.client.state",
+            "encryptedClientStates.json",
             "position_map",
             "position.map",
             "oram-position-map",
