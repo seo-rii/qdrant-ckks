@@ -54,7 +54,7 @@ const PRIVATE_RESULT_ORAM_PAYLOAD_BLOCK_VERSION: u16 = 1;
 const PRIVATE_RESULT_ORAM_BUCKET_PLAINTEXT_MAGIC: &[u8; 4] = b"QRPB";
 const PRIVATE_RESULT_ORAM_BUCKET_PLAINTEXT_VERSION: u16 = 1;
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, PartialEq, Eq)]
 pub enum PrivateResultOramError {
     #[error("private result ORAM client encryption failed")]
     Encryption(#[from] EncryptionError),
@@ -172,6 +172,14 @@ pub enum PrivateResultOramError {
     UnsupportedClientStateCiphertextVersion(u16),
     #[error("private result ORAM client state decryption authentication failed")]
     ClientStateOpenFailed,
+}
+
+impl Debug for PrivateResultOramError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("PrivateResultOramError")
+            .field(&self.to_string())
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3712,6 +3720,69 @@ mod tests {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
             for leaked in ["99", "88", "77", "66", "55", "123", "456", "42", "43"] {
+                assert!(!rendered.contains(leaked), "{rendered}");
+            }
+        }
+    }
+
+    #[test]
+    fn private_result_oram_error_debug_does_not_reflect_structured_values() {
+        let cases = [
+            format!(
+                "{:?}",
+                PrivateResultOramError::Encryption(EncryptionError::UnsupportedAlgorithm(
+                    "aead-alg-sentinel".to_string(),
+                ))
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::UnsupportedManifestVersion(99)
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidManifestField("manifest-field-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::ManifestContextMismatch("manifest-context-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::UnsupportedSignatureAlgorithm(
+                    "rsa-pss-sentinel".to_string()
+                )
+            ),
+            format!("{:?}", PrivateResultOramError::UnsupportedBucketVersion(88)),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidBucketField("bucket-field-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidClientConfig("client-config-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::StaleBucketEpoch {
+                    bucket_id: 123,
+                    expected_epoch: 42,
+                    actual_epoch: 43,
+                }
+            ),
+        ];
+
+        for rendered in cases {
+            assert!(!rendered.contains("aead-alg-sentinel"), "{rendered}");
+            assert!(!rendered.contains("rsa-pss-sentinel"), "{rendered}");
+            for leaked in [
+                "manifest-field-sentinel",
+                "manifest-context-sentinel",
+                "bucket-field-sentinel",
+                "client-config-sentinel",
+            ] {
+                assert!(!rendered.contains(leaked), "{rendered}");
+            }
+            for leaked in ["99", "88", "123", "42", "43"] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
         }

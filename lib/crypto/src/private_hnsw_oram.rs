@@ -27,7 +27,7 @@ const PRIVATE_HNSW_NODE_BLOCK_NEIGHBOR_SLOT_BYTES: u64 = 33;
 const PRIVATE_HNSW_ORAM_BUCKET_PLAINTEXT_HEADER_BYTES: usize = 4 + 2 + 4 + 4;
 const PRIVATE_HNSW_ORAM_BUCKET_AEAD_OVERHEAD_BYTES: usize = 1 + 12 + 16;
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, PartialEq, Eq)]
 pub enum PrivateHnswOramError {
     #[error("private HNSW ORAM manifest uses unsupported version")]
     UnsupportedManifestVersion(u16),
@@ -57,6 +57,14 @@ pub enum PrivateHnswOramError {
     InvalidReadPathsSignature,
     #[error("private HNSW ORAM resource key id is invalid")]
     InvalidResourceKeyId,
+}
+
+impl Debug for PrivateHnswOramError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("PrivateHnswOramError")
+            .field(&self.to_string())
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1081,6 +1089,35 @@ mod tests {
             PrivateHnswOramError::ManifestContextMismatch("manifest-context-sentinel").to_string(),
             PrivateHnswOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
                 .to_string(),
+        ];
+
+        for rendered in cases {
+            assert!(!rendered.contains("rsa-pss-sentinel"), "{rendered}");
+            assert!(!rendered.contains("manifest-field-sentinel"), "{rendered}");
+            assert!(
+                !rendered.contains("manifest-context-sentinel"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("99"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn private_hnsw_oram_error_debug_does_not_reflect_structured_values() {
+        let cases = [
+            format!("{:?}", PrivateHnswOramError::UnsupportedManifestVersion(99)),
+            format!(
+                "{:?}",
+                PrivateHnswOramError::InvalidManifestField("manifest-field-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswOramError::ManifestContextMismatch("manifest-context-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
+            ),
         ];
 
         for rendered in cases {
