@@ -338,6 +338,7 @@ fn assert_private_result_oram_read_error_without(
             && !description.contains("runtime payload encryption"),
         "unexpected error: {description}",
     );
+    assert_private_result_oram_error_omits_operation_labels(&description);
     assert!(!description.contains(operation), "{description}");
     for value in forbidden {
         assert!(!description.contains(value), "{description}");
@@ -359,6 +360,7 @@ fn assert_private_result_oram_write_error_without(
             && !description.contains("runtime payload encryption"),
         "unexpected error: {description}",
     );
+    assert_private_result_oram_error_omits_operation_labels(&description);
     assert!(!description.contains(operation), "{description}");
     for value in forbidden {
         assert!(!description.contains(value), "{description}");
@@ -381,11 +383,41 @@ fn assert_private_result_oram_selector_error_without(
             && !description.contains("runtime payload encryption"),
         "unexpected error: {description}",
     );
+    assert_private_result_oram_error_omits_operation_labels(&description);
     if operation != "use" {
         assert!(!description.contains(operation), "{description}");
     }
     for value in forbidden {
         assert!(!description.contains(value), "{description}");
+    }
+}
+
+fn assert_private_result_oram_error_omits_operation_labels(description: &str) {
+    for operation_label in [
+        "retrieve",
+        "scroll",
+        "search",
+        "query",
+        "recommend",
+        "discover",
+        "group lookup",
+        "filter on",
+        "order by",
+        "facet on",
+        "group by",
+        "use formula condition on",
+        "upsert",
+        "conditional upsert",
+        "delete points",
+        "delete points by filter",
+        "set payload",
+        "overwrite payload",
+        "delete payload",
+        "delete payload by filter",
+        "clear payload",
+        "clear payload by filter",
+    ] {
+        assert!(!description.contains(operation_label), "{description}");
     }
 }
 
