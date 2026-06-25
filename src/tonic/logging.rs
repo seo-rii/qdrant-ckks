@@ -257,6 +257,12 @@ mod tests {
              request_signature=request-signature-sentinel \
              readSignature=read-signature-camel-sentinel \
              commitSignature=commit-signature-camel-sentinel \
+             owner_signing_key_id=owner-signing-key-sentinel \
+             ownerSigningKeyIds=owner-signing-key-ids-camel-sentinel \
+             signing_key_id=signing-key-sentinel \
+             signingKeyIds=signing-key-ids-camel-sentinel \
+             signature_public_keys=signature-public-keys-sentinel \
+             signaturePublicKeys=signature-public-keys-camel-sentinel \
              fetch_token=short-fetch-token-sentinel \
              fetchTokens=short-fetch-token-camel-sentinel \
              payload_fetch_token=fetch-token-sentinel \
@@ -380,6 +386,12 @@ mod tests {
         assert!(!rendered.contains("request-signature-sentinel"));
         assert!(!rendered.contains("read-signature-camel-sentinel"));
         assert!(!rendered.contains("commit-signature-camel-sentinel"));
+        assert!(!rendered.contains("owner-signing-key-sentinel"));
+        assert!(!rendered.contains("owner-signing-key-ids-camel-sentinel"));
+        assert!(!rendered.contains("signing-key-sentinel"));
+        assert!(!rendered.contains("signing-key-ids-camel-sentinel"));
+        assert!(!rendered.contains("signature-public-keys-sentinel"));
+        assert!(!rendered.contains("signature-public-keys-camel-sentinel"));
         assert!(!rendered.contains("short-fetch-token-sentinel"));
         assert!(!rendered.contains("short-fetch-token-camel-sentinel"));
         assert!(!rendered.contains("fetch-token-sentinel"));
