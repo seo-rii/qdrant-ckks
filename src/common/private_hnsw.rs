@@ -3960,7 +3960,7 @@ mod private_hnsw_tests {
         };
         PrivateHnswSession {
             session_id: session_id.to_string(),
-            _client_id: "client".to_string(),
+            _client_id: "hnsw-client-id-sentinel".to_string(),
             collection_id: "collection-uuid-1".to_string(),
             collection_path: std::path::PathBuf::from("/tmp/qdrant-private-hnsw-test"),
             vector_name: "text".to_string(),
@@ -3981,6 +3981,9 @@ mod private_hnsw_tests {
             "text",
             "session-1",
             "session-2",
+            "hnsw-client-id-sentinel",
+            "tenant-a/vector-private-rk",
+            "OioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio",
             "qdrant-private-hnsw-test",
         ] {
             assert!(

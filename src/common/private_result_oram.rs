@@ -3632,6 +3632,9 @@ mod private_result_oram_tests {
             "collection-private-result-test",
             "session-1",
             "session-2",
+            "tenant-a/sdk-instance-1",
+            "tenant-a/private-result-rk",
+            "OioqKioqKioqKioqKioqKioqKioqKioqKioqKioqKio",
             "qdrant-private-result-oram-test",
         ] {
             assert!(
