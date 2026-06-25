@@ -12638,6 +12638,15 @@ esac
                     api::grpc::qdrant::with_payload_selector::SelectorOptions::Enable(false),
                 ),
             };
+            let grpc_payload_decrypted = || api::grpc::qdrant::WithPayloadSelector {
+                selector_options: Some(
+                    api::grpc::qdrant::with_payload_selector::SelectorOptions::Encrypted(
+                        api::grpc::qdrant::PayloadEncryptedSelector {
+                            mode: api::grpc::qdrant::payload_encrypted_selector::EncryptedPayloadReadMode::EncryptedPayloadDecrypted as i32,
+                        },
+                    ),
+                ),
+            };
             let grpc_dense_vector = || api::grpc::qdrant::Vector {
                 vector: Some(api::grpc::qdrant::vector::Vector::Dense(
                     api::grpc::qdrant::DenseVector {
@@ -12820,6 +12829,30 @@ esac
                     &toc,
                     "private_result_docs",
                     PointRequestInternal {
+                        ids: vec![1.into()],
+                        with_payload: Some(WithPayloadInterface::Encrypted(
+                            PayloadEncryptedReadPolicy {
+                                encrypted_payload: EncryptedPayloadReadMode::Decrypted,
+                            },
+                        )),
+                        with_vector: WithVector::Bool(false),
+                    },
+                    None,
+                    None,
+                    ShardSelectorInternal::All,
+                    auth.clone(),
+                    HwMeasurementAcc::disposable(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM decrypted retrieve must fail closed"),
+            );
+
+            assert_private_result_session_error(
+                crate::common::query::do_get_points(
+                    &toc,
+                    "private_result_docs",
+                    PointRequestInternal {
                         ids: Vec::new(),
                         with_payload: Some(WithPayloadInterface::Bool(true)),
                         with_vector: WithVector::Bool(false),
@@ -12854,6 +12887,27 @@ esac
                 )
                 .await
                 .expect_err("private result ORAM gRPC retrieve must fail closed"),
+            );
+
+            assert_private_result_grpc_session_error(
+                crate::tonic::api::query_common::get(
+                    UncheckedTocProvider::new_unchecked(&toc),
+                    api::grpc::qdrant::GetPoints {
+                        collection_name: "private_result_docs".to_string(),
+                        ids: vec![segment::types::PointIdType::from(1).into()],
+                        with_payload: Some(grpc_payload_decrypted()),
+                        with_vectors: None,
+                        read_consistency: None,
+                        shard_key_selector: None,
+                        timeout: None,
+                    },
+                    None,
+                    auth.clone(),
+                    request_hw_counter(),
+                    None,
+                )
+                .await
+                .expect_err("private result ORAM gRPC decrypted retrieve must fail closed"),
             );
 
             assert_private_result_session_error(

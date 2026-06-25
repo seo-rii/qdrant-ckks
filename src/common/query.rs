@@ -780,14 +780,6 @@ pub async fn do_core_search_batch_points(
             mode
         })
         .collect::<Vec<_>>();
-    preflight_payload_decrypt_modes_for_read(
-        toc,
-        collection_name,
-        &encrypted_payload_read_modes,
-        runtime_settings,
-        &auth,
-    )
-    .await?;
     for search in &request.searches {
         preflight_private_result_oram_raw_payload_read(
             toc,
@@ -798,6 +790,14 @@ pub async fn do_core_search_batch_points(
         )
         .await?;
     }
+    preflight_payload_decrypt_modes_for_read(
+        toc,
+        collection_name,
+        &encrypted_payload_read_modes,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
     if runtime_settings.is_none() {
         let private_hnsw_vectors =
             private_hnsw_oram_vector_names_for_collection(toc, collection_name, &auth).await?;
@@ -3699,19 +3699,19 @@ pub async fn do_search_point_groups(
     runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
     let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
-    preflight_payload_decrypt_for_read(
-        toc,
-        collection_name,
-        encrypted_payload_read_mode,
-        runtime_settings,
-        &auth,
-    )
-    .await?;
     preflight_private_result_oram_raw_payload_read(
         toc,
         collection_name,
         request.with_payload.as_ref(),
         "search grouped results",
+        &auth,
+    )
+    .await?;
+    preflight_payload_decrypt_for_read(
+        toc,
+        collection_name,
+        encrypted_payload_read_mode,
+        runtime_settings,
         &auth,
     )
     .await?;
@@ -4395,14 +4395,6 @@ pub async fn do_recommend_batch_points(
             mode
         })
         .collect::<Vec<_>>();
-    preflight_payload_decrypt_modes_for_read(
-        toc,
-        collection_name,
-        &encrypted_payload_read_modes,
-        runtime_settings,
-        &auth,
-    )
-    .await?;
     for (request, _) in &requests {
         preflight_private_result_oram_raw_payload_read(
             toc,
@@ -4413,6 +4405,14 @@ pub async fn do_recommend_batch_points(
         )
         .await?;
     }
+    preflight_payload_decrypt_modes_for_read(
+        toc,
+        collection_name,
+        &encrypted_payload_read_modes,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
 
     if runtime_settings.is_none() {
         let private_hnsw_vectors =
@@ -4946,19 +4946,19 @@ pub async fn do_recommend_point_groups(
     runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
     let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
-    preflight_payload_decrypt_for_read(
-        toc,
-        collection_name,
-        encrypted_payload_read_mode,
-        runtime_settings,
-        &auth,
-    )
-    .await?;
     preflight_private_result_oram_raw_payload_read(
         toc,
         collection_name,
         request.with_payload.as_ref(),
         "recommend grouped results",
+        &auth,
+    )
+    .await?;
+    preflight_payload_decrypt_for_read(
+        toc,
+        collection_name,
+        encrypted_payload_read_mode,
+        runtime_settings,
         &auth,
     )
     .await?;
@@ -5318,14 +5318,6 @@ pub async fn do_discover_batch_points(
             mode
         })
         .collect::<Vec<_>>();
-    preflight_payload_decrypt_modes_for_read(
-        toc,
-        collection_name,
-        &encrypted_payload_read_modes,
-        runtime_settings,
-        &auth,
-    )
-    .await?;
     for (request, _) in &requests {
         preflight_private_result_oram_raw_payload_read(
             toc,
@@ -5336,6 +5328,14 @@ pub async fn do_discover_batch_points(
         )
         .await?;
     }
+    preflight_payload_decrypt_modes_for_read(
+        toc,
+        collection_name,
+        &encrypted_payload_read_modes,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
 
     if runtime_settings.is_none() {
         let private_hnsw_vectors =
@@ -6074,7 +6074,7 @@ fn private_result_oram_raw_payload_read_violation<'a>(
     encryption: &'a CollectionEncryptionConfig,
 ) -> Result<Option<&'a str>, StorageError> {
     if !with_payload.is_required()
-        || with_payload.encrypted_payload_read_mode() != EncryptedPayloadReadMode::Raw
+        || with_payload.encrypted_payload_read_mode() == EncryptedPayloadReadMode::Redacted
     {
         return Ok(None);
     }
@@ -6323,19 +6323,19 @@ pub async fn do_get_points(
     .await?;
 
     let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
-    preflight_payload_decrypt_for_read(
-        toc,
-        collection_name,
-        encrypted_payload_read_mode,
-        runtime_settings,
-        &auth,
-    )
-    .await?;
     preflight_private_result_oram_raw_payload_read(
         toc,
         collection_name,
         request.with_payload.as_ref(),
         "retrieve",
+        &auth,
+    )
+    .await?;
+    preflight_payload_decrypt_for_read(
+        toc,
+        collection_name,
+        encrypted_payload_read_mode,
+        runtime_settings,
         &auth,
     )
     .await?;
@@ -6392,19 +6392,19 @@ pub async fn do_scroll_points(
     .await?;
 
     let encrypted_payload_read_mode = encrypted_payload_read_mode(request.with_payload.as_ref());
-    preflight_payload_decrypt_for_read(
-        toc,
-        collection_name,
-        encrypted_payload_read_mode,
-        runtime_settings,
-        &auth,
-    )
-    .await?;
     preflight_private_result_oram_raw_payload_read(
         toc,
         collection_name,
         request.with_payload.as_ref(),
         "scroll",
+        &auth,
+    )
+    .await?;
+    preflight_payload_decrypt_for_read(
+        toc,
+        collection_name,
+        encrypted_payload_read_mode,
+        runtime_settings,
         &auth,
     )
     .await?;
@@ -6985,14 +6985,6 @@ pub async fn do_query_batch_points(
             mode
         })
         .collect::<Vec<_>>();
-    preflight_payload_decrypt_modes_for_read(
-        toc,
-        collection_name,
-        &encrypted_payload_read_modes,
-        runtime_settings,
-        &auth,
-    )
-    .await?;
     for (request, _) in &requests {
         preflight_private_result_oram_raw_payload_read(
             toc,
@@ -7003,6 +6995,14 @@ pub async fn do_query_batch_points(
         )
         .await?;
     }
+    preflight_payload_decrypt_modes_for_read(
+        toc,
+        collection_name,
+        &encrypted_payload_read_modes,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
 
     if runtime_settings.is_none() {
         let private_hnsw_vectors =
@@ -7627,14 +7627,6 @@ pub async fn do_query_point_groups(
     runtime_settings: Option<&Settings>,
 ) -> Result<GroupsResult, StorageError> {
     let encrypted_payload_read_mode = request.with_payload.encrypted_payload_read_mode();
-    preflight_payload_decrypt_for_read(
-        toc,
-        collection_name,
-        encrypted_payload_read_mode,
-        runtime_settings,
-        &auth,
-    )
-    .await?;
     preflight_private_result_oram_raw_payload_read(
         toc,
         collection_name,
@@ -7654,6 +7646,14 @@ pub async fn do_query_point_groups(
         )
         .await?;
     }
+    preflight_payload_decrypt_for_read(
+        toc,
+        collection_name,
+        encrypted_payload_read_mode,
+        runtime_settings,
+        &auth,
+    )
+    .await?;
     let lookup_decrypt_collection = request
         .with_lookup
         .as_ref()
@@ -12492,6 +12492,9 @@ mod tests {
             )),
             WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
                 encrypted_payload: EncryptedPayloadReadMode::Raw,
+            }),
+            WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                encrypted_payload: EncryptedPayloadReadMode::Decrypted,
             }),
         ];
 

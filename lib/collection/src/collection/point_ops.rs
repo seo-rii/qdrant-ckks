@@ -336,7 +336,7 @@ fn private_result_oram_raw_payload_read_violation<'a>(
     encryption: &'a CollectionEncryptionConfig,
 ) -> CollectionResult<Option<&'a str>> {
     if !with_payload.is_required()
-        || with_payload.encrypted_payload_read_mode() != EncryptedPayloadReadMode::Raw
+        || with_payload.encrypted_payload_read_mode() == EncryptedPayloadReadMode::Redacted
     {
         return Ok(None);
     }
@@ -4773,6 +4773,9 @@ mod tests {
             ))),
             WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
                 encrypted_payload: EncryptedPayloadReadMode::Raw,
+            }),
+            WithPayloadInterface::Encrypted(PayloadEncryptedReadPolicy {
+                encrypted_payload: EncryptedPayloadReadMode::Decrypted,
             }),
         ];
 
