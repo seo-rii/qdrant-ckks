@@ -941,13 +941,14 @@ mod tests {
 
     #[test]
     fn receiving_shard_rejects_private_oram_collection_until_bucket_transfer_exists() {
-        reject_private_oram_receiving_shard_until_supported("docs", false).unwrap();
+        reject_private_oram_receiving_shard_until_supported("stashBackups.json", false).unwrap();
 
-        let err = reject_private_oram_receiving_shard_until_supported("docs", true).unwrap_err();
+        let err = reject_private_oram_receiving_shard_until_supported("stashBackups.json", true)
+            .unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("private ORAM collections"));
         assert!(rendered.contains("encrypted ORAM bucket transfer"));
-        assert!(!rendered.contains("docs"));
+        assert!(!rendered.contains("stashBackups"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains("private_result_oram"));
     }
