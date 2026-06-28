@@ -915,6 +915,11 @@ mod private_result_oram_rest_tests {
                     );
                     assert!(!body.contains(collection_name), "{body}");
                     assert!(!body.contains("secret"), "{body}");
+                    assert!(!body.contains(&fixture.manifest.root_hash), "{body}");
+                    assert!(!body.contains(&fixture.signature.sig), "{body}");
+                    assert!(!body.contains(&fixture.buckets[0].ciphertext), "{body}");
+                    assert!(!body.contains(SESSION_ID), "{body}");
+                    assert!(!body.contains("tenant-a/sdk-instance-1"), "{body}");
                 }};
             }
 

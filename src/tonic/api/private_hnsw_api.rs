@@ -1011,6 +1011,15 @@ mod private_hnsw_grpc_tests {
                     );
                     assert!(!err.message().contains(collection_name));
                     assert!(!err.message().contains("secret"));
+                    assert!(!err.message().contains(&fixture.manifest.root_hash));
+                    assert!(!err.message().contains(&fixture.manifest_signature.sig));
+                    assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+                    assert!(
+                        !err.message()
+                            .contains(&fixture.encrypted_build.buckets[0].ciphertext)
+                    );
+                    assert!(!err.message().contains(SESSION_ID));
+                    assert!(!err.message().contains("tenant-a/sdk-instance-1"));
                 }};
             }
 

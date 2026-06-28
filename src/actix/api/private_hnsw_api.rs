@@ -996,6 +996,15 @@ mod private_hnsw_rest_tests {
                     );
                     assert!(!body.contains(collection_name), "{body}");
                     assert!(!body.contains("secret"), "{body}");
+                    assert!(!body.contains(&fixture.manifest.root_hash), "{body}");
+                    assert!(!body.contains(&fixture.manifest_signature.sig), "{body}");
+                    assert!(!body.contains(&fixture.encrypted_build.root_hash), "{body}");
+                    assert!(
+                        !body.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                        "{body}"
+                    );
+                    assert!(!body.contains(SESSION_ID), "{body}");
+                    assert!(!body.contains("tenant-a/sdk-instance-1"), "{body}");
                 }};
             }
 
