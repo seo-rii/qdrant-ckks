@@ -4390,6 +4390,37 @@ mod tests {
     }
 
     #[test]
+    fn private_hnsw_point_errors_redact_backup_alias_vector_name() {
+        let vector_name = "encryptedClientStateBackups";
+        let rule = private_hnsw_vector_rule(vector_name);
+        let encryption = private_hnsw_encryption(vector_name);
+
+        let messages = [
+            plaintext_vector_write_error_for_encryption_rule(vector_name, &rule, false).to_string(),
+            encrypted_vector_return_error(
+                &encryption,
+                &WithVector::Selector(vec![vector_name.to_string()]),
+            )
+            .unwrap()
+            .to_string(),
+            encrypted_vector_search_error(&encryption, vector_name, "search")
+                .unwrap()
+                .to_string(),
+            encrypted_vector_filter_error(&rule, vector_name).to_string(),
+        ];
+
+        for message in messages {
+            assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+            assert!(message.contains("/private-hnsw/{vector}/session"));
+            assert!(!message.contains(vector_name), "{message}");
+            assert!(
+                !message.contains("encryptedClientStateBackups"),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
     fn ckks_filter_error_keeps_sidecar_message() {
         let rule = EncryptionRuleRef {
             id: "vector_conf".to_string(),
@@ -4817,6 +4848,53 @@ mod tests {
                 private_result_oram_raw_payload_read_violation(&with_payload, &encryption).unwrap();
             assert_eq!(violation, None);
         }
+    }
+
+    #[test]
+    fn private_result_oram_point_errors_redact_backup_alias_payload_path() {
+        let payload_path = "clientStateBackups";
+        let encryption = private_result_oram_encryption(payload_path);
+        let delete_private_payload = CollectionUpdateOperations::PayloadOperation(
+            PayloadOps::DeletePayload(crate::operations::payload_ops::DeletePayloadOp {
+                keys: vec![payload_path.parse().unwrap()],
+                points: Some(vec![1.into()]),
+                filter: None,
+            }),
+        );
+
+        let write_message = reject_private_result_oram_payload_point_operation(
+            &delete_private_payload,
+            &encryption,
+            false,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(write_message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(write_message.contains("/private-result-oram/session"));
+        assert!(!write_message.contains(payload_path), "{write_message}");
+        assert!(
+            !write_message.contains("clientStateBackups"),
+            "{write_message}"
+        );
+
+        let violation = private_result_oram_raw_payload_read_violation(
+            &WithPayloadInterface::Fields(vec![payload_path.parse().unwrap()]),
+            &encryption,
+        )
+        .unwrap();
+        assert_eq!(violation, Some(payload_path));
+
+        let read_message = format!(
+            "cannot read private result ORAM payload field through ordinary collection payload reads; {}",
+            private_result_oram_api_required_message(violation.unwrap()),
+        );
+        assert!(read_message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(read_message.contains("/private-result-oram/session"));
+        assert!(!read_message.contains(payload_path), "{read_message}");
+        assert!(
+            !read_message.contains("clientStateBackups"),
+            "{read_message}"
+        );
     }
 
     #[test]
