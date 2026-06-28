@@ -1050,7 +1050,18 @@ async fn test_snapshot_private_oram_store_files_are_archived() {
             "snapshot archive is missing {expected_path}; archived paths: {archive_paths:?}",
         );
     }
-    for forbidden in ["client_state", "position_map", "stash"] {
+    for forbidden in [
+        "client_state",
+        "clientState",
+        "clientStateBackups",
+        "encryptedClientStateBackups",
+        "position_map",
+        "positionMap",
+        "positionMapBackups",
+        "oramPositionMapBackups",
+        "stash",
+        "stashBackups",
+    ] {
         assert!(
             !archive_paths.iter().any(|path| path.contains(forbidden)),
             "snapshot archive contains client-owned private ORAM state marker {forbidden}: {archive_paths:?}",
