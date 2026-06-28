@@ -11455,30 +11455,35 @@ esac
 
     #[test]
     fn private_result_oram_payload_write_error_redacts_payload_path() {
-        let payload_path = "document.private-result-payload-path-sentinel";
-        for operation_kind in [
-            "upsert points",
-            "set payload",
-            "overwrite payload",
-            "delete payload",
-            "clear payload",
-            "clear payload by filter",
-            "delete points",
-            "delete points by filter",
-            "payload update",
-            "private-result-write-operation-sentinel",
+        for payload_path in [
+            "document.private-result-payload-path-sentinel",
+            "clientStateBackups",
         ] {
-            let err = private_result_oram_payload_write_error(payload_path).to_string();
+            for operation_kind in [
+                "upsert points",
+                "set payload",
+                "overwrite payload",
+                "delete payload",
+                "clear payload",
+                "clear payload by filter",
+                "delete points",
+                "delete points by filter",
+                "payload update",
+                "private-result-write-operation-sentinel",
+            ] {
+                let err = private_result_oram_payload_write_error(payload_path).to_string();
 
-            assert!(err.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
-            assert!(err.contains("/private-result-oram/session"));
-            assert!(err.contains("cannot modify private result ORAM payload field"));
-            assert!(!err.contains(operation_kind), "{err}");
-            assert!(!err.contains(payload_path), "{err}");
-            assert!(
-                !err.contains("private-result-payload-path-sentinel"),
-                "{err}"
-            );
+                assert!(err.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+                assert!(err.contains("/private-result-oram/session"));
+                assert!(err.contains("cannot modify private result ORAM payload field"));
+                assert!(!err.contains(operation_kind), "{err}");
+                assert!(!err.contains(payload_path), "{err}");
+                assert!(
+                    !err.contains("private-result-payload-path-sentinel"),
+                    "{err}"
+                );
+                assert!(!err.contains("clientStateBackups"), "{err}");
+            }
         }
     }
 
