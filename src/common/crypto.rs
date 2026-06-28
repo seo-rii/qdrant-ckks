@@ -2302,6 +2302,14 @@ fn sanitize_collection_crypto_validation_error(err: impl std::fmt::Display) -> S
     } else if rendered.contains("private_hnsw_oram_safe_vector_store_name") {
         "private HNSW ORAM vector names must be safe non-client-state store path components"
             .to_string()
+    } else if rendered.contains("private_result_oram_requires_payload_selector") {
+        "private result ORAM bindings must use payload_paths selectors".to_string()
+    } else if rendered.contains("private_hnsw_oram_requires_vector_selector") {
+        "private HNSW ORAM bindings must use vector_names selectors".to_string()
+    } else if rendered.contains("private_result_oram_overlapping_selector") {
+        "private result ORAM payload selector overlaps another encryption selector".to_string()
+    } else if rendered.contains("private_hnsw_oram_overlapping_selector") {
+        "private HNSW ORAM vector selector overlaps another encryption selector".to_string()
     } else if rendered.contains("private-result-oram/v1")
         && rendered.contains("unsupported_vector_encryption_binding")
     {

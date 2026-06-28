@@ -62,6 +62,18 @@ fn describe_error(
             "private HNSW ORAM vector names must be safe non-client-state store path components"
                 .to_string()
         }
+        "private_result_oram_requires_payload_selector" => {
+            "private result ORAM bindings must use payload_paths selectors".to_string()
+        }
+        "private_hnsw_oram_requires_vector_selector" => {
+            "private HNSW ORAM bindings must use vector_names selectors".to_string()
+        }
+        "private_result_oram_overlapping_selector" => {
+            "private result ORAM payload selector overlaps another encryption selector".to_string()
+        }
+        "private_hnsw_oram_overlapping_selector" => {
+            "private HNSW ORAM vector selector overlaps another encryption selector".to_string()
+        }
         "unsupported_vector_encryption_binding"
             if params
                 .get("value")
@@ -289,6 +301,19 @@ mod tests {
 
     #[test]
     fn describe_error_redacts_private_result_oram_selector_values() {
+        assert_eq!(
+            describe_error(&ValidationError::new(
+                "private_result_oram_requires_payload_selector"
+            )),
+            "private result ORAM bindings must use payload_paths selectors",
+        );
+        assert_eq!(
+            describe_error(&ValidationError::new(
+                "private_result_oram_overlapping_selector"
+            )),
+            "private result ORAM payload selector overlaps another encryption selector",
+        );
+
         let mut duplicate = ValidationError::new("duplicate_private_result_oram_binding");
         duplicate.add_param(
             std::borrow::Cow::from("value"),
@@ -352,6 +377,19 @@ mod tests {
 
     #[test]
     fn describe_error_redacts_private_hnsw_oram_selector_values() {
+        assert_eq!(
+            describe_error(&ValidationError::new(
+                "private_hnsw_oram_requires_vector_selector"
+            )),
+            "private HNSW ORAM bindings must use vector_names selectors",
+        );
+        assert_eq!(
+            describe_error(&ValidationError::new(
+                "private_hnsw_oram_overlapping_selector"
+            )),
+            "private HNSW ORAM vector selector overlaps another encryption selector",
+        );
+
         let mut multi_vector = ValidationError::new("private_hnsw_oram_single_vector_selector");
         multi_vector.add_param(
             std::borrow::Cow::from("value"),

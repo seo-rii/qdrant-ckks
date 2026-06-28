@@ -1654,6 +1654,56 @@ mod ckks_tests {
             err.to_string()
                 .contains("unsupported_vector_encryption_binding")
         );
+
+        let hnsw_with_payload_selector = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "hnsw_wrong_selector".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["private_hnsw_payload_sentinel".to_string()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some("private-hnsw-oram/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let err = hnsw_with_payload_selector
+            .validate()
+            .expect_err("private HNSW binding must reject payload selectors");
+        let rendered = err.to_string();
+        assert!(rendered.contains("private_hnsw_oram_requires_vector_selector"));
+        assert!(!rendered.contains("private_hnsw_payload_sentinel"));
+
+        let result_with_vector_selector = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "result_wrong_selector".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["private-result-vector-sentinel".into()],
+                    },
+                    instance: "docs_private_result_v1".to_string(),
+                    binding: Some("private-result-oram/v1".to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let err = result_with_vector_selector
+            .validate()
+            .expect_err("private result binding must reject vector selectors");
+        let rendered = err.to_string();
+        assert!(rendered.contains("private_result_oram_requires_payload_selector"));
+        assert!(!rendered.contains("private-result-vector-sentinel"));
     }
 
     #[test]
@@ -1903,7 +1953,10 @@ mod ckks_tests {
         let err = params
             .validate()
             .expect_err("private HNSW ORAM vector must not overlap another vector binding");
-        assert!(err.to_string().contains("overlapping_encryption_selector"));
+        assert!(
+            err.to_string()
+                .contains("private_hnsw_oram_overlapping_selector")
+        );
     }
 }
 
@@ -2630,9 +2683,9 @@ fn validate_encryption_rules(
     }
 
     let mut ids = HashSet::new();
-    let mut payload_paths = Vec::<&str>::new();
-    let mut vector_names = HashSet::new();
-    let mut metadata_keys = Vec::<&str>::new();
+    let mut payload_paths = Vec::<(&str, Option<&str>)>::new();
+    let mut vector_names = HashMap::<&str, Option<&str>>::new();
+    let mut metadata_keys = Vec::<(&str, Option<&str>)>::new();
     let mut has_private_result_oram_rule = false;
     for rule in rules {
         if !ids.insert(rule.id.as_str()) {
@@ -2642,16 +2695,22 @@ fn validate_encryption_rules(
         }
         match &rule.selector {
             EncryptionSelector::PayloadPaths { paths } => {
-                if rule.binding.as_deref().is_some_and(|binding| {
+                let binding = rule.binding.as_deref();
+                if binding.is_some_and(|binding| {
                     binding != PAYLOAD_FIELD_BINDING
                         && binding != CLIENT_PAYLOAD_ENVELOPE_BINDING
                         && binding != PRIVATE_RESULT_ORAM_BINDING
                 }) {
+                    if binding == Some(PRIVATE_HNSW_ORAM_BINDING) {
+                        return Err(validator::ValidationError::new(
+                            "private_hnsw_oram_requires_vector_selector",
+                        ));
+                    }
                     return Err(validator::ValidationError::new(
                         "unsupported_payload_encryption_binding",
                     ));
                 }
-                if rule.binding.as_deref() == Some(PRIVATE_RESULT_ORAM_BINDING)
+                if binding == Some(PRIVATE_RESULT_ORAM_BINDING)
                     && std::mem::replace(&mut has_private_result_oram_rule, true)
                 {
                     return Err(validator::ValidationError::new(
@@ -2659,23 +2718,22 @@ fn validate_encryption_rules(
                     ));
                 }
                 for path in paths {
-                    if payload_paths
+                    if let Some((_, existing_binding)) = payload_paths
                         .iter()
-                        .any(|existing| encryption_paths_overlap(existing, path))
+                        .find(|(existing, _)| encryption_paths_overlap(existing, path))
                     {
-                        return Err(validator::ValidationError::new(
-                            "overlapping_encryption_selector",
+                        return Err(private_result_oram_overlap_validation_error(
+                            binding,
+                            *existing_binding,
                         ));
                     }
                     if metadata_keys
                         .iter()
-                        .any(|existing| encryption_paths_overlap(existing, path))
+                        .any(|(existing, _)| encryption_paths_overlap(existing, path))
                     {
-                        return Err(validator::ValidationError::new(
-                            "overlapping_encryption_selector",
-                        ));
+                        return Err(private_result_oram_overlap_validation_error(binding, None));
                     }
-                    payload_paths.push(path);
+                    payload_paths.push((path, binding));
                 }
             }
             EncryptionSelector::VectorNames { names } => {
@@ -2683,6 +2741,11 @@ fn validate_encryption_rules(
                 if binding.is_some_and(|binding| {
                     binding != VECTOR_ENVELOPE_BINDING && binding != PRIVATE_HNSW_ORAM_BINDING
                 }) {
+                    if binding == Some(PRIVATE_RESULT_ORAM_BINDING) {
+                        return Err(validator::ValidationError::new(
+                            "private_result_oram_requires_payload_selector",
+                        ));
+                    }
                     return Err(validator::ValidationError::new(
                         "unsupported_vector_encryption_binding",
                     ));
@@ -2702,16 +2765,18 @@ fn validate_encryption_rules(
                     ));
                 }
                 for name in names {
-                    if !vector_names.insert(name.as_str()) {
-                        return Err(validator::ValidationError::new(
-                            "overlapping_encryption_selector",
+                    if let Some(existing_binding) = vector_names.insert(name.as_str(), binding) {
+                        return Err(private_hnsw_oram_overlap_validation_error(
+                            binding,
+                            existing_binding,
                         ));
                     }
                 }
             }
             EncryptionSelector::MetadataKeys { keys } => {
+                let binding = rule.binding.as_deref();
                 if !matches!(
-                    rule.binding.as_deref(),
+                    binding,
                     Some(METADATA_VALUE_BINDING | METADATA_EXACT_MATCH_TOKEN_BINDING)
                 ) {
                     return Err(validator::ValidationError::new(
@@ -2719,24 +2784,56 @@ fn validate_encryption_rules(
                     ));
                 }
                 for key in keys {
-                    if payload_paths
+                    if let Some((_, existing_binding)) = payload_paths
                         .iter()
-                        .any(|existing| encryption_paths_overlap(existing, key))
-                        || metadata_keys
-                            .iter()
-                            .any(|existing| encryption_paths_overlap(existing, key))
+                        .find(|(existing, _)| encryption_paths_overlap(existing, key))
+                    {
+                        return Err(private_result_oram_overlap_validation_error(
+                            binding,
+                            *existing_binding,
+                        ));
+                    }
+                    if metadata_keys
+                        .iter()
+                        .any(|(existing, _)| encryption_paths_overlap(existing, key))
                     {
                         return Err(validator::ValidationError::new(
                             "overlapping_encryption_selector",
                         ));
                     }
-                    metadata_keys.push(key);
+                    metadata_keys.push((key, binding));
                 }
             }
         }
     }
 
     Ok(())
+}
+
+fn private_result_oram_overlap_validation_error(
+    current_binding: Option<&str>,
+    existing_binding: Option<&str>,
+) -> validator::ValidationError {
+    if current_binding == Some(PRIVATE_RESULT_ORAM_BINDING)
+        || existing_binding == Some(PRIVATE_RESULT_ORAM_BINDING)
+    {
+        validator::ValidationError::new("private_result_oram_overlapping_selector")
+    } else {
+        validator::ValidationError::new("overlapping_encryption_selector")
+    }
+}
+
+fn private_hnsw_oram_overlap_validation_error(
+    current_binding: Option<&str>,
+    existing_binding: Option<&str>,
+) -> validator::ValidationError {
+    if current_binding == Some(PRIVATE_HNSW_ORAM_BINDING)
+        || existing_binding == Some(PRIVATE_HNSW_ORAM_BINDING)
+    {
+        validator::ValidationError::new("private_hnsw_oram_overlapping_selector")
+    } else {
+        validator::ValidationError::new("overlapping_encryption_selector")
+    }
 }
 
 fn encryption_paths_overlap(left: &str, right: &str) -> bool {
