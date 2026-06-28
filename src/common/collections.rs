@@ -1865,6 +1865,104 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_cluster_guards_redact_backup_aliases() {
+        let mut config = private_result_oram_collection_config();
+        let encryption = config.params.encryption.as_mut().unwrap();
+        encryption.key_id = Some("clientStateBackups.json".to_string());
+        let rule = encryption.rules.first_mut().unwrap();
+        rule.id = "encryptedClientStateBackups.json".to_string();
+        rule.instance = "positionMapBackups.json".to_string();
+        if let collection::config::EncryptionSelector::PayloadPaths { paths } = &mut rule.selector {
+            *paths = vec!["tokenPositionMapBackups.json".to_string()];
+        }
+
+        let collection_name = "stashBackups.json";
+        let transfer_operation = private_hnsw_transfer_start_operations()
+            .into_iter()
+            .next()
+            .unwrap();
+        let resharding_operation = private_oram_resharding_progress_operations()
+            .into_iter()
+            .next()
+            .unwrap();
+        let shard_key_operation = private_oram_shard_key_change_operations()
+            .into_iter()
+            .next()
+            .unwrap();
+        let replica_operation = private_oram_drop_replica_operation();
+
+        let errors = [
+            (
+                "transfer",
+                reject_private_oram_cluster_transfer_until_supported(
+                    collection_name,
+                    &config,
+                    &transfer_operation,
+                )
+                .expect_err("private ORAM transfer must fail closed without alias leaks")
+                .to_string(),
+                "encrypted ORAM bucket transfer",
+            ),
+            (
+                "resharding",
+                reject_private_oram_cluster_resharding_until_supported(
+                    collection_name,
+                    &config,
+                    &resharding_operation,
+                )
+                .expect_err("private ORAM resharding must fail closed without alias leaks")
+                .to_string(),
+                "encrypted ORAM bucket migration",
+            ),
+            (
+                "shard-key",
+                reject_private_oram_cluster_shard_key_change_until_supported(
+                    collection_name,
+                    &config,
+                    &shard_key_operation,
+                )
+                .expect_err("private ORAM shard-key changes must fail closed without alias leaks")
+                .to_string(),
+                "shard-key layout changes",
+            ),
+            (
+                "replica-removal",
+                reject_private_oram_cluster_replica_remove_until_supported(
+                    collection_name,
+                    &config,
+                    &replica_operation,
+                )
+                .expect_err("private ORAM replica removal must fail closed without alias leaks")
+                .to_string(),
+                "replica removal",
+            ),
+        ];
+
+        for (label, rendered, expected) in errors {
+            assert!(
+                rendered.contains("private ORAM collections"),
+                "unexpected {label} error: {rendered}",
+            );
+            assert!(
+                rendered.contains(expected),
+                "unexpected {label} error: {rendered}",
+            );
+            assert_no_private_oram_config_leak(
+                &rendered,
+                &[
+                    "clientStateBackups",
+                    "encryptedClientStateBackups",
+                    "positionMapBackups",
+                    "tokenPositionMapBackups",
+                    "stashBackups",
+                    PRIVATE_RESULT_ORAM_BINDING,
+                    "private_result_oram",
+                ],
+            );
+        }
+    }
+
+    #[test]
     fn private_oram_shard_key_guard_blocks_layout_changes_until_bucket_migration_supported() {
         let collection_name = "private-oram-shard-key-secret-collection";
         for (label, config, sentinels) in [
