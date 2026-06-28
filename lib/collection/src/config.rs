@@ -390,6 +390,27 @@ mod ckks_tests {
         assert!(message.contains("/private-hnsw/{vector}/session"));
         assert!(message.contains("compatible SDK traversal APIs"));
         assert!(!message.contains("embedding"));
+
+        for reflected_label in [
+            "retrieve",
+            "scroll",
+            "search",
+            "query",
+            "recommend",
+            "discover",
+            "delete vectors",
+            "sync points",
+            "upsert points",
+            "update vectors",
+            "private-hnsw-vector-operation-sentinel",
+        ] {
+            assert!(!message.contains(reflected_label), "{message}");
+        }
+
+        let message = private_hnsw_oram_api_required_message("clientStateBackups");
+        assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        assert!(message.contains("/private-hnsw/{vector}/session"));
+        assert!(!message.contains("clientStateBackups"), "{message}");
     }
 
     #[test]
