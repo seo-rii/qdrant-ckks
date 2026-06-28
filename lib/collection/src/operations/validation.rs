@@ -375,7 +375,13 @@ mod tests {
             &serde_json::json!([
                 {
                     "id": "stash_private_hnsw",
-                    "selector": { "names": ["stash"] },
+                    "selector": {
+                        "names": [
+                            "stash",
+                            "clientStateBackups.json",
+                            "tokenPositionMapBackups.json"
+                        ]
+                    },
                     "binding": "private-hnsw-oram/v1",
                 },
             ]),
@@ -384,6 +390,8 @@ mod tests {
         assert!(unsafe_store_name_message.contains("safe non-client-state store path"));
         assert!(!unsafe_store_name_message.contains("stash_private_hnsw"));
         assert!(!unsafe_store_name_message.contains("stash"));
+        assert!(!unsafe_store_name_message.contains("clientStateBackups"));
+        assert!(!unsafe_store_name_message.contains("tokenPositionMapBackups"));
 
         let mut overlap = ValidationError::new("overlapping_encryption_selector");
         overlap.add_param(
