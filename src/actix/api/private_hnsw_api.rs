@@ -961,6 +961,107 @@ mod private_hnsw_rest_tests {
                 assert!(!body.contains("private_hnsw_oram"), "{body}");
                 assert!(!body.contains("/tmp"), "{body}");
             }
+
+            let unsafe_vector_name = "stashBackups.json";
+            let paths = vec![fixture.entry_leaf_label()];
+            let read_signature = fixture.sign_read_paths(&paths, 1, true);
+            let read_response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/docs/private-hnsw/{unsafe_vector_name}/oram/read_paths"
+                    ))
+                    .set_json(OramReadPathsRequest {
+                        session_id: SESSION_ID.to_string(),
+                        index_epoch: fixture.encrypted_build.index_epoch,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        paths: paths.clone(),
+                        padding: OramReadPadding {
+                            requested_paths: 1,
+                            dummy_paths_included: true,
+                        },
+                        client_signature: PrivateHnswClientSignature {
+                            alg: read_signature.alg.clone(),
+                            key_id: read_signature.key_id.clone(),
+                            sig: read_signature.sig.clone(),
+                        },
+                    })
+                    .to_request(),
+            )
+            .await;
+            let read_status = read_response.status();
+            let read_body = actix_test::read_body(read_response).await;
+            let read_body = String::from_utf8_lossy(&read_body);
+            assert_eq!(read_status, StatusCode::BAD_REQUEST, "{read_body}");
+            assert!(
+                read_body.contains("client-led private ORAM sessions"),
+                "{read_body}"
+            );
+            assert!(!read_body.contains(unsafe_vector_name), "{read_body}");
+            assert!(
+                !read_body.contains(&fixture.encrypted_build.root_hash),
+                "{read_body}"
+            );
+            assert!(!read_body.contains(SESSION_ID), "{read_body}");
+            assert!(!read_body.contains(&paths[0]), "{read_body}");
+            assert!(!read_body.contains(&read_signature.key_id), "{read_body}");
+            assert!(!read_body.contains(&read_signature.sig), "{read_body}");
+            assert!(!read_body.contains("private_hnsw_oram"), "{read_body}");
+
+            let run = fixture.run_single_search_collect_writeback();
+            let commit_response = actix_test::call_service(
+                &app,
+                actix_test::TestRequest::post()
+                    .uri(&format!(
+                        "/collections/docs/private-hnsw/{unsafe_vector_name}/oram/commit"
+                    ))
+                    .set_json(OramCommitRequest {
+                        session_id: SESSION_ID.to_string(),
+                        old_epoch: run.commit_plan.old_epoch,
+                        new_epoch: run.commit_plan.new_epoch,
+                        old_root_hash: run.commit_plan.old_root_hash.clone(),
+                        new_root_hash: run.commit_plan.new_root_hash.clone(),
+                        updated_buckets: run.updated_buckets.clone(),
+                        commit_signature: PrivateHnswClientSignature {
+                            alg: run.commit_signature.alg.clone(),
+                            key_id: run.commit_signature.key_id.clone(),
+                            sig: run.commit_signature.sig.clone(),
+                        },
+                    })
+                    .to_request(),
+            )
+            .await;
+            let commit_status = commit_response.status();
+            let commit_body = actix_test::read_body(commit_response).await;
+            let commit_body = String::from_utf8_lossy(&commit_body);
+            assert_eq!(commit_status, StatusCode::BAD_REQUEST, "{commit_body}");
+            assert!(
+                commit_body.contains("client-led private ORAM sessions"),
+                "{commit_body}"
+            );
+            assert!(!commit_body.contains(unsafe_vector_name), "{commit_body}");
+            assert!(
+                !commit_body.contains(&run.commit_plan.old_root_hash),
+                "{commit_body}"
+            );
+            assert!(
+                !commit_body.contains(&run.commit_plan.new_root_hash),
+                "{commit_body}"
+            );
+            assert!(!commit_body.contains(SESSION_ID), "{commit_body}");
+            assert!(
+                !commit_body.contains(&run.commit_signature.key_id),
+                "{commit_body}"
+            );
+            assert!(
+                !commit_body.contains(&run.commit_signature.sig),
+                "{commit_body}"
+            );
+            assert!(
+                !commit_body.contains(&run.updated_buckets[0].ciphertext),
+                "{commit_body}"
+            );
+            assert!(!commit_body.contains("private_hnsw_oram"), "{commit_body}");
         });
     }
 

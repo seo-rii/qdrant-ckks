@@ -983,6 +983,78 @@ mod private_hnsw_grpc_tests {
                 assert!(!err.message().contains("private_hnsw_oram"));
                 assert!(!err.message().contains("/tmp"));
             }
+
+            let unsafe_vector_name = "stashBackups.json";
+            let paths = vec![fixture.entry_leaf_label()];
+            let read_signature = fixture.sign_read_paths(&paths, 1, true);
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: unsafe_vector_name.to_string(),
+                    session_id: SESSION_ID.to_string(),
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: paths.clone(),
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(read_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message().contains("client-led private ORAM sessions"),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains(unsafe_vector_name));
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(!err.message().contains(SESSION_ID));
+            assert!(!err.message().contains(&paths[0]));
+            assert!(!err.message().contains(&read_signature.key_id));
+            assert!(!err.message().contains(&read_signature.sig));
+            assert!(!err.message().contains("private_hnsw_oram"));
+
+            let run = fixture.run_single_search_collect_writeback();
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramCommitRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: unsafe_vector_name.to_string(),
+                    session_id: SESSION_ID.to_string(),
+                    old_epoch: run.commit_plan.old_epoch,
+                    new_epoch: run.commit_plan.new_epoch,
+                    old_root_hash: run.commit_plan.old_root_hash.clone(),
+                    new_root_hash: run.commit_plan.new_root_hash.clone(),
+                    updated_buckets: run
+                        .updated_buckets
+                        .clone()
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                    commit_signature: Some(signature_to_proto(run.commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message().contains("client-led private ORAM sessions"),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains(unsafe_vector_name));
+            assert!(!err.message().contains(&run.commit_plan.old_root_hash));
+            assert!(!err.message().contains(&run.commit_plan.new_root_hash));
+            assert!(!err.message().contains(SESSION_ID));
+            assert!(!err.message().contains(&run.commit_signature.key_id));
+            assert!(!err.message().contains(&run.commit_signature.sig));
+            assert!(!err.message().contains(&run.updated_buckets[0].ciphertext));
+            assert!(!err.message().contains("private_hnsw_oram"));
         });
     }
 
