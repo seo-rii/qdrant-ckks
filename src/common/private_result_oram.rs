@@ -2405,20 +2405,31 @@ mod private_result_oram_tests {
         validate_bucket_read_request_budget(&manifest, &[0, 1, 7, 0, 1, 4]).unwrap();
 
         let empty = validate_bucket_read_request(&manifest, &[]).unwrap_err();
-        assert!(empty.to_string().contains("read_buckets request is empty"));
+        let rendered = empty.to_string();
+        assert!(rendered.contains("read_buckets request is empty"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_result_oram"));
 
         let deduped = validate_bucket_read_request(&manifest, &[0, 1, 3, 4]).unwrap_err();
-        assert!(deduped.to_string().contains("whole ORAM paths"));
+        let rendered = deduped.to_string();
+        assert!(rendered.contains("whole ORAM paths"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_result_oram"));
+        assert!(!rendered.contains("4"), "{rendered}");
 
         let under_budget = validate_bucket_read_request(&manifest, &[0, 1, 3]).unwrap_err();
         let rendered = under_budget.to_string();
         assert!(rendered.contains("fixed path budget"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains("3"), "{rendered}");
 
         let malformed_path =
             validate_bucket_read_request(&manifest, &[0, 2, 3, 0, 1, 4]).unwrap_err();
         let rendered = malformed_path.to_string();
         assert!(rendered.contains("valid ORAM paths"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains("2"), "{rendered}");
         assert!(!rendered.contains("3"), "{rendered}");
 
@@ -2426,12 +2437,16 @@ mod private_result_oram_tests {
             validate_bucket_read_request(&manifest, &[0, 1, 3, 0, 1, 4, 0, 2, 5]).unwrap_err();
         let rendered = over_budget.to_string();
         assert!(rendered.contains("fixed path budget"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains("5"), "{rendered}");
 
         let out_of_range =
             validate_bucket_read_request(&manifest, &[0, 1, 7, 0, 1, 4]).unwrap_err();
         let rendered = out_of_range.to_string();
         assert!(rendered.contains("out of range"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains("7"), "{rendered}");
     }
 
