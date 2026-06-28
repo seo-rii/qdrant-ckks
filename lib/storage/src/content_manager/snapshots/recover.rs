@@ -1042,6 +1042,52 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_replica_priority_recovery_redacts_backup_aliases() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("clientStateBackups.json".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "encryptedClientStateBackups.json".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["tokenPositionMapBackups.json".to_string()],
+                    },
+                    instance: "positionMapBackups.json".to_string(),
+                    binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = reject_private_oram_replica_priority_snapshot_recovery_until_supported(
+            "stashBackups.json",
+            &params,
+        )
+        .expect_err("private ORAM replica-priority recovery must fail closed without alias leaks")
+        .to_string();
+
+        assert!(err.contains("private ORAM collections"));
+        assert!(err.contains("encrypted ORAM bucket transfer"));
+        for sentinel in [
+            "clientStateBackups",
+            "encryptedClientStateBackups",
+            "positionMapBackups",
+            "tokenPositionMapBackups",
+            "stashBackups",
+            PRIVATE_RESULT_ORAM_BINDING,
+            PRIVATE_RESULT_ORAM_DIR,
+        ] {
+            assert!(
+                !err.contains(sentinel),
+                "private ORAM replica-priority recovery leaked backup alias `{sentinel}`: {err}",
+            );
+        }
+    }
+
+    #[test]
     fn encrypted_snapshot_recovery_rejects_collection_uuid_mismatch() {
         let existing_uuid = Uuid::from_u128(1);
         let snapshot_uuid = Uuid::from_u128(2);

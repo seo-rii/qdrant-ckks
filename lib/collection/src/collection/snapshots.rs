@@ -3264,6 +3264,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn private_result_oram_shard_snapshot_guard_redacts_backup_aliases() {
+        let mut config = private_result_config(Uuid::from_u128(80));
+        let encryption = config.params.encryption.as_mut().unwrap();
+        encryption.key_id = Some("clientStateBackups.json".to_string());
+        let rule = encryption.rules.first_mut().unwrap();
+        rule.id = "encryptedClientStateBackups.json".to_string();
+        rule.instance = "positionMapBackups.json".to_string();
+        if let EncryptionSelector::PayloadPaths { paths } = &mut rule.selector {
+            *paths = vec!["tokenPositionMapBackups.json".to_string()];
+        }
+
+        let err = validate_private_oram_shard_snapshot_operation(
+            "stashBackups.json",
+            &config.params,
+            "private-shard-snapshot-operation-sentinel",
+        )
+        .expect_err("private result ORAM shard snapshots must fail closed without alias leaks");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("shard snapshot operations for private ORAM collections"));
+        assert!(rendered.contains("collection snapshot/restore preflight"));
+        for sentinel in [
+            "clientStateBackups",
+            "encryptedClientStateBackups",
+            "positionMapBackups",
+            "tokenPositionMapBackups",
+            "stashBackups",
+            "private-shard-snapshot-operation-sentinel",
+            PRIVATE_RESULT_ORAM_BINDING,
+            PRIVATE_RESULT_ORAM_DIR,
+        ] {
+            assert!(
+                !rendered.contains(sentinel),
+                "private ORAM shard snapshot guard leaked backup alias `{sentinel}`: {rendered}",
+            );
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn private_oram_snapshot_source_dir_rejects_symlink() {
