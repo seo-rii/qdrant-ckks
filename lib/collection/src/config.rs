@@ -440,6 +440,31 @@ mod ckks_tests {
         assert!(message.contains("/private-result-oram/session"));
         assert!(message.contains("compatible SDK fetch APIs"));
         assert!(!message.contains("document.body"));
+
+        for reflected_label in [
+            "retrieve",
+            "scroll",
+            "search",
+            "query",
+            "recommend",
+            "discover",
+            "filter",
+            "order by",
+            "group by",
+            "facet",
+            "set payload",
+            "overwrite payload",
+            "delete payload",
+            "clear payload",
+            "private-result-payload-operation-sentinel",
+        ] {
+            assert!(!message.contains(reflected_label), "{message}");
+        }
+
+        let message = private_result_oram_api_required_message("clientStateBackups");
+        assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(message.contains("/private-result-oram/session"));
+        assert!(!message.contains("clientStateBackups"), "{message}");
     }
 
     #[test]
