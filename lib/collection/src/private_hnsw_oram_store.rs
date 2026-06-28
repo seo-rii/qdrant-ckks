@@ -1444,7 +1444,7 @@ fn validate_path_component(value: &str, label: &str) -> CollectionResult<()> {
     Ok(())
 }
 
-pub(crate) fn private_hnsw_oram_vector_name_is_safe_store_component(value: &str) -> bool {
+pub fn private_hnsw_oram_vector_name_is_safe_store_component(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value != "."

@@ -11,6 +11,7 @@ use collection::config::{
     CollectionConfigInternal, CollectionEncryptionConfig, CollectionParams, CryptoMigrationState,
     EncryptionSelector, private_hnsw_oram_api_required_message,
 };
+use collection::private_hnsw_oram_store::private_hnsw_oram_vector_name_is_safe_store_component;
 use data_encoding::{BASE64, BASE64URL_NOPAD};
 use qdrant_sec::{
     AeadCipher, CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
@@ -6665,76 +6666,12 @@ fn is_crypto_identifier(value: &str) -> bool {
 fn validate_private_hnsw_oram_collection_vector_name(
     vector_name: &str,
 ) -> Result<(), StorageError> {
-    if vector_name.is_empty()
-        || vector_name.len() > 128
-        || matches!(vector_name, "." | "..")
-        || private_hnsw_oram_collection_vector_name_is_client_owned_state_alias(vector_name)
-        || !vector_name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
-    {
+    if !private_hnsw_oram_vector_name_is_safe_store_component(vector_name) {
         return Err(StorageError::bad_input(
             "private HNSW ORAM vector name must be a safe store path component",
         ));
     }
     Ok(())
-}
-
-fn private_hnsw_oram_collection_vector_name_is_client_owned_state_alias(value: &str) -> bool {
-    let value = value.to_ascii_lowercase();
-    let compact_value = value.replace(['_', '-', '.'], "");
-    if private_hnsw_oram_compact_collection_vector_name_is_client_owned_state_alias(&compact_value)
-    {
-        return true;
-    }
-    let Some((stem, _extension)) = value.rsplit_once('.') else {
-        return false;
-    };
-    private_hnsw_oram_compact_collection_vector_name_is_client_owned_state_alias(
-        &stem.replace(['_', '-', '.'], ""),
-    )
-}
-
-fn private_hnsw_oram_compact_collection_vector_name_is_client_owned_state_alias(
-    value: &str,
-) -> bool {
-    matches!(
-        value,
-        "clientstate"
-            | "clientstatebackup"
-            | "clientstatebackups"
-            | "clientstatesnapshot"
-            | "clientstatesnapshots"
-            | "encryptedclientstate"
-            | "encryptedclientstates"
-            | "encryptedclientstatebackup"
-            | "encryptedclientstatebackups"
-            | "encryptedclientstatesnapshot"
-            | "encryptedclientstatesnapshots"
-            | "positionmap"
-            | "positionmapbackup"
-            | "positionmapbackups"
-            | "positionmaps"
-            | "positionmapsnapshot"
-            | "positionmapsnapshots"
-            | "orampositionmap"
-            | "orampositionmapbackup"
-            | "orampositionmapbackups"
-            | "orampositionmaps"
-            | "orampositionmapsnapshot"
-            | "orampositionmapsnapshots"
-            | "tokenpositionmap"
-            | "tokenpositionmapbackup"
-            | "tokenpositionmapbackups"
-            | "tokenpositionmaps"
-            | "tokenpositionmapsnapshot"
-            | "tokenpositionmapsnapshots"
-            | "stash"
-            | "stashbackup"
-            | "stashbackups"
-            | "stashsnapshot"
-            | "stashsnapshots"
-    )
 }
 
 pub(crate) fn ckks_client_query_signature_message(
