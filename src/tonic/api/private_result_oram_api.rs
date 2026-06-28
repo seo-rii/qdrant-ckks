@@ -2336,6 +2336,57 @@ mod private_result_oram_grpc_tests {
             assert!(!proof_mismatch_read.message().contains("/tmp"));
             std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
 
+            let (future_bucket, _, _) = fixture.commit_bucket();
+            let future_bucket_path = uploaded_store
+                .root_path()
+                .join("buckets")
+                .join(format!("{:08}.bucket", future_bucket.bucket_id));
+            let original_future_bucket_bytes = std::fs::read(&future_bucket_path).unwrap();
+            std::fs::write(
+                &future_bucket_path,
+                serde_json::to_vec_pretty(&future_bucket).unwrap(),
+            )
+            .unwrap();
+            let future_bucket_read = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(
+                        fixture.read_signature(&read_bucket_ids),
+                    )),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(future_bucket_read.code(), Code::InvalidArgument);
+            assert!(
+                future_bucket_read
+                    .message()
+                    .contains("encrypted bucket store validation failed")
+            );
+            assert!(
+                !future_bucket_read
+                    .message()
+                    .contains(&future_bucket.ciphertext)
+            );
+            assert!(
+                !future_bucket_read
+                    .message()
+                    .contains(&future_bucket.index_epoch.to_string())
+            );
+            assert!(
+                !future_bucket_read
+                    .message()
+                    .contains(&fixture.manifest.root_hash)
+            );
+            assert!(!future_bucket_read.message().contains(&session.session_id));
+            assert!(!future_bucket_read.message().contains("private_result_oram"));
+            std::fs::write(&future_bucket_path, &original_future_bucket_bytes).unwrap();
+
             let read_wrong_root = BASE64URL_NOPAD.encode(&[9; 32]);
             let read_wrong_root_err = PrivateResultOram::read_private_result_oram_buckets(
                 &service,

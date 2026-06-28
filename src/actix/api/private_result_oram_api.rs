@@ -2271,6 +2271,36 @@ mod private_result_oram_rest_tests {
             assert!(!proof_mismatch_error.contains("/tmp"));
             std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
 
+            let (future_bucket, _, _) = fixture.commit_bucket();
+            let future_bucket_path = uploaded_store
+                .root_path()
+                .join("buckets")
+                .join(format!("{:08}.bucket", future_bucket.bucket_id));
+            let original_future_bucket_bytes = std::fs::read(&future_bucket_path).unwrap();
+            std::fs::write(
+                &future_bucket_path,
+                serde_json::to_vec_pretty(&future_bucket).unwrap(),
+            )
+            .unwrap();
+            let future_bucket_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: fixture.read_signature(&read_bucket_ids),
+                },
+                StatusCode::BAD_REQUEST,
+                "encrypted bucket store validation failed"
+            );
+            assert!(!future_bucket_error.contains(&future_bucket.ciphertext));
+            assert!(!future_bucket_error.contains(&future_bucket.index_epoch.to_string()));
+            assert!(!future_bucket_error.contains(&fixture.manifest.root_hash));
+            assert!(!future_bucket_error.contains(&session_id));
+            assert!(!future_bucket_error.contains("private_result_oram"));
+            std::fs::write(&future_bucket_path, &original_future_bucket_bytes).unwrap();
+
             let read_wrong_root = BASE64URL_NOPAD.encode(&[9; 32]);
             let read_wrong_root_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
