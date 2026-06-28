@@ -4791,42 +4791,48 @@ mod tests {
 
     #[test]
     fn private_hnsw_oram_restore_preflight_rejects_unsafe_vector_name_before_store_read() {
-        let temp_dir = tempfile::Builder::new()
-            .prefix("private-hnsw-restore-unsafe-vector-rule")
-            .tempdir()
-            .unwrap();
-        let uuid = Uuid::from_u128(7);
-        let mut config = private_hnsw_config(uuid);
-        let unsafe_vector_name = "private vector secret";
-        let vector_params = config
-            .params
-            .vectors
-            .get_params("text")
-            .expect("fixture must have text vector")
-            .clone();
-        config.params.vectors = VectorsConfig::Multi(BTreeMap::from([(
-            unsafe_vector_name.to_string(),
-            vector_params,
-        )]));
-        let EncryptionSelector::VectorNames { names } =
-            &mut config.params.encryption.as_mut().unwrap().rules[0].selector
-        else {
-            panic!("fixture must use vector_names selector");
-        };
-        names[0] = unsafe_vector_name.to_string();
+        for unsafe_vector_name in [
+            "private vector secret",
+            "client.state",
+            "position.map",
+            "stashBackups.json",
+        ] {
+            let temp_dir = tempfile::Builder::new()
+                .prefix("private-hnsw-restore-unsafe-vector-rule")
+                .tempdir()
+                .unwrap();
+            let uuid = Uuid::from_u128(7);
+            let mut config = private_hnsw_config(uuid);
+            let vector_params = config
+                .params
+                .vectors
+                .get_params("text")
+                .expect("fixture must have text vector")
+                .clone();
+            config.params.vectors = VectorsConfig::Multi(BTreeMap::from([(
+                unsafe_vector_name.to_string(),
+                vector_params,
+            )]));
+            let EncryptionSelector::VectorNames { names } =
+                &mut config.params.encryption.as_mut().unwrap().rules[0].selector
+            else {
+                panic!("fixture must use vector_names selector");
+            };
+            names[0] = unsafe_vector_name.to_string();
 
-        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
-            "docs",
-            &config,
-            temp_dir.path(),
-        )
-        .unwrap_err();
-        let rendered = err.to_string();
+            let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+                "docs",
+                &config,
+                temp_dir.path(),
+            )
+            .unwrap_err();
+            let rendered = err.to_string();
 
-        assert!(rendered.contains("safe store path component"), "{rendered}");
-        assert!(!rendered.contains(unsafe_vector_name), "{rendered}");
-        assert!(!rendered.contains("missing for configured vector rules"));
-        assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+            assert!(rendered.contains("safe store path component"), "{rendered}");
+            assert!(!rendered.contains(unsafe_vector_name), "{rendered}");
+            assert!(!rendered.contains("missing for configured vector rules"));
+            assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        }
     }
 
     #[test]

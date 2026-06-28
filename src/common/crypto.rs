@@ -6668,6 +6668,7 @@ fn validate_private_hnsw_oram_collection_vector_name(
     if vector_name.is_empty()
         || vector_name.len() > 128
         || matches!(vector_name, "." | "..")
+        || private_hnsw_oram_collection_vector_name_is_client_owned_state_alias(vector_name)
         || !vector_name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
@@ -6677,6 +6678,63 @@ fn validate_private_hnsw_oram_collection_vector_name(
         ));
     }
     Ok(())
+}
+
+fn private_hnsw_oram_collection_vector_name_is_client_owned_state_alias(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    let compact_value = value.replace(['_', '-', '.'], "");
+    if private_hnsw_oram_compact_collection_vector_name_is_client_owned_state_alias(&compact_value)
+    {
+        return true;
+    }
+    let Some((stem, _extension)) = value.rsplit_once('.') else {
+        return false;
+    };
+    private_hnsw_oram_compact_collection_vector_name_is_client_owned_state_alias(
+        &stem.replace(['_', '-', '.'], ""),
+    )
+}
+
+fn private_hnsw_oram_compact_collection_vector_name_is_client_owned_state_alias(
+    value: &str,
+) -> bool {
+    matches!(
+        value,
+        "clientstate"
+            | "clientstatebackup"
+            | "clientstatebackups"
+            | "clientstatesnapshot"
+            | "clientstatesnapshots"
+            | "encryptedclientstate"
+            | "encryptedclientstates"
+            | "encryptedclientstatebackup"
+            | "encryptedclientstatebackups"
+            | "encryptedclientstatesnapshot"
+            | "encryptedclientstatesnapshots"
+            | "positionmap"
+            | "positionmapbackup"
+            | "positionmapbackups"
+            | "positionmaps"
+            | "positionmapsnapshot"
+            | "positionmapsnapshots"
+            | "orampositionmap"
+            | "orampositionmapbackup"
+            | "orampositionmapbackups"
+            | "orampositionmaps"
+            | "orampositionmapsnapshot"
+            | "orampositionmapsnapshots"
+            | "tokenpositionmap"
+            | "tokenpositionmapbackup"
+            | "tokenpositionmapbackups"
+            | "tokenpositionmaps"
+            | "tokenpositionmapsnapshot"
+            | "tokenpositionmapsnapshots"
+            | "stash"
+            | "stashbackup"
+            | "stashbackups"
+            | "stashsnapshot"
+            | "stashsnapshots"
+    )
 }
 
 pub(crate) fn ckks_client_query_signature_message(
@@ -21496,7 +21554,12 @@ mod tests {
 
     #[test]
     fn validate_collection_crypto_runtime_rejects_private_hnsw_oram_unsafe_vector_name() {
-        let unsafe_vector_name = "embedding:private-secret";
+        let unsafe_vector_names = [
+            "embedding:private-secret",
+            "client.state",
+            "position.map",
+            "stashBackups.json",
+        ];
         let settings = Settings {
             crypto: CryptoSettings {
                 zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
@@ -21514,61 +21577,65 @@ mod tests {
             },
             ..Settings::new(None).unwrap()
         };
-        let params = CollectionParams {
-            vectors: collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
-                unsafe_vector_name.to_string(),
-                VectorParamsBuilder::new(2, Distance::Cosine).build(),
-            )])),
-            encryption: Some(CollectionEncryptionConfig {
-                version: 1,
-                key_id: Some("tenant-a:docs-private-rk".to_string()),
-                crypto_schema_version: 1,
-                encryption_epoch: 7,
-                migration_state: CryptoMigrationState::Active,
-                rules: vec![EncryptionRuleRef {
-                    id: "embedding_private_hnsw".to_string(),
-                    selector: EncryptionSelector::VectorNames {
-                        names: vec![unsafe_vector_name.to_string()],
-                    },
-                    instance: "docs_private_hnsw_v1".to_string(),
-                    binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
-                }],
-            }),
-            ..CollectionParams::empty()
-        };
 
-        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
-            .expect_err("private HNSW ORAM vector name must be safe for the bucket store path");
-        assert!(
-            matches!(err, StorageError::BadInput { ref description }
-                if description.contains("safe store path component")
-                    && !description.contains(unsafe_vector_name)),
-            "unexpected error: {err:?}",
-        );
+        for unsafe_vector_name in unsafe_vector_names {
+            let params = CollectionParams {
+                vectors: collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
+                    unsafe_vector_name.to_string(),
+                    VectorParamsBuilder::new(2, Distance::Cosine).build(),
+                )])),
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec![unsafe_vector_name.to_string()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            };
 
-        let err =
-            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
-                .expect_err("private HNSW ORAM schema validation must redact unsafe vector names");
-        assert!(
-            matches!(err, StorageError::BadInput { ref description }
-                if description.contains("safe non-client-state store path components")
-                    && !description.contains(unsafe_vector_name)
-                    && !description.contains("embedding_private_hnsw")),
-            "unexpected error: {err:?}",
-        );
+            let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+                .expect_err("private HNSW ORAM vector name must be safe for the bucket store path");
+            assert!(
+                matches!(err, StorageError::BadInput { ref description }
+                    if description.contains("safe store path component")
+                        && !description.contains(unsafe_vector_name)),
+                "unexpected error for {unsafe_vector_name}: {err:?}",
+            );
 
-        let err = match vector_write_plan_for_collection_with_crypto_id(
-            &settings, "docs", "docs", &params,
-        ) {
-            Ok(_) => panic!("private HNSW ORAM write plan must reject unsafe vector names"),
-            Err(err) => err,
-        };
-        assert!(
-            matches!(err, StorageError::BadInput { ref description }
-                if description.contains("safe store path component")
-                    && !description.contains(unsafe_vector_name)),
-            "unexpected error: {err:?}",
-        );
+            let err = validate_collection_crypto_runtime_with_crypto_id(
+                &settings, "docs", "docs", &params,
+            )
+            .expect_err("private HNSW ORAM schema validation must redact unsafe vector names");
+            assert!(
+                matches!(err, StorageError::BadInput { ref description }
+                    if description.contains("safe non-client-state store path components")
+                        && !description.contains(unsafe_vector_name)
+                        && !description.contains("embedding_private_hnsw")),
+                "unexpected error for {unsafe_vector_name}: {err:?}",
+            );
+
+            let err = match vector_write_plan_for_collection_with_crypto_id(
+                &settings, "docs", "docs", &params,
+            ) {
+                Ok(_) => panic!("private HNSW ORAM write plan must reject unsafe vector names"),
+                Err(err) => err,
+            };
+            assert!(
+                matches!(err, StorageError::BadInput { ref description }
+                    if description.contains("safe store path component")
+                        && !description.contains(unsafe_vector_name)),
+                "unexpected error for {unsafe_vector_name}: {err:?}",
+            );
+        }
     }
 
     #[test]
