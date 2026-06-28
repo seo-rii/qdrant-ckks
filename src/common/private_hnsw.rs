@@ -2457,6 +2457,8 @@ mod private_hnsw_tests {
         let err = validate_unique_path_labels(&[leaf.clone(), leaf]).unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("duplicate path label"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains(&BASE64URL_NOPAD.encode(&5u64.to_be_bytes())));
     }
 
@@ -2470,6 +2472,8 @@ mod private_hnsw_tests {
         let err = validate_private_hnsw_read_path_label_request_shape(&[]).unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("read_paths request is empty"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_hnsw_oram"));
 
         let oversized_batch = (0..=PRIVATE_HNSW_ORAM_PATH_BATCH_SIZE_MAX)
             .map(|leaf| BASE64URL_NOPAD.encode(&(leaf as u64).to_be_bytes()))
@@ -2482,6 +2486,7 @@ mod private_hnsw_tests {
             !rendered.contains("session is missing or expired"),
             "{rendered}"
         );
+        assert!(!rendered.contains("private_hnsw_oram"), "{rendered}");
         assert!(!rendered.contains(&oversized_batch[0]), "{rendered}");
 
         let err =
@@ -2493,6 +2498,7 @@ mod private_hnsw_tests {
             !rendered.contains("session is missing or expired"),
             "{rendered}"
         );
+        assert!(!rendered.contains("private_hnsw_oram"), "{rendered}");
         assert!(!rendered.contains(&valid), "{rendered}");
 
         let oversized = format!(
@@ -2505,6 +2511,8 @@ mod private_hnsw_tests {
                 .unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains(&oversized));
 
         let malformed = "not-base64!".to_string();
@@ -2513,6 +2521,8 @@ mod private_hnsw_tests {
                 .unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains(&malformed), "{rendered}");
     }
 
