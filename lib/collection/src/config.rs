@@ -1793,8 +1793,14 @@ mod ckks_tests {
     fn encryption_config_rejects_private_hnsw_oram_unsafe_vector_store_names() {
         for vector_name in [
             "stash",
+            "stashBackups.json",
             "client.state",
+            "clientStateBackups.json",
+            "encryptedClientStateBackups.json",
             "position-map",
+            "positionMapBackups.json",
+            "oramPositionMapBackups.json",
+            "tokenPositionMapBackups.json",
             "tenant/private-vector-secret",
             "private vector secret",
         ] {
@@ -1837,6 +1843,16 @@ mod ckks_tests {
                 rendered.contains("private_hnsw_oram_safe_vector_store_name"),
                 "{rendered}"
             );
+            for leaked in [
+                "stashBackups",
+                "clientStateBackups",
+                "encryptedClientStateBackups",
+                "positionMapBackups",
+                "oramPositionMapBackups",
+                "tokenPositionMapBackups",
+            ] {
+                assert!(!rendered.contains(leaked), "{rendered}");
+            }
         }
     }
 
@@ -2255,7 +2271,6 @@ pub struct CollectionEncryptionConfig {
     #[anonymize(false)]
     pub migration_state: CryptoMigrationState,
     #[validate(nested)]
-    #[validate(custom(function = "validate_encryption_rules"))]
     pub rules: Vec<EncryptionRuleRef>,
 }
 
@@ -2266,6 +2281,8 @@ const fn default_crypto_schema_version() -> u16 {
 fn validate_collection_encryption_config(
     config: &CollectionEncryptionConfig,
 ) -> Result<(), validator::ValidationError> {
+    validate_encryption_rules(&config.rules)?;
+
     if config.migration_state != CryptoMigrationState::Active {
         return Err(validator::ValidationError::new(
             "crypto_migration_state_requires_migration_job",
