@@ -602,7 +602,9 @@ bindings for the same vector name.
 Private HNSW ORAM vector names must also be safe collection-local store path
 components, so collection config, manifest, and signed request validation reject
 names such as `.`, `..`, names containing `/` or `:`, and names longer than 128
-bytes before any bucket-store path is constructed.
+bytes before any bucket-store path is constructed. They also reject names that
+normalize to client-owned ORAM state aliases such as `client.state`,
+`position.map`, or `stashBackups.json`, including dotted extension forms.
 The same private-session guidance is returned even when runtime crypto settings
 are absent, so private HNSW ORAM vectors do not fall through to CKKS/OpenFHE
 runtime fallback messages on ordinary vector upsert/update, inference-derived
