@@ -1134,6 +1134,75 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_consensus_guard_redacts_client_state_backup_aliases() {
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("clientStateBackups.json".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "encryptedClientStateBackups.json".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["positionMapBackups.json".to_string()],
+                        },
+                        instance: "oramPositionMapBackups.json".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "tokenPositionMapBackups.json".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["stashBackups.json".to_string()],
+                        },
+                        instance: "clientStateBackups.json".to_string(),
+                        binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+        let operation = ShardTransferOperations::Start(ShardTransfer {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 2,
+            to: 3,
+            sync: false,
+            method: Some(ShardTransferMethod::StreamRecords),
+            filter: None,
+        });
+
+        let err = reject_private_oram_shard_transfer_until_supported(
+            "stashBackups.json",
+            &params,
+            &operation,
+        )
+        .expect_err("private ORAM transfer must fail closed without leaking backup aliases");
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("private ORAM shard transfer"));
+        assert!(rendered.contains("consensus-backed epoch/root ownership"));
+        for sentinel in [
+            "clientStateBackups",
+            "encryptedClientStateBackups",
+            "positionMapBackups",
+            "oramPositionMapBackups",
+            "tokenPositionMapBackups",
+            "stashBackups",
+            PRIVATE_HNSW_ORAM_BINDING,
+            PRIVATE_RESULT_ORAM_BINDING,
+            "private_hnsw_oram",
+            "private_result_oram",
+        ] {
+            assert!(
+                !rendered.contains(sentinel),
+                "private ORAM consensus guard leaked backup alias `{sentinel}`: {rendered}",
+            );
+        }
+    }
+
+    #[test]
     fn encrypted_collection_requires_transfer_parity_enforcement() {
         assert!(!collection_params_require_crypto_runtime_transfer_parity(
             &CollectionParams::empty()

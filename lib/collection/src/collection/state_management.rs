@@ -522,6 +522,67 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_apply_config_layout_guard_redacts_backup_aliases() {
+        let private_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("clientStateBackups.json".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![
+                    EncryptionRuleRef {
+                        id: "encryptedClientStateBackups.json".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["positionMapBackups.json".to_string()],
+                        },
+                        instance: "oramPositionMapBackups.json".to_string(),
+                        binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    },
+                    EncryptionRuleRef {
+                        id: "tokenPositionMapBackups.json".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["stashBackups.json".to_string()],
+                        },
+                        instance: "clientStateBackups.json".to_string(),
+                        binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                    },
+                ],
+            }),
+            ..CollectionParams::empty()
+        };
+        let mut changed_layout = private_params.clone();
+        changed_layout.shard_number = NonZeroU32::new(2).unwrap();
+
+        let err = validate_private_oram_apply_config_layout_until_supported(
+            &private_params,
+            &changed_layout,
+        )
+        .unwrap_err();
+        let rendered = format!("{err:?}");
+
+        assert!(rendered.contains("cannot apply shard layout config change"));
+        assert!(rendered.contains("consensus-backed epoch/root"));
+        for sentinel in [
+            "clientStateBackups",
+            "encryptedClientStateBackups",
+            "positionMapBackups",
+            "oramPositionMapBackups",
+            "tokenPositionMapBackups",
+            "stashBackups",
+            qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+            qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+            "private_hnsw_oram",
+            "private_result_oram",
+        ] {
+            assert!(
+                !rendered.contains(sentinel),
+                "private ORAM consensus apply leaked backup alias `{sentinel}`: {rendered}",
+            );
+        }
+    }
+
+    #[test]
     fn private_oram_apply_shard_transfers_guard_redacts_collection_details() {
         let transfers = HashSet::from([ShardTransfer {
             shard_id: 9,
