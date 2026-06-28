@@ -379,6 +379,7 @@ mod tests {
             "create shard key",
             "drop shard key",
             "private-shard-key-operation-sentinel",
+            "positionMapBackups.json",
         ] {
             let err = validate_private_oram_shard_key_change_until_supported(operation_name, true)
                 .unwrap_err();
