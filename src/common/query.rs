@@ -12322,6 +12322,39 @@ mod tests {
     }
 
     #[test]
+    fn private_result_oram_grouping_redacts_backup_alias_payload_path() {
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:result-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "private_result_payload".to_string(),
+                selector: EncryptionSelector::PayloadPaths {
+                    paths: vec!["clientStateBackups".to_string()],
+                },
+                instance: "docs_private_result_oram_v1".to_string(),
+                binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
+            }],
+        };
+        let group_by = "clientStateBackups".parse::<JsonPath>().unwrap();
+
+        let err = ensure_group_path_does_not_touch_encrypted_crypto_selectors(
+            Some(&encryption),
+            &group_by,
+        )
+        .expect_err("private result ORAM grouping must fail closed without alias leaks");
+        let message = err.to_string();
+
+        assert!(message.contains("cannot use private result ORAM payload field"));
+        assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(message.contains("/private-result-oram/session"));
+        assert!(!message.contains("clientStateBackups"), "{message}");
+        assert!(!message.contains("configure a blind index provider"));
+    }
+
+    #[test]
     fn private_result_oram_grouping_invalid_payload_path_error_is_sanitized() {
         let secret_path = "document.body[private-result-group-secret";
         let encryption = CollectionEncryptionConfig {
@@ -12647,5 +12680,15 @@ mod tests {
             assert!(!message.contains("document"), "{message}");
             assert!(!message.contains("body"), "{message}");
         }
+
+        let message = private_result_oram_raw_payload_read_error("clientStateBackups").to_string();
+        assert!(
+            message.contains("cannot read private result ORAM payload field"),
+            "{message}"
+        );
+        assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+        assert!(message.contains("/private-result-oram/session"));
+        assert!(message.contains("ordinary collection payload reads"));
+        assert!(!message.contains("clientStateBackups"), "{message}");
     }
 }
