@@ -3403,6 +3403,52 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("/tmp"));
             std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
 
+            let future_bucket = search_run.updated_buckets[0].clone();
+            let future_bucket_path = uploaded_store
+                .root_path()
+                .join("buckets")
+                .join(format!("{:08}.bucket", future_bucket.bucket_id));
+            let original_future_bucket_bytes = std::fs::read(&future_bucket_path).unwrap();
+            std::fs::write(
+                &future_bucket_path,
+                serde_json::to_vec_pretty(&future_bucket).unwrap(),
+            )
+            .unwrap();
+            let future_bucket_paths = vec![fixture.entry_leaf_label()];
+            let future_bucket_signature = fixture.sign_read_paths(&future_bucket_paths, 1, true);
+            let err = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: future_bucket_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(future_bucket_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("encrypted bucket store validation failed")
+            );
+            assert!(!err.message().contains(&future_bucket.ciphertext));
+            assert!(
+                !err.message()
+                    .contains(&future_bucket.index_epoch.to_string())
+            );
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains("private_hnsw_oram"));
+            std::fs::write(&future_bucket_path, &original_future_bucket_bytes).unwrap();
+
             let current_epoch_path = uploaded_store
                 .root_path()
                 .join("epochs")
