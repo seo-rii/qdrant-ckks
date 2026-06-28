@@ -2231,6 +2231,45 @@ mod private_result_oram_rest_tests {
             );
             assert_eq!(read_result["buckets"].as_array().unwrap().len(), 6);
             assert_eq!(read_result["buckets"][0]["bucket_id"], 0);
+            let read_response: PrivateResultOramReadBucketsResponse =
+                serde_json::from_value(read_result).unwrap();
+
+            let proof_mismatched_bucket_id = read_response.buckets[0].bucket_id;
+            let bucket_path = uploaded_store
+                .root_path()
+                .join("buckets")
+                .join(format!("{proof_mismatched_bucket_id:08}.bucket"));
+            let original_bucket_bytes = std::fs::read(&bucket_path).unwrap();
+            let mut proof_mismatched_bucket = read_response.buckets[0].clone();
+            proof_mismatched_bucket.bucket_commitment =
+                data_encoding::BASE64URL_NOPAD.encode(&[91; 32]);
+            std::fs::write(
+                &bucket_path,
+                serde_json::to_vec_pretty(&proof_mismatched_bucket).unwrap(),
+            )
+            .unwrap();
+            let proof_mismatch_signature = fixture.read_signature(&read_bucket_ids);
+            let proof_mismatch_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: proof_mismatch_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "encrypted bucket store validation failed"
+            );
+            assert!(
+                !proof_mismatch_error.contains(&proof_mismatched_bucket.ciphertext),
+                "{proof_mismatch_error}"
+            );
+            assert!(!proof_mismatch_error.contains(&fixture.manifest.root_hash));
+            assert!(!proof_mismatch_error.contains(&session_id));
+            assert!(!proof_mismatch_error.contains("private_result_oram"));
+            assert!(!proof_mismatch_error.contains("/tmp"));
+            std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
 
             let read_wrong_root = BASE64URL_NOPAD.encode(&[9; 32]);
             let read_wrong_root_error = post_json_error_contains!(
