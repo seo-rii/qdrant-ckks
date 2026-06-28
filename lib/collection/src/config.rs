@@ -1695,7 +1695,7 @@ mod ckks_tests {
                     EncryptionRuleRef {
                         id: "body_private_result".to_string(),
                         selector: EncryptionSelector::PayloadPaths {
-                            paths: vec!["body".to_string()],
+                            paths: vec!["private_result_path_sentinel.body".to_string()],
                         },
                         instance: "docs_private_result_oram_v1".to_string(),
                         binding: Some("private-result-oram/v1".to_string()),
@@ -1720,6 +1720,7 @@ mod ckks_tests {
             err.to_string()
                 .contains("duplicate_private_result_oram_binding")
         );
+        assert!(!err.to_string().contains("private_result_path_sentinel"));
     }
 
     #[test]
