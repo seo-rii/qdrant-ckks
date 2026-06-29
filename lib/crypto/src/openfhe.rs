@@ -53,8 +53,8 @@ pub struct CommandOpenFheBackend {
 impl std::fmt::Debug for CommandOpenFheBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CommandOpenFheBackend")
-            .field("program", &self.program)
-            .field("args", &self.args)
+            .field("program", &"[redacted]")
+            .field("args_count", &self.args.len())
             .field("timeout", &self.timeout)
             .field("max_output_bytes", &self.max_output_bytes)
             .field("pool_size", &self.pool_size)
@@ -2097,6 +2097,25 @@ mod tests {
         let err = decode_single_bridge_response(response.as_bytes(), expected_profile)
             .expect_err("empty bridge ciphertext must fail closed");
         assert!(format!("{err}").contains("empty ciphertext"));
+    }
+
+    #[test]
+    fn command_backend_debug_redacts_program_policy_values() {
+        let sentinel = "openfhe-backend-debug-sentinel";
+        let mut backend = CommandOpenFheBackend::new_unchecked(format!("/tmp/{sentinel}/bridge"))
+            .with_args([format!("--token={sentinel}")])
+            .with_sensitive_env_names([format!("OPENFHE_{sentinel}")]);
+        backend.expected_sha256_b64 = Some(format!("sha256-{sentinel}"));
+        let rendered = format!("{backend:?}");
+
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(rendered.contains("program: \"[redacted]\""), "{rendered}");
+        assert!(rendered.contains("args_count: 1"), "{rendered}");
+        assert!(rendered.contains("expected_sha256_b64: Some"), "{rendered}");
+        assert!(
+            rendered.contains("sensitive_env_names_count: 1"),
+            "{rendered}"
+        );
     }
 
     #[test]
