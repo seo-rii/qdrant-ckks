@@ -1039,11 +1039,21 @@ impl Debug for PrivateResultOramReadBucketsSignatureContext<'_> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramBucketValidationContext {
     pub expected_index_epoch: u64,
     pub bucket_count: u64,
     pub max_ciphertext_bytes: usize,
+}
+
+impl Debug for PrivateResultOramBucketValidationContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramBucketValidationContext")
+            .field("expected_index_epoch", &"[redacted]")
+            .field("bucket_count", &"[redacted]")
+            .field("max_ciphertext_bytes", &"[redacted]")
+            .finish()
+    }
 }
 
 impl PrivateResultOramBucketValidationContext {
@@ -4477,6 +4487,11 @@ mod tests {
             rk_epoch: 7,
             signing_key_id: "RESULT-READ-CONTEXT-SIGNING-KEY-SENTINEL",
         };
+        let bucket_validation_context = PrivateResultOramBucketValidationContext {
+            expected_index_epoch: 991_001,
+            bucket_count: 991_002,
+            max_ciphertext_bytes: 991_003,
+        };
         let bucket_aead_context = PrivateResultOramBucketAeadContext {
             collection_id: "collection-uuid-1",
             key_id: "RESULT-AEAD-BUCKET-KEY-SENTINEL",
@@ -4536,6 +4551,7 @@ mod tests {
             format!("{validation_context:?}"),
             format!("{commit_signature_context:?}"),
             format!("{read_signature_context:?}"),
+            format!("{bucket_validation_context:?}"),
             format!("{bucket_aead_context:?}"),
             format!("{bucket_aead_base_context:?}"),
             format!("{client_state_aead_context:?}"),
@@ -4594,6 +4610,9 @@ mod tests {
             "RESULT-READ-CONTEXT-KEY-SENTINEL".to_string(),
             "RESULT-READ-CONTEXT-RK-SENTINEL".to_string(),
             "RESULT-READ-CONTEXT-SIGNING-KEY-SENTINEL".to_string(),
+            "991001".to_string(),
+            "991002".to_string(),
+            "991003".to_string(),
             "RESULT-AEAD-BUCKET-KEY-SENTINEL".to_string(),
             "RESULT-AEAD-BUCKET-RK-SENTINEL".to_string(),
             "888223".to_string(),
@@ -4652,6 +4671,18 @@ mod tests {
             (
                 format!("{read_signature_input:?}"),
                 "requested_bucket_count: 2",
+            ),
+            (
+                format!("{bucket_validation_context:?}"),
+                "expected_index_epoch: 991001",
+            ),
+            (
+                format!("{bucket_validation_context:?}"),
+                "bucket_count: 991002",
+            ),
+            (
+                format!("{bucket_validation_context:?}"),
+                "max_ciphertext_bytes: 991003",
             ),
         ] {
             assert!(
