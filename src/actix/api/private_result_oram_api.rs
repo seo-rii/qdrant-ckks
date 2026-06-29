@@ -55,7 +55,7 @@ impl Debug for UploadPrivateResultOramBucketsRequest {
         f.debug_struct("UploadPrivateResultOramBucketsRequest")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.buckets.len())
+            .field("bucket_count", &"[redacted]")
             .finish()
     }
 }
@@ -841,6 +841,10 @@ mod private_result_oram_rest_tests {
                     "updated_bucket_count: {}",
                     commit_request.updated_buckets.len()
                 ),
+            ),
+            (
+                format!("{buckets_request:?}"),
+                format!("bucket_count: {}", buckets_request.buckets.len()),
             ),
             (
                 format!("{read_response:?}"),
