@@ -2116,8 +2116,9 @@ unwrap.
 Inside the sealed body, `context_digest` is still the SHA-256 digest over the
 CKKS parameters, serialized OpenFHE crypto context, and public key. It is
 intended to prevent mixing ciphertexts created for incompatible contexts.
-CKKS parameters are restricted to the allowlisted
-`ckks-128-n16384-d4-scale50` profile in this branch. Generic
+CKKS parameters are restricted through the crypto crate's allowlisted profile
+registry, which currently contains only `ckks-128-n16384-d4-scale50` in this
+branch. Generic
 `vector/openfhe-ckks@v1` runtime instances must set this `profile` option plus
 `crypto_context_b64`, `public_key_b64`, and
 `score_plaintext_output_tcb_ack: qdrant-sec-ckks-score-output-tcb-v1`; a

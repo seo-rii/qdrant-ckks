@@ -138,27 +138,49 @@ pub struct CkksParameters {
     pub batch_size: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CkksParameterProfile {
+    pub name: &'static str,
+    pub parameters: CkksParameters,
+}
+
+const CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50_PARAMETERS: CkksParameters = CkksParameters {
+    poly_modulus_degree: 16_384,
+    multiplicative_depth: 4,
+    scaling_mod_size: 50,
+    first_mod_size: 60,
+    batch_size: 8_192,
+};
+
+pub const CKKS_PARAMETER_PROFILES: &[CkksParameterProfile] = &[CkksParameterProfile {
+    name: CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+    parameters: CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50_PARAMETERS,
+}];
+
 impl CkksParameters {
     pub const fn openfhe_default_128_bit() -> Self {
-        Self {
-            poly_modulus_degree: 16_384,
-            multiplicative_depth: 4,
-            scaling_mod_size: 50,
-            first_mod_size: 60,
-            batch_size: 8_192,
-        }
+        CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50_PARAMETERS
     }
 
-    pub const fn security_profile(&self) -> Option<&'static str> {
-        match (
-            self.poly_modulus_degree,
-            self.multiplicative_depth,
-            self.scaling_mod_size,
-            self.first_mod_size,
-        ) {
-            (16_384, 4, 50, 60) => Some(CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50),
-            _ => None,
-        }
+    pub fn from_security_profile(profile: &str) -> Option<Self> {
+        CKKS_PARAMETER_PROFILES
+            .iter()
+            .find(|candidate| candidate.name == profile)
+            .map(|candidate| candidate.parameters)
+    }
+
+    pub fn security_profile(&self) -> Option<&'static str> {
+        CKKS_PARAMETER_PROFILES
+            .iter()
+            .find(|candidate| candidate.parameters.matches_security_parameters(self))
+            .map(|candidate| candidate.name)
+    }
+
+    fn matches_security_parameters(&self, other: &Self) -> bool {
+        self.poly_modulus_degree == other.poly_modulus_degree
+            && self.multiplicative_depth == other.multiplicative_depth
+            && self.scaling_mod_size == other.scaling_mod_size
+            && self.first_mod_size == other.first_mod_size
     }
 
     pub fn validate(&self) -> Result<(), CkksError> {
@@ -2021,6 +2043,28 @@ fn vector_metadata_aad(version: u8, scheme: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ckks_parameter_profile_registry_roundtrips_current_profile() {
+        let parameters =
+            CkksParameters::from_security_profile(CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50)
+                .expect("current OpenFHE profile must be registered");
+        assert_eq!(parameters, CkksParameters::openfhe_default_128_bit());
+        assert_eq!(
+            parameters.security_profile(),
+            Some(CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50),
+        );
+
+        let mut smaller_batch = parameters;
+        smaller_batch.batch_size = 128;
+        assert_eq!(
+            smaller_batch.security_profile(),
+            Some(CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50),
+        );
+        smaller_batch.validate().unwrap();
+
+        assert!(CkksParameters::from_security_profile("ckks-raw-unsafe").is_none());
+    }
 
     #[test]
     fn client_ckks_vector_debug_redacts_envelope_and_sidecar_identifiers() {
