@@ -3645,20 +3645,20 @@ fn encrypted_vector_from_payload(
         .as_object()
         .and_then(|object| object.get(ENCRYPTED_CKKS_VECTOR_MARKER))
     else {
-        return Err(StorageError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is malformed",
-        )));
+        return Err(StorageError::service_error(
+            "stored CKKS vector sidecar entry is malformed",
+        ));
     };
     ckks_ciphertext_from_payload(payload, vector_name).map_err(|err| {
         StorageError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' failed validation: {err}",
+            "stored CKKS vector sidecar entry failed validation: {err}",
         ))
     })?;
     serde_json::from_value(marker.clone())
         .map(Some)
         .map_err(|err| {
             StorageError::service_error(format!(
-                "stored CKKS vector sidecar entry '{vector_name}' failed to parse: {err}",
+                "stored CKKS vector sidecar entry failed to parse: {err}",
             ))
         })
 }
@@ -11016,19 +11016,19 @@ mod tests {
     fn encrypted_vector_from_payload_validates_sidecar_metadata() {
         let payload = json!({
             "$qdrant_sec_vectors": {
-                "embedding": {
+                "embedding-sensitive-sentinel": {
                     "$qdrant_sec_ckks_vector": {
                         "version": 1,
                         "scheme": "openfhe-ckks",
                         "envelope": {
                             "version": 1,
                             "algorithm": "AES-256-GCM",
-                            "key_id": "tenant-a:vector",
-                            "material_fingerprint": "tenant-a/vector@v1",
-                            "rk_id": "tenant-a/vector-rk@v1",
+                            "key_id": "tenant-a:vector-sensitive-sentinel",
+                            "material_fingerprint": "tenant-a/vector-sensitive-sentinel@v1",
+                            "rk_id": "tenant-a/vector-rk-sensitive-sentinel@v1",
                             "rk_epoch": 1,
                             "nonce": "AAAAAAAAAAAAAAAA",
-                            "ciphertext": "short"
+                            "ciphertext": "short-sensitive-sentinel!"
                         }
                     }
                 }
@@ -11036,12 +11036,25 @@ mod tests {
         });
         let payload = Payload(payload.as_object().unwrap().clone());
 
-        let err = encrypted_vector_from_payload(&payload, "embedding")
+        let err = encrypted_vector_from_payload(&payload, "embedding-sensitive-sentinel")
             .expect_err("common query sidecar scan must reject malformed ciphertext metadata");
+        let rendered = err.to_string();
         assert!(
-            err.to_string().contains("failed validation"),
+            rendered.contains("failed validation"),
             "unexpected error: {err:?}",
         );
+        for leaked in [
+            "embedding-sensitive-sentinel",
+            "tenant-a:vector-sensitive-sentinel",
+            "tenant-a/vector-sensitive-sentinel@v1",
+            "tenant-a/vector-rk-sensitive-sentinel@v1",
+            "short-sensitive-sentinel",
+        ] {
+            assert!(
+                !rendered.contains(leaked),
+                "stored CKKS vector sidecar validation error leaked {leaked}: {rendered}",
+            );
+        }
     }
 
     #[test]
