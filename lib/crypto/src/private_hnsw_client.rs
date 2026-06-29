@@ -421,15 +421,9 @@ impl Debug for PrivateHnswNodeBlockPlaintext {
             .field("vector_len", &"[redacted]")
             .field("neighbor_count", &"[redacted]")
             .field("neighbor_levels_len", &"[redacted]")
-            .field("deleted", &self.deleted)
-            .field("generation", &self.generation)
-            .field(
-                "payload_fetch_token",
-                &self
-                    .payload_fetch_token
-                    .as_ref()
-                    .map(|_| "[redacted; 32 bytes]"),
-            )
+            .field("deleted", &"[redacted]")
+            .field("generation", &"[redacted]")
+            .field("payload_fetch_token", &"[redacted]")
             .finish()
     }
 }
@@ -744,10 +738,7 @@ impl Debug for PrivateHnswSearchHit {
         f.debug_struct("PrivateHnswSearchHit")
             .field("node_id", &"[redacted; 32 bytes]")
             .field("point_token", &"[redacted; 32 bytes]")
-            .field(
-                "has_payload_fetch_token",
-                &self.payload_fetch_token.is_some(),
-            )
+            .field("has_payload_fetch_token", &"[redacted]")
             .field("distance", &"[redacted]")
             .finish()
     }
@@ -1116,10 +1107,7 @@ impl Debug for PrivateHnswBuildPoint {
             .field("node_id", &"[redacted; 32 bytes]")
             .field("point_token", &"[redacted; 32 bytes]")
             .field("vector_len", &self.vector.len())
-            .field(
-                "has_payload_fetch_token",
-                &self.payload_fetch_token.is_some(),
-            )
+            .field("has_payload_fetch_token", &"[redacted]")
             .finish()
     }
 }
@@ -5896,6 +5884,9 @@ mod tests {
             (format!("{block:?}"), "vector_len: 8"),
             (format!("{block:?}"), "neighbor_count: 1"),
             (format!("{block:?}"), "neighbor_levels_len: 1"),
+            (format!("{block:?}"), "deleted: false"),
+            (format!("{block:?}"), "generation: 1"),
+            (format!("{block:?}"), "payload_fetch_token: Some"),
             (format!("{bucket:?}"), "blocks_len: 2"),
             (format!("{bucket:?}"), "occupied_blocks: 1"),
             (format!("{state_snapshot:?}"), "position_count: 1"),
@@ -5908,6 +5899,7 @@ mod tests {
             (format!("{params:?}"), "ef: 4"),
             (format!("{params:?}"), "fixed_steps: 8"),
             (format!("{params:?}"), "has_padding_node_id: true"),
+            (format!("{hit:?}"), "has_payload_fetch_token: true"),
             (format!("{result:?}"), "hit_count: 1"),
             (format!("{result:?}"), "accessed_leaf_label_count: 1"),
             (format!("{result:?}"), "completed_steps: 8"),
@@ -5929,6 +5921,7 @@ mod tests {
             (format!("{traversal:?}"), "retained_neighbor_count: 1"),
             (format!("{directional:?}"), "node_id_count: 1"),
             (format!("{directional:?}"), "retained_count: 1"),
+            (format!("{build_point:?}"), "has_payload_fetch_token: true"),
             (format!("{node_cache:?}"), "node_count: 1"),
             (format!("{commit_plan:?}"), "leaf_commitment_count: 1"),
             (format!("{commit_plan:?}"), "updated_bucket_count: 1"),
