@@ -365,19 +365,36 @@ pub struct CryptoMaterialConfig {
 
 impl fmt::Debug for CryptoMaterialConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let source_configured = self.source.is_some();
+        let env_configured = self.env.is_some();
+        let path_configured = self.path.is_some();
+        let fd_configured = self.fd.is_some();
+        let vault_field_configured = self.vault_field.is_some();
+        let expected_host_configured = self.expected_host.is_some();
+        let provider_key_version_configured = self.provider_key_version.is_some();
+        let provider_attestation_id_configured = self.provider_attestation_id.is_some();
+        let wrapped_by_configured = self.wrapped_by.is_some();
+        let scope_configured = self.scope.is_some();
+
         f.debug_struct("CryptoMaterialConfig")
             .field("kind", &self.kind)
-            .field("source", &self.source)
-            .field("env", &self.env)
-            .field("path", &self.path)
-            .field("fd", &self.fd)
+            .field("source_configured", &source_configured)
+            .field("env_configured", &env_configured)
+            .field("path_configured", &path_configured)
+            .field("fd_configured", &fd_configured)
             .field("value_b64", &self.value_b64.as_ref().map(|_| "[redacted]"))
-            .field("vault_field", &self.vault_field)
-            .field("expected_host", &self.expected_host)
+            .field("vault_field_configured", &vault_field_configured)
+            .field("expected_host_configured", &expected_host_configured)
             .field("timeout_ms", &self.timeout_ms)
-            .field("provider_key_version", &self.provider_key_version)
-            .field("provider_attestation_id", &self.provider_attestation_id)
-            .field("wrapped_by", &self.wrapped_by)
+            .field(
+                "provider_key_version_configured",
+                &provider_key_version_configured,
+            )
+            .field(
+                "provider_attestation_id_configured",
+                &provider_attestation_id_configured,
+            )
+            .field("wrapped_by_configured", &wrapped_by_configured)
             .field("wrap_algorithm", &self.wrap_algorithm)
             .field("nonce", &self.nonce.as_ref().map(|_| "[redacted]"))
             .field(
@@ -386,7 +403,7 @@ impl fmt::Debug for CryptoMaterialConfig {
             )
             .field("rk_epoch", &self.rk_epoch)
             .field("state", &self.state)
-            .field("scope", &self.scope)
+            .field("scope_configured", &scope_configured)
             .finish()
     }
 }
@@ -925,6 +942,63 @@ mod tests {
             assert!(!rendered.contains("public-key-"), "{rendered}");
             assert!(!rendered.contains("signature-"), "{rendered}");
             assert!(rendered.contains("[redacted]"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn crypto_material_config_debug_redacts_locators_and_material() {
+        let sentinel = "qdrant-sec-material-debug-sentinel";
+        let material = CryptoMaterialConfig {
+            kind: "wrapped_symmetric_key_32".to_string(),
+            source: Some(format!("source-{sentinel}")),
+            env: Some(format!("ENV_{sentinel}")),
+            path: Some(format!("/tmp/{sentinel}/material.key")),
+            fd: Some(42),
+            value_b64: Some(format!("value-{sentinel}")),
+            vault_field: Some(format!("vault-field-{sentinel}")),
+            expected_host: Some(format!("{sentinel}.example.com")),
+            timeout_ms: Some(5_000),
+            provider_key_version: Some(format!("provider-version-{sentinel}")),
+            provider_attestation_id: Some(format!("provider-attestation-{sentinel}")),
+            wrapped_by: Some(format!("wrapped-by-{sentinel}")),
+            wrap_algorithm: Some("local_aes_gcm_siv".to_string()),
+            nonce: Some(format!("nonce-{sentinel}")),
+            wrapped_key_b64: Some(format!("wrapped-key-{sentinel}")),
+            rk_epoch: Some(7),
+            state: Some("active".to_string()),
+            scope: Some(format!("scope-{sentinel}")),
+        };
+        let mut settings = Config::builder()
+            .add_source(File::from_str(DEFAULT_CONFIG, FileFormat::Yaml))
+            .build()
+            .expect("failed to build default config")
+            .try_deserialize::<Settings>()
+            .expect("failed to deserialize default config");
+        settings
+            .crypto
+            .materials
+            .insert("docs_material".to_string(), material.clone());
+
+        for rendered in [format!("{material:?}"), format!("{settings:?}")] {
+            assert!(rendered.contains("wrapped_symmetric_key_32"), "{rendered}");
+            assert!(rendered.contains("source_configured"), "{rendered}");
+            assert!(rendered.contains("env_configured"), "{rendered}");
+            assert!(rendered.contains("path_configured"), "{rendered}");
+            assert!(rendered.contains("vault_field_configured"), "{rendered}");
+            assert!(rendered.contains("expected_host_configured"), "{rendered}");
+            assert!(rendered.contains("[redacted]"), "{rendered}");
+            assert!(!rendered.contains("/tmp/"), "{rendered}");
+            assert!(!rendered.contains("ENV_"), "{rendered}");
+            assert!(!rendered.contains("source-"), "{rendered}");
+            assert!(!rendered.contains("value-"), "{rendered}");
+            assert!(!rendered.contains("vault-field-"), "{rendered}");
+            assert!(!rendered.contains("provider-version-"), "{rendered}");
+            assert!(!rendered.contains("provider-attestation-"), "{rendered}");
+            assert!(!rendered.contains("wrapped-by-"), "{rendered}");
+            assert!(!rendered.contains("nonce-"), "{rendered}");
+            assert!(!rendered.contains("wrapped-key-"), "{rendered}");
+            assert!(!rendered.contains("scope-"), "{rendered}");
+            assert!(!rendered.contains(sentinel), "{rendered}");
         }
     }
 
