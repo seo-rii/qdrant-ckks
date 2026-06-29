@@ -2012,6 +2012,8 @@ signatures, and SDK private ORAM upload bundle debug output redacts upload
 bucket counts. SDK private HNSW search access metrics redact path/leaf/fixed
 step counts and budget-exhaustion state. SDK private HNSW node/search/build
 debug output also redacts deleted/generation state and payload-token presence.
+Private HNSW ORAM commit errors use a fixed writeback-budget message and do not
+reflect the concrete max writeback bucket count.
 Private result ORAM bucket validation contexts redact expected epochs, bucket
 counts, and ciphertext size limits. Audit events never include request bodies.
 Prometheus request metrics may include fixed REST/gRPC endpoint labels and the

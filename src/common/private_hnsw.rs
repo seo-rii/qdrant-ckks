@@ -1115,9 +1115,9 @@ pub async fn do_commit_private_hnsw_paths(
         }
         let max_updated_buckets = max_updated_bucket_count(session)?;
         if updated_buckets.is_empty() || updated_buckets.len() > max_updated_buckets {
-            return Err(StorageError::bad_request(format!(
-                "private HNSW ORAM commit updated_buckets must contain 1..={max_updated_buckets} buckets",
-            )));
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM commit updated_buckets must contain at least one bucket and fit the fixed writeback budget",
+            ));
         }
         let updated_bucket_refs = updated_buckets
             .iter()

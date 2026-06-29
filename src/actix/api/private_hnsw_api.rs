@@ -4193,8 +4193,9 @@ mod private_hnsw_rest_tests {
                     },
                 },
                 StatusCode::BAD_REQUEST,
-                "updated_buckets must contain"
+                "fixed writeback budget"
             );
+            assert!(!oversized_commit_error.contains("1..=3"));
             assert!(!oversized_commit_error.contains(&session_id));
             assert!(
                 !oversized_commit_error.contains(&search_run.commit_plan.old_root_hash),

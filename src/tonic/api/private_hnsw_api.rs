@@ -4181,6 +4181,7 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("updated_buckets must contain"));
+            assert!(!err.message().contains("1..=3"));
             assert!(!err.message().contains(&session.session_id));
             assert!(
                 !err.message()
@@ -4458,7 +4459,8 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(err.message().contains("updated_buckets must contain"));
+            assert!(err.message().contains("fixed writeback budget"));
+            assert!(!err.message().contains("1..=3"));
             assert!(!err.message().contains(&session.session_id));
             assert!(
                 !err.message()
