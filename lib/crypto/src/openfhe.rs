@@ -247,31 +247,31 @@ impl CommandOpenFheBackend {
         S: Into<String>,
     {
         self.args.extend(args.into_iter().map(Into::into));
-        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.reset_worker_pool_after_policy_change();
         self
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
-        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.reset_worker_pool_after_policy_change();
         self
     }
 
     pub fn with_max_output_bytes(mut self, max_output_bytes: usize) -> Self {
         self.max_output_bytes = max_output_bytes;
-        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.reset_worker_pool_after_policy_change();
         self
     }
 
     pub fn with_pool_size(mut self, pool_size: NonZeroUsize) -> Self {
         self.pool_size = pool_size;
-        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.reset_worker_pool_after_policy_change();
         self
     }
 
     pub fn with_linux_landlock_write_deny_sandbox(mut self) -> Self {
         self.sandbox = BridgeSandbox::LinuxLandlockWriteDeny;
-        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.reset_worker_pool_after_policy_change();
         self
     }
 
@@ -285,8 +285,12 @@ impl CommandOpenFheBackend {
             .map(Into::into)
             .filter(|name| !name.is_empty())
             .collect();
-        self.workers = Arc::new(Mutex::new(Vec::new()));
+        self.reset_worker_pool_after_policy_change();
         self
+    }
+
+    fn reset_worker_pool_after_policy_change(&mut self) {
+        self.workers = Arc::new(Mutex::new(Vec::new()));
     }
 }
 
@@ -2330,6 +2334,23 @@ mod tests {
             }
             Err(err) => panic!("unexpected busy full pool error: {err:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn builder_policy_change_uses_isolated_worker_pool() {
+        let backend = CommandOpenFheBackend::new_unchecked("cat")
+            .with_pool_size(NonZeroUsize::new(1).unwrap());
+        let first = backend.worker_process().unwrap();
+        let first_worker = Arc::clone(first.worker());
+
+        let changed = backend.clone().with_timeout(Duration::from_millis(250));
+        let changed_worker = changed.worker_process().unwrap();
+
+        assert!(
+            !Arc::ptr_eq(changed_worker.worker(), &first_worker),
+            "policy-changing builders must not reuse workers started with the previous policy",
+        );
     }
 
     #[cfg(target_os = "linux")]
