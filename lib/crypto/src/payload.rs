@@ -262,7 +262,7 @@ pub struct PayloadTextEncryptor {
     encryption_epoch: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ClientPayloadValidationContext<'a> {
     pub collection_id: &'a str,
     pub point_id: &'a str,
@@ -276,10 +276,39 @@ pub struct ClientPayloadValidationContext<'a> {
     pub signature_verification: Option<ClientPayloadSignatureVerification<'a>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+impl Debug for ClientPayloadValidationContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientPayloadValidationContext")
+            .field("collection_id", &"[redacted]")
+            .field("point_id", &"[redacted]")
+            .field("field_path", &"[redacted]")
+            .field("expected_key_id", &"[redacted]")
+            .field("expected_rk_id", &"[redacted]")
+            .field("min_rk_epoch", &self.min_rk_epoch)
+            .field("max_rk_epoch", &self.max_rk_epoch)
+            .field("key_id_required", &self.key_id_required)
+            .field("signature_required", &self.signature_required)
+            .field(
+                "signature_verification_configured",
+                &self.signature_verification.is_some(),
+            )
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ClientPayloadSignatureVerification<'a> {
     pub expected_key_id: &'a str,
     pub public_key: &'a [u8],
+}
+
+impl Debug for ClientPayloadSignatureVerification<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientPayloadSignatureVerification")
+            .field("expected_key_id", &"[redacted]")
+            .field("public_key", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -2061,6 +2090,35 @@ mod tests {
         assert!(signature_debug.contains("sig_len"));
         assert!(!signature_debug.contains("tenant-a:signing"));
         assert!(!signature_debug.contains(&BASE64URL_NOPAD.encode(&[3_u8; 64])));
+
+        let signature_verification = ClientPayloadSignatureVerification {
+            expected_key_id: "CLIENT-PAYLOAD-VERIFY-KEY-SENTINEL",
+            public_key: &[9_u8; 32],
+        };
+        let validation_context = ClientPayloadValidationContext {
+            collection_id: "CLIENT-PAYLOAD-CONTEXT-COLLECTION-SENTINEL",
+            point_id: "CLIENT-PAYLOAD-CONTEXT-POINT-SENTINEL",
+            field_path: "CLIENT-PAYLOAD-CONTEXT-FIELD-SENTINEL",
+            expected_key_id: Some("CLIENT-PAYLOAD-CONTEXT-KEY-SENTINEL"),
+            expected_rk_id: Some("CLIENT-PAYLOAD-CONTEXT-RK-SENTINEL"),
+            min_rk_epoch: Some(3),
+            max_rk_epoch: Some(3),
+            key_id_required: true,
+            signature_required: true,
+            signature_verification: Some(signature_verification),
+        };
+        for rendered in [
+            format!("{signature_verification:?}"),
+            format!("{validation_context:?}"),
+        ] {
+            assert!(rendered.contains("[redacted]"));
+            assert!(!rendered.contains("CLIENT-PAYLOAD-VERIFY-KEY-SENTINEL"));
+            assert!(!rendered.contains("CLIENT-PAYLOAD-CONTEXT-COLLECTION-SENTINEL"));
+            assert!(!rendered.contains("CLIENT-PAYLOAD-CONTEXT-POINT-SENTINEL"));
+            assert!(!rendered.contains("CLIENT-PAYLOAD-CONTEXT-FIELD-SENTINEL"));
+            assert!(!rendered.contains("CLIENT-PAYLOAD-CONTEXT-KEY-SENTINEL"));
+            assert!(!rendered.contains("CLIENT-PAYLOAD-CONTEXT-RK-SENTINEL"));
+        }
 
         let nonce_key = ClientPayloadNonceReplayKey {
             key_id: "CLIENT-PAYLOAD-NONCE-KEY-SENTINEL".to_string(),
