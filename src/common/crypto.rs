@@ -1401,9 +1401,9 @@ impl VectorWritePlan {
                 ..
             } => (encryptor, public_material),
             VectorWriteRule::ClientEnvelope { .. } => {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; plaintext dense vector writes are not allowed",
-                )));
+                return Err(StorageError::bad_input(
+                    "server-blind client CKKS envelopes do not allow plaintext dense vector writes",
+                ));
             }
             VectorWriteRule::PrivateHnswOram { .. } => {
                 return Err(StorageError::bad_input(
@@ -1419,17 +1419,13 @@ impl VectorWritePlan {
                 public_material,
                 values.as_slice(),
             )
-            .map_err(|err| {
-                StorageError::service_error(format!(
-                    "CKKS vector encryption failed for vector '{vector_name}' in collection {collection_name}: {err}",
-                ))
-            })?;
+            .map_err(|_| StorageError::service_error("CKKS vector encryption failed"))?;
         Ok(Some(encrypted))
     }
 
     pub(crate) fn verify_client_vector_sidecar_payload_value(
         &self,
-        collection_name: &str,
+        _collection_name: &str,
         point_id: &str,
         vector_name: &str,
         value: &Value,
@@ -1456,10 +1452,10 @@ impl VectorWritePlan {
             return Ok(None);
         };
         let Some(envelope_key) = client_ckks_vector_sidecar_envelope_key(value, vector_name)
-            .map_err(|err| {
-                StorageError::bad_input(format!(
-                    "client CKKS vector sidecar entry '{vector_name}' is invalid for collection {collection_name}: {err}",
-                ))
+            .map_err(|_| {
+                StorageError::bad_input(
+                    "client CKKS vector sidecar entry is invalid for runtime verification",
+                )
             })?
         else {
             return Ok(None);
@@ -1467,9 +1463,9 @@ impl VectorWritePlan {
         let Some(public_key) =
             signature_verifier.public_key_for_key_id(envelope_key.signature_key_id())
         else {
-            return Err(StorageError::bad_input(format!(
-                "client CKKS vector sidecar entry '{vector_name}' signature key_id is not trusted for collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "client CKKS vector sidecar signature key_id is not trusted",
+            ));
         };
         let verified = validate_client_ckks_vector_payload_value_for_runtime(
             value,
@@ -1489,10 +1485,8 @@ impl VectorWritePlan {
                 },
             },
         )
-        .map_err(|err| {
-            StorageError::bad_input(format!(
-                "client CKKS vector sidecar entry '{vector_name}' failed runtime verification for collection {collection_name}: {err}",
-            ))
+        .map_err(|_| {
+            StorageError::bad_input("client CKKS vector sidecar entry failed runtime verification")
         })?;
         Ok(Some(verified))
     }
@@ -1525,9 +1519,9 @@ impl VectorWritePlan {
                 distance,
             ),
             VectorWriteRule::ClientEnvelope { .. } => {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; Qdrant cannot score opaque client vector ciphertexts",
-                )));
+                return Err(StorageError::bad_input(
+                    "server-blind client CKKS envelopes cannot be scored by Qdrant",
+                ));
             }
             VectorWriteRule::PrivateHnswOram { .. } => {
                 return Err(StorageError::bad_input(
@@ -1536,9 +1530,9 @@ impl VectorWritePlan {
             }
         };
         if !*allow_plaintext_queries {
-            return Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' does not allow plaintext query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted vectors do not allow plaintext query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
+            ));
         }
         let query_values = query_values
             .iter()
@@ -1556,19 +1550,17 @@ impl VectorWritePlan {
                 ckks_score_distance_name(*distance),
                 query_values.as_slice(),
             )
-            .map_err(|err| {
-                StorageError::service_error(format!(
-                    "CKKS vector encrypted-query batch scoring failed for vector '{vector_name}' in collection {collection_name}: {err}",
-                ))
+            .map_err(|_| {
+                StorageError::service_error("CKKS vector encrypted-query batch scoring failed")
             })?;
         let scores = scores
             .into_iter()
             .map(|score| {
                 let score = score as f32;
                 if !score.is_finite() {
-                    return Err(StorageError::service_error(format!(
-                        "CKKS vector encrypted-query batch scoring returned non-finite score for vector '{vector_name}' in collection {collection_name}",
-                    )));
+                    return Err(StorageError::service_error(
+                        "CKKS vector encrypted-query batch scoring returned non-finite score",
+                    ));
                 }
                 Ok(score)
             })
@@ -1626,9 +1618,9 @@ impl VectorWritePlan {
                 ..
             } => (encryptor, public_material, distance),
             VectorWriteRule::ClientEnvelope { .. } => {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; Qdrant cannot score opaque client vector ciphertexts",
-                )));
+                return Err(StorageError::bad_input(
+                    "server-blind client CKKS envelopes cannot be scored by Qdrant",
+                ));
             }
             VectorWriteRule::PrivateHnswOram { .. } => {
                 return Err(StorageError::bad_input(
@@ -1649,19 +1641,19 @@ impl VectorWritePlan {
                 &encrypted_items,
                 ckks_score_distance_name(*distance),
             )
-            .map_err(|err| {
-                StorageError::service_error(format!(
-                    "CKKS vector client-encrypted-query batch scoring failed for vector '{vector_name}' in collection {collection_name}: {err}",
-                ))
+            .map_err(|_| {
+                StorageError::service_error(
+                    "CKKS vector client-encrypted-query batch scoring failed",
+                )
             })?;
         let scores = scores
             .into_iter()
             .map(|score| {
                 let score = score as f32;
                 if !score.is_finite() {
-                    return Err(StorageError::service_error(format!(
-                        "CKKS vector client-encrypted-query batch scoring returned non-finite score for vector '{vector_name}' in collection {collection_name}",
-                    )));
+                    return Err(StorageError::service_error(
+                        "CKKS vector client-encrypted-query batch scoring returned non-finite score",
+                    ));
                 }
                 Ok(score)
             })
@@ -1672,7 +1664,7 @@ impl VectorWritePlan {
 
     pub(crate) fn validate_client_encrypted_query(
         &self,
-        collection_name: &str,
+        _collection_name: &str,
         vector_name: &str,
         query_collection_id: &str,
         query_vector_name: &str,
@@ -1722,9 +1714,9 @@ impl VectorWritePlan {
                 query_signature_verifier,
             ),
             VectorWriteRule::ClientEnvelope { .. } => {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; client query scoring is not available without a trusted scoring bridge",
-                )));
+                return Err(StorageError::bad_input(
+                    "server-blind client CKKS envelopes cannot be scored by Qdrant",
+                ));
             }
             VectorWriteRule::PrivateHnswOram { .. } => {
                 return Err(StorageError::bad_input(
@@ -1733,80 +1725,74 @@ impl VectorWritePlan {
             }
         };
         if query_collection_id != collection_id {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query collection_id does not match active CKKS collection identity for vector '{vector_name}' in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted query collection_id does not match active CKKS collection identity",
+            ));
         }
         if query_vector_name != vector_name {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query vector_name does not match encrypted vector '{vector_name}' in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted query vector_name does not match encrypted vector",
+            ));
         }
         if query_key_id != key_id {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query key_id does not match active CKKS key for vector '{vector_name}' in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted query key_id does not match active CKKS key",
+            ));
         }
         if query_rk_id != rk_id {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query rk_id does not match active CKKS resource key for vector '{vector_name}' in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted query rk_id does not match active CKKS resource key",
+            ));
         }
         if query_rk_epoch != *rk_epoch {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query rk_epoch does not match active CKKS resource key epoch for vector '{vector_name}' in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted query rk_epoch does not match active CKKS resource key epoch",
+            ));
         }
         let expected_digest = encryptor.context_digest_for(public_material);
         if context_digest != expected_digest {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query context digest does not match active CKKS public material for vector '{vector_name}' in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted query context digest does not match active CKKS public material",
+            ));
         }
         encryptor
             .validate_pre_encrypted_query_input(encrypted_query, slots)
-            .map_err(|err| {
-                StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' client CKKS query is incompatible with active CKKS parameters in collection {collection_name}: {err}",
-                ))
+            .map_err(|_| {
+                StorageError::bad_input(
+                    "client CKKS query is incompatible with active CKKS parameters",
+                )
             })?;
         if query_nonce.len() != 16 {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query nonce must be 16 base64url characters for vector '{vector_name}' in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted query nonce must be 16 base64url characters",
+            ));
         }
-        let nonce = BASE64URL_NOPAD.decode(query_nonce.as_bytes()).map_err(|_| {
-            StorageError::bad_input(format!(
-                "encrypted query nonce is not base64url for vector '{vector_name}' in collection {collection_name}",
-            ))
-        })?;
+        let nonce = BASE64URL_NOPAD
+            .decode(query_nonce.as_bytes())
+            .map_err(|_| StorageError::bad_input("encrypted query nonce is not base64url"))?;
         if nonce.len() != 12 {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query nonce must decode to 12 bytes for vector '{vector_name}' in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted query nonce must decode to 12 bytes",
+            ));
         }
         if signature_alg != "ed25519" {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query signature algorithm is not supported for vector '{vector_name}' in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted query signature algorithm is not supported",
+            ));
         }
         let Some(public_key) = query_signature_verifier.public_key_for_key_id(signature_key_id)
         else {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query signature key_id is not trusted for vector '{vector_name}' in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted query signature key_id is not trusted",
+            ));
         };
         let signature = BASE64URL_NOPAD
             .decode(signature_b64.as_bytes())
-            .map_err(|_| {
-                StorageError::bad_input(format!(
-                    "encrypted query signature is not base64url for vector '{vector_name}' in collection {collection_name}",
-                ))
-            })?;
+            .map_err(|_| StorageError::bad_input("encrypted query signature is not base64url"))?;
         if signature.len() != 64 {
-            return Err(StorageError::bad_input(format!(
-                "encrypted query signature must decode to 64 bytes for vector '{vector_name}' in collection {collection_name}",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted query signature must decode to 64 bytes",
+            ));
         }
         let message = ckks_client_query_signature_message(
             query_collection_id,
@@ -1824,9 +1810,7 @@ impl VectorWritePlan {
         UnparsedPublicKey::new(&ED25519, public_key)
             .verify(&message, &signature)
             .map_err(|_| {
-                StorageError::bad_input(format!(
-                    "encrypted query signature verification failed for vector '{vector_name}' in collection {collection_name}",
-                ))
+                StorageError::bad_input("encrypted query signature verification failed")
             })?;
 
         Ok(Some(()))
@@ -1855,9 +1839,9 @@ impl VectorWritePlan {
                 ..
             } => (encryptor, public_material, distance),
             VectorWriteRule::ClientEnvelope { .. } => {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' in collection {collection_name} uses server-blind client CKKS envelopes; stored-query scoring is not available without a trusted scoring bridge",
-                )));
+                return Err(StorageError::bad_input(
+                    "server-blind client CKKS envelopes cannot be scored by Qdrant",
+                ));
             }
             VectorWriteRule::PrivateHnswOram { .. } => {
                 return Err(StorageError::bad_input(
@@ -1878,19 +1862,17 @@ impl VectorWritePlan {
                 &encrypted_items,
                 ckks_score_distance_name(*distance),
             )
-            .map_err(|err| {
-                StorageError::service_error(format!(
-                    "CKKS vector stored-ciphertext batch scoring failed for vector '{vector_name}' in collection {collection_name}: {err}",
-                ))
+            .map_err(|_| {
+                StorageError::service_error("CKKS vector stored-ciphertext batch scoring failed")
             })?;
         let scores = scores
             .into_iter()
             .map(|score| {
                 let score = score as f32;
                 if !score.is_finite() {
-                    return Err(StorageError::service_error(format!(
-                        "CKKS vector stored-ciphertext batch scoring returned non-finite score for vector '{vector_name}' in collection {collection_name}",
-                    )));
+                    return Err(StorageError::service_error(
+                        "CKKS vector stored-ciphertext batch scoring returned non-finite score",
+                    ));
                 }
                 Ok(score)
             })
@@ -22178,6 +22160,549 @@ mod tests {
 
         validate_collection_crypto_runtime_inner(&settings, "docs", &params)
             .expect("client-side vector provider should pass collection runtime validation");
+    }
+
+    #[test]
+    fn vector_write_plan_redacts_client_ckks_vector_runtime_errors() {
+        let collection_sentinel = "client-ckks-vector-secret-collection";
+        let vector_sentinel = "client_ckks_vector_secret_embedding";
+        let point_sentinel = "client-ckks-vector-secret-point";
+        let key_sentinel = "tenant-a:client-vector-secret-key";
+        let rk_sentinel = "tenant-a/client-vector-secret-rk";
+        let sidecar_sentinel = "client-ckks-vector-secret-sidecar-value";
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: None,
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
+                instances: HashMap::from([(
+                    "docs_client_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_CLIENT_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": key_sentinel,
+                            "expected_rk_id": rk_sentinel,
+                            "min_rk_epoch": 3,
+                            "max_rk_epoch": 3,
+                            "search_mode": CLIENT_CKKS_VECTOR_SEARCH_MODE_OPAQUE_STORAGE_ONLY,
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(b"openfhe context"),
+                            "public_key_b64": BASE64URL_NOPAD.encode(b"openfhe public key"),
+                            "signature_public_keys": {
+                                "tenant-a/client-vector-secret-signing-v1": BASE64URL_NOPAD.encode(&[9_u8; 32]),
+                            },
+                        }),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            vectors: collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
+                vector_sentinel.to_string(),
+                VectorParamsBuilder::new(2, Distance::Dot).build(),
+            )])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some(key_sentinel.to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "client_vector_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec![vector_sentinel.to_string()],
+                    },
+                    instance: "docs_client_vector_v1".to_string(),
+                    binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            collection_sentinel,
+            "stable-client-vector-collection-id",
+            &params,
+        )
+        .unwrap()
+        .expect("client CKKS vector should produce a store-only write plan");
+        let forbidden = [
+            collection_sentinel,
+            vector_sentinel,
+            point_sentinel,
+            key_sentinel,
+            rk_sentinel,
+            sidecar_sentinel,
+            "tenant-a/client-vector-secret-signing-v1",
+        ];
+        let assert_bad_input_redacted = |err: StorageError, expected: &str| {
+            let StorageError::BadInput { description } = err else {
+                panic!("unexpected error type: {err:?}");
+            };
+            assert!(
+                description.contains(expected),
+                "unexpected error description: {description}",
+            );
+            for sentinel in forbidden {
+                assert!(
+                    !description.contains(sentinel),
+                    "error leaked sentinel {sentinel}: {description}",
+                );
+            }
+        };
+
+        let plaintext_err = match plan.encrypt_dense_vector_payload_value(
+            collection_sentinel,
+            point_sentinel,
+            vector_sentinel,
+            &[0.1, 0.2],
+        ) {
+            Err(err) => err,
+            Ok(_) => panic!("client CKKS vector must reject plaintext dense vector writes"),
+        };
+        assert_bad_input_redacted(plaintext_err, "plaintext dense vector writes");
+
+        let score_err = match plan.score_encrypted_query_batch(
+            collection_sentinel,
+            vector_sentinel,
+            &[],
+            &[0.1, 0.2],
+        ) {
+            Err(err) => err,
+            Ok(_) => panic!("client CKKS vector must reject server-side scoring"),
+        };
+        assert_bad_input_redacted(score_err, "cannot be scored by Qdrant");
+
+        let malformed_sidecar = json!({
+            qdrant_sec::CLIENT_CKKS_VECTOR_MARKER: sidecar_sentinel,
+        });
+        let sidecar_err = match plan.verify_client_vector_sidecar_payload_value(
+            collection_sentinel,
+            point_sentinel,
+            vector_sentinel,
+            &malformed_sidecar,
+        ) {
+            Err(err) => err,
+            Ok(_) => panic!("malformed client CKKS vector sidecar must fail closed"),
+        };
+        assert_bad_input_redacted(sidecar_err, "client CKKS vector sidecar entry is invalid");
+    }
+
+    #[test]
+    fn vector_write_plan_redacts_client_ckks_query_validation_errors() {
+        let (_bridge_dir, bridge_program, bridge_sha256_b64) = test_bridge_program();
+        let collection_sentinel = "ckks-query-secret-collection";
+        let vector_sentinel = "ckks_query_secret_vector";
+        let key_sentinel = "tenant-a:ckks-query-secret-key";
+        let rk_sentinel = "tenant-a/ckks-query-secret-rk";
+        let query_signing_sentinel = "tenant-a/ckks-query-secret-signing-v1";
+        let collection_crypto_id = "stable-ckks-query-collection-id";
+        let crypto_context = b"openfhe context";
+        let public_key = b"openfhe public key";
+        let public_material =
+            CkksPublicMaterial::new(crypto_context.to_vec(), public_key.to_vec()).unwrap();
+        let context_digest = public_material.digest_for(&CkksParameters::openfhe_default_128_bit());
+        let settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: None,
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            rk_sentinel.to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_local".to_string()),
+                        options: json!({
+                            "key_id": key_sentinel,
+                            "material_fingerprint_id": "tenant-a/ckks-query-secret-fingerprint",
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(crypto_context),
+                            "public_key_b64": BASE64URL_NOPAD.encode(public_key),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
+                            "signature_public_keys": {
+                                query_signing_sentinel: BASE64URL_NOPAD.encode(&[12_u8; 32]),
+                            },
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    rk_sentinel.to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[8_u8; 32])),
+                        rk_epoch: Some(3),
+                        state: Some(RESOURCE_KEY_STATE_ACTIVE.to_string()),
+                        scope: Some(format!("collection:{collection_sentinel}")),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some(bridge_program),
+                        sha256_b64: Some(bridge_sha256_b64),
+                        signature_public_key_b64: None,
+                        signature_b64: None,
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                    },
+                )]),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let params = CollectionParams {
+            vectors: collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
+                vector_sentinel.to_string(),
+                VectorParamsBuilder::new(2, Distance::Dot).build(),
+            )])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some(key_sentinel.to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec![vector_sentinel.to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            collection_sentinel,
+            collection_crypto_id,
+            &params,
+        )
+        .unwrap()
+        .expect("trusted CKKS vector should produce a write plan");
+        let valid_signature = BASE64URL_NOPAD.encode(&[0_u8; 64]);
+        let short_signature = BASE64URL_NOPAD.encode(&[0_u8; 8]);
+        let forbidden = [
+            collection_sentinel,
+            vector_sentinel,
+            key_sentinel,
+            rk_sentinel,
+            query_signing_sentinel,
+            "wrong-collection-secret",
+            "wrong-vector-secret",
+            "tenant-a/wrong-query-secret-key",
+            "tenant-a/wrong-query-secret-rk",
+            "wrong-context-secret",
+            "secret-alg",
+            "tenant-a/query-secret-unknown",
+            "tenant-a/ckks-query-secret-fingerprint",
+        ];
+        let assert_query_error_redacted = |err: StorageError, expected: &str| {
+            let StorageError::BadInput { description } = err else {
+                panic!("unexpected error type: {err:?}");
+            };
+            assert!(
+                description.contains(expected),
+                "unexpected error description: {description}",
+            );
+            for sentinel in forbidden {
+                assert!(
+                    !description.contains(sentinel),
+                    "error leaked sentinel {sentinel}: {description}",
+                );
+            }
+        };
+        let query_error = |query_collection_id: &str,
+                           query_vector_name: &str,
+                           query_key_id: &str,
+                           query_rk_id: &str,
+                           query_rk_epoch: u64,
+                           query_nonce: &str,
+                           query_context_digest: &str,
+                           slots: usize,
+                           encrypted_query: &[u8],
+                           signature_alg: &str,
+                           signature_key_id: &str,
+                           signature_b64: &str|
+         -> StorageError {
+            plan.validate_client_encrypted_query(
+                collection_sentinel,
+                vector_sentinel,
+                query_collection_id,
+                query_vector_name,
+                query_key_id,
+                query_rk_id,
+                query_rk_epoch,
+                query_nonce,
+                query_context_digest,
+                slots,
+                encrypted_query,
+                signature_alg,
+                signature_key_id,
+                signature_b64,
+            )
+            .expect_err("query validation case must fail")
+        };
+
+        assert_query_error_redacted(
+            query_error(
+                "wrong-collection-secret",
+                vector_sentinel,
+                key_sentinel,
+                rk_sentinel,
+                3,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_sentinel,
+                &valid_signature,
+            ),
+            "collection_id",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                "wrong-vector-secret",
+                key_sentinel,
+                rk_sentinel,
+                3,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_sentinel,
+                &valid_signature,
+            ),
+            "vector_name",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                "tenant-a/wrong-query-secret-key",
+                rk_sentinel,
+                3,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_sentinel,
+                &valid_signature,
+            ),
+            "key_id",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                key_sentinel,
+                "tenant-a/wrong-query-secret-rk",
+                3,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_sentinel,
+                &valid_signature,
+            ),
+            "rk_id",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                key_sentinel,
+                rk_sentinel,
+                2,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_sentinel,
+                &valid_signature,
+            ),
+            "rk_epoch",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                key_sentinel,
+                rk_sentinel,
+                3,
+                "AAAAAAAAAAAAAAAA",
+                "wrong-context-secret",
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_sentinel,
+                &valid_signature,
+            ),
+            "context digest",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                key_sentinel,
+                rk_sentinel,
+                3,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"",
+                "ed25519",
+                query_signing_sentinel,
+                &valid_signature,
+            ),
+            "incompatible",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                key_sentinel,
+                rk_sentinel,
+                3,
+                "short-secret",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_sentinel,
+                &valid_signature,
+            ),
+            "nonce",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                key_sentinel,
+                rk_sentinel,
+                3,
+                "!!!!!!!!!!!!!!!!",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_sentinel,
+                &valid_signature,
+            ),
+            "base64url",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                key_sentinel,
+                rk_sentinel,
+                3,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "secret-alg",
+                query_signing_sentinel,
+                &valid_signature,
+            ),
+            "algorithm",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                key_sentinel,
+                rk_sentinel,
+                3,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                "tenant-a/query-secret-unknown",
+                &valid_signature,
+            ),
+            "signature key_id",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                key_sentinel,
+                rk_sentinel,
+                3,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_sentinel,
+                "!!!!secret!!!!",
+            ),
+            "signature is not base64url",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                key_sentinel,
+                rk_sentinel,
+                3,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_sentinel,
+                &short_signature,
+            ),
+            "64 bytes",
+        );
+        assert_query_error_redacted(
+            query_error(
+                collection_crypto_id,
+                vector_sentinel,
+                key_sentinel,
+                rk_sentinel,
+                3,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_sentinel,
+                &valid_signature,
+            ),
+            "verification failed",
+        );
     }
 
     #[test]
