@@ -432,7 +432,7 @@ impl fmt::Debug for CryptoBackendConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Deserialize, Clone, Default)]
 pub struct CryptoInstanceConfig {
     pub provider: String,
     #[serde(default)]
@@ -441,6 +441,28 @@ pub struct CryptoInstanceConfig {
     pub backend_ref: Option<String>,
     #[serde(default = "default_crypto_options")]
     pub options: serde_json::Value,
+}
+
+impl fmt::Debug for CryptoInstanceConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let materials_count = self.materials.len();
+        let backend_ref_configured = self.backend_ref.is_some();
+        let options_shape = match &self.options {
+            serde_json::Value::Null => "null".to_string(),
+            serde_json::Value::Bool(_) => "bool".to_string(),
+            serde_json::Value::Number(_) => "number".to_string(),
+            serde_json::Value::String(_) => "string".to_string(),
+            serde_json::Value::Array(items) => format!("array:{} items", items.len()),
+            serde_json::Value::Object(fields) => format!("object:{} fields", fields.len()),
+        };
+
+        f.debug_struct("CryptoInstanceConfig")
+            .field("provider", &self.provider)
+            .field("materials_count", &materials_count)
+            .field("backend_ref_configured", &backend_ref_configured)
+            .field("options_shape", &options_shape)
+            .finish()
+    }
 }
 
 impl Validate for CryptoInstanceConfig {
@@ -903,6 +925,54 @@ mod tests {
             assert!(!rendered.contains("public-key-"), "{rendered}");
             assert!(!rendered.contains("signature-"), "{rendered}");
             assert!(rendered.contains("[redacted]"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn crypto_instance_config_debug_redacts_materials_backend_and_options() {
+        let sentinel = "qdrant-sec-instance-debug-sentinel";
+        let instance = CryptoInstanceConfig {
+            provider: "vector/private-hnsw-oram@v1".to_string(),
+            materials: HashMap::from([(
+                "client_secret_material".to_string(),
+                format!("material-ref-{sentinel}"),
+            )]),
+            backend_ref: Some(format!("backend-ref-{sentinel}")),
+            options: serde_json::json!({
+                "key_id": format!("tenant-a/{sentinel}"),
+                "client_secret": format!("secret-option-{sentinel}"),
+                "signature_public_keys": {
+                    format!("signing-key-{sentinel}"): format!("public-key-{sentinel}")
+                }
+            }),
+        };
+        let mut settings = Config::builder()
+            .add_source(File::from_str(DEFAULT_CONFIG, FileFormat::Yaml))
+            .build()
+            .expect("failed to build default config")
+            .try_deserialize::<Settings>()
+            .expect("failed to deserialize default config");
+        settings
+            .crypto
+            .instances
+            .insert("docs_private".to_string(), instance.clone());
+
+        for rendered in [format!("{instance:?}"), format!("{settings:?}")] {
+            assert!(
+                rendered.contains("vector/private-hnsw-oram@v1"),
+                "{rendered}"
+            );
+            assert!(rendered.contains("materials_count"), "{rendered}");
+            assert!(rendered.contains("backend_ref_configured"), "{rendered}");
+            assert!(rendered.contains("options_shape"), "{rendered}");
+            assert!(!rendered.contains("client_secret_material"), "{rendered}");
+            assert!(!rendered.contains("material-ref-"), "{rendered}");
+            assert!(!rendered.contains("backend-ref-"), "{rendered}");
+            assert!(!rendered.contains("client_secret"), "{rendered}");
+            assert!(!rendered.contains("secret-option-"), "{rendered}");
+            assert!(!rendered.contains("signature_public_keys"), "{rendered}");
+            assert!(!rendered.contains("public-key-"), "{rendered}");
+            assert!(!rendered.contains(sentinel), "{rendered}");
         }
     }
 
