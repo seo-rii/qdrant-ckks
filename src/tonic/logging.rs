@@ -194,6 +194,46 @@ mod tests {
              sessionId=session-camel-sentinel \
              session_ids=session-list-sentinel \
              sessionIds=session-list-camel-sentinel \
+             access_count=access-count-sentinel \
+             accessCounts=access-counts-camel-sentinel \
+             path_count=path-count-sentinel \
+             pathCounts=path-counts-camel-sentinel \
+             read_bucket_count=read-bucket-count-sentinel \
+             readBucketCounts=read-bucket-counts-camel-sentinel \
+             read_bucket_id_count=read-bucket-id-count-sentinel \
+             readBucketIdCounts=read-bucket-id-counts-camel-sentinel \
+             requested_path_count=requested-path-count-sentinel \
+             requestedPathCounts=requested-path-counts-camel-sentinel \
+             requested_bucket_count=requested-bucket-count-sentinel \
+             requestedBucketCounts=requested-bucket-counts-camel-sentinel \
+             returned_bucket_count=returned-bucket-count-sentinel \
+             returnedBucketCounts=returned-bucket-counts-camel-sentinel \
+             updated_bucket_count=updated-bucket-count-sentinel \
+             updatedBucketCounts=updated-bucket-counts-camel-sentinel \
+             writeback_bucket_count=writeback-bucket-count-sentinel \
+             writebackBucketCounts=writeback-bucket-counts-camel-sentinel \
+             leaf_count=leaf-count-sentinel \
+             leafCounts=leaf-counts-camel-sentinel \
+             sibling_count=sibling-count-sentinel \
+             siblingCounts=sibling-counts-camel-sentinel \
+             position_count=position-count-sentinel \
+             positionCounts=position-counts-camel-sentinel \
+             position_map_len=position-map-len-sentinel \
+             positionMapLength=position-map-length-camel-sentinel \
+             stash_len=stash-len-sentinel \
+             stashLength=stash-length-camel-sentinel \
+             token_count=token-count-sentinel \
+             tokenCounts=token-counts-camel-sentinel \
+             neighbor_count=neighbor-count-sentinel \
+             neighborCounts=neighbor-counts-camel-sentinel \
+             payload_len=payload-len-sentinel \
+             payloadLength=payload-length-camel-sentinel \
+             hit_count=hit-count-sentinel \
+             hitCounts=hit-counts-camel-sentinel \
+             result_count=result-count-sentinel \
+             resultCounts=result-counts-camel-sentinel \
+             real_path_count=real-path-count-sentinel \
+             realPathCounts=real-path-counts-camel-sentinel \
              paths=raw-path-sentinel \
              accessPath=access-path-camel-sentinel \
              read_path=single-read-path-snake-sentinel \
@@ -337,6 +377,46 @@ mod tests {
         assert!(!rendered.contains("session-camel-sentinel"));
         assert!(!rendered.contains("session-list-sentinel"));
         assert!(!rendered.contains("session-list-camel-sentinel"));
+        assert!(!rendered.contains("access-count-sentinel"));
+        assert!(!rendered.contains("access-counts-camel-sentinel"));
+        assert!(!rendered.contains("path-count-sentinel"));
+        assert!(!rendered.contains("path-counts-camel-sentinel"));
+        assert!(!rendered.contains("read-bucket-count-sentinel"));
+        assert!(!rendered.contains("read-bucket-counts-camel-sentinel"));
+        assert!(!rendered.contains("read-bucket-id-count-sentinel"));
+        assert!(!rendered.contains("read-bucket-id-counts-camel-sentinel"));
+        assert!(!rendered.contains("requested-path-count-sentinel"));
+        assert!(!rendered.contains("requested-path-counts-camel-sentinel"));
+        assert!(!rendered.contains("requested-bucket-count-sentinel"));
+        assert!(!rendered.contains("requested-bucket-counts-camel-sentinel"));
+        assert!(!rendered.contains("returned-bucket-count-sentinel"));
+        assert!(!rendered.contains("returned-bucket-counts-camel-sentinel"));
+        assert!(!rendered.contains("updated-bucket-count-sentinel"));
+        assert!(!rendered.contains("updated-bucket-counts-camel-sentinel"));
+        assert!(!rendered.contains("writeback-bucket-count-sentinel"));
+        assert!(!rendered.contains("writeback-bucket-counts-camel-sentinel"));
+        assert!(!rendered.contains("leaf-count-sentinel"));
+        assert!(!rendered.contains("leaf-counts-camel-sentinel"));
+        assert!(!rendered.contains("sibling-count-sentinel"));
+        assert!(!rendered.contains("sibling-counts-camel-sentinel"));
+        assert!(!rendered.contains("position-count-sentinel"));
+        assert!(!rendered.contains("position-counts-camel-sentinel"));
+        assert!(!rendered.contains("position-map-len-sentinel"));
+        assert!(!rendered.contains("position-map-length-camel-sentinel"));
+        assert!(!rendered.contains("stash-len-sentinel"));
+        assert!(!rendered.contains("stash-length-camel-sentinel"));
+        assert!(!rendered.contains("token-count-sentinel"));
+        assert!(!rendered.contains("token-counts-camel-sentinel"));
+        assert!(!rendered.contains("neighbor-count-sentinel"));
+        assert!(!rendered.contains("neighbor-counts-camel-sentinel"));
+        assert!(!rendered.contains("payload-len-sentinel"));
+        assert!(!rendered.contains("payload-length-camel-sentinel"));
+        assert!(!rendered.contains("hit-count-sentinel"));
+        assert!(!rendered.contains("hit-counts-camel-sentinel"));
+        assert!(!rendered.contains("result-count-sentinel"));
+        assert!(!rendered.contains("result-counts-camel-sentinel"));
+        assert!(!rendered.contains("real-path-count-sentinel"));
+        assert!(!rendered.contains("real-path-counts-camel-sentinel"));
         assert!(!rendered.contains("raw-path-sentinel"));
         assert!(!rendered.contains("access-path-camel-sentinel"));
         assert!(!rendered.contains("single-read-path-snake-sentinel"));

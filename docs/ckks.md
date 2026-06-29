@@ -2005,8 +2005,8 @@ redaction helper before serialization; they redact qdrant-sec envelope markers,
 secret-like crypto fields, private ORAM owner/signing key id aliases,
 signature-public-key registry aliases, and private ORAM path/root/bucket/node,
 query vector/embedding/plaintext, score/distance, candidate/node score,
-candidate/node distance, token, client-state, and proof aliases. Audit events
-never include request bodies.
+candidate/node distance, token, client-state, proof, and access-volume
+count/length aliases. Audit events never include request bodies.
 Prometheus request metrics may include fixed REST/gRPC endpoint labels and the
 collection label for private ORAM manifest, session, read, and commit APIs, but
 they do not include path labels, bucket ids, session ids, ciphertext bodies, or
