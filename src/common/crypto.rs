@@ -1531,7 +1531,7 @@ impl VectorWritePlan {
         };
         if !*allow_plaintext_queries {
             return Err(StorageError::bad_input(
-                "encrypted vectors do not allow plaintext query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
+                "encrypted vector search does not allow plaintext query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
             ));
         }
         let query_values = query_values

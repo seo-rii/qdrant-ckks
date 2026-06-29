@@ -3942,9 +3942,9 @@ fn ensure_group_path_does_not_touch_encrypted_crypto_selectors(
         rest: Vec::new(),
     };
     if group_by.compatible(&sidecar_path) {
-        return Err(StorageError::bad_input(format!(
-            "cannot group by encrypted vector sidecar field '{group_by}'; use a plaintext group field",
-        )));
+        return Err(StorageError::bad_input(
+            "cannot group by encrypted vector sidecar field; use a plaintext group field",
+        ));
     }
 
     let Some(encryption) = encryption else {
@@ -12451,9 +12451,11 @@ mod tests {
             let group_by = group_by.parse::<JsonPath>().unwrap();
             let err = ensure_group_path_does_not_touch_encrypted_crypto_selectors(None, &group_by)
                 .expect_err("grouping by encrypted vector sidecar path must fail");
+            let message = format!("{err}");
 
             assert!(
-                format!("{err}").contains("cannot group by encrypted vector sidecar field"),
+                message.contains("cannot group by encrypted vector sidecar field")
+                    && !message.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD),
                 "unexpected error: {err}",
             );
         }

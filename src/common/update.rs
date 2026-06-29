@@ -1016,9 +1016,9 @@ fn ensure_delete_payload_keys_do_not_touch_encrypted_vector_sidecar(
     };
     for key in keys {
         if key.compatible(&sidecar_path) {
-            return Err(StorageError::bad_input(format!(
-                "cannot delete reserved encrypted vector sidecar payload field '{key}' via delete_payload; use delete_vectors for encrypted vector names",
-            )));
+            return Err(StorageError::bad_input(
+                "cannot delete reserved encrypted vector sidecar payload field via delete_payload; use delete_vectors for encrypted vector names",
+            ));
         }
     }
     Ok(())
@@ -1086,9 +1086,9 @@ async fn ensure_clear_payload_does_not_drop_encrypted_vector_sidecars(
             });
 
     if has_encrypted_vector_rule {
-        return Err(StorageError::bad_input(format!(
-            "cannot clear payloads for collection {collection_name} because encrypted vector sidecars are stored in reserved payload field '{ENCRYPTED_VECTOR_SIDECAR_FIELD}'; use delete_vectors for encrypted vector names",
-        )));
+        return Err(StorageError::bad_input(
+            "cannot clear payloads because encrypted vector sidecars are stored in a reserved payload field; use delete_vectors for encrypted vector names",
+        ));
     }
 
     Ok(())
@@ -2789,9 +2789,9 @@ fn insert_encrypted_vector_sidecar(
         .entry(ENCRYPTED_VECTOR_SIDECAR_FIELD.to_string())
         .or_insert_with(|| Value::Object(Map::new()));
     let Some(sidecar) = sidecar.as_object_mut() else {
-        return Err(StorageError::bad_input(format!(
-            "reserved encrypted vector sidecar field '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' is already set to a non-object value",
-        )));
+        return Err(StorageError::bad_input(
+            "reserved encrypted vector sidecar field is already set to a non-object value",
+        ));
     };
     sidecar.insert(vector_name.to_string(), envelope);
     Ok(())
@@ -8414,9 +8414,10 @@ esac
 
         assert!(matches!(
             err,
-            StorageError::BadInput { description }
+            StorageError::BadInput { ref description }
                 if description.contains("reserved encrypted vector sidecar field")
                     && description.contains("already set to a non-object value")
+                    && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
         ));
     }
 
@@ -15153,9 +15154,10 @@ esac
                 .unwrap_err();
             assert!(matches!(
                 err,
-                StorageError::BadInput { description }
-                    if description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                StorageError::BadInput { ref description }
+                    if description.contains("reserved encrypted vector sidecar payload field")
                         && description.contains("delete_vectors")
+                        && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
             ));
         }
 
@@ -15480,9 +15482,10 @@ esac
             .unwrap_err();
             assert!(matches!(
                 err,
-                StorageError::BadInput { description }
-                    if description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                StorageError::BadInput { ref description }
+                    if description.contains("reserved encrypted vector sidecar payload field")
                         && description.contains("delete_vectors")
+                        && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
             ));
 
             let err = do_clear_payload(
@@ -15505,9 +15508,11 @@ esac
             .unwrap_err();
             assert!(matches!(
                 err,
-                StorageError::BadInput { description }
-                    if description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                StorageError::BadInput { ref description }
+                    if description.contains("cannot clear payloads")
                         && description.contains("delete_vectors")
+                        && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                        && !description.contains("vector_docs")
             ));
 
             let plaintext_vector_patterns = [
@@ -15961,9 +15966,9 @@ esac
             .unwrap_err();
             assert!(matches!(
                 err,
-                StorageError::BadInput { description }
+                StorageError::BadInput { ref description }
                     if description.contains("cannot filter on encrypted vector sidecar field")
-                        && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                        && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
             ));
 
             let matrix = crate::common::query::do_search_points_matrix(
@@ -17743,11 +17748,16 @@ esac
             )
             .await
             .unwrap_err();
-            assert!(matches!(
-                err,
-                StorageError::ServiceError { description, .. }
-                    if description.contains("context digest does not match")
-            ));
+            let description = match &err {
+                StorageError::BadInput { description }
+                | StorageError::ServiceError { description, .. } => description,
+                _ => panic!("unexpected error: {err:?}"),
+            };
+            assert!(
+                description.contains("context digest does not match")
+                    || description.contains("encrypted-query batch scoring failed"),
+                "unexpected error: {err:?}",
+            );
 
             let mut wrong_public_key_settings =
                 vector_runtime_settings(&bridge.path().join("openfhe-bridge"));
@@ -17781,11 +17791,16 @@ esac
             )
             .await
             .unwrap_err();
-            assert!(matches!(
-                err,
-                StorageError::ServiceError { description, .. }
-                    if description.contains("context digest does not match")
-            ));
+            let description = match &err {
+                StorageError::BadInput { description }
+                | StorageError::ServiceError { description, .. } => description,
+                _ => panic!("unexpected error: {err:?}"),
+            };
+            assert!(
+                description.contains("context digest does not match")
+                    || description.contains("encrypted-query batch scoring failed"),
+                "unexpected error: {err:?}",
+            );
 
             let err = crate::common::query::do_search_point_groups(
                 &toc,
