@@ -295,9 +295,9 @@ impl Debug for CkksEncryptionInput<'_> {
         f.debug_struct("CkksEncryptionInput")
             .field("parameters", self.parameters)
             .field("public_material", self.public_material)
-            .field("collection", &self.collection)
-            .field("point_id", &self.point_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection", &"[redacted]")
+            .field("point_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("values_len", &self.values.len())
             .finish()
     }
@@ -312,7 +312,7 @@ pub struct CkksVectorBatchItem<'a> {
 impl Debug for CkksVectorBatchItem<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("CkksVectorBatchItem")
-            .field("point_id", &self.point_id)
+            .field("point_id", &"[redacted]")
             .field("values_len", &self.values.len())
             .finish()
     }
@@ -332,8 +332,8 @@ impl Debug for CkksBatchEncryptionInput<'_> {
         f.debug_struct("CkksBatchEncryptionInput")
             .field("parameters", self.parameters)
             .field("public_material", self.public_material)
-            .field("collection", &self.collection)
-            .field("vector_name", &self.vector_name)
+            .field("collection", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("items", &self.items)
             .finish()
     }
@@ -356,9 +356,9 @@ impl Debug for CkksPlaintextQueryScoreInput<'_> {
         f.debug_struct("CkksPlaintextQueryScoreInput")
             .field("parameters", self.parameters)
             .field("public_material", self.public_material)
-            .field("collection", &self.collection)
-            .field("point_id", &self.point_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection", &"[redacted]")
+            .field("point_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("distance", &self.distance)
             .field("query_values_len", &self.query_values.len())
             .field("ciphertext_len", &self.ciphertext.len())
@@ -375,7 +375,7 @@ pub struct CkksPlaintextQueryScoreBatchItem<'a> {
 impl Debug for CkksPlaintextQueryScoreBatchItem<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("CkksPlaintextQueryScoreBatchItem")
-            .field("point_id", &self.point_id)
+            .field("point_id", &"[redacted]")
             .field("ciphertext_len", &self.ciphertext.len())
             .finish()
     }
@@ -397,8 +397,8 @@ impl Debug for CkksPlaintextQueryScoreBatchInput<'_> {
         f.debug_struct("CkksPlaintextQueryScoreBatchInput")
             .field("parameters", self.parameters)
             .field("public_material", self.public_material)
-            .field("collection", &self.collection)
-            .field("vector_name", &self.vector_name)
+            .field("collection", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("distance", &self.distance)
             .field("query_values_len", &self.query_values.len())
             .field("items", &self.items)
@@ -420,8 +420,8 @@ impl Debug for CkksQueryEncryptionInput<'_> {
         f.debug_struct("CkksQueryEncryptionInput")
             .field("parameters", self.parameters)
             .field("public_material", self.public_material)
-            .field("collection", &self.collection)
-            .field("vector_name", &self.vector_name)
+            .field("collection", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("values_len", &self.values.len())
             .finish()
     }
@@ -444,9 +444,9 @@ impl Debug for CkksEncryptedQueryScoreInput<'_> {
         f.debug_struct("CkksEncryptedQueryScoreInput")
             .field("parameters", self.parameters)
             .field("public_material", self.public_material)
-            .field("collection", &self.collection)
-            .field("point_id", &self.point_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection", &"[redacted]")
+            .field("point_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("distance", &self.distance)
             .field("encrypted_query_len", &self.encrypted_query.len())
             .field("ciphertext_len", &self.ciphertext.len())
@@ -463,7 +463,7 @@ pub struct CkksEncryptedQueryScoreBatchItem<'a> {
 impl Debug for CkksEncryptedQueryScoreBatchItem<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("CkksEncryptedQueryScoreBatchItem")
-            .field("point_id", &self.point_id)
+            .field("point_id", &"[redacted]")
             .field("ciphertext_len", &self.ciphertext.len())
             .finish()
     }
@@ -485,8 +485,8 @@ impl Debug for CkksEncryptedQueryScoreBatchInput<'_> {
         f.debug_struct("CkksEncryptedQueryScoreBatchInput")
             .field("parameters", self.parameters)
             .field("public_material", self.public_material)
-            .field("collection", &self.collection)
-            .field("vector_name", &self.vector_name)
+            .field("collection", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("distance", &self.distance)
             .field("encrypted_query_len", &self.encrypted_query.len())
             .field("items", &self.items)
@@ -1305,7 +1305,7 @@ impl Debug for VerifiedCkksVector {
             .field("crypto_schema_version", &self.crypto_schema_version)
             .field("encryption_epoch", &self.encryption_epoch)
             .field("key_id", &"[redacted]")
-            .field("vector_name", &self.vector_name)
+            .field("vector_name", &"[redacted]")
             .field("slots", &self.slots)
             .field("context_digest", &"[redacted]")
             .field("ciphertext_len", &self.ciphertext.len())
@@ -2064,6 +2064,163 @@ mod tests {
         smaller_batch.validate().unwrap();
 
         assert!(CkksParameters::from_security_profile("ckks-raw-unsafe").is_none());
+    }
+
+    #[test]
+    fn ckks_backend_input_debug_redacts_identifiers() {
+        let parameters = CkksParameters::default();
+        let public_material = CkksPublicMaterial::new(
+            b"CKKS-BACKEND-CONTEXT-SENTINEL".to_vec(),
+            b"CKKS-BACKEND-PUBLIC-KEY-SENTINEL".to_vec(),
+        )
+        .unwrap();
+        let values = [1.25, 2.5];
+        let query_values = [3.75, 4.5];
+        let ciphertext = b"CKKS-BACKEND-CIPHERTEXT-SENTINEL";
+        let encrypted_query = b"CKKS-BACKEND-QUERY-SENTINEL";
+        let vector_items = [CkksVectorBatchItem {
+            point_id: "CKKS-BACKEND-BATCH-POINT-SENTINEL",
+            values: &values,
+        }];
+        let plaintext_items = [CkksPlaintextQueryScoreBatchItem {
+            point_id: "CKKS-BACKEND-PLAINTEXT-BATCH-POINT-SENTINEL",
+            ciphertext,
+        }];
+        let encrypted_items = [CkksEncryptedQueryScoreBatchItem {
+            point_id: "CKKS-BACKEND-ENCRYPTED-BATCH-POINT-SENTINEL",
+            ciphertext,
+        }];
+        let verified = VerifiedCkksVector {
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            key_id: "CKKS-BACKEND-VERIFIED-KEY-SENTINEL".to_string(),
+            vector_name: "CKKS-BACKEND-VERIFIED-VECTOR-SENTINEL".to_string(),
+            slots: 2,
+            context_digest: "CKKS-BACKEND-VERIFIED-CONTEXT-SENTINEL".to_string(),
+            ciphertext: "CKKS-BACKEND-VERIFIED-CIPHERTEXT-SENTINEL".to_string(),
+        };
+
+        let rendered = [
+            format!(
+                "{:?}",
+                CkksEncryptionInput {
+                    parameters: &parameters,
+                    public_material: &public_material,
+                    collection: "CKKS-BACKEND-COLLECTION-SENTINEL",
+                    point_id: "CKKS-BACKEND-POINT-SENTINEL",
+                    vector_name: "CKKS-BACKEND-VECTOR-SENTINEL",
+                    values: &values,
+                }
+            ),
+            format!("{:?}", vector_items[0]),
+            format!(
+                "{:?}",
+                CkksBatchEncryptionInput {
+                    parameters: &parameters,
+                    public_material: &public_material,
+                    collection: "CKKS-BACKEND-BATCH-COLLECTION-SENTINEL",
+                    vector_name: "CKKS-BACKEND-BATCH-VECTOR-SENTINEL",
+                    items: &vector_items,
+                }
+            ),
+            format!(
+                "{:?}",
+                CkksPlaintextQueryScoreInput {
+                    parameters: &parameters,
+                    public_material: &public_material,
+                    collection: "CKKS-BACKEND-PLAINTEXT-COLLECTION-SENTINEL",
+                    point_id: "CKKS-BACKEND-PLAINTEXT-POINT-SENTINEL",
+                    vector_name: "CKKS-BACKEND-PLAINTEXT-VECTOR-SENTINEL",
+                    distance: "cosine",
+                    query_values: &query_values,
+                    ciphertext,
+                }
+            ),
+            format!("{:?}", plaintext_items[0]),
+            format!(
+                "{:?}",
+                CkksPlaintextQueryScoreBatchInput {
+                    parameters: &parameters,
+                    public_material: &public_material,
+                    collection: "CKKS-BACKEND-PLAINTEXT-BATCH-COLLECTION-SENTINEL",
+                    vector_name: "CKKS-BACKEND-PLAINTEXT-BATCH-VECTOR-SENTINEL",
+                    distance: "cosine",
+                    query_values: &query_values,
+                    items: &plaintext_items,
+                }
+            ),
+            format!(
+                "{:?}",
+                CkksQueryEncryptionInput {
+                    parameters: &parameters,
+                    public_material: &public_material,
+                    collection: "CKKS-BACKEND-QUERY-COLLECTION-SENTINEL",
+                    vector_name: "CKKS-BACKEND-QUERY-VECTOR-SENTINEL",
+                    values: &query_values,
+                }
+            ),
+            format!(
+                "{:?}",
+                CkksEncryptedQueryScoreInput {
+                    parameters: &parameters,
+                    public_material: &public_material,
+                    collection: "CKKS-BACKEND-ENCRYPTED-COLLECTION-SENTINEL",
+                    point_id: "CKKS-BACKEND-ENCRYPTED-POINT-SENTINEL",
+                    vector_name: "CKKS-BACKEND-ENCRYPTED-VECTOR-SENTINEL",
+                    distance: "cosine",
+                    encrypted_query,
+                    ciphertext,
+                }
+            ),
+            format!("{:?}", encrypted_items[0]),
+            format!(
+                "{:?}",
+                CkksEncryptedQueryScoreBatchInput {
+                    parameters: &parameters,
+                    public_material: &public_material,
+                    collection: "CKKS-BACKEND-ENCRYPTED-BATCH-COLLECTION-SENTINEL",
+                    vector_name: "CKKS-BACKEND-ENCRYPTED-BATCH-VECTOR-SENTINEL",
+                    distance: "cosine",
+                    encrypted_query,
+                    items: &encrypted_items,
+                }
+            ),
+            format!("{verified:?}"),
+        ]
+        .join("\n");
+
+        for leaked in [
+            "CKKS-BACKEND-CONTEXT-SENTINEL",
+            "CKKS-BACKEND-PUBLIC-KEY-SENTINEL",
+            "CKKS-BACKEND-COLLECTION-SENTINEL",
+            "CKKS-BACKEND-POINT-SENTINEL",
+            "CKKS-BACKEND-VECTOR-SENTINEL",
+            "CKKS-BACKEND-BATCH-POINT-SENTINEL",
+            "CKKS-BACKEND-BATCH-COLLECTION-SENTINEL",
+            "CKKS-BACKEND-BATCH-VECTOR-SENTINEL",
+            "CKKS-BACKEND-PLAINTEXT-COLLECTION-SENTINEL",
+            "CKKS-BACKEND-PLAINTEXT-POINT-SENTINEL",
+            "CKKS-BACKEND-PLAINTEXT-VECTOR-SENTINEL",
+            "CKKS-BACKEND-PLAINTEXT-BATCH-POINT-SENTINEL",
+            "CKKS-BACKEND-PLAINTEXT-BATCH-COLLECTION-SENTINEL",
+            "CKKS-BACKEND-PLAINTEXT-BATCH-VECTOR-SENTINEL",
+            "CKKS-BACKEND-QUERY-COLLECTION-SENTINEL",
+            "CKKS-BACKEND-QUERY-VECTOR-SENTINEL",
+            "CKKS-BACKEND-ENCRYPTED-COLLECTION-SENTINEL",
+            "CKKS-BACKEND-ENCRYPTED-POINT-SENTINEL",
+            "CKKS-BACKEND-ENCRYPTED-VECTOR-SENTINEL",
+            "CKKS-BACKEND-ENCRYPTED-BATCH-POINT-SENTINEL",
+            "CKKS-BACKEND-ENCRYPTED-BATCH-COLLECTION-SENTINEL",
+            "CKKS-BACKEND-ENCRYPTED-BATCH-VECTOR-SENTINEL",
+            "CKKS-BACKEND-CIPHERTEXT-SENTINEL",
+            "CKKS-BACKEND-QUERY-SENTINEL",
+            "CKKS-BACKEND-VERIFIED-KEY-SENTINEL",
+            "CKKS-BACKEND-VERIFIED-VECTOR-SENTINEL",
+            "CKKS-BACKEND-VERIFIED-CONTEXT-SENTINEL",
+            "CKKS-BACKEND-VERIFIED-CIPHERTEXT-SENTINEL",
+        ] {
+            assert!(!rendered.contains(leaked), "{rendered}");
+        }
     }
 
     #[test]
