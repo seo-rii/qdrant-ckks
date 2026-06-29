@@ -375,7 +375,7 @@ impl Debug for PrivateResultOramClientStateSnapshot {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramClientStateSnapshot")
             .field("version", &self.version)
-            .field("tree_height", &self.tree_height)
+            .field("tree_height", &"[redacted]")
             .field("position_count", &"[redacted]")
             .field("stash_len", &"[redacted]")
             .finish()
@@ -845,7 +845,7 @@ impl Debug for PrivateResultOramMerkleProof {
             .field("kind", &self.kind)
             .field("index_epoch", &"[redacted]")
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.bucket_count)
+            .field("bucket_count", &"[redacted]")
             .field("leaf_count", &"[redacted]")
             .finish()
     }
@@ -1168,7 +1168,7 @@ impl Debug for PrivateResultOramEncryptedBucketBatch {
         f.debug_struct("PrivateResultOramEncryptedBucketBatch")
             .field("index_epoch", &"[redacted]")
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.bucket_count)
+            .field("bucket_count", &"[redacted]")
             .field("proof_value", &"[redacted]")
             .field("returned_bucket_count", &"[redacted]")
             .finish()
@@ -1315,7 +1315,7 @@ impl Debug for PrivateResultOramReadBucketsSignatureInput<'_> {
             .field("rk_epoch", &self.rk_epoch)
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.bucket_count)
+            .field("bucket_count", &"[redacted]")
             .field("requested_bucket_count", &"[redacted]")
             .field("signature_alg", &self.signature_alg)
             .field("signature_key_id", &"[redacted]")
@@ -4650,8 +4650,10 @@ mod tests {
             (format!("{bucket:?}"), "blocks_len: 2"),
             (format!("{bucket:?}"), "occupied_blocks: 1"),
             (format!("{access:?}"), "writeback_bucket_count: 1"),
+            (format!("{state_snapshot:?}"), "tree_height: 3"),
             (format!("{state_snapshot:?}"), "position_count: 1"),
             (format!("{state_snapshot:?}"), "stash_len: 1"),
+            (format!("{proof:?}"), "bucket_count: 8"),
             (format!("{proof:?}"), "leaf_count: 1"),
             (format!("{:?}", proof.leaves[0]), "sibling_count: 1"),
             (format!("{read_batch:?}"), "bucket_id_count: 2"),
@@ -4662,6 +4664,7 @@ mod tests {
             (format!("{fetch_result:?}"), "access_count: 1"),
             (format!("{fetch_result:?}"), "updated_bucket_count: 0"),
             (format!("{upload_bundle:?}"), "bucket_count: 1"),
+            (format!("{encrypted_batch:?}"), "bucket_count: 8"),
             (format!("{encrypted_batch:?}"), "returned_bucket_count: 1"),
             (format!("{commit_plan:?}"), "leaf_commitment_count: 1"),
             (format!("{commit_plan:?}"), "updated_bucket_count: 1"),
@@ -4669,6 +4672,7 @@ mod tests {
                 format!("{commit_signature_input:?}"),
                 "updated_bucket_count: 1",
             ),
+            (format!("{read_signature_input:?}"), "bucket_count: 8"),
             (
                 format!("{read_signature_input:?}"),
                 "requested_bucket_count: 2",

@@ -550,7 +550,7 @@ impl Debug for PrivateHnswOramClientStateSnapshot {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswOramClientStateSnapshot")
             .field("version", &self.version)
-            .field("tree_height", &self.tree_height)
+            .field("tree_height", &"[redacted]")
             .field("position_count", &"[redacted]")
             .field("stash_len", &"[redacted]")
             .finish()
@@ -611,7 +611,7 @@ impl Debug for PrivateHnswOramMerkleProof {
             .field("kind", &self.kind)
             .field("index_epoch", &"[redacted]")
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.bucket_count)
+            .field("bucket_count", &"[redacted]")
             .field("leaf_count", &"[redacted]")
             .finish()
     }
@@ -674,7 +674,7 @@ impl Debug for PrivateHnswEncryptedPathBatch {
         f.debug_struct("PrivateHnswEncryptedPathBatch")
             .field("index_epoch", &"[redacted]")
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.bucket_count)
+            .field("bucket_count", &"[redacted]")
             .field("proof_value", &"[redacted]")
             .field("returned_bucket_count", &"[redacted]")
             .finish()
@@ -1126,7 +1126,7 @@ impl Debug for PrivateHnswPlaintextIndexBuild {
         f.debug_struct("PrivateHnswPlaintextIndexBuild")
             .field("entry_node_id", &"[redacted; 32 bytes]")
             .field("state", &self.state)
-            .field("bucket_count", &self.buckets.len())
+            .field("bucket_count", &"[redacted]")
             .field("logical_node_count", &"[redacted]")
             .field("dummy_node_count", &"[redacted]")
             .finish()
@@ -1150,7 +1150,7 @@ impl Debug for PrivateHnswEncryptedIndexBuild {
             .field("index_epoch", &"[redacted]")
             .field("entry_node_id", &"[redacted; 32 bytes]")
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.bucket_count)
+            .field("bucket_count", &"[redacted]")
             .field("logical_node_count", &"[redacted]")
             .field("dummy_node_count", &"[redacted]")
             .field("returned_bucket_count", &"[redacted]")
@@ -5889,11 +5889,15 @@ mod tests {
             (format!("{block:?}"), "payload_fetch_token: Some"),
             (format!("{bucket:?}"), "blocks_len: 2"),
             (format!("{bucket:?}"), "occupied_blocks: 1"),
+            (format!("{state_snapshot:?}"), "tree_height: 3"),
             (format!("{state_snapshot:?}"), "position_count: 1"),
             (format!("{state_snapshot:?}"), "stash_len: 1"),
+            (format!("{proof:?}"), "bucket_count: 8"),
             (format!("{proof:?}"), "leaf_count: 1"),
             (format!("{:?}", proof.leaves[0]), "sibling_count: 1"),
+            (format!("{encrypted_batch:?}"), "bucket_count: 8"),
             (format!("{encrypted_batch:?}"), "returned_bucket_count: 1"),
+            (format!("{encrypted_index:?}"), "bucket_count: 1"),
             (format!("{access:?}"), "writeback_bucket_count: 1"),
             (format!("{params:?}"), "k: 1"),
             (format!("{params:?}"), "ef: 4"),
