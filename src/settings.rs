@@ -391,7 +391,7 @@ impl fmt::Debug for CryptoMaterialConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Default, Validate)]
+#[derive(Deserialize, Clone, Default, Validate)]
 pub struct CryptoBackendConfig {
     #[validate(custom(function = "validate_crypto_runtime_identifier"))]
     pub kind: String,
@@ -407,6 +407,29 @@ pub struct CryptoBackendConfig {
     pub size: Option<usize>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
+}
+
+impl fmt::Debug for CryptoBackendConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CryptoBackendConfig")
+            .field("kind", &self.kind)
+            .field("program", &self.program.as_ref().map(|_| "[redacted]"))
+            .field(
+                "sha256_b64",
+                &self.sha256_b64.as_ref().map(|_| "[redacted]"),
+            )
+            .field(
+                "signature_public_key_b64",
+                &self.signature_public_key_b64.as_ref().map(|_| "[redacted]"),
+            )
+            .field(
+                "signature_b64",
+                &self.signature_b64.as_ref().map(|_| "[redacted]"),
+            )
+            .field("size", &self.size)
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -848,6 +871,38 @@ mod tests {
             assert!(!rendered.contains("qdrant-sec-api-key-sentinel"));
             assert!(!rendered.contains("qdrant-sec-alt-api-key-sentinel"));
             assert!(!rendered.contains("qdrant-sec-read-only-key-sentinel"));
+        }
+    }
+
+    #[test]
+    fn crypto_backend_config_debug_redacts_program_and_pins() {
+        let sentinel = "qdrant-sec-backend-debug-sentinel";
+        let backend = CryptoBackendConfig {
+            kind: "process_pool".to_string(),
+            program: Some(format!("/tmp/{sentinel}/openfhe-bridge")),
+            sha256_b64: Some(format!("sha256-{sentinel}")),
+            signature_public_key_b64: Some(format!("public-key-{sentinel}")),
+            signature_b64: Some(format!("signature-{sentinel}")),
+            size: Some(2),
+            timeout_ms: Some(5_000),
+        };
+        let mut settings = Config::builder()
+            .add_source(File::from_str(DEFAULT_CONFIG, FileFormat::Yaml))
+            .build()
+            .expect("failed to build default config")
+            .try_deserialize::<Settings>()
+            .expect("failed to deserialize default config");
+        settings
+            .crypto
+            .backends
+            .insert(format!("backend-{sentinel}"), backend.clone());
+
+        for rendered in [format!("{backend:?}"), format!("{settings:?}")] {
+            assert!(!rendered.contains("/tmp/"), "{rendered}");
+            assert!(!rendered.contains("sha256-"), "{rendered}");
+            assert!(!rendered.contains("public-key-"), "{rendered}");
+            assert!(!rendered.contains("signature-"), "{rendered}");
+            assert!(rendered.contains("[redacted]"), "{rendered}");
         }
     }
 
