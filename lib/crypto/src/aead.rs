@@ -388,6 +388,23 @@ impl Drop for AeadCipher {
     }
 }
 
+impl Debug for AeadCipher {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let rk_id = if self.rk_id.is_empty() {
+            "<empty>"
+        } else {
+            "[redacted]"
+        };
+        f.debug_struct("AeadCipher")
+            .field("key_id", &"[redacted]")
+            .field("material_fingerprint", &"[redacted]")
+            .field("rk_id", &rk_id)
+            .field("rk_epoch", &self.rk_epoch)
+            .field("key", &"[redacted; 32 bytes]")
+            .finish()
+    }
+}
+
 #[derive(Clone, Eq, Hash, PartialEq)]
 struct AeadCipherMetadataKey {
     key_id: String,
@@ -800,6 +817,16 @@ pub struct AeadKeyring {
     retired_by_metadata: HashMap<AeadCipherMetadataKey, usize>,
 }
 
+impl Debug for AeadKeyring {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AeadKeyring")
+            .field("active", &self.active)
+            .field("retired_count", &self.retired.len())
+            .field("retired_metadata_count", &self.retired_by_metadata.len())
+            .finish()
+    }
+}
+
 impl AeadKeyring {
     pub fn new(active: AeadCipher) -> Self {
         Self {
@@ -967,6 +994,42 @@ mod tests {
         assert!(!rendered.contains("payload-key-sentinel"));
         assert!(!rendered.contains("material-fingerprint-sentinel"));
         assert!(!rendered.contains("resource-key-sentinel"));
+    }
+
+    #[test]
+    fn cipher_and_keyring_debug_redact_key_metadata() {
+        let active = cipher(
+            0x41,
+            "tenant-a:active-key-sentinel",
+            "tenant-a/active-material-sentinel",
+            "tenant-a/active-rk-sentinel",
+            7,
+        );
+        let retired = cipher(
+            0x42,
+            "tenant-a:retired-key-sentinel",
+            "tenant-a/retired-material-sentinel",
+            "tenant-a/retired-rk-sentinel",
+            6,
+        );
+
+        let active_debug = format!("{active:?}");
+        let keyring_debug = format!("{:?}", AeadKeyring::new(active).with_retired(retired));
+
+        for rendered in [active_debug, keyring_debug] {
+            assert!(rendered.contains("[redacted; 32 bytes]"), "{rendered}");
+            assert!(!rendered.contains("active-key-sentinel"), "{rendered}");
+            assert!(!rendered.contains("active-material-sentinel"), "{rendered}");
+            assert!(!rendered.contains("active-rk-sentinel"), "{rendered}");
+            assert!(!rendered.contains("retired-key-sentinel"), "{rendered}");
+            assert!(
+                !rendered.contains("retired-material-sentinel"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("retired-rk-sentinel"), "{rendered}");
+            assert!(!rendered.contains("[65"), "{rendered}");
+            assert!(!rendered.contains("[66"), "{rendered}");
+        }
     }
 
     #[test]
