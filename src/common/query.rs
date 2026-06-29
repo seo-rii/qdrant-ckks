@@ -1271,9 +1271,9 @@ async fn ckks_vector_search_points_with_scoring(
     }
     let with_vector = with_vector.unwrap_or_default();
     if with_vector.is_enabled() {
-        return Err(StorageError::bad_input(format!(
-            "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
-        )));
+        return Err(StorageError::bad_input(
+            "cannot return encrypted vector; CKKS vector ciphertext read path returns payload sidecar only",
+        ));
     }
     if let Some(params) = params.as_ref()
         && !ckks_search_params_supported(params)
@@ -3837,9 +3837,9 @@ async fn try_ckks_vector_search_groups(
         return Err(err);
     }
     if request.with_vector.clone().unwrap_or_default().is_enabled() {
-        return Err(StorageError::bad_input(format!(
-            "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
-        )));
+        return Err(StorageError::bad_input(
+            "cannot return encrypted vector; CKKS vector ciphertext read path returns payload sidecar only",
+        ));
     }
     ensure_group_path_does_not_touch_encrypted_crypto_selectors(
         config.params.encryption.as_ref(),
@@ -5103,9 +5103,9 @@ async fn try_ckks_vector_recommend_groups(
         lookup_from: request.lookup_from.clone(),
     };
     if request.with_vector.clone().unwrap_or_default().is_enabled() {
-        return Err(StorageError::bad_input(format!(
-            "cannot return encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
-        )));
+        return Err(StorageError::bad_input(
+            "cannot return encrypted vector; CKKS vector ciphertext read path returns payload sidecar only",
+        ));
     }
     ensure_group_path_does_not_touch_encrypted_crypto_selectors(
         config.params.encryption.as_ref(),
@@ -6448,11 +6448,11 @@ async fn ensure_with_vector_does_not_request_encrypted_vectors(
 
             match request {
                 EncryptedVectorReturnRequest::Any { .. } => Err(StorageError::bad_input(format!(
-                    "cannot {operation} encrypted vectors for collection '{collection_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+                    "cannot {operation} encrypted vectors; CKKS vector ciphertext read path returns payload sidecar only",
                 ))),
-                EncryptedVectorReturnRequest::Named { vector_name } => {
+                EncryptedVectorReturnRequest::Named { .. } => {
                     Err(StorageError::bad_input(format!(
-                        "cannot {operation} encrypted vector '{vector_name}'; CKKS vector ciphertext read path returns payload sidecar only",
+                        "cannot {operation} encrypted vector; CKKS vector ciphertext read path returns payload sidecar only",
                     )))
                 }
             }
@@ -8685,7 +8685,7 @@ async fn ensure_encrypted_vector_name_is_unsupported(
                     return Err(private_hnsw_oram_api_required_error(vector_name));
                 }
                 return Err(StorageError::bad_input(format!(
-                    "cannot {operation} encrypted vector '{vector_name}'; {reason}",
+                    "cannot {operation} encrypted vector; {reason}",
                 )));
             }
         }
