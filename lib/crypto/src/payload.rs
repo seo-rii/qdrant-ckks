@@ -1614,7 +1614,7 @@ struct ValidatedClientPayloadEnvelope {
     signature_sha256_b64: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ClientPayloadAad {
     collection_id: String,
@@ -1624,11 +1624,31 @@ struct ClientPayloadAad {
     schema_version: u16,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+impl Debug for ClientPayloadAad {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientPayloadAad")
+            .field("collection_id", &"[redacted]")
+            .field("point_id", &"[redacted]")
+            .field("field_path", &"[redacted]")
+            .field("schema_version", &self.schema_version)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ClientPayloadBlindIndexBinding {
     field_path: String,
     token: String,
+}
+
+impl Debug for ClientPayloadBlindIndexBinding {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClientPayloadBlindIndexBinding")
+            .field("field_path", &"[redacted]")
+            .field("token", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2026,6 +2046,16 @@ mod tests {
         assert!(!debug.contains("CLIENT-PAYLOAD-COLLECTION-SENTINEL"));
         assert!(!debug.contains("CLIENT-PAYLOAD-POINT-SENTINEL"));
         assert!(!debug.contains("CLIENT-PAYLOAD-FIELD-SENTINEL"));
+
+        let aad_debug = format!("{:?}", envelope.aad);
+        assert!(aad_debug.contains("schema_version"));
+        assert!(!aad_debug.contains("CLIENT-PAYLOAD-COLLECTION-SENTINEL"));
+        assert!(!aad_debug.contains("CLIENT-PAYLOAD-POINT-SENTINEL"));
+        assert!(!aad_debug.contains("CLIENT-PAYLOAD-FIELD-SENTINEL"));
+
+        let blind_index_debug = format!("{:?}", envelope.blind_indexes.first().unwrap());
+        assert!(!blind_index_debug.contains("CLIENT-PAYLOAD-BLIND-FIELD-SENTINEL"));
+        assert!(!blind_index_debug.contains(&BASE64URL_NOPAD.encode(&[8_u8; 32])));
 
         let signature_debug = format!("{:?}", envelope.signature.as_ref().unwrap());
         assert!(signature_debug.contains("sig_len"));
