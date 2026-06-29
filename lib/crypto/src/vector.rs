@@ -620,7 +620,7 @@ impl Debug for CkksVectorSidecarEnvelopeKey {
         f.debug_struct("CkksVectorSidecarEnvelopeKey")
             .field("collection_id", &"[redacted]")
             .field("point_id", &"[redacted]")
-            .field("vector_name", &self.vector_name)
+            .field("vector_name", &"[redacted]")
             .field("envelope_version", &self.envelope_version)
             .field("envelope_algorithm", &self.envelope_algorithm)
             .field("key_id", &"[redacted]")
@@ -666,7 +666,7 @@ impl Debug for ClientCkksVectorSidecarEnvelopeKey {
         f.debug_struct("ClientCkksVectorSidecarEnvelopeKey")
             .field("collection_id", &"[redacted]")
             .field("point_id", &"[redacted]")
-            .field("vector_name", &self.vector_name)
+            .field("vector_name", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -703,7 +703,7 @@ impl Debug for CkksVectorVerifiedSidecarDeleteKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("CkksVectorVerifiedSidecarDeleteKey")
             .field("collection_id", &"[redacted]")
-            .field("vector_name", &self.vector_name)
+            .field("vector_name", &"[redacted]")
             .field("target", &self.target)
             .finish()
     }
@@ -1249,9 +1249,9 @@ impl Debug for ClientCkksVectorEnvelope {
             .field("version", &self.version)
             .field("scheme", &self.scheme)
             .field("security_profile", &self.security_profile)
-            .field("collection_id", &self.collection_id)
-            .field("point_id", &self.point_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection_id", &"[redacted]")
+            .field("point_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -2085,7 +2085,7 @@ mod tests {
             security_profile: CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50.to_string(),
             collection_id: "CLIENT-CKKS-COLLECTION-SENTINEL".to_string(),
             point_id: "CLIENT-CKKS-POINT-SENTINEL".to_string(),
-            vector_name: "text".to_string(),
+            vector_name: "CLIENT-CKKS-VECTOR-SENTINEL".to_string(),
             key_id: "CLIENT-CKKS-KEY-SENTINEL".to_string(),
             rk_id: "CLIENT-CKKS-RK-SENTINEL".to_string(),
             rk_epoch: 7,
@@ -2097,6 +2097,9 @@ mod tests {
         };
         let envelope_debug = format!("{envelope:?}");
         assert!(envelope_debug.contains("ciphertext_len"));
+        assert!(!envelope_debug.contains("CLIENT-CKKS-COLLECTION-SENTINEL"));
+        assert!(!envelope_debug.contains("CLIENT-CKKS-POINT-SENTINEL"));
+        assert!(!envelope_debug.contains("CLIENT-CKKS-VECTOR-SENTINEL"));
         assert!(!envelope_debug.contains("CLIENT-CKKS-KEY-SENTINEL"));
         assert!(!envelope_debug.contains("CLIENT-CKKS-RK-SENTINEL"));
         assert!(!envelope_debug.contains("CLIENT-CKKS-CONTEXT-SENTINEL"));
@@ -2108,7 +2111,7 @@ mod tests {
         let sidecar_key = ClientCkksVectorSidecarEnvelopeKey {
             collection_id: "CLIENT-CKKS-COLLECTION-SENTINEL".to_string(),
             point_id: "CLIENT-CKKS-POINT-SENTINEL".to_string(),
-            vector_name: "text".to_string(),
+            vector_name: "CLIENT-CKKS-VECTOR-SENTINEL".to_string(),
             key_id: "CLIENT-CKKS-KEY-SENTINEL".to_string(),
             rk_id: "CLIENT-CKKS-RK-SENTINEL".to_string(),
             rk_epoch: 7,
@@ -2125,6 +2128,7 @@ mod tests {
         assert!(verified_key_debug.contains("slots"));
         assert!(!verified_key_debug.contains("CLIENT-CKKS-COLLECTION-SENTINEL"));
         assert!(!verified_key_debug.contains("CLIENT-CKKS-POINT-SENTINEL"));
+        assert!(!verified_key_debug.contains("CLIENT-CKKS-VECTOR-SENTINEL"));
         assert!(!verified_key_debug.contains("CLIENT-CKKS-KEY-SENTINEL"));
         assert!(!verified_key_debug.contains("CLIENT-CKKS-RK-SENTINEL"));
         assert!(!verified_key_debug.contains("CLIENT-CKKS-CONTEXT-SENTINEL"));
@@ -2135,7 +2139,7 @@ mod tests {
         let server_sidecar_key = CkksVectorSidecarEnvelopeKey {
             collection_id: "SERVER-CKKS-COLLECTION-SENTINEL".to_string(),
             point_id: "SERVER-CKKS-POINT-SENTINEL".to_string(),
-            vector_name: "text".to_string(),
+            vector_name: "SERVER-CKKS-VECTOR-SENTINEL".to_string(),
             envelope_version: VERSION,
             envelope_algorithm: "AES-256-GCM".to_string(),
             key_id: "SERVER-CKKS-KEY-SENTINEL".to_string(),
@@ -2152,6 +2156,7 @@ mod tests {
         assert!(server_verified_debug.contains("envelope_version"));
         assert!(!server_verified_debug.contains("SERVER-CKKS-COLLECTION-SENTINEL"));
         assert!(!server_verified_debug.contains("SERVER-CKKS-POINT-SENTINEL"));
+        assert!(!server_verified_debug.contains("SERVER-CKKS-VECTOR-SENTINEL"));
         assert!(!server_verified_debug.contains("SERVER-CKKS-KEY-SENTINEL"));
         assert!(!server_verified_debug.contains("SERVER-CKKS-MATERIAL-FINGERPRINT-SENTINEL"));
         assert!(!server_verified_debug.contains("SERVER-CKKS-RK-SENTINEL"));
@@ -2160,13 +2165,14 @@ mod tests {
 
         let delete_key = CkksVectorVerifiedSidecarDeleteKey {
             collection_id: "SERVER-CKKS-DELETE-COLLECTION-SENTINEL".to_string(),
-            vector_name: "text".to_string(),
+            vector_name: "SERVER-CKKS-DELETE-VECTOR-SENTINEL".to_string(),
             target: CkksVectorSidecarDeleteTarget::PointIds {
                 digest_b64: "SERVER-CKKS-DELETE-DIGEST-SENTINEL".to_string(),
             },
         };
         let delete_debug = format!("{delete_key:?}");
         assert!(!delete_debug.contains("SERVER-CKKS-DELETE-COLLECTION-SENTINEL"));
+        assert!(!delete_debug.contains("SERVER-CKKS-DELETE-VECTOR-SENTINEL"));
         assert!(!delete_debug.contains("SERVER-CKKS-DELETE-DIGEST-SENTINEL"));
     }
 }
