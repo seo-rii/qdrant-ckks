@@ -538,7 +538,7 @@ fn validate_optional_instance_key_id(
     }
 }
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, PartialEq, Eq)]
 pub enum PayloadWriteSetupError {
     #[error("collection {collection} references unknown payload crypto instance {instance}")]
     UnknownInstance {
@@ -686,6 +686,209 @@ pub enum PayloadWriteSetupError {
     InvalidMaterialLength { material: String },
     #[error(transparent)]
     Payload(#[from] PayloadEncryptionError),
+}
+
+impl Debug for PayloadWriteSetupError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownInstance { .. } => f
+                .debug_struct("UnknownInstance")
+                .field("collection", &"[redacted]")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::UnsupportedProvider { .. } => f
+                .debug_struct("UnsupportedProvider")
+                .field("collection", &"[redacted]")
+                .field("rule_id", &"[redacted]")
+                .field("provider", &"[redacted]")
+                .finish(),
+            Self::InvalidClientEnvelopeBinding { .. } => f
+                .debug_struct("InvalidClientEnvelopeBinding")
+                .field("collection", &"[redacted]")
+                .field("rule_id", &"[redacted]")
+                .field("binding", &"[redacted]")
+                .finish(),
+            Self::InvalidPayloadBinding { .. } => f
+                .debug_struct("InvalidPayloadBinding")
+                .field("collection", &"[redacted]")
+                .field("rule_id", &"[redacted]")
+                .field("binding", &"[redacted]")
+                .finish(),
+            Self::ClientEnvelopeDecryptUnsupported => {
+                f.write_str("ClientEnvelopeDecryptUnsupported")
+            }
+            Self::ClientProviderMustBeServerBlind { .. } => f
+                .debug_struct("ClientProviderMustBeServerBlind")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::MissingMaterialBinding { .. } => f
+                .debug_struct("MissingMaterialBinding")
+                .field("instance", &"[redacted]")
+                .field("role", &"[redacted]")
+                .finish(),
+            Self::InvalidInstanceKeyId { .. } => f
+                .debug_struct("InvalidInstanceKeyId")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::ClientKeyIdMustBeRequired { .. } => f
+                .debug_struct("ClientKeyIdMustBeRequired")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::InvalidClientResourceKeyId { .. } => f
+                .debug_struct("InvalidClientResourceKeyId")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::ClientResourceKeyIdCollectionMismatch { .. } => f
+                .debug_struct("ClientResourceKeyIdCollectionMismatch")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::MissingClientResourceKeyId { .. } => f
+                .debug_struct("MissingClientResourceKeyId")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::InvalidClientResourceKeyEpoch { .. } => f
+                .debug_struct("InvalidClientResourceKeyEpoch")
+                .field("instance", &"[redacted]")
+                .field("option", &"[redacted]")
+                .finish(),
+            Self::MissingClientResourceKeyEpoch { .. } => f
+                .debug_struct("MissingClientResourceKeyEpoch")
+                .field("instance", &"[redacted]")
+                .field("option", &"[redacted]")
+                .finish(),
+            Self::InvalidClientResourceKeyEpochRange { .. } => f
+                .debug_struct("InvalidClientResourceKeyEpochRange")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::ClientResourceKeyEpochMustBePinned { .. } => f
+                .debug_struct("ClientResourceKeyEpochMustBePinned")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::InvalidClientSignaturePublicKey { .. } => f
+                .debug_struct("InvalidClientSignaturePublicKey")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::InvalidClientSignaturePublicKeyLength { .. } => f
+                .debug_struct("InvalidClientSignaturePublicKeyLength")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::ClientSignaturePublicKeyRegistryTooLarge { max_keys, .. } => f
+                .debug_struct("ClientSignaturePublicKeyRegistryTooLarge")
+                .field("instance", &"[redacted]")
+                .field("max_keys", max_keys)
+                .finish(),
+            Self::InvalidClientSignaturePublicKeys { .. } => f
+                .debug_struct("InvalidClientSignaturePublicKeys")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::MissingClientSignatureVerifier { .. } => f
+                .debug_struct("MissingClientSignatureVerifier")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::InvalidInstanceMaterialFingerprintId { .. } => f
+                .debug_struct("InvalidInstanceMaterialFingerprintId")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::MissingMaterialFingerprintId { .. } => f
+                .debug_struct("MissingMaterialFingerprintId")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::InvalidRetiredMaterials { .. } => f
+                .debug_struct("InvalidRetiredMaterials")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::UnsupportedInstanceOption { .. } => f
+                .debug_struct("UnsupportedInstanceOption")
+                .field("instance", &"[redacted]")
+                .field("option", &"[redacted]")
+                .finish(),
+            Self::MissingKeyId { .. } => f
+                .debug_struct("MissingKeyId")
+                .field("collection", &"[redacted]")
+                .finish(),
+            Self::InvalidCollectionKeyId { .. } => f
+                .debug_struct("InvalidCollectionKeyId")
+                .field("collection", &"[redacted]")
+                .finish(),
+            Self::CollectionKeyMismatch { .. } => f
+                .debug_struct("CollectionKeyMismatch")
+                .field("collection", &"[redacted]")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::UnsupportedMaterialKind { .. } => f
+                .debug_struct("UnsupportedMaterialKind")
+                .field("material", &"[redacted]")
+                .field("kind", &"[redacted]")
+                .finish(),
+            Self::UnknownWrappingMaterial { .. } => f
+                .debug_struct("UnknownWrappingMaterial")
+                .field("material", &"[redacted]")
+                .field("wrapped_by", &"[redacted]")
+                .finish(),
+            Self::UnsupportedWrappingMaterialKind { .. } => f
+                .debug_struct("UnsupportedWrappingMaterialKind")
+                .field("material", &"[redacted]")
+                .field("wrapped_by", &"[redacted]")
+                .field("kind", &"[redacted]")
+                .finish(),
+            Self::InvalidWrappedMaterial { .. } => f
+                .debug_struct("InvalidWrappedMaterial")
+                .field("material", &"[redacted]")
+                .field("reason", &"[redacted]")
+                .finish(),
+            Self::UnsupportedWrapAlgorithm { .. } => f
+                .debug_struct("UnsupportedWrapAlgorithm")
+                .field("material", &"[redacted]")
+                .field("algorithm", &"[redacted]")
+                .finish(),
+            Self::MissingMaterialSource { .. } => f
+                .debug_struct("MissingMaterialSource")
+                .field("material", &"[redacted]")
+                .finish(),
+            Self::UnsupportedMaterialSource { .. } => f
+                .debug_struct("UnsupportedMaterialSource")
+                .field("material", &"[redacted]")
+                .field("material_source", &"[redacted]")
+                .finish(),
+            Self::MissingMaterialEnv { .. } => f
+                .debug_struct("MissingMaterialEnv")
+                .field("material", &"[redacted]")
+                .field("env", &"[redacted]")
+                .finish(),
+            Self::MissingMaterialPath { .. } => f
+                .debug_struct("MissingMaterialPath")
+                .field("material", &"[redacted]")
+                .finish(),
+            Self::MissingMaterialFd { .. } => f
+                .debug_struct("MissingMaterialFd")
+                .field("material", &"[redacted]")
+                .finish(),
+            Self::MissingInlineMaterial { .. } => f
+                .debug_struct("MissingInlineMaterial")
+                .field("material", &"[redacted]")
+                .finish(),
+            Self::UnreadableMaterialFile { .. } => f
+                .debug_struct("UnreadableMaterialFile")
+                .field("material", &"[redacted]")
+                .field("path", &"[redacted]")
+                .finish(),
+            Self::InvalidMaterialFileSource { .. } => f
+                .debug_struct("InvalidMaterialFileSource")
+                .field("material", &"[redacted]")
+                .field("path", &"[redacted]")
+                .field("reason", &"[redacted]")
+                .finish(),
+            Self::InvalidMaterialEncoding { .. } => f
+                .debug_struct("InvalidMaterialEncoding")
+                .field("material", &"[redacted]")
+                .finish(),
+            Self::InvalidMaterialLength { .. } => f
+                .debug_struct("InvalidMaterialLength")
+                .field("material", &"[redacted]")
+                .finish(),
+            Self::Payload(_) => f.debug_tuple("Payload").field(&"[redacted]").finish(),
+        }
+    }
 }
 
 enum PayloadWriteRule {
@@ -9604,6 +9807,178 @@ mod tests {
             let rendered = format!("{err:?}");
             assert!(!rendered.contains(sentinel), "{rendered}");
             assert!(rendered.contains("[redacted]"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn payload_write_setup_error_debug_redacts_runtime_values() {
+        let sentinel = "payload-write-debug-sentinel";
+        let errors = vec![
+            PayloadWriteSetupError::UnknownInstance {
+                collection: format!("collection-{sentinel}"),
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::UnsupportedProvider {
+                collection: format!("collection-{sentinel}"),
+                rule_id: format!("rule-{sentinel}"),
+                provider: format!("provider-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidClientEnvelopeBinding {
+                collection: format!("collection-{sentinel}"),
+                rule_id: format!("rule-{sentinel}"),
+                binding: format!("binding-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidPayloadBinding {
+                collection: format!("collection-{sentinel}"),
+                rule_id: format!("rule-{sentinel}"),
+                binding: format!("binding-{sentinel}"),
+            },
+            PayloadWriteSetupError::ClientEnvelopeDecryptUnsupported,
+            PayloadWriteSetupError::ClientProviderMustBeServerBlind {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::MissingMaterialBinding {
+                instance: format!("instance-{sentinel}"),
+                role: format!("role-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidInstanceKeyId {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::ClientKeyIdMustBeRequired {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidClientResourceKeyId {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::ClientResourceKeyIdCollectionMismatch {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::MissingClientResourceKeyId {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidClientResourceKeyEpoch {
+                instance: format!("instance-{sentinel}"),
+                option: format!("option-{sentinel}"),
+            },
+            PayloadWriteSetupError::MissingClientResourceKeyEpoch {
+                instance: format!("instance-{sentinel}"),
+                option: format!("option-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidClientResourceKeyEpochRange {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::ClientResourceKeyEpochMustBePinned {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidClientSignaturePublicKey {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidClientSignaturePublicKeyLength {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::ClientSignaturePublicKeyRegistryTooLarge {
+                instance: format!("instance-{sentinel}"),
+                max_keys: 8,
+            },
+            PayloadWriteSetupError::InvalidClientSignaturePublicKeys {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::MissingClientSignatureVerifier {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidInstanceMaterialFingerprintId {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::MissingMaterialFingerprintId {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidRetiredMaterials {
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::UnsupportedInstanceOption {
+                instance: format!("instance-{sentinel}"),
+                option: format!("option-{sentinel}"),
+            },
+            PayloadWriteSetupError::MissingKeyId {
+                collection: format!("collection-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidCollectionKeyId {
+                collection: format!("collection-{sentinel}"),
+            },
+            PayloadWriteSetupError::CollectionKeyMismatch {
+                collection: format!("collection-{sentinel}"),
+                instance: format!("instance-{sentinel}"),
+            },
+            PayloadWriteSetupError::UnsupportedMaterialKind {
+                material: format!("material-{sentinel}"),
+                kind: format!("kind-{sentinel}"),
+            },
+            PayloadWriteSetupError::UnknownWrappingMaterial {
+                material: format!("material-{sentinel}"),
+                wrapped_by: format!("wrapped-by-{sentinel}"),
+            },
+            PayloadWriteSetupError::UnsupportedWrappingMaterialKind {
+                material: format!("material-{sentinel}"),
+                wrapped_by: format!("wrapped-by-{sentinel}"),
+                kind: format!("kind-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidWrappedMaterial {
+                material: format!("material-{sentinel}"),
+                reason: format!("reason-{sentinel}"),
+            },
+            PayloadWriteSetupError::UnsupportedWrapAlgorithm {
+                material: format!("material-{sentinel}"),
+                algorithm: format!("algorithm-{sentinel}"),
+            },
+            PayloadWriteSetupError::MissingMaterialSource {
+                material: format!("material-{sentinel}"),
+            },
+            PayloadWriteSetupError::UnsupportedMaterialSource {
+                material: format!("material-{sentinel}"),
+                material_source: format!("source-{sentinel}"),
+            },
+            PayloadWriteSetupError::MissingMaterialEnv {
+                material: format!("material-{sentinel}"),
+                env: format!("env-{sentinel}"),
+            },
+            PayloadWriteSetupError::MissingMaterialPath {
+                material: format!("material-{sentinel}"),
+            },
+            PayloadWriteSetupError::MissingMaterialFd {
+                material: format!("material-{sentinel}"),
+            },
+            PayloadWriteSetupError::MissingInlineMaterial {
+                material: format!("material-{sentinel}"),
+            },
+            PayloadWriteSetupError::UnreadableMaterialFile {
+                material: format!("material-{sentinel}"),
+                path: format!("/tmp/{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidMaterialFileSource {
+                material: format!("material-{sentinel}"),
+                path: format!("/tmp/{sentinel}"),
+                reason: format!("reason-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidMaterialEncoding {
+                material: format!("material-{sentinel}"),
+            },
+            PayloadWriteSetupError::InvalidMaterialLength {
+                material: format!("material-{sentinel}"),
+            },
+            PayloadWriteSetupError::Payload(PayloadEncryptionError::InvalidFieldPath(format!(
+                "field-{sentinel}"
+            ))),
+        ];
+
+        for err in errors {
+            let rendered = format!("{err:?}");
+            assert!(!rendered.contains(sentinel), "{rendered}");
+            if !matches!(
+                err,
+                PayloadWriteSetupError::ClientEnvelopeDecryptUnsupported
+            ) {
+                assert!(rendered.contains("[redacted]"), "{rendered}");
+            }
         }
     }
 
