@@ -296,11 +296,21 @@ impl Debug for PrivateResultOramPayloadBlockPlaintext {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateResultOramClientConfig {
     pub tree_height: u32,
     pub bucket_size: usize,
     pub block_size_bytes: usize,
+}
+
+impl Debug for PrivateResultOramClientConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramClientConfig")
+            .field("tree_height", &"[redacted]")
+            .field("bucket_size", &"[redacted]")
+            .field("block_size_bytes", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -4340,6 +4350,11 @@ mod tests {
             block: block.clone(),
             writeback_buckets: vec![bucket.clone()],
         };
+        let client_config = PrivateResultOramClientConfig {
+            tree_height: 3,
+            bucket_size: 2,
+            block_size_bytes: 128,
+        };
         let token_position = PrivateResultOramFetchTokenPosition {
             payload_fetch_token: block.payload_fetch_token,
             leaf: 777_888,
@@ -4531,6 +4546,7 @@ mod tests {
             format!("{block:?}"),
             format!("{bucket:?}"),
             format!("{access:?}"),
+            format!("{client_config:?}"),
             format!("{token_position:?}"),
             format!("{read_batch:?}"),
             format!("{read_plan:?}"),
@@ -4650,6 +4666,9 @@ mod tests {
             (format!("{bucket:?}"), "blocks_len: 2"),
             (format!("{bucket:?}"), "occupied_blocks: 1"),
             (format!("{access:?}"), "writeback_bucket_count: 1"),
+            (format!("{client_config:?}"), "tree_height: 3"),
+            (format!("{client_config:?}"), "bucket_size: 2"),
+            (format!("{client_config:?}"), "block_size_bytes: 128"),
             (format!("{state_snapshot:?}"), "tree_height: 3"),
             (format!("{state_snapshot:?}"), "position_count: 1"),
             (format!("{state_snapshot:?}"), "stash_len: 1"),

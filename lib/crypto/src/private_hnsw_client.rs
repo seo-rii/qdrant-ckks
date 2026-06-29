@@ -513,12 +513,23 @@ impl<'a> PrivateHnswBucketAeadBaseContext<'a> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswOramClientConfig {
     pub tree_height: u32,
     pub bucket_size: usize,
     pub block_size_bytes: usize,
     pub fixed_neighbor_slots: usize,
+}
+
+impl Debug for PrivateHnswOramClientConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramClientConfig")
+            .field("tree_height", &"[redacted]")
+            .field("bucket_size", &"[redacted]")
+            .field("block_size_bytes", &"[redacted]")
+            .field("fixed_neighbor_slots", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -5551,6 +5562,12 @@ mod tests {
             distance: DistanceKind::Cosine,
             padding_node_id: Some([47; 32]),
         };
+        let client_config = PrivateHnswOramClientConfig {
+            tree_height: 3,
+            bucket_size: 4,
+            block_size_bytes: 512,
+            fixed_neighbor_slots: 2,
+        };
         let hit = PrivateHnswSearchHit {
             node_id: block.node_id,
             point_token: block.point_token,
@@ -5788,6 +5805,7 @@ mod tests {
             format!("{bucket:?}"),
             format!("{access:?}"),
             format!("{params:?}"),
+            format!("{client_config:?}"),
             format!("{hit:?}"),
             format!("{result:?}"),
             format!("{access_metrics:?}"),
@@ -5903,6 +5921,10 @@ mod tests {
             (format!("{params:?}"), "ef: 4"),
             (format!("{params:?}"), "fixed_steps: 8"),
             (format!("{params:?}"), "has_padding_node_id: true"),
+            (format!("{client_config:?}"), "tree_height: 3"),
+            (format!("{client_config:?}"), "bucket_size: 4"),
+            (format!("{client_config:?}"), "block_size_bytes: 512"),
+            (format!("{client_config:?}"), "fixed_neighbor_slots: 2"),
             (format!("{hit:?}"), "has_payload_fetch_token: true"),
             (format!("{result:?}"), "hit_count: 1"),
             (format!("{result:?}"), "accessed_leaf_label_count: 1"),
