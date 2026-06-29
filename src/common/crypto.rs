@@ -8219,10 +8219,19 @@ pub fn generate_wrapped_runtime_resource_key_material(
     Ok(material)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct RuntimeResourceKeyRewrapPlan {
     pub target_materials: Vec<String>,
     pub estimated_external_calls: usize,
+}
+
+impl Debug for RuntimeResourceKeyRewrapPlan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuntimeResourceKeyRewrapPlan")
+            .field("target_material_count", &"[redacted]")
+            .field("estimated_external_calls", &self.estimated_external_calls)
+            .finish()
+    }
 }
 
 #[allow(
@@ -20180,6 +20189,20 @@ mod tests {
             ]),
             backends: HashMap::new(),
         };
+        let plan = plan_runtime_resource_key_rewrap_by_master_key(
+            &runtime_settings,
+            old_mk_material,
+            new_mk_material,
+        )
+        .unwrap();
+        let plan_debug = format!("{plan:?}");
+        assert!(plan_debug.contains("estimated_external_calls"));
+        assert!(plan_debug.contains("[redacted]"));
+        assert!(!plan_debug.contains(active_rk_material));
+        assert!(!plan_debug.contains(retired_rk_material));
+        assert!(!plan_debug.contains(unrelated_rk_material));
+        assert!(!plan_debug.contains(destroyed_rk_material));
+
         let old_active_resource_key = decode_wrapped_resource_key(
             &runtime_settings,
             active_rk_material,
