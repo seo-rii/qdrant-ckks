@@ -103,13 +103,14 @@ fn plaintext_vector_write_error_for_encryption_rule(
     }
 
     if peer_update {
-        CollectionError::bad_input(format!(
-            "peer update cannot write plaintext vector '{encrypted_name}' for encrypted vector rule",
-        ))
+        CollectionError::bad_input(
+            "peer update cannot write plaintext vector for encrypted vector rule",
+        )
     } else {
-        CollectionError::bad_input(format!(
-            "cannot write plaintext vector '{encrypted_name}' for encrypted vector rule; configure runtime CKKS vector encryption before writing this vector",
-        ))
+        CollectionError::bad_input(
+            "cannot write plaintext vector for encrypted vector rule; configure runtime CKKS \
+             vector encryption before writing this vector",
+        )
     }
 }
 
@@ -178,9 +179,9 @@ fn encrypted_vector_return_error(
         )));
     }
 
-    Some(CollectionError::bad_input(format!(
-        "cannot return encrypted vector '{encrypted_name}'; CKKS vector ciphertext read path returns payload sidecar only",
-    )))
+    Some(CollectionError::bad_input(
+        "cannot return encrypted vector; CKKS vector ciphertext read path returns payload sidecar only",
+    ))
 }
 
 fn encrypted_vector_search_error(
@@ -200,7 +201,7 @@ fn encrypted_vector_search_error(
             private_hnsw_oram_api_required_message(vector_name)
         } else {
             format!(
-                "cannot {operation} encrypted vector '{vector_name}' through direct collection {operation}; use the runtime CKKS sidecar {operation} entrypoint",
+                "cannot {operation} encrypted vector through direct collection {operation}; use the runtime CKKS sidecar {operation} entrypoint",
             )
         };
         return Some(CollectionError::bad_input(message));
@@ -217,9 +218,9 @@ fn encrypted_vector_filter_error(rule: &EncryptionRuleRef, filter_vector: &str) 
         ));
     }
 
-    CollectionError::bad_input(format!(
-        "cannot filter on encrypted vector '{filter_vector}'; use CKKS sidecar vector search APIs instead",
-    ))
+    CollectionError::bad_input(
+        "cannot filter on encrypted vector; use CKKS sidecar vector search APIs instead",
+    )
 }
 
 fn reject_private_result_oram_payload_point_operation(
@@ -4346,17 +4347,19 @@ mod tests {
     }
 
     #[test]
-    fn ckks_vector_return_error_keeps_ciphertext_read_path_message() {
-        let encryption = params_with_encrypted_vector_name("embedding");
+    fn ckks_vector_return_error_keeps_ciphertext_read_path_message_without_vector_name() {
+        let vector_name = "ckks_return_secret_embedding";
+        let encryption = params_with_encrypted_vector_name(vector_name);
 
         let err = encrypted_vector_return_error(
             &encryption,
-            &WithVector::Selector(vec!["embedding".to_string()]),
+            &WithVector::Selector(vec![vector_name.to_string()]),
         )
         .unwrap();
         let message = format!("{err}");
-        assert!(message.contains("cannot return encrypted vector 'embedding'"));
+        assert!(message.contains("cannot return encrypted vector"));
         assert!(message.contains("CKKS vector ciphertext read path"));
+        assert!(!message.contains(vector_name), "{message}");
         assert!(!message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
     }
 
@@ -4418,21 +4421,44 @@ mod tests {
     }
 
     #[test]
-    fn ckks_filter_error_keeps_sidecar_message() {
+    fn ckks_point_errors_redact_vector_names() {
+        let vector_name = "ckks_point_ops_secret_embedding";
         let rule = EncryptionRuleRef {
             id: "vector_conf".to_string(),
             selector: EncryptionSelector::VectorNames {
-                names: vec!["embedding".to_string()],
+                names: vec![vector_name.to_string()],
             },
             instance: "docs_vector_v1".to_string(),
             binding: Some("vector-envelope/v1".to_string()),
         };
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a:vector-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![rule.clone()],
+        };
 
-        let err = encrypted_vector_filter_error(&rule, "embedding");
-        let message = format!("{err}");
-        assert!(message.contains("cannot filter on encrypted vector 'embedding'"));
-        assert!(message.contains("CKKS sidecar vector search APIs"));
-        assert!(!message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        let messages = [
+            plaintext_vector_write_error_for_encryption_rule(vector_name, &rule, false).to_string(),
+            plaintext_vector_write_error_for_encryption_rule(vector_name, &rule, true).to_string(),
+            encrypted_vector_return_error(
+                &encryption,
+                &WithVector::Selector(vec![vector_name.to_string()]),
+            )
+            .unwrap()
+            .to_string(),
+            encrypted_vector_search_error(&encryption, vector_name, "search")
+                .unwrap()
+                .to_string(),
+            encrypted_vector_filter_error(&rule, vector_name).to_string(),
+        ];
+
+        for message in messages {
+            assert!(!message.contains(vector_name), "{message}");
+            assert!(!message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        }
     }
 
     #[test]
