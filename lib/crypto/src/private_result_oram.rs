@@ -907,7 +907,7 @@ impl Debug for PrivateResultOramUploadBundle {
         f.debug_struct("PrivateResultOramUploadBundle")
             .field("manifest", &self.manifest)
             .field("manifest_signature", &self.manifest_signature)
-            .field("bucket_count", &self.buckets.len())
+            .field("bucket_count", &"[redacted]")
             .finish()
     }
 }
@@ -4661,6 +4661,7 @@ mod tests {
             (format!("{read_plan:?}"), "path_batch_size: 88"),
             (format!("{fetch_result:?}"), "access_count: 1"),
             (format!("{fetch_result:?}"), "updated_bucket_count: 0"),
+            (format!("{upload_bundle:?}"), "bucket_count: 1"),
             (format!("{encrypted_batch:?}"), "returned_bucket_count: 1"),
             (format!("{commit_plan:?}"), "leaf_commitment_count: 1"),
             (format!("{commit_plan:?}"), "updated_bucket_count: 1"),

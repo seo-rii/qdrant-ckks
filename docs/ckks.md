@@ -2008,7 +2008,8 @@ query vector/embedding/plaintext, score/distance, candidate/node score,
 candidate/node distance, token, client-state, proof, and access-volume
 count/length aliases. REST private ORAM wire DTO `Debug` wrappers also redact
 upload/read bucket counts alongside roots, ciphertext bodies, commitments, and
-signatures, and SDK private HNSW search access metrics redact path/leaf/fixed
+signatures, and SDK private ORAM upload bundle debug output redacts upload
+bucket counts. SDK private HNSW search access metrics redact path/leaf/fixed
 step counts and budget-exhaustion state. SDK private HNSW node/search/build
 debug output also redacts deleted/generation state and payload-token presence.
 Private result ORAM bucket validation contexts redact expected epochs, bucket

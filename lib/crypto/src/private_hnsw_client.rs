@@ -1242,7 +1242,7 @@ impl Debug for PrivateHnswOramUploadBundle {
         f.debug_struct("PrivateHnswOramUploadBundle")
             .field("manifest", &self.manifest)
             .field("manifest_signature", &self.manifest_signature)
-            .field("bucket_count", &self.buckets.len())
+            .field("bucket_count", &"[redacted]")
             .finish()
     }
 }
@@ -5923,6 +5923,7 @@ mod tests {
             (format!("{directional:?}"), "retained_count: 1"),
             (format!("{build_point:?}"), "has_payload_fetch_token: true"),
             (format!("{node_cache:?}"), "node_count: 1"),
+            (format!("{upload_bundle:?}"), "bucket_count: 1"),
             (format!("{commit_plan:?}"), "leaf_commitment_count: 1"),
             (format!("{commit_plan:?}"), "updated_bucket_count: 1"),
         ] {
