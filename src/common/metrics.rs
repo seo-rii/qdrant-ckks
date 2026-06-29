@@ -127,66 +127,49 @@ fn canonical_rest_endpoint_label(endpoint: &str) -> Option<&str> {
         .split('/')
         .collect::<Vec<_>>();
     match segments.as_slice() {
-        ["collections", _, "private-hnsw", _, "buckets", ..] => {
+        ["collections", _, "private-hnsw", _, "buckets"] => {
             Some("/collections/{collection_name}/private-hnsw/{vector_name}/buckets")
         }
-        ["collections", _, "private-hnsw", _, "manifest", ..] => {
+        ["collections", _, "private-hnsw", _, "manifest"] => {
             Some("/collections/{collection_name}/private-hnsw/{vector_name}/manifest")
         }
-        ["collections", _, "private-hnsw", _, "oram", "commit", ..] => {
+        ["collections", _, "private-hnsw", _, "oram", "commit"] => {
             Some("/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit")
         }
-        [
-            "collections",
-            _,
-            "private-hnsw",
-            _,
-            "oram",
-            "read_paths",
-            ..,
-        ] => Some("/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths"),
-        ["collections", _, "private-hnsw", _, "session", tail @ ..]
-            if !tail.is_empty() && tail.last().copied() == Some("close") =>
-        {
-            Some(
-                "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
-            )
+        ["collections", _, "private-hnsw", _, "oram", "read_paths"] => {
+            Some("/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths")
         }
-        ["collections", _, "private-hnsw", _, "session", ..] => {
+        ["collections", _, "private-hnsw", _, "session", _, "close"] => Some(
+            "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+        ),
+        ["collections", _, "private-hnsw", _, "session"] => {
             Some("/collections/{collection_name}/private-hnsw/{vector_name}/session")
         }
-        ["collections", _, "private-result-oram", "buckets", ..] => {
+        ["collections", _, "private-result-oram", "buckets"] => {
             Some("/collections/{collection_name}/private-result-oram/buckets")
         }
-        ["collections", _, "private-result-oram", "manifest", ..] => {
+        ["collections", _, "private-result-oram", "manifest"] => {
             Some("/collections/{collection_name}/private-result-oram/manifest")
         }
-        [
-            "collections",
-            _,
-            "private-result-oram",
-            "oram",
-            "commit",
-            ..,
-        ] => Some("/collections/{collection_name}/private-result-oram/oram/commit"),
+        ["collections", _, "private-result-oram", "oram", "commit"] => {
+            Some("/collections/{collection_name}/private-result-oram/oram/commit")
+        }
         [
             "collections",
             _,
             "private-result-oram",
             "oram",
             "read_buckets",
-            ..,
         ] => Some("/collections/{collection_name}/private-result-oram/oram/read_buckets"),
         [
             "collections",
             _,
             "private-result-oram",
             "session",
-            tail @ ..,
-        ] if !tail.is_empty() && tail.last().copied() == Some("close") => {
-            Some("/collections/{collection_name}/private-result-oram/session/{session_id}/close")
-        }
-        ["collections", _, "private-result-oram", "session", ..] => {
+            _,
+            "close",
+        ] => Some("/collections/{collection_name}/private-result-oram/session/{session_id}/close"),
+        ["collections", _, "private-result-oram", "session"] => {
             Some("/collections/{collection_name}/private-result-oram/session")
         }
         _ => None,
@@ -204,13 +187,7 @@ fn canonical_grpc_endpoint_label(endpoint: &str) -> Option<&str> {
         return None;
     }
 
-    GRPC_ENDPOINT_WHITELIST.iter().copied().find(|candidate| {
-        (candidate.starts_with("/qdrant.PrivateHnswOram/")
-            || candidate.starts_with("/qdrant.PrivateResultOram/"))
-            && endpoint
-                .strip_prefix(candidate)
-                .is_some_and(|suffix| suffix.starts_with('/'))
-    })
+    None
 }
 
 /// For REST requests, only report timings when having this HTTP response status.
@@ -1557,20 +1534,20 @@ mod tests {
     }
 
     #[test]
-    fn test_private_oram_dynamic_metrics_paths_are_canonicalized() {
+    fn test_private_oram_metrics_canonicalizes_only_fixed_route_shapes() {
         use super::{canonical_grpc_endpoint_label, canonical_rest_endpoint_label};
 
         let rest_cases = [
             (
-                "/collections/docs/private-hnsw/text/buckets/bucket-id-sentinel",
+                "/collections/docs/private-hnsw/text/buckets",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/buckets",
             ),
             (
-                "/collections/docs/private-hnsw/text/manifest/root-hash-sentinel",
+                "/collections/docs/private-hnsw/text/manifest",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/manifest",
             ),
             (
-                "/collections/docs/private-hnsw/text/oram/read_paths/leaf-label-sentinel",
+                "/collections/docs/private-hnsw/text/oram/read_paths",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
             ),
             (
@@ -1578,19 +1555,11 @@ mod tests {
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
             ),
             (
-                "/collections/docs/private-hnsw/text/oram/commit/updated-bucket-sentinel",
+                "/collections/docs/private-hnsw/text/oram/commit",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit",
             ),
             (
-                "/collections/docs/private-hnsw/text/session/client-state-sentinel",
-                "/collections/{collection_name}/private-hnsw/{vector_name}/session",
-            ),
-            (
-                "/collections/docs/private-hnsw/text/session/client-state-backup-sentinel",
-                "/collections/{collection_name}/private-hnsw/{vector_name}/session",
-            ),
-            (
-                "/collections/docs/private-hnsw/text/session/encryptedClientStateBackups-sentinel",
+                "/collections/docs/private-hnsw/text/session",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/session",
             ),
             (
@@ -1598,31 +1567,19 @@ mod tests {
                 "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
             ),
             (
-                "/collections/docs/private-hnsw/text/session/bad/hnsw-session-id-sentinel/close",
-                "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
-            ),
-            (
-                "/collections/docs/private-result-oram/session/token-position-map-sentinel",
+                "/collections/docs/private-result-oram/session",
                 "/collections/{collection_name}/private-result-oram/session",
             ),
             (
-                "/collections/docs/private-result-oram/session/token-position-map-backup-sentinel",
-                "/collections/{collection_name}/private-result-oram/session",
-            ),
-            (
-                "/collections/docs/private-result-oram/session/tokenPositionMapBackups-sentinel",
-                "/collections/{collection_name}/private-result-oram/session",
-            ),
-            (
-                "/collections/docs/private-result-oram/buckets/result-bucket-id-sentinel",
+                "/collections/docs/private-result-oram/buckets",
                 "/collections/{collection_name}/private-result-oram/buckets",
             ),
             (
-                "/collections/docs/private-result-oram/manifest/result-root-hash-sentinel",
+                "/collections/docs/private-result-oram/manifest",
                 "/collections/{collection_name}/private-result-oram/manifest",
             ),
             (
-                "/collections/docs/private-result-oram/oram/read_buckets/result-bucket-id-sentinel",
+                "/collections/docs/private-result-oram/oram/read_buckets",
                 "/collections/{collection_name}/private-result-oram/oram/read_buckets",
             ),
             (
@@ -1630,11 +1587,11 @@ mod tests {
                 "/collections/{collection_name}/private-result-oram/oram/read_buckets",
             ),
             (
-                "/collections/docs/private-result-oram/oram/commit/result-updated-bucket-sentinel",
+                "/collections/docs/private-result-oram/oram/commit",
                 "/collections/{collection_name}/private-result-oram/oram/commit",
             ),
             (
-                "/collections/docs/private-result-oram/session/bad/result-session-id-sentinel/close",
+                "/collections/docs/private-result-oram/session/result-session-id-sentinel/close",
                 "/collections/{collection_name}/private-result-oram/session/{session_id}/close",
             ),
         ];
@@ -1672,6 +1629,22 @@ mod tests {
             None,
         );
         for raw in [
+            "/collections/docs/private-hnsw/text/buckets/bucket-id-sentinel",
+            "/collections/docs/private-hnsw/text/manifest/root-hash-sentinel",
+            "/collections/docs/private-hnsw/text/oram/read_paths/leaf-label-sentinel",
+            "/collections/docs/private-hnsw/text/oram/commit/updated-bucket-sentinel",
+            "/collections/docs/private-hnsw/text/session/client-state-sentinel",
+            "/collections/docs/private-hnsw/text/session/client-state-backup-sentinel",
+            "/collections/docs/private-hnsw/text/session/encryptedClientStateBackups-sentinel",
+            "/collections/docs/private-hnsw/text/session/bad/hnsw-session-id-sentinel/close",
+            "/collections/docs/private-result-oram/buckets/result-bucket-id-sentinel",
+            "/collections/docs/private-result-oram/manifest/result-root-hash-sentinel",
+            "/collections/docs/private-result-oram/oram/read_buckets/result-bucket-id-sentinel",
+            "/collections/docs/private-result-oram/oram/commit/result-updated-bucket-sentinel",
+            "/collections/docs/private-result-oram/session/token-position-map-sentinel",
+            "/collections/docs/private-result-oram/session/token-position-map-backup-sentinel",
+            "/collections/docs/private-result-oram/session/tokenPositionMapBackups-sentinel",
+            "/collections/docs/private-result-oram/session/bad/result-session-id-sentinel/close",
             "/collections/docs/private-hnsw?leaf=hnsw-query-leaf-sentinel",
             "/collections/docs/private-result-oram?token=result-query-token-sentinel",
             "/collections/docs/not-private-hnsw/text/session/session-id-sentinel",
@@ -1686,83 +1659,25 @@ mod tests {
         }
 
         let grpc_cases = [
-            (
-                "/qdrant.PrivateHnswOram/GetPrivateHnswManifest/root-hash-sentinel",
-                "/qdrant.PrivateHnswOram/GetPrivateHnswManifest",
-            ),
-            (
-                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/client-state-sentinel",
-                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
-            ),
-            (
-                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/client-state-backup-sentinel",
-                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
-            ),
-            (
-                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/encryptedClientStateBackups-sentinel",
-                "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
-            ),
-            (
-                "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets/hnsw-bucket-id-sentinel",
-                "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets",
-            ),
-            (
-                "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest/root-hash-sentinel",
-                "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest",
-            ),
-            (
-                "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths/leaf-label-sentinel",
-                "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths",
-            ),
-            (
-                "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths/updated-bucket-sentinel",
-                "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths",
-            ),
-            (
-                "/qdrant.PrivateHnswOram/ClosePrivateHnswSession/session-id-sentinel",
-                "/qdrant.PrivateHnswOram/ClosePrivateHnswSession",
-            ),
-            (
-                "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets/result-updated-bucket-sentinel",
-                "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets",
-            ),
-            (
-                "/qdrant.PrivateResultOram/GetPrivateResultOramManifest/result-root-hash-sentinel",
-                "/qdrant.PrivateResultOram/GetPrivateResultOramManifest",
-            ),
-            (
-                "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/token-position-map-sentinel",
-                "/qdrant.PrivateResultOram/OpenPrivateResultOramSession",
-            ),
-            (
-                "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/token-position-map-backup-sentinel",
-                "/qdrant.PrivateResultOram/OpenPrivateResultOramSession",
-            ),
-            (
-                "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/tokenPositionMapBackups-sentinel",
-                "/qdrant.PrivateResultOram/OpenPrivateResultOramSession",
-            ),
-            (
-                "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets/result-bucket-id-sentinel",
-                "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets",
-            ),
-            (
-                "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets/result-bucket-id-sentinel",
-                "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets",
-            ),
-            (
-                "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest/result-root-hash-sentinel",
-                "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest",
-            ),
-            (
-                "/qdrant.PrivateResultOram/ClosePrivateResultOramSession/result-session-id-sentinel",
-                "/qdrant.PrivateResultOram/ClosePrivateResultOramSession",
-            ),
+            "/qdrant.PrivateHnswOram/GetPrivateHnswManifest",
+            "/qdrant.PrivateHnswOram/OpenPrivateHnswSession",
+            "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets",
+            "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest",
+            "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths",
+            "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths",
+            "/qdrant.PrivateHnswOram/ClosePrivateHnswSession",
+            "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets",
+            "/qdrant.PrivateResultOram/GetPrivateResultOramManifest",
+            "/qdrant.PrivateResultOram/OpenPrivateResultOramSession",
+            "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets",
+            "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets",
+            "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest",
+            "/qdrant.PrivateResultOram/ClosePrivateResultOramSession",
         ];
-        for (raw, canonical) in grpc_cases {
+        for raw in grpc_cases {
             let label =
                 canonical_grpc_endpoint_label(raw).expect("private ORAM gRPC method canonicalizes");
-            assert_eq!(label, canonical);
+            assert_eq!(label, raw);
             for leaked in [
                 "client-state-sentinel",
                 "client-state-backup-sentinel",
@@ -1792,9 +1707,27 @@ mod tests {
             "/qdrant.PrivateHnswOramish/ReadPrivateHnswPaths/leaf-label-sentinel",
             "/qdrant.PrivateHnswOram/ReadPrivateHnswPathsExtra/leaf-label-sentinel",
             "/qdrant.PrivateHnswOram/CommitPrivateHnswPathsExtra/updated-bucket-sentinel",
+            "/qdrant.PrivateHnswOram/GetPrivateHnswManifest/root-hash-sentinel",
+            "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/client-state-sentinel",
+            "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/client-state-backup-sentinel",
+            "/qdrant.PrivateHnswOram/OpenPrivateHnswSession/encryptedClientStateBackups-sentinel",
+            "/qdrant.PrivateHnswOram/UploadPrivateHnswBuckets/hnsw-bucket-id-sentinel",
+            "/qdrant.PrivateHnswOram/UploadPrivateHnswManifest/root-hash-sentinel",
+            "/qdrant.PrivateHnswOram/ReadPrivateHnswPaths/leaf-label-sentinel",
+            "/qdrant.PrivateHnswOram/CommitPrivateHnswPaths/updated-bucket-sentinel",
+            "/qdrant.PrivateHnswOram/ClosePrivateHnswSession/session-id-sentinel",
             "/qdrant.PrivateResultOramish/ReadPrivateResultOramBuckets/result-bucket-id-sentinel",
             "/qdrant.PrivateResultOram/ReadPrivateResultOramBucketsExtra/result-bucket-id-sentinel",
             "/qdrant.PrivateResultOram/ClosePrivateResultOramSessionExtra/result-session-id-sentinel",
+            "/qdrant.PrivateResultOram/CommitPrivateResultOramBuckets/result-updated-bucket-sentinel",
+            "/qdrant.PrivateResultOram/GetPrivateResultOramManifest/result-root-hash-sentinel",
+            "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/token-position-map-sentinel",
+            "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/token-position-map-backup-sentinel",
+            "/qdrant.PrivateResultOram/OpenPrivateResultOramSession/tokenPositionMapBackups-sentinel",
+            "/qdrant.PrivateResultOram/ReadPrivateResultOramBuckets/result-bucket-id-sentinel",
+            "/qdrant.PrivateResultOram/UploadPrivateResultOramBuckets/result-bucket-id-sentinel",
+            "/qdrant.PrivateResultOram/UploadPrivateResultOramManifest/result-root-hash-sentinel",
+            "/qdrant.PrivateResultOram/ClosePrivateResultOramSession/result-session-id-sentinel",
         ] {
             assert_eq!(
                 canonical_grpc_endpoint_label(raw),
