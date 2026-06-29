@@ -1317,9 +1317,9 @@ impl Debug for PrivateHnswManifestBuildContext<'_> {
             .field("rk_epoch", &self.rk_epoch)
             .field("dim", &self.dim)
             .field("distance", &self.distance)
-            .field("hnsw", &self.hnsw)
-            .field("oram", &self.oram)
-            .field("fixed_budget", &self.fixed_budget)
+            .field("hnsw", &"[redacted]")
+            .field("oram", &"[redacted]")
+            .field("fixed_budget", &"[redacted]")
             .field("result_privacy", &self.result_privacy)
             .field("owner_signing_key_id", &"[redacted]")
             .field("created_at_unix", &self.created_at_unix)
@@ -5925,6 +5925,12 @@ mod tests {
             (format!("{client_config:?}"), "bucket_size: 4"),
             (format!("{client_config:?}"), "block_size_bytes: 512"),
             (format!("{client_config:?}"), "fixed_neighbor_slots: 2"),
+            (format!("{manifest_build_context:?}"), "ef_construction: 2"),
+            (
+                format!("{manifest_build_context:?}"),
+                "block_size_bytes: 512",
+            ),
+            (format!("{manifest_build_context:?}"), "fixed_result_k: 1"),
             (format!("{hit:?}"), "has_payload_fetch_token: true"),
             (format!("{result:?}"), "hit_count: 1"),
             (format!("{result:?}"), "accessed_leaf_label_count: 1"),
