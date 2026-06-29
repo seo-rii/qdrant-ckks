@@ -2475,7 +2475,7 @@ fn openfhe_backend_from_config(
     Ok(cache_openfhe_backend(cache_key, command_backend))
 }
 
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq)]
 struct OpenFheBackendCacheKey {
     backend_name: String,
     kind: String,
@@ -2486,6 +2486,25 @@ struct OpenFheBackendCacheKey {
     size: usize,
     timeout_ms: Option<u64>,
     sensitive_env_names: Vec<String>,
+}
+
+impl Debug for OpenFheBackendCacheKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenFheBackendCacheKey")
+            .field("backend_name", &"[redacted]")
+            .field("kind", &self.kind)
+            .field("program", &"[redacted]")
+            .field("sha256_b64", &"[redacted]")
+            .field(
+                "signature_public_key_configured",
+                &self.signature_public_key_b64.is_some(),
+            )
+            .field("signature_configured", &self.signature_b64.is_some())
+            .field("size", &self.size)
+            .field("timeout_ms", &self.timeout_ms)
+            .field("sensitive_env_names_count", &self.sensitive_env_names.len())
+            .finish()
+    }
 }
 
 #[derive(Default)]
@@ -17250,6 +17269,33 @@ mod tests {
         .unwrap();
 
         assert!(format!("{backend:?}").contains("sensitive_env_names_count: 2"));
+    }
+
+    #[test]
+    fn openfhe_backend_cache_key_debug_redacts_sensitive_policy_values() {
+        let sentinel = "openfhe-cache-debug-sentinel";
+        let cache_key = OpenFheBackendCacheKey {
+            backend_name: format!("backend-{sentinel}"),
+            kind: "process_pool".to_string(),
+            program: format!("/tmp/{sentinel}/openfhe-bridge"),
+            sha256_b64: format!("sha256-{sentinel}"),
+            signature_public_key_b64: Some(format!("public-key-{sentinel}")),
+            signature_b64: Some(format!("signature-{sentinel}")),
+            size: 2,
+            timeout_ms: Some(5_000),
+            sensitive_env_names: vec![format!("ENV_{sentinel}")],
+        };
+        let rendered = format!("{cache_key:?}");
+
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(
+            rendered.contains("signature_configured: true"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("sensitive_env_names_count: 1"),
+            "{rendered}"
+        );
     }
 
     #[test]
