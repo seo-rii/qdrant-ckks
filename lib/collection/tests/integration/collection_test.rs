@@ -52,17 +52,16 @@ use data_encoding::BASE64URL_NOPAD;
 use fs_err::{self as fs, File};
 use itertools::Itertools;
 use qdrant_sec::{
-    AeadCipher, CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING,
-    CkksEncryptionInput, CkksError, CkksParameters, CkksPublicMaterial, CkksVectorBackend,
-    CkksVectorEncryptor, CkksVectorVerifiedSidecarKey, ClientPayloadSignatureVerification,
+    CLIENT_ENCRYPTED_PAYLOAD_MARKER, CLIENT_PAYLOAD_ENVELOPE_BINDING, CkksEncryptionInput,
+    CkksError, CkksParameters, CkksPublicMaterial, CkksVectorBackend, CkksVectorEncryptor,
+    CkksVectorVerifiedSidecarKey, ClientPayloadSignatureVerification,
     ClientPayloadValidationContext, ENCRYPTED_CKKS_VECTOR_MARKER, ENCRYPTED_PAYLOAD_MARKER,
     ENCRYPTED_VECTOR_SIDECAR_FIELD, ExistingPayloadMode, METADATA_EXACT_MATCH_TOKEN_BINDING,
-    METADATA_VALUE_BINDING, PAYLOAD_TEXT_ENVELOPE_KIND, PAYLOAD_TEXT_KEY_DOMAIN,
-    PRIVATE_HNSW_ORAM_BINDING, PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey,
-    ServerPayloadValidationContext, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
-    client_payload_signature_message, is_client_encrypted_payload_value,
-    is_encrypted_payload_value, validate_client_payload_value_for_runtime,
-    validate_server_payload_value_metadata,
+    METADATA_VALUE_BINDING, PAYLOAD_TEXT_ENVELOPE_KIND, PRIVATE_HNSW_ORAM_BINDING,
+    PayloadEncryptionPolicy, PayloadTextEncryptor, SecretKey, ServerPayloadValidationContext,
+    VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, client_payload_signature_message,
+    is_client_encrypted_payload_value, is_encrypted_payload_value,
+    validate_client_payload_value_for_runtime, validate_server_payload_value_metadata,
 };
 use ring::rand::SystemRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
@@ -187,6 +186,21 @@ fn payload_encryption_config() -> CollectionEncryptionConfig {
             binding: Some("payload-field/v1".to_string()),
         }],
     }
+}
+
+fn payload_text_encryptor_from_resource_key(
+    collection: &str,
+    key_id: &str,
+    resource_key: SecretKey,
+    material_fingerprint_id: &str,
+) -> PayloadTextEncryptor {
+    PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
+        collection,
+        key_id,
+        &resource_key,
+        material_fingerprint_id,
+    )
+    .unwrap()
 }
 
 fn payload_encryption_with_blind_index_config() -> CollectionEncryptionConfig {
@@ -5118,16 +5132,12 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
                 && description.contains("document.body")
     ));
 
-    let wrong_key_encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+    let wrong_key_encryptor = payload_text_encryptor_from_resource_key(
         "docs",
-        AeadCipher::new_with_material_fingerprint(
-            "tenant-a:other",
-            SecretKey::from_bytes([7u8; 32]),
-            "tenant-a/other@v1",
-        )
-        .unwrap(),
-    )
-    .unwrap();
+        "tenant-a:other",
+        SecretKey::from_bytes([7u8; 32]),
+        "tenant-a/other@v1",
+    );
     let mut wrong_key_payload: Payload =
         serde_json::from_str(r#"{"document":{"body":"wrong key marker"}}"#).unwrap();
     wrong_key_encryptor
@@ -5185,16 +5195,12 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         .contains("key id does not match"),
     );
 
-    let valid_key_encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+    let valid_key_encryptor = payload_text_encryptor_from_resource_key(
         &collection_crypto_id,
-        AeadCipher::new_with_material_fingerprint(
-            "tenant-a:docs",
-            SecretKey::from_bytes([8u8; 32]),
-            "tenant-a/docs@v1",
-        )
-        .unwrap(),
-    )
-    .unwrap();
+        "tenant-a:docs",
+        SecretKey::from_bytes([8u8; 32]),
+        "tenant-a/docs@v1",
+    );
     let mut point_bound_payload: Payload =
         serde_json::from_str(r#"{"document":{"body":"point-bound marker"}}"#).unwrap();
     let (_changed, point_bound_proofs) = valid_key_encryptor
@@ -5398,16 +5404,12 @@ async fn peer_update_rechecks_encrypted_payload_invariants() {
                 && description.contains("document.body")
     ));
 
-    let valid_key_encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+    let valid_key_encryptor = payload_text_encryptor_from_resource_key(
         &collection_crypto_id,
-        AeadCipher::new_with_material_fingerprint(
-            "tenant-a:docs",
-            SecretKey::from_bytes([8u8; 32]),
-            "tenant-a/docs@v1",
-        )
-        .unwrap(),
-    )
-    .unwrap();
+        "tenant-a:docs",
+        SecretKey::from_bytes([8u8; 32]),
+        "tenant-a/docs@v1",
+    );
     let mut encrypted_payload: Payload =
         serde_json::from_str(r#"{"document":{"body":"peer encrypted"}}"#).unwrap();
     valid_key_encryptor
@@ -6615,19 +6617,12 @@ async fn encrypted_payload_marker_upsert_does_not_leak_plaintext_to_collection_f
         .unwrap()
         .clone(),
     );
-    let metadata_key = SecretKey::from_bytes([31u8; 32])
-        .derive_subkey(PAYLOAD_TEXT_KEY_DOMAIN)
-        .unwrap();
-    let encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+    let encryptor = payload_text_encryptor_from_resource_key(
         &collection_crypto_id,
-        AeadCipher::new_with_material_fingerprint(
-            "tenant-a:docs",
-            metadata_key,
-            "tenant-a/docs@v1",
-        )
-        .unwrap(),
-    )
-    .unwrap();
+        "tenant-a:docs",
+        SecretKey::from_bytes([31u8; 32]),
+        "tenant-a/docs@v1",
+    );
     let policy = PayloadEncryptionPolicy::new(vec!["document.body".to_string()]).unwrap();
     let (changed, verified_server_envelope_keys) = encryptor
         .encrypt_selected_fields_for_runtime(

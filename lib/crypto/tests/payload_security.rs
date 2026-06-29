@@ -18,13 +18,13 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Map, Value, json};
 
 fn encryptor() -> PayloadTextEncryptor {
-    let cipher = AeadCipher::new_with_material_fingerprint(
+    PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
+        "docs",
         "tenant-a:payload",
-        SecretKey::from_bytes([11u8; 32]),
+        &SecretKey::from_bytes([11u8; 32]),
         "tenant-a/payload@v1",
     )
-    .unwrap();
-    PayloadTextEncryptor::new_with_derived_cipher_unchecked("docs", cipher).unwrap()
+    .unwrap()
 }
 
 #[test]
@@ -43,18 +43,15 @@ fn resource_key_constructor_derives_payload_text_subkey() {
         .encrypt_selected_fields("point-1", &mut payload, &policy)
         .unwrap();
 
-    let wrong_raw_resource_key = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+    let wrong_resource_key = PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
         "docs",
-        AeadCipher::new_with_material_fingerprint(
-            "tenant-a:payload",
-            SecretKey::from_bytes([71u8; 32]),
-            "tenant-a/payload@v1",
-        )
-        .unwrap(),
+        "tenant-a:payload",
+        &SecretKey::from_bytes([72u8; 32]),
+        "tenant-a/payload@v1",
     )
     .unwrap();
     assert_eq!(
-        wrong_raw_resource_key.decrypt_selected_fields("point-1", &mut payload, &policy),
+        wrong_resource_key.decrypt_selected_fields("point-1", &mut payload, &policy),
         Err(PayloadEncryptionError::Crypto(EncryptionError::OpenFailed)),
     );
 }
@@ -1496,38 +1493,34 @@ fn payload_outer_metadata_tampering_fails_authentication() {
 #[test]
 fn payload_decrypt_accepts_retired_key_but_new_writes_use_active_key() {
     let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
-    let old_cipher = AeadCipher::new_with_material_fingerprint(
+    let old_resource_key = SecretKey::from_bytes([11u8; 32]);
+    let new_resource_key = SecretKey::from_bytes([12u8; 32]);
+    let old_encryptor = PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
+        "docs",
         "tenant-a:payload-old",
-        SecretKey::from_bytes([11u8; 32]),
+        &old_resource_key,
         "tenant-a/payload-old@v1",
     )
     .unwrap();
-    let old_encryptor =
-        PayloadTextEncryptor::new_with_derived_cipher_unchecked("docs", old_cipher).unwrap();
     let mut old_payload = object(json!({ "body": "rotation protected" }));
 
     old_encryptor
         .encrypt_selected_fields("point-1", &mut old_payload, &policy)
         .unwrap();
 
-    let keyring = AeadKeyring::new(
-        AeadCipher::new_with_material_fingerprint(
-            "tenant-a:payload-new",
-            SecretKey::from_bytes([12u8; 32]),
-            "tenant-a/payload-new@v1",
-        )
-        .unwrap(),
+    let rotated_encryptor = PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
+        "docs",
+        "tenant-a:payload-new",
+        &new_resource_key,
+        "tenant-a/payload-new@v1",
     )
-    .with_retired(
-        AeadCipher::new_with_material_fingerprint(
-            "tenant-a:payload-old",
-            SecretKey::from_bytes([11u8; 32]),
-            "tenant-a/payload-old@v1",
-        )
-        .unwrap(),
-    );
-    let rotated_encryptor =
-        PayloadTextEncryptor::new_with_derived_keyring_unchecked("docs", keyring).unwrap();
+    .unwrap()
+    .with_retired_resource_key(
+        "tenant-a:payload-old",
+        &old_resource_key,
+        "tenant-a/payload-old@v1",
+    )
+    .unwrap();
 
     assert_eq!(
         rotated_encryptor

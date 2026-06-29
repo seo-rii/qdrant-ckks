@@ -583,7 +583,7 @@ impl PayloadTextEncryptor {
     /// one place. This constructor is safe Rust because key provenance cannot
     /// be checked by the type system; `unchecked` records the caller's
     /// cryptographic responsibility rather than a memory-safety precondition.
-    pub fn new_with_derived_cipher_unchecked(
+    pub(crate) fn new_with_derived_cipher_unchecked(
         collection: impl Into<String>,
         cipher: AeadCipher,
     ) -> Result<Self, PayloadEncryptionError> {
@@ -594,7 +594,7 @@ impl PayloadTextEncryptor {
     ///
     /// Prefer `new_from_resource_key*` for production runtime code. The caller
     /// is still responsible for passing only payload-text domain key material.
-    pub fn new_with_derived_keyring_unchecked(
+    pub(crate) fn new_with_derived_keyring_unchecked(
         collection: impl Into<String>,
         keyring: AeadKeyring,
     ) -> Result<Self, PayloadEncryptionError> {
@@ -2162,6 +2162,42 @@ mod tests {
             payload_encryptor.decrypt_selected_fields("1", &mut tampered_payload, &policy),
             Err(PayloadEncryptionError::Crypto(EncryptionError::OpenFailed))
         ));
+    }
+
+    #[test]
+    fn resource_key_constructor_does_not_use_raw_resource_key_as_payload_aead_key() {
+        let resource_key = SecretKey::from_bytes([71_u8; 32]);
+        let policy = PayloadEncryptionPolicy::new(["body"]).unwrap();
+        let encryptor = PayloadTextEncryptor::new_from_resource_key_with_material_fingerprint(
+            "docs",
+            "tenant-a:payload",
+            &resource_key,
+            "tenant-a/payload@v1",
+        )
+        .unwrap();
+        let mut payload = serde_json::json!({ "body": "domain separated" })
+            .as_object()
+            .unwrap()
+            .clone();
+
+        encryptor
+            .encrypt_selected_fields("point-1", &mut payload, &policy)
+            .unwrap();
+
+        let raw_resource_key_encryptor = PayloadTextEncryptor::new_with_derived_cipher_unchecked(
+            "docs",
+            AeadCipher::new_with_material_fingerprint(
+                "tenant-a:payload",
+                resource_key,
+                "tenant-a/payload@v1",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            raw_resource_key_encryptor.decrypt_selected_fields("point-1", &mut payload, &policy),
+            Err(PayloadEncryptionError::Crypto(EncryptionError::OpenFailed)),
+        );
     }
 
     #[test]
