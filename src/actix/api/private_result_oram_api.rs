@@ -118,7 +118,7 @@ impl Debug for ReadPrivateResultOramBucketsRequest {
             .field("session_id", &"[redacted]")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("bucket_id_count", &self.bucket_ids.len())
+            .field("bucket_id_count", &"[redacted]")
             .field("read_signature", &self.read_signature)
             .finish()
     }
@@ -138,7 +138,7 @@ impl Debug for PrivateResultOramReadBucketsResponse {
         f.debug_struct("PrivateResultOramReadBucketsResponse")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.buckets.len())
+            .field("bucket_count", &"[redacted]")
             .field("proof", &self.proof)
             .finish()
     }
@@ -180,7 +180,7 @@ impl Debug for CommitPrivateResultOramBucketsRequest {
             .field("new_epoch", &self.new_epoch)
             .field("old_root_hash", &"[redacted]")
             .field("new_root_hash", &"[redacted]")
-            .field("updated_bucket_count", &self.updated_buckets.len())
+            .field("updated_bucket_count", &"[redacted]")
             .field("commit_signature", &self.commit_signature)
             .finish()
     }
@@ -829,6 +829,28 @@ mod private_result_oram_rest_tests {
             "private-result-rest-client-id-sentinel".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
+        }
+        for (debug_rendered, redacted_count) in [
+            (
+                format!("{read_request:?}"),
+                format!("bucket_id_count: {}", bucket_ids.len()),
+            ),
+            (
+                format!("{commit_request:?}"),
+                format!(
+                    "updated_bucket_count: {}",
+                    commit_request.updated_buckets.len()
+                ),
+            ),
+            (
+                format!("{read_response:?}"),
+                format!("bucket_count: {}", read_response.buckets.len()),
+            ),
+        ] {
+            assert!(
+                !debug_rendered.contains(&redacted_count),
+                "leaked {redacted_count} in {debug_rendered}"
+            );
         }
     }
 

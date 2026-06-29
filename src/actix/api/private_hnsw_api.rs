@@ -159,7 +159,7 @@ impl Debug for OramReadPathsRequest {
             .field("session_id", &"[redacted]")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("path_count", &self.paths.len())
+            .field("path_count", &"[redacted]")
             .field("padding", &self.padding)
             .field("client_signature", &self.client_signature)
             .finish()
@@ -180,7 +180,7 @@ impl Debug for OramReadPathsResponse {
         f.debug_struct("OramReadPathsResponse")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.buckets.len())
+            .field("bucket_count", &"[redacted]")
             .field("proof", &self.proof)
             .finish()
     }
@@ -222,7 +222,7 @@ impl Debug for OramCommitRequest {
             .field("new_epoch", &self.new_epoch)
             .field("old_root_hash", &"[redacted]")
             .field("new_root_hash", &"[redacted]")
-            .field("updated_bucket_count", &self.updated_buckets.len())
+            .field("updated_bucket_count", &"[redacted]")
             .field("commit_signature", &self.commit_signature)
             .finish()
     }
@@ -666,6 +666,25 @@ mod private_hnsw_rest_tests {
             !rendered.contains("dummy_paths_included: false"),
             "{rendered}"
         );
+        for (debug_rendered, redacted_count) in [
+            (format!("{read_request:?}"), "path_count: 1".to_string()),
+            (
+                format!("{commit_request:?}"),
+                format!(
+                    "updated_bucket_count: {}",
+                    commit_request.updated_buckets.len()
+                ),
+            ),
+            (
+                format!("{read_response:?}"),
+                format!("bucket_count: {}", read_response.buckets.len()),
+            ),
+        ] {
+            assert!(
+                !debug_rendered.contains(&redacted_count),
+                "leaked {redacted_count} in {debug_rendered}"
+            );
+        }
     }
 
     #[test]
