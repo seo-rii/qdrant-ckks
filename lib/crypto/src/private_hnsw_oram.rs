@@ -205,8 +205,8 @@ impl Debug for PrivateHnswOramManifest {
             .field("version", &self.version)
             .field("provider", &self.provider)
             .field("binding", &self.binding)
-            .field("collection_id", &self.collection_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -300,8 +300,8 @@ pub struct PrivateHnswManifestValidationContext<'a> {
 impl Debug for PrivateHnswManifestValidationContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswManifestValidationContext")
-            .field("expected_collection_id", &self.expected_collection_id)
-            .field("expected_vector_name", &self.expected_vector_name)
+            .field("expected_collection_id", &"[redacted]")
+            .field("expected_vector_name", &"[redacted]")
             .field("expected_key_id", &"[redacted]")
             .field("expected_rk_id", &"[redacted]")
             .field("min_rk_epoch", &self.min_rk_epoch)
@@ -362,8 +362,8 @@ pub struct PrivateHnswOramCommitSignatureInput<'a> {
 impl Debug for PrivateHnswOramCommitSignatureInput<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswOramCommitSignatureInput")
-            .field("collection_id", &self.collection_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -397,8 +397,8 @@ pub struct PrivateHnswOramReadPathsSignatureInput<'a> {
 impl Debug for PrivateHnswOramReadPathsSignatureInput<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswOramReadPathsSignatureInput")
-            .field("collection_id", &self.collection_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -1147,6 +1147,8 @@ mod tests {
             sig: "HNSW-SIGNATURE-SENTINEL".to_string(),
         };
         let mut manifest = fixture_manifest();
+        manifest.collection_id = "HNSW-MANIFEST-COLLECTION-ID-SENTINEL".to_string();
+        manifest.vector_name = "HNSW-MANIFEST-VECTOR-NAME-SENTINEL".to_string();
         manifest.key_id = "HNSW-MANIFEST-KEY-SENTINEL".to_string();
         manifest.rk_id = "HNSW-MANIFEST-RK-SENTINEL".to_string();
         manifest.owner_signing_key_id = "HNSW-MANIFEST-OWNER-SIGNING-KEY-SENTINEL".to_string();
@@ -1156,8 +1158,8 @@ mod tests {
             ciphertext_sha256: "HNSW-SHA-SENTINEL",
         }];
         let commit_signature_input = PrivateHnswOramCommitSignatureInput {
-            collection_id: "collection-uuid-1",
-            vector_name: "text",
+            collection_id: "HNSW-COMMIT-COLLECTION-ID-SENTINEL",
+            vector_name: "HNSW-COMMIT-VECTOR-NAME-SENTINEL",
             key_id: "HNSW-COMMIT-KEY-SENTINEL",
             rk_id: "HNSW-COMMIT-RK-SENTINEL",
             rk_epoch: 7,
@@ -1171,8 +1173,8 @@ mod tests {
         };
         let paths = ["HNSW-PATH-LABEL-SENTINEL"];
         let read_paths_signature_input = PrivateHnswOramReadPathsSignatureInput {
-            collection_id: "collection-uuid-1",
-            vector_name: "text",
+            collection_id: "HNSW-READ-COLLECTION-ID-SENTINEL",
+            vector_name: "HNSW-READ-VECTOR-NAME-SENTINEL",
             key_id: "HNSW-READ-KEY-SENTINEL",
             rk_id: "HNSW-READ-RK-SENTINEL",
             rk_epoch: 7,
@@ -1185,8 +1187,8 @@ mod tests {
             signature_key_id: "HNSW-READ-SIGNATURE-KEY-SENTINEL",
         };
         let validation_context = PrivateHnswManifestValidationContext {
-            expected_collection_id: "collection-uuid-1",
-            expected_vector_name: "text",
+            expected_collection_id: "HNSW-CONTEXT-COLLECTION-ID-SENTINEL",
+            expected_vector_name: "HNSW-CONTEXT-VECTOR-NAME-SENTINEL",
             expected_key_id: "HNSW-CONTEXT-KEY-SENTINEL",
             expected_rk_id: "HNSW-CONTEXT-RK-SENTINEL",
             min_rk_epoch: 7,
@@ -1226,14 +1228,22 @@ mod tests {
             "HNSW-CIPHERTEXT-SENTINEL",
             "HNSW-SHA-SENTINEL",
             "HNSW-COMMITMENT-SENTINEL",
+            "HNSW-MANIFEST-COLLECTION-ID-SENTINEL",
+            "HNSW-MANIFEST-VECTOR-NAME-SENTINEL",
             "HNSW-SIGNATURE-KEY-SENTINEL",
             "HNSW-SIGNATURE-SENTINEL",
+            "HNSW-COMMIT-COLLECTION-ID-SENTINEL",
+            "HNSW-COMMIT-VECTOR-NAME-SENTINEL",
             "HNSW-COMMIT-KEY-SENTINEL",
             "HNSW-COMMIT-RK-SENTINEL",
             "HNSW-COMMIT-SIGNATURE-KEY-SENTINEL",
+            "HNSW-READ-COLLECTION-ID-SENTINEL",
+            "HNSW-READ-VECTOR-NAME-SENTINEL",
             "HNSW-READ-KEY-SENTINEL",
             "HNSW-READ-RK-SENTINEL",
             "HNSW-READ-SIGNATURE-KEY-SENTINEL",
+            "HNSW-CONTEXT-COLLECTION-ID-SENTINEL",
+            "HNSW-CONTEXT-VECTOR-NAME-SENTINEL",
             "HNSW-CONTEXT-KEY-SENTINEL",
             "HNSW-CONTEXT-RK-SENTINEL",
             "HNSW-CONTEXT-SIGNATURE-KEY-SENTINEL",

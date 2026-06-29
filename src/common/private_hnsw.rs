@@ -97,8 +97,8 @@ impl Debug for PrivateHnswSessionResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswSessionResponse")
             .field("session_id", &"[redacted]")
-            .field("collection_id", &self.collection_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("manifest", &self.manifest)
@@ -195,9 +195,9 @@ impl Debug for PrivateHnswSession {
         f.debug_struct("PrivateHnswSession")
             .field("session_id", &"[redacted]")
             .field("client_id", &"[redacted]")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("collection_path", &"[redacted]")
-            .field("vector_name", &self.vector_name)
+            .field("vector_name", &"[redacted]")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("lease_expires_unix", &self.lease_expires_unix)
@@ -3354,6 +3354,10 @@ mod private_hnsw_tests {
     fn common_debug_redacts_private_hnsw_session_and_read_values() {
         let mut session = fixture_session("hnsw-common-session-sentinel", 20);
         session._client_id = "hnsw-common-client-sentinel".to_string();
+        session.collection_id = "hnsw-common-collection-sentinel".to_string();
+        session.manifest.collection_id = session.collection_id.clone();
+        session.vector_name = "hnsw-common-vector-sentinel".to_string();
+        session.manifest.vector_name = session.vector_name.clone();
         session.collection_path =
             std::path::PathBuf::from("/tmp/qdrant-private-hnsw-common-path-sentinel");
         let root_hash = session.root_hash.clone();
@@ -3406,6 +3410,8 @@ mod private_hnsw_tests {
         for leaked in [
             "hnsw-common-session-sentinel",
             "hnsw-common-client-sentinel",
+            "hnsw-common-collection-sentinel",
+            "hnsw-common-vector-sentinel",
             "qdrant-private-hnsw-common-path-sentinel",
             root_hash.as_str(),
             ciphertext.as_str(),

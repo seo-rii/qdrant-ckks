@@ -116,8 +116,8 @@ impl Debug for PrivateHnswSessionResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswSessionResponse")
             .field("session_id", &"[redacted]")
-            .field("collection_id", &self.collection_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("manifest", &self.manifest)
@@ -561,8 +561,11 @@ mod private_hnsw_rest_tests {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let client_signature = fixture.client_signature();
         let entry_leaf_label = fixture.entry_leaf_label();
+        let mut manifest = fixture.manifest.clone();
+        manifest.collection_id = "HNSW-REST-MANIFEST-COLLECTION-ID-SENTINEL".to_string();
+        manifest.vector_name = "HNSW-REST-MANIFEST-VECTOR-NAME-SENTINEL".to_string();
         let manifest_request = UploadPrivateHnswManifestRequest {
-            manifest: fixture.manifest.clone(),
+            manifest: manifest.clone(),
             signature: fixture.manifest_signature.clone(),
         };
         let open_request = OpenPrivateHnswSessionRequest {
@@ -573,11 +576,11 @@ mod private_hnsw_rest_tests {
         };
         let session_response = PrivateHnswSessionResponse {
             session_id: SESSION_ID.to_string(),
-            collection_id: COLLECTION_ID.to_string(),
-            vector_name: "text".to_string(),
+            collection_id: "HNSW-REST-SESSION-COLLECTION-ID-SENTINEL".to_string(),
+            vector_name: "HNSW-REST-SESSION-VECTOR-NAME-SENTINEL".to_string(),
             index_epoch: fixture.manifest.index_epoch,
             root_hash: fixture.manifest.root_hash.clone(),
-            manifest: fixture.manifest.clone(),
+            manifest,
             lease_expires_unix: 1_770_000_000,
         };
         let read_request = OramReadPathsRequest {
@@ -653,6 +656,10 @@ mod private_hnsw_rest_tests {
             updated_bucket.bucket_commitment,
             client_signature.sig,
             commit_signature.sig,
+            "HNSW-REST-MANIFEST-COLLECTION-ID-SENTINEL".to_string(),
+            "HNSW-REST-MANIFEST-VECTOR-NAME-SENTINEL".to_string(),
+            "HNSW-REST-SESSION-COLLECTION-ID-SENTINEL".to_string(),
+            "HNSW-REST-SESSION-VECTOR-NAME-SENTINEL".to_string(),
             "HNSW-REST-READ-KEY-ID-SENTINEL".to_string(),
             "HNSW-REST-COMMIT-KEY-ID-SENTINEL".to_string(),
             entry_leaf_label,

@@ -86,7 +86,7 @@ impl Debug for PrivateResultOramSessionResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramSessionResponse")
             .field("session_id", &"[redacted]")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("manifest", &self.manifest)
@@ -148,7 +148,7 @@ impl Debug for PrivateResultOramSession {
         f.debug_struct("PrivateResultOramSession")
             .field("session_id", &"[redacted]")
             .field("client_id", &"[redacted]")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("collection_path", &"[redacted]")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
@@ -2181,6 +2181,8 @@ mod private_result_oram_tests {
     fn common_debug_redacts_private_result_oram_session_and_read_values() {
         let mut session = fixture_session("result-common-session-sentinel", 20);
         session._client_id = "result-common-client-sentinel".to_string();
+        session.collection_id = "result-common-collection-sentinel".to_string();
+        session.manifest.collection_id = session.collection_id.clone();
         session.collection_path =
             std::path::PathBuf::from("/tmp/qdrant-private-result-common-path-sentinel");
         let root_hash = session.root_hash.clone();
@@ -2220,6 +2222,7 @@ mod private_result_oram_tests {
         for leaked in [
             "result-common-session-sentinel",
             "result-common-client-sentinel",
+            "result-common-collection-sentinel",
             "qdrant-private-result-common-path-sentinel",
             root_hash.as_str(),
             ciphertext.as_str(),

@@ -214,7 +214,7 @@ impl Debug for PrivateResultOramManifest {
             .field("version", &self.version)
             .field("provider", &self.provider)
             .field("binding", &self.binding)
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -667,7 +667,7 @@ pub struct PrivateResultOramBucketAeadContext<'a> {
 impl Debug for PrivateResultOramBucketAeadContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramBucketAeadContext")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -688,7 +688,7 @@ pub struct PrivateResultOramBucketAeadBaseContext<'a> {
 impl Debug for PrivateResultOramBucketAeadBaseContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramBucketAeadBaseContext")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -709,7 +709,7 @@ pub struct PrivateResultOramClientStateAeadContext<'a> {
 impl Debug for PrivateResultOramClientStateAeadContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramClientStateAeadContext")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -997,7 +997,7 @@ pub struct PrivateResultOramManifestValidationContext<'a> {
 impl Debug for PrivateResultOramManifestValidationContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramManifestValidationContext")
-            .field("expected_collection_id", &self.expected_collection_id)
+            .field("expected_collection_id", &"[redacted]")
             .field("expected_key_id", &"[redacted]")
             .field("expected_rk_id", &"[redacted]")
             .field("min_rk_epoch", &self.min_rk_epoch)
@@ -1019,7 +1019,7 @@ pub struct PrivateResultOramCommitSignatureContext<'a> {
 impl Debug for PrivateResultOramCommitSignatureContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramCommitSignatureContext")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -1040,7 +1040,7 @@ pub struct PrivateResultOramReadBucketsSignatureContext<'a> {
 impl Debug for PrivateResultOramReadBucketsSignatureContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramReadBucketsSignatureContext")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -1092,7 +1092,7 @@ pub struct PrivateResultOramBucketCommitmentContext<'a> {
 impl Debug for PrivateResultOramBucketCommitmentContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramBucketCommitmentContext")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -1287,7 +1287,7 @@ pub struct PrivateResultOramCommitSignatureInput<'a> {
 impl Debug for PrivateResultOramCommitSignatureInput<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramCommitSignatureInput")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -1319,7 +1319,7 @@ pub struct PrivateResultOramReadBucketsSignatureInput<'a> {
 impl Debug for PrivateResultOramReadBucketsSignatureInput<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramReadBucketsSignatureInput")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -4423,6 +4423,7 @@ mod tests {
             }],
         };
         let mut manifest = fixture_manifest();
+        manifest.collection_id = "RESULT-MANIFEST-COLLECTION-ID-SENTINEL".to_string();
         manifest.key_id = "RESULT-MANIFEST-KEY-SENTINEL".to_string();
         manifest.rk_id = "RESULT-MANIFEST-RK-SENTINEL".to_string();
         manifest.owner_signing_key_id = "RESULT-MANIFEST-OWNER-SIGNING-KEY-SENTINEL".to_string();
@@ -4452,7 +4453,7 @@ mod tests {
         };
         let commit_refs = commit_plan.signature_bucket_refs();
         let commit_signature_input = PrivateResultOramCommitSignatureInput {
-            collection_id: "collection-uuid-1",
+            collection_id: "RESULT-COMMIT-COLLECTION-ID-SENTINEL",
             key_id: "RESULT-COMMIT-KEY-SENTINEL",
             rk_id: "RESULT-COMMIT-RK-SENTINEL",
             rk_epoch: 7,
@@ -4466,7 +4467,7 @@ mod tests {
         };
         let read_bucket_ids = [123_456, 123_457];
         let read_signature_input = PrivateResultOramReadBucketsSignatureInput {
-            collection_id: "collection-uuid-1",
+            collection_id: "RESULT-READ-COLLECTION-ID-SENTINEL",
             key_id: "RESULT-READ-KEY-SENTINEL",
             rk_id: "RESULT-READ-RK-SENTINEL",
             rk_epoch: 7,
@@ -4478,7 +4479,7 @@ mod tests {
             signature_key_id: "RESULT-READ-SIGNATURE-KEY-SENTINEL",
         };
         let validation_context = PrivateResultOramManifestValidationContext {
-            expected_collection_id: "collection-uuid-1",
+            expected_collection_id: "RESULT-CONTEXT-COLLECTION-ID-SENTINEL",
             expected_key_id: "RESULT-CONTEXT-KEY-SENTINEL",
             expected_rk_id: "RESULT-CONTEXT-RK-SENTINEL",
             min_rk_epoch: 7,
@@ -4489,14 +4490,14 @@ mod tests {
             },
         };
         let commit_signature_context = PrivateResultOramCommitSignatureContext {
-            collection_id: "collection-uuid-1",
+            collection_id: "RESULT-SIGN-CONTEXT-COLLECTION-ID-SENTINEL",
             key_id: "RESULT-SIGN-CONTEXT-KEY-SENTINEL",
             rk_id: "RESULT-SIGN-CONTEXT-RK-SENTINEL",
             rk_epoch: 7,
             signing_key_id: "RESULT-SIGN-CONTEXT-SIGNING-KEY-SENTINEL",
         };
         let read_signature_context = PrivateResultOramReadBucketsSignatureContext {
-            collection_id: "collection-uuid-1",
+            collection_id: "RESULT-READ-CONTEXT-COLLECTION-ID-SENTINEL",
             key_id: "RESULT-READ-CONTEXT-KEY-SENTINEL",
             rk_id: "RESULT-READ-CONTEXT-RK-SENTINEL",
             rk_epoch: 7,
@@ -4508,7 +4509,7 @@ mod tests {
             max_ciphertext_bytes: 991_003,
         };
         let bucket_aead_context = PrivateResultOramBucketAeadContext {
-            collection_id: "collection-uuid-1",
+            collection_id: "RESULT-AEAD-BUCKET-COLLECTION-ID-SENTINEL",
             key_id: "RESULT-AEAD-BUCKET-KEY-SENTINEL",
             rk_id: "RESULT-AEAD-BUCKET-RK-SENTINEL",
             rk_epoch: 7,
@@ -4516,13 +4517,13 @@ mod tests {
             index_epoch: 777_223,
         };
         let bucket_aead_base_context = PrivateResultOramBucketAeadBaseContext {
-            collection_id: "collection-uuid-1",
+            collection_id: "RESULT-AEAD-BASE-COLLECTION-ID-SENTINEL",
             key_id: "RESULT-AEAD-BASE-KEY-SENTINEL",
             rk_id: "RESULT-AEAD-BASE-RK-SENTINEL",
             rk_epoch: 7,
         };
         let client_state_aead_context = PrivateResultOramClientStateAeadContext {
-            collection_id: "collection-uuid-1",
+            collection_id: "RESULT-AEAD-STATE-COLLECTION-ID-SENTINEL",
             key_id: "RESULT-AEAD-STATE-KEY-SENTINEL",
             rk_id: "RESULT-AEAD-STATE-RK-SENTINEL",
             rk_epoch: 7,
@@ -4530,7 +4531,7 @@ mod tests {
             root_hash: "RESULT-AEAD-STATE-ROOT-SENTINEL",
         };
         let bucket_commitment_context = PrivateResultOramBucketCommitmentContext {
-            collection_id: "collection-uuid-1",
+            collection_id: "RESULT-COMMITMENT-CONTEXT-COLLECTION-ID-SENTINEL",
             key_id: "RESULT-COMMITMENT-CONTEXT-KEY-SENTINEL",
             rk_id: "RESULT-COMMITMENT-CONTEXT-RK-SENTINEL",
             rk_epoch: 7,
@@ -4610,35 +4611,44 @@ mod tests {
             "RESULT-COMMITMENT-SENTINEL".to_string(),
             "RESULT-SIGNATURE-KEY-SENTINEL".to_string(),
             "RESULT-SIGNATURE-SENTINEL".to_string(),
+            "RESULT-COMMIT-COLLECTION-ID-SENTINEL".to_string(),
             "RESULT-COMMIT-KEY-SENTINEL".to_string(),
             "RESULT-COMMIT-RK-SENTINEL".to_string(),
             "RESULT-COMMIT-SIGNATURE-KEY-SENTINEL".to_string(),
+            "RESULT-READ-COLLECTION-ID-SENTINEL".to_string(),
             "RESULT-READ-KEY-SENTINEL".to_string(),
             "RESULT-READ-RK-SENTINEL".to_string(),
             "RESULT-READ-SIGNATURE-KEY-SENTINEL".to_string(),
+            "RESULT-CONTEXT-COLLECTION-ID-SENTINEL".to_string(),
             "RESULT-CONTEXT-KEY-SENTINEL".to_string(),
             "RESULT-CONTEXT-RK-SENTINEL".to_string(),
             "RESULT-CONTEXT-SIGNATURE-KEY-SENTINEL".to_string(),
             "[88, 88, 88".to_string(),
+            "RESULT-SIGN-CONTEXT-COLLECTION-ID-SENTINEL".to_string(),
             "RESULT-SIGN-CONTEXT-KEY-SENTINEL".to_string(),
             "RESULT-SIGN-CONTEXT-RK-SENTINEL".to_string(),
             "RESULT-SIGN-CONTEXT-SIGNING-KEY-SENTINEL".to_string(),
+            "RESULT-READ-CONTEXT-COLLECTION-ID-SENTINEL".to_string(),
             "RESULT-READ-CONTEXT-KEY-SENTINEL".to_string(),
             "RESULT-READ-CONTEXT-RK-SENTINEL".to_string(),
             "RESULT-READ-CONTEXT-SIGNING-KEY-SENTINEL".to_string(),
             "991001".to_string(),
             "991002".to_string(),
             "991003".to_string(),
+            "RESULT-AEAD-BUCKET-COLLECTION-ID-SENTINEL".to_string(),
             "RESULT-AEAD-BUCKET-KEY-SENTINEL".to_string(),
             "RESULT-AEAD-BUCKET-RK-SENTINEL".to_string(),
             "888223".to_string(),
             "777223".to_string(),
+            "RESULT-AEAD-BASE-COLLECTION-ID-SENTINEL".to_string(),
             "RESULT-AEAD-BASE-KEY-SENTINEL".to_string(),
             "RESULT-AEAD-BASE-RK-SENTINEL".to_string(),
+            "RESULT-AEAD-STATE-COLLECTION-ID-SENTINEL".to_string(),
             "RESULT-AEAD-STATE-KEY-SENTINEL".to_string(),
             "RESULT-AEAD-STATE-RK-SENTINEL".to_string(),
             "777224".to_string(),
             "RESULT-AEAD-STATE-ROOT-SENTINEL".to_string(),
+            "RESULT-COMMITMENT-CONTEXT-COLLECTION-ID-SENTINEL".to_string(),
             "RESULT-COMMITMENT-CONTEXT-KEY-SENTINEL".to_string(),
             "RESULT-COMMITMENT-CONTEXT-RK-SENTINEL".to_string(),
             "888224".to_string(),
@@ -4652,6 +4662,7 @@ mod tests {
             "RESULT-PROOF-VALUE-SENTINEL".to_string(),
             "RESULT-OLD-ROOT-SENTINEL".to_string(),
             "RESULT-NEW-ROOT-SENTINEL".to_string(),
+            "RESULT-MANIFEST-COLLECTION-ID-SENTINEL".to_string(),
             "RESULT-MANIFEST-KEY-SENTINEL".to_string(),
             "RESULT-MANIFEST-RK-SENTINEL".to_string(),
             "RESULT-MANIFEST-OWNER-SIGNING-KEY-SENTINEL".to_string(),

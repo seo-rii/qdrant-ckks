@@ -93,7 +93,7 @@ impl Debug for PrivateResultOramSessionResponse {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramSessionResponse")
             .field("session_id", &"[redacted]")
-            .field("collection_id", &self.collection_id)
+            .field("collection_id", &"[redacted]")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("manifest", &self.manifest)
@@ -738,8 +738,10 @@ mod private_result_oram_rest_tests {
     #[test]
     fn private_result_oram_rest_dto_debug_redacts_sensitive_values() {
         let fixture = PrivateResultRouteFixture::build();
+        let mut manifest = fixture.manifest.clone();
+        manifest.collection_id = "RESULT-REST-MANIFEST-COLLECTION-ID-SENTINEL".to_string();
         let manifest_request = UploadPrivateResultOramManifestRequest {
-            manifest: fixture.manifest.clone(),
+            manifest: manifest.clone(),
             signature: fixture.signature.clone(),
         };
         let open_request = OpenPrivateResultOramSessionRequest {
@@ -749,10 +751,10 @@ mod private_result_oram_rest_tests {
         };
         let session_response = PrivateResultOramSessionResponse {
             session_id: SESSION_ID.to_string(),
-            collection_id: COLLECTION_ID.to_string(),
+            collection_id: "RESULT-REST-SESSION-COLLECTION-ID-SENTINEL".to_string(),
             index_epoch: fixture.manifest.index_epoch,
             root_hash: fixture.manifest.root_hash.clone(),
-            manifest: fixture.manifest.clone(),
+            manifest,
             lease_expires_unix: 1_770_000_000,
         };
         let bucket_ids = vec![987_654, 987_655];
@@ -823,6 +825,8 @@ mod private_result_oram_rest_tests {
             read_signature.sig,
             commit_signature.key_id,
             commit_signature.sig,
+            "RESULT-REST-MANIFEST-COLLECTION-ID-SENTINEL".to_string(),
+            "RESULT-REST-SESSION-COLLECTION-ID-SENTINEL".to_string(),
             "987654".to_string(),
             "987655".to_string(),
             "RESULT-REST-PROOF-SENTINEL".to_string(),
