@@ -738,6 +738,19 @@ fn debug_output_redacts_secrets_and_ciphertexts() {
     }
 }
 
+#[test]
+fn encryption_error_debug_redacts_attacker_controlled_values() {
+    let sentinel = "aead-debug-secret-sentinel";
+    let rendered = format!(
+        "{:?}",
+        EncryptionError::UnsupportedAlgorithm(format!("algorithm.{sentinel}"))
+    );
+
+    assert!(rendered.contains("UnsupportedAlgorithm"), "{rendered}");
+    assert!(rendered.contains("[redacted]"), "{rendered}");
+    assert!(!rendered.contains(sentinel), "{rendered}");
+}
+
 proptest! {
     #[test]
     fn arbitrary_bytes_round_trip(bytes in proptest::collection::vec(any::<u8>(), 0..4096)) {

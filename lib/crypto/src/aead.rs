@@ -40,7 +40,7 @@ const fn base64url_nopad_encoded_len(decoded_len: usize) -> usize {
     }
 }
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, PartialEq, Eq)]
 pub enum EncryptionError {
     #[error("encryption key must be exactly 32 bytes")]
     InvalidKeyLength,
@@ -74,6 +74,34 @@ pub enum EncryptionError {
     OpenFailed,
     #[error("wrapped resource key master key id does not match")]
     MasterKeyMismatch,
+}
+
+impl Debug for EncryptionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidKeyLength => f.write_str("InvalidKeyLength"),
+            Self::InvalidKeyId => f.write_str("InvalidKeyId"),
+            Self::InvalidMaterialFingerprintId => f.write_str("InvalidMaterialFingerprintId"),
+            Self::InvalidResourceKeyId => f.write_str("InvalidResourceKeyId"),
+            Self::RandomFailure => f.write_str("RandomFailure"),
+            Self::KeyDerivationFailed => f.write_str("KeyDerivationFailed"),
+            Self::UnsupportedVersion(version) => {
+                f.debug_tuple("UnsupportedVersion").field(version).finish()
+            }
+            Self::UnsupportedAlgorithm(_) => f
+                .debug_tuple("UnsupportedAlgorithm")
+                .field(&"[redacted]")
+                .finish(),
+            Self::KeyMismatch => f.write_str("KeyMismatch"),
+            Self::MaterialFingerprintMismatch => f.write_str("MaterialFingerprintMismatch"),
+            Self::InvalidEncoding => f.write_str("InvalidEncoding"),
+            Self::InvalidNonceLength => f.write_str("InvalidNonceLength"),
+            Self::InvalidCiphertextLength => f.write_str("InvalidCiphertextLength"),
+            Self::SealFailed => f.write_str("SealFailed"),
+            Self::OpenFailed => f.write_str("OpenFailed"),
+            Self::MasterKeyMismatch => f.write_str("MasterKeyMismatch"),
+        }
+    }
 }
 
 pub struct SecretKey {
