@@ -2524,9 +2524,9 @@ fn encrypt_vectors_for_point(
                     values,
                 )?
                 .ok_or_else(|| {
-                    StorageError::service_error(format!(
-                        "encrypted vector '{DEFAULT_VECTOR_NAME}' was selected but no sidecar was produced",
-                    ))
+                    StorageError::service_error(
+                        "encrypted vector was selected but no sidecar was produced",
+                    )
                 })?;
             let mut staged_payload = payload.clone();
             insert_encrypted_vector_sidecar(&mut staged_payload, DEFAULT_VECTOR_NAME, envelope)?;
@@ -2536,9 +2536,9 @@ fn encrypt_vectors_for_point(
         }
         VectorStructPersisted::MultiDense(_) => {
             if plan.contains_vector_name(DEFAULT_VECTOR_NAME) {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{DEFAULT_VECTOR_NAME}' only supports dense vectors; multi-dense vector encryption is not implemented",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector only supports dense vectors; multi-dense vector encryption is not implemented",
+                ));
             }
             Ok(Vec::new())
         }
@@ -2551,14 +2551,14 @@ fn encrypt_vectors_for_point(
             let mut staged_sidecars = Vec::new();
             for vector_name in &encrypted_names {
                 let vector = vectors.get(vector_name).ok_or_else(|| {
-                    StorageError::service_error(format!(
-                        "encrypted vector '{vector_name}' disappeared while staging point update",
-                    ))
+                    StorageError::service_error(
+                        "encrypted vector disappeared while staging point update",
+                    )
                 })?;
                 let VectorPersisted::Dense(values) = vector else {
-                    return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{vector_name}' only supports dense vectors; sparse and multi-dense vector encryption is not implemented",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "encrypted vector only supports dense vectors; sparse and multi-dense vector encryption is not implemented",
+                    ));
                 };
                 let (envelope, verified_sidecar_key) = plan
                     .encrypt_dense_vector_payload_value(
@@ -2568,9 +2568,9 @@ fn encrypt_vectors_for_point(
                         &values,
                     )?
                     .ok_or_else(|| {
-                        StorageError::service_error(format!(
-                            "encrypted vector '{vector_name}' was selected but no sidecar was produced",
-                        ))
+                        StorageError::service_error(
+                            "encrypted vector was selected but no sidecar was produced",
+                        )
                     })?;
                 staged_sidecars.push((vector_name.clone(), envelope, verified_sidecar_key));
             }
@@ -2625,9 +2625,9 @@ fn encrypt_vectors_for_batch(
                         values,
                     )?
                     .ok_or_else(|| {
-                        StorageError::service_error(format!(
-                            "encrypted vector '{DEFAULT_VECTOR_NAME}' was selected but no sidecar was produced",
-                        ))
+                        StorageError::service_error(
+                            "encrypted vector was selected but no sidecar was produced",
+                        )
                     })?;
                 staged_sidecars.push((payload_index, envelope, verified_sidecar_key));
             }
@@ -2646,9 +2646,9 @@ fn encrypt_vectors_for_batch(
         }
         BatchVectorStructPersisted::MultiDense(_) => {
             if plan.contains_vector_name(DEFAULT_VECTOR_NAME) {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{DEFAULT_VECTOR_NAME}' only supports dense vectors; multi-dense vector encryption is not implemented",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector only supports dense vectors; multi-dense vector encryption is not implemented",
+                ));
             }
             Ok(Vec::new())
         }
@@ -2664,20 +2664,20 @@ fn encrypt_vectors_for_batch(
             let mut staged_sidecars = Vec::new();
             for vector_name in &encrypted_names {
                 let values = named.get(vector_name).ok_or_else(|| {
-                    StorageError::service_error(format!(
-                        "encrypted vector '{vector_name}' disappeared while staging batch update",
-                    ))
+                    StorageError::service_error(
+                        "encrypted vector disappeared while staging batch update",
+                    )
                 })?;
                 if values.len() != ids.len() {
-                    return Err(StorageError::bad_input(format!(
-                        "batch vector count for '{vector_name}' must match point id count",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "batch vector count for encrypted vector must match point id count",
+                    ));
                 }
                 for (payload_index, (point_id, value)) in ids.iter().zip(values).enumerate() {
                     let VectorPersisted::Dense(values) = value else {
-                        return Err(StorageError::bad_input(format!(
-                            "encrypted vector '{vector_name}' only supports dense vectors; sparse and multi-dense vector encryption is not implemented",
-                        )));
+                        return Err(StorageError::bad_input(
+                            "encrypted vector only supports dense vectors; sparse and multi-dense vector encryption is not implemented",
+                        ));
                     };
                     let (envelope, verified_sidecar_key) = plan
                         .encrypt_dense_vector_payload_value(
@@ -2687,9 +2687,9 @@ fn encrypt_vectors_for_batch(
                             &values,
                         )?
                         .ok_or_else(|| {
-                            StorageError::service_error(format!(
-                                "encrypted vector '{vector_name}' was selected but no sidecar was produced",
-                            ))
+                            StorageError::service_error(
+                                "encrypted vector was selected but no sidecar was produced",
+                            )
                         })?;
                     staged_sidecars.push((
                         payload_index,
@@ -8380,6 +8380,7 @@ esac
             err,
             StorageError::BadInput { description }
                 if description.contains("only supports dense vectors")
+                    && !description.contains("embedding")
         ));
     }
 
@@ -8626,7 +8627,8 @@ esac
         assert!(matches!(
             err,
             StorageError::BadInput { description }
-                if description.contains("batch vector count for 'embedding'")
+                if description.contains("batch vector count for encrypted vector")
+                    && !description.contains("embedding")
         ));
     }
 
