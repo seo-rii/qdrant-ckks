@@ -5,24 +5,35 @@
 //! handlers having to know about telemetry at all.
 
 use api::grpc::qdrant::points_server::Points;
+use api::grpc::qdrant::private_hnsw_oram_server::PrivateHnswOram;
+use api::grpc::qdrant::private_result_oram_server::PrivateResultOram;
 use api::grpc::qdrant::shard_snapshots_server::ShardSnapshots;
 use api::grpc::qdrant::snapshots_server::Snapshots;
 use api::grpc::qdrant::{
-    ClearPayloadPoints, CountPoints, CountResponse, CreateFieldIndexCollection,
+    ClearPayloadPoints, ClosePrivateHnswSessionRequest, ClosePrivateHnswSessionResponse,
+    ClosePrivateResultOramSessionRequest, ClosePrivateResultOramSessionResponse,
+    CommitPrivateResultOramBucketsRequest, CountPoints, CountResponse, CreateFieldIndexCollection,
     CreateFullSnapshotRequest, CreateShardSnapshotRequest, CreateSnapshotRequest,
     CreateSnapshotResponse, DeleteFieldIndexCollection, DeleteFullSnapshotRequest,
     DeletePayloadPoints, DeletePointVectors, DeletePoints, DeleteShardSnapshotRequest,
     DeleteSnapshotRequest, DeleteSnapshotResponse, DiscoverBatchPoints, DiscoverBatchResponse,
-    DiscoverPoints, DiscoverResponse, FacetCounts, FacetResponse, GetPoints, GetResponse,
+    DiscoverPoints, DiscoverResponse, FacetCounts, FacetResponse, GetPoints,
+    GetPrivateHnswManifestRequest, GetPrivateHnswManifestResponse,
+    GetPrivateResultOramManifestRequest, GetPrivateResultOramManifestResponse, GetResponse,
     ListFullSnapshotsRequest, ListShardSnapshotsRequest, ListSnapshotsRequest,
-    ListSnapshotsResponse, PointsOperationResponse, QueryBatchPoints, QueryBatchResponse,
-    QueryGroupsResponse, QueryPointGroups, QueryPoints, QueryResponse, RecommendBatchPoints,
-    RecommendBatchResponse, RecommendGroupsResponse, RecommendPointGroups, RecommendPoints,
-    RecommendResponse, RecoverShardSnapshotRequest, RecoverSnapshotResponse, ScrollPoints,
-    ScrollResponse, SearchBatchPoints, SearchBatchResponse, SearchGroupsResponse,
-    SearchMatrixOffsetsResponse, SearchMatrixPairsResponse, SearchMatrixPoints, SearchPointGroups,
-    SearchPoints, SearchResponse, SetPayloadPoints, UpdateBatchPoints, UpdateBatchResponse,
-    UpdatePointVectors, UpsertPoints,
+    ListSnapshotsResponse, OpenPrivateHnswSessionRequest, OpenPrivateHnswSessionResponse,
+    OpenPrivateResultOramSessionRequest, OpenPrivateResultOramSessionResponse, OramCommitRequest,
+    OramReadPathsRequest, OramReadPathsResponse, PointsOperationResponse, PrivateHnswEpochResponse,
+    PrivateResultOramEpochResponse, QueryBatchPoints, QueryBatchResponse, QueryGroupsResponse,
+    QueryPointGroups, QueryPoints, QueryResponse, ReadPrivateResultOramBucketsRequest,
+    ReadPrivateResultOramBucketsResponse, RecommendBatchPoints, RecommendBatchResponse,
+    RecommendGroupsResponse, RecommendPointGroups, RecommendPoints, RecommendResponse,
+    RecoverShardSnapshotRequest, RecoverSnapshotResponse, ScrollPoints, ScrollResponse,
+    SearchBatchPoints, SearchBatchResponse, SearchGroupsResponse, SearchMatrixOffsetsResponse,
+    SearchMatrixPairsResponse, SearchMatrixPoints, SearchPointGroups, SearchPoints, SearchResponse,
+    SetPayloadPoints, UpdateBatchPoints, UpdateBatchResponse, UpdatePointVectors,
+    UploadPrivateHnswBucketsRequest, UploadPrivateHnswManifestRequest,
+    UploadPrivateResultOramBucketsRequest, UploadPrivateResultOramManifestRequest, UpsertPoints,
 };
 use tonic::{Request, Response, Status};
 
@@ -319,6 +330,189 @@ impl<T: Points> Points for PointsTelemetryWrapper<T> {
     }
 }
 
+/// Wraps a [`PrivateHnswOram`] service, attaching `collection_name` to every
+/// response without exposing vector names, sessions, paths, buckets, or roots
+/// to the telemetry extension.
+pub struct PrivateHnswOramTelemetryWrapper<T> {
+    inner: T,
+}
+
+impl<T> PrivateHnswOramTelemetryWrapper<T> {
+    pub fn new(inner: T) -> Self {
+        Self { inner }
+    }
+}
+
+#[tonic::async_trait]
+impl<T: PrivateHnswOram> PrivateHnswOram for PrivateHnswOramTelemetryWrapper<T> {
+    async fn get_private_hnsw_manifest(
+        &self,
+        request: Request<GetPrivateHnswManifestRequest>,
+    ) -> Result<Response<GetPrivateHnswManifestResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self.inner.get_private_hnsw_manifest(request).await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn upload_private_hnsw_manifest(
+        &self,
+        request: Request<UploadPrivateHnswManifestRequest>,
+    ) -> Result<Response<PrivateHnswEpochResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self.inner.upload_private_hnsw_manifest(request).await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn open_private_hnsw_session(
+        &self,
+        request: Request<OpenPrivateHnswSessionRequest>,
+    ) -> Result<Response<OpenPrivateHnswSessionResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self.inner.open_private_hnsw_session(request).await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn upload_private_hnsw_buckets(
+        &self,
+        request: Request<UploadPrivateHnswBucketsRequest>,
+    ) -> Result<Response<PrivateHnswEpochResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self.inner.upload_private_hnsw_buckets(request).await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn read_private_hnsw_paths(
+        &self,
+        request: Request<OramReadPathsRequest>,
+    ) -> Result<Response<OramReadPathsResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self.inner.read_private_hnsw_paths(request).await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn commit_private_hnsw_paths(
+        &self,
+        request: Request<OramCommitRequest>,
+    ) -> Result<Response<PrivateHnswEpochResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self.inner.commit_private_hnsw_paths(request).await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn close_private_hnsw_session(
+        &self,
+        request: Request<ClosePrivateHnswSessionRequest>,
+    ) -> Result<Response<ClosePrivateHnswSessionResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self.inner.close_private_hnsw_session(request).await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+}
+
+/// Wraps a [`PrivateResultOram`] service, attaching only `collection_name` to
+/// every response.
+pub struct PrivateResultOramTelemetryWrapper<T> {
+    inner: T,
+}
+
+impl<T> PrivateResultOramTelemetryWrapper<T> {
+    pub fn new(inner: T) -> Self {
+        Self { inner }
+    }
+}
+
+#[tonic::async_trait]
+impl<T: PrivateResultOram> PrivateResultOram for PrivateResultOramTelemetryWrapper<T> {
+    async fn get_private_result_oram_manifest(
+        &self,
+        request: Request<GetPrivateResultOramManifestRequest>,
+    ) -> Result<Response<GetPrivateResultOramManifestResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self.inner.get_private_result_oram_manifest(request).await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn upload_private_result_oram_manifest(
+        &self,
+        request: Request<UploadPrivateResultOramManifestRequest>,
+    ) -> Result<Response<PrivateResultOramEpochResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self
+            .inner
+            .upload_private_result_oram_manifest(request)
+            .await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn upload_private_result_oram_buckets(
+        &self,
+        request: Request<UploadPrivateResultOramBucketsRequest>,
+    ) -> Result<Response<PrivateResultOramEpochResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self
+            .inner
+            .upload_private_result_oram_buckets(request)
+            .await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn open_private_result_oram_session(
+        &self,
+        request: Request<OpenPrivateResultOramSessionRequest>,
+    ) -> Result<Response<OpenPrivateResultOramSessionResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self.inner.open_private_result_oram_session(request).await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn read_private_result_oram_buckets(
+        &self,
+        request: Request<ReadPrivateResultOramBucketsRequest>,
+    ) -> Result<Response<ReadPrivateResultOramBucketsResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self.inner.read_private_result_oram_buckets(request).await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn commit_private_result_oram_buckets(
+        &self,
+        request: Request<CommitPrivateResultOramBucketsRequest>,
+    ) -> Result<Response<PrivateResultOramEpochResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self
+            .inner
+            .commit_private_result_oram_buckets(request)
+            .await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+
+    async fn close_private_result_oram_session(
+        &self,
+        request: Request<ClosePrivateResultOramSessionRequest>,
+    ) -> Result<Response<ClosePrivateResultOramSessionResponse>, Status> {
+        let cn = request.get_ref().collection_name.clone();
+        let mut resp = self
+            .inner
+            .close_private_result_oram_session(request)
+            .await?;
+        resp.extensions_mut().insert(CollectionName(cn));
+        Ok(resp)
+    }
+}
+
 /// Wraps a [`Snapshots`] service, attaching `collection_name` to every
 /// collection-scoped response. Full-snapshot methods are passed through as-is.
 pub struct SnapshotsTelemetryWrapper<T> {
@@ -442,6 +636,8 @@ impl<T: ShardSnapshots> ShardSnapshots for ShardSnapshotsTelemetryWrapper<T> {
 #[cfg(test)]
 mod tests {
     use api::grpc::qdrant::points_server::Points;
+    use api::grpc::qdrant::private_hnsw_oram_server::PrivateHnswOram;
+    use api::grpc::qdrant::private_result_oram_server::PrivateResultOram;
     use api::grpc::qdrant::shard_snapshots_server::ShardSnapshots;
     use api::grpc::qdrant::snapshots_server::Snapshots;
     use api::grpc::qdrant::*;
@@ -514,6 +710,113 @@ mod tests {
         facet(FacetCounts) -> FacetResponse,
         search_matrix_pairs(SearchMatrixPoints) -> SearchMatrixPairsResponse,
         search_matrix_offsets(SearchMatrixPoints) -> SearchMatrixOffsetsResponse,
+    }
+
+    macro_rules! mock_and_test_private_hnsw {
+        ($($method:ident($req:ident) -> $resp:ident),* $(,)?) => {
+            struct MockPrivateHnswOram;
+
+            #[tonic::async_trait]
+            #[allow(unused_variables)]
+            impl PrivateHnswOram for MockPrivateHnswOram {
+                $(
+                    async fn $method(&self, r: Request<$req>) -> Result<Response<$resp>, Status> {
+                        Ok(Response::new(Default::default()))
+                    }
+                )*
+            }
+
+            mod private_hnsw_oram_tests {
+                use super::*;
+
+                $(
+                    #[tokio::test]
+                    #[allow(clippy::needless_update)]
+                    async fn $method() {
+                        let w = PrivateHnswOramTelemetryWrapper::new(MockPrivateHnswOram);
+                        let r = w
+                            .$method(Request::new($req {
+                                collection_name: stringify!($method).into(),
+                                vector_name: "vector-name-sentinel".into(),
+                                ..Default::default()
+                            }))
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            r.extensions().get::<CollectionName>().unwrap().0,
+                            stringify!($method),
+                        );
+                        assert!(
+                            r.extensions()
+                                .get::<CollectionName>()
+                                .unwrap()
+                                .0
+                                != "vector-name-sentinel",
+                            "telemetry wrapper must not attach vector names as collection labels",
+                        );
+                    }
+                )*
+            }
+        };
+    }
+
+    mock_and_test_private_hnsw! {
+        get_private_hnsw_manifest(GetPrivateHnswManifestRequest) -> GetPrivateHnswManifestResponse,
+        upload_private_hnsw_manifest(UploadPrivateHnswManifestRequest) -> PrivateHnswEpochResponse,
+        open_private_hnsw_session(OpenPrivateHnswSessionRequest) -> OpenPrivateHnswSessionResponse,
+        upload_private_hnsw_buckets(UploadPrivateHnswBucketsRequest) -> PrivateHnswEpochResponse,
+        read_private_hnsw_paths(OramReadPathsRequest) -> OramReadPathsResponse,
+        commit_private_hnsw_paths(OramCommitRequest) -> PrivateHnswEpochResponse,
+        close_private_hnsw_session(ClosePrivateHnswSessionRequest) -> ClosePrivateHnswSessionResponse,
+    }
+
+    macro_rules! mock_and_test_private_result_oram {
+        ($($method:ident($req:ident) -> $resp:ident),* $(,)?) => {
+            struct MockPrivateResultOram;
+
+            #[tonic::async_trait]
+            #[allow(unused_variables)]
+            impl PrivateResultOram for MockPrivateResultOram {
+                $(
+                    async fn $method(&self, r: Request<$req>) -> Result<Response<$resp>, Status> {
+                        Ok(Response::new(Default::default()))
+                    }
+                )*
+            }
+
+            mod private_result_oram_tests {
+                use super::*;
+
+                $(
+                    #[tokio::test]
+                    #[allow(clippy::needless_update)]
+                    async fn $method() {
+                        let w = PrivateResultOramTelemetryWrapper::new(MockPrivateResultOram);
+                        let r = w
+                            .$method(Request::new($req {
+                                collection_name: stringify!($method).into(),
+                                ..Default::default()
+                            }))
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            r.extensions().get::<CollectionName>().unwrap().0,
+                            stringify!($method),
+                        );
+                    }
+                )*
+            }
+        };
+    }
+
+    mock_and_test_private_result_oram! {
+        get_private_result_oram_manifest(GetPrivateResultOramManifestRequest) -> GetPrivateResultOramManifestResponse,
+        upload_private_result_oram_manifest(UploadPrivateResultOramManifestRequest) -> PrivateResultOramEpochResponse,
+        upload_private_result_oram_buckets(UploadPrivateResultOramBucketsRequest) -> PrivateResultOramEpochResponse,
+        open_private_result_oram_session(OpenPrivateResultOramSessionRequest) -> OpenPrivateResultOramSessionResponse,
+        read_private_result_oram_buckets(ReadPrivateResultOramBucketsRequest) -> ReadPrivateResultOramBucketsResponse,
+        commit_private_result_oram_buckets(CommitPrivateResultOramBucketsRequest) -> PrivateResultOramEpochResponse,
+        close_private_result_oram_session(ClosePrivateResultOramSessionRequest) -> ClosePrivateResultOramSessionResponse,
     }
 
     // Snapshots

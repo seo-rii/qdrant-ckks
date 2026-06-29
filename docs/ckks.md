@@ -2011,7 +2011,10 @@ ORAM REST method/path/operation ids and generated gRPC method paths using exact
 route-shape matching. Metrics canonicalization strips query strings only for
 otherwise fixed routes and drops malformed/lookalike or extra-tail private ORAM
 paths, so these metrics labels cannot silently drift away from the published
-API surface.
+API surface. gRPC private HNSW/result ORAM services use the same collection
+telemetry wrapper as other collection-scoped services, but the wrapper attaches
+only `collection_name` and not vector names, session ids, path labels, bucket
+ids, roots, ciphertext, or client-state fields.
 Client-side-only envelope collections must use `raw` or `redacted`; requesting
 `decrypted` fails closed because Qdrant has no client data key.
 The REST single-point `GET /collections/{collection}/points/{id}` endpoint has

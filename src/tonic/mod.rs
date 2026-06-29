@@ -56,7 +56,8 @@ use crate::tonic::api::private_result_oram_api::PrivateResultOramService;
 use crate::tonic::api::qdrant_internal_api::QdrantInternalService;
 use crate::tonic::api::snapshots_api::{ShardSnapshotsService, SnapshotsService};
 use crate::tonic::api::telemetry_wrapper::{
-    PointsTelemetryWrapper, ShardSnapshotsTelemetryWrapper, SnapshotsTelemetryWrapper,
+    PointsTelemetryWrapper, PrivateHnswOramTelemetryWrapper, PrivateResultOramTelemetryWrapper,
+    ShardSnapshotsTelemetryWrapper, SnapshotsTelemetryWrapper,
 };
 
 const BYTES_PER_MIB: usize = 1024 * 1024;
@@ -222,16 +223,20 @@ pub fn init(
                     .max_decoding_message_size(usize::MAX),
             )
             .add_service(
-                PrivateHnswOramServer::new(private_hnsw_service)
-                    .send_compressed(CompressionEncoding::Gzip)
-                    .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(private_oram_max_decoding_message_size),
+                PrivateHnswOramServer::new(PrivateHnswOramTelemetryWrapper::new(
+                    private_hnsw_service,
+                ))
+                .send_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Gzip)
+                .max_decoding_message_size(private_oram_max_decoding_message_size),
             )
             .add_service(
-                PrivateResultOramServer::new(private_result_service)
-                    .send_compressed(CompressionEncoding::Gzip)
-                    .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(private_oram_max_decoding_message_size),
+                PrivateResultOramServer::new(PrivateResultOramTelemetryWrapper::new(
+                    private_result_service,
+                ))
+                .send_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Gzip)
+                .max_decoding_message_size(private_oram_max_decoding_message_size),
             )
             .add_service(
                 SnapshotsServer::new(SnapshotsTelemetryWrapper::new(snapshot_service))
