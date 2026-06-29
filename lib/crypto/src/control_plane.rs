@@ -276,7 +276,7 @@ pub trait MetadataProviderFactory: Send + Sync {
     fn provider_id(&self) -> &'static str;
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CompiledPayloadRule {
     pub rule_id: String,
     pub instance: String,
@@ -284,7 +284,18 @@ pub struct CompiledPayloadRule {
     pub binding: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl fmt::Debug for CompiledPayloadRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompiledPayloadRule")
+            .field("rule_id", &"[redacted]")
+            .field("instance", &"[redacted]")
+            .field("provider", &self.provider)
+            .field("binding", &self.binding)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct CompiledVectorRule {
     pub rule_id: String,
     pub vector_name: String,
@@ -293,7 +304,19 @@ pub struct CompiledVectorRule {
     pub binding: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl fmt::Debug for CompiledVectorRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompiledVectorRule")
+            .field("rule_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
+            .field("instance", &"[redacted]")
+            .field("provider", &self.provider)
+            .field("binding", &self.binding)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct CompiledMetadataRule {
     pub rule_id: String,
     pub key: String,
@@ -302,11 +325,33 @@ pub struct CompiledMetadataRule {
     pub binding: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+impl fmt::Debug for CompiledMetadataRule {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompiledMetadataRule")
+            .field("rule_id", &"[redacted]")
+            .field("key", &"[redacted]")
+            .field("instance", &"[redacted]")
+            .field("provider", &self.provider)
+            .field("binding", &self.binding)
+            .finish()
+    }
+}
+
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct CompiledCollectionCryptoPlan {
     payload_rules: Vec<CompiledPayloadRule>,
     vector_rules: BTreeMap<String, CompiledVectorRule>,
     metadata_rules: Vec<CompiledMetadataRule>,
+}
+
+impl fmt::Debug for CompiledCollectionCryptoPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompiledCollectionCryptoPlan")
+            .field("payload_rule_count", &"[redacted]")
+            .field("vector_rule_count", &"[redacted]")
+            .field("metadata_rule_count", &"[redacted]")
+            .finish()
+    }
 }
 
 impl CompiledCollectionCryptoPlan {
@@ -477,6 +522,53 @@ mod tests {
         assert!(!rendered.contains("header-"), "{rendered}");
         assert!(!rendered.contains("body-"), "{rendered}");
         assert!(!rendered.contains(sentinel), "{rendered}");
+    }
+
+    #[test]
+    fn compiled_crypto_plan_debug_redacts_rule_selectors_and_instances() {
+        let sentinel = "compiled-plan-debug-sentinel";
+        let payload_rule = CompiledPayloadRule {
+            rule_id: format!("payload-rule-{sentinel}"),
+            instance: format!("payload-instance-{sentinel}"),
+            provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+            binding: Some(PAYLOAD_FIELD_BINDING.to_string()),
+        };
+        let vector_rule = CompiledVectorRule {
+            rule_id: format!("vector-rule-{sentinel}"),
+            vector_name: format!("vector-name-{sentinel}"),
+            instance: format!("vector-instance-{sentinel}"),
+            provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+            binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+        };
+        let metadata_rule = CompiledMetadataRule {
+            rule_id: format!("metadata-rule-{sentinel}"),
+            key: format!("metadata-key-{sentinel}"),
+            instance: format!("metadata-instance-{sentinel}"),
+            provider: METADATA_BLIND_INDEX_PROVIDER.to_string(),
+            binding: Some(METADATA_EXACT_MATCH_TOKEN_BINDING.to_string()),
+        };
+        let mut plan = CompiledCollectionCryptoPlan::default();
+        plan.add_payload_rule(payload_rule.clone());
+        plan.add_vector_rule(vector_rule.clone());
+        plan.add_metadata_rule(metadata_rule.clone());
+
+        for rendered in [
+            format!("{payload_rule:?}"),
+            format!("{vector_rule:?}"),
+            format!("{metadata_rule:?}"),
+            format!("{plan:?}"),
+        ] {
+            assert!(rendered.contains("[redacted]"), "{rendered}");
+            assert!(!rendered.contains("payload-rule-"), "{rendered}");
+            assert!(!rendered.contains("payload-instance-"), "{rendered}");
+            assert!(!rendered.contains("vector-rule-"), "{rendered}");
+            assert!(!rendered.contains("vector-name-"), "{rendered}");
+            assert!(!rendered.contains("vector-instance-"), "{rendered}");
+            assert!(!rendered.contains("metadata-rule-"), "{rendered}");
+            assert!(!rendered.contains("metadata-key-"), "{rendered}");
+            assert!(!rendered.contains("metadata-instance-"), "{rendered}");
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
     }
 
     #[test]
