@@ -227,7 +227,7 @@ impl Default for ConsensusConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Validate)]
+#[derive(Deserialize, Clone, Validate)]
 pub struct TlsConfig {
     pub cert: String,
     pub key: String,
@@ -235,6 +235,17 @@ pub struct TlsConfig {
     #[serde(default = "default_tls_cert_ttl")]
     #[validate(range(min = 1))]
     pub cert_ttl: Option<u64>,
+}
+
+impl fmt::Debug for TlsConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TlsConfig")
+            .field("cert", &"[redacted]")
+            .field("key", &"[redacted]")
+            .field("ca_cert", &self.ca_cert.as_ref().map(|_| "[redacted]"))
+            .field("cert_ttl", &self.cert_ttl)
+            .finish()
+    }
 }
 
 #[allow(dead_code)]
@@ -910,6 +921,34 @@ mod tests {
             assert!(!rendered.contains("qdrant-sec-api-key-sentinel"));
             assert!(!rendered.contains("qdrant-sec-alt-api-key-sentinel"));
             assert!(!rendered.contains("qdrant-sec-read-only-key-sentinel"));
+        }
+    }
+
+    #[test]
+    fn tls_config_debug_redacts_key_paths() {
+        let sentinel = "qdrant-sec-tls-debug-sentinel";
+        let tls = TlsConfig {
+            cert: format!("/tmp/{sentinel}/server.crt"),
+            key: format!("/tmp/{sentinel}/server.key"),
+            ca_cert: Some(format!("/tmp/{sentinel}/ca.crt")),
+            cert_ttl: Some(3_600),
+        };
+        let mut settings = Config::builder()
+            .add_source(File::from_str(DEFAULT_CONFIG, FileFormat::Yaml))
+            .build()
+            .expect("failed to build default config")
+            .try_deserialize::<Settings>()
+            .expect("failed to deserialize default config");
+        settings.tls = Some(tls.clone());
+
+        for rendered in [format!("{tls:?}"), format!("{settings:?}")] {
+            assert!(rendered.contains("[redacted]"), "{rendered}");
+            assert!(rendered.contains("cert_ttl"), "{rendered}");
+            assert!(!rendered.contains("/tmp/"), "{rendered}");
+            assert!(!rendered.contains("server.crt"), "{rendered}");
+            assert!(!rendered.contains("server.key"), "{rendered}");
+            assert!(!rendered.contains("ca.crt"), "{rendered}");
+            assert!(!rendered.contains(sentinel), "{rendered}");
         }
     }
 
