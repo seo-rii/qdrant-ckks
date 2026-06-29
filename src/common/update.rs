@@ -2163,7 +2163,7 @@ async fn ensure_point_vectors_inference_inputs_do_not_touch_encrypted_vectors(
 }
 
 fn encrypted_vector_inference_write_error(
-    collection_name: &str,
+    _collection_name: &str,
     vector_name: &str,
     params: &CollectionParams,
 ) -> StorageError {
@@ -2171,11 +2171,10 @@ fn encrypted_vector_inference_write_error(
         return private_hnsw_oram_api_required_error(vector_name);
     }
 
-    StorageError::bad_input(format!(
-        "encrypted vector '{vector_name}' in collection {collection_name} does not allow \
-         inference-derived update vectors; provide precomputed dense values or use an explicit \
-         client-side encrypted vector envelope path",
-    ))
+    StorageError::bad_input(
+        "encrypted vectors do not allow inference-derived update vectors; provide precomputed \
+         dense values or use an explicit client-side encrypted vector envelope path",
+    )
 }
 
 fn upsert_inference_inputs_touch_encrypted_config(
@@ -2753,9 +2752,9 @@ fn verify_client_vector_sidecars_for_point(
             value,
         )?
         else {
-            return Err(StorageError::bad_input(format!(
-                "client CKKS vector sidecar entry '{vector_name}' in collection {collection_name} is not configured as a server-blind encrypted vector",
-            )));
+            return Err(StorageError::bad_input(
+                "client CKKS vector sidecar entry is not configured as a server-blind encrypted vector",
+            ));
         };
         verified.push(verified_key);
     }
@@ -5663,6 +5662,26 @@ esac
     }
 
     #[test]
+    fn encrypted_vector_inference_write_error_redacts_collection_and_vector_names() {
+        let collection_sentinel = "encrypted-vector-inference-secret-collection";
+        let vector_sentinel = "encrypted_vector_inference_secret_embedding";
+        let err = encrypted_vector_inference_write_error(
+            collection_sentinel,
+            vector_sentinel,
+            &encrypted_vector_params(),
+        );
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("inference-derived update vectors")
+                    && description.contains("client-side encrypted vector envelope")
+                    && !description.contains(collection_sentinel)
+                    && !description.contains(vector_sentinel)
+        ));
+    }
+
+    #[test]
     fn private_hnsw_oram_vector_shape_guards_cover_batch_and_default_vectors() {
         let params = private_hnsw_vector_params();
         let named_batch = PointInsertOperationsInternal::PointsBatch(
@@ -8449,6 +8468,38 @@ esac
                 )
                 .is_some()
         );
+
+        let collection_sentinel = "client-ckks-sidecar-secret-collection";
+        let point_sentinel = "client-ckks-sidecar-secret-point";
+        let vector_sentinel = "client_ckks_sidecar_secret_unconfigured_vector";
+        let mut sidecar = serde_json::Map::new();
+        sidecar.insert(
+            vector_sentinel.to_string(),
+            signed_client_ckks_vector_sidecar(&signing_key),
+        );
+        let payload = segment::types::Payload(
+            json!({
+                ENCRYPTED_VECTOR_SIDECAR_FIELD: Value::Object(sidecar),
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        );
+        let err = verify_client_vector_sidecars_for_point(
+            &plan,
+            collection_sentinel,
+            point_sentinel,
+            Some(&payload),
+        )
+        .expect_err("unconfigured client CKKS vector sidecar must fail closed");
+        assert!(matches!(
+            err,
+            StorageError::BadInput { description }
+                if description.contains("server-blind encrypted vector")
+                    && !description.contains(collection_sentinel)
+                    && !description.contains(point_sentinel)
+                    && !description.contains(vector_sentinel)
+        ));
     }
 
     #[test]
@@ -8472,7 +8523,7 @@ esac
             plaintext_score_err,
             StorageError::BadInput { description }
                 if description.contains("server-blind client CKKS envelopes")
-                    && description.contains("cannot score opaque client vector ciphertexts")
+                    && description.contains("cannot be scored by Qdrant")
         ));
 
         let encrypted_query_err = plan
@@ -8498,7 +8549,7 @@ esac
             encrypted_query_err,
             StorageError::BadInput { description }
                 if description.contains("server-blind client CKKS envelopes")
-                    && description.contains("client query scoring is not available")
+                    && description.contains("cannot be scored by Qdrant")
         ));
     }
 
