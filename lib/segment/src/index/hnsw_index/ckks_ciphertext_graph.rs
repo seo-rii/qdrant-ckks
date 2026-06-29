@@ -484,23 +484,20 @@ impl CkksCiphertextVectorIndex {
 
         let bytes = read_graph_file(path).map_err(|err| {
             OperationError::service_error(format!(
-                "failed to read CKKS ciphertext HNSW graph file {}: {err}",
-                path.display(),
+                "failed to read CKKS ciphertext HNSW graph file: {err}",
             ))
         })?;
         let graph_file: CkksCiphertextHnswGraphFile =
             serde_json::from_slice(&bytes).map_err(|err| {
                 OperationError::service_error(format!(
-                    "failed to parse CKKS ciphertext HNSW graph file {}: {err}",
-                    path.display(),
+                    "failed to parse CKKS ciphertext HNSW graph file: {err}",
                 ))
             })?;
 
         if graph_file.version != CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION {
             return Err(OperationError::service_error(format!(
-                "unsupported CKKS ciphertext HNSW graph file version {} in {}",
+                "unsupported CKKS ciphertext HNSW graph file version {}",
                 graph_file.version,
-                path.display(),
             )));
         }
         if graph_file.record_count != records.len() {
@@ -541,8 +538,7 @@ impl CkksCiphertextVectorIndex {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|err| {
                 OperationError::service_error(format!(
-                    "failed to create CKKS ciphertext HNSW graph directory {}: {err}",
-                    parent.display(),
+                    "failed to create CKKS ciphertext HNSW graph directory: {err}",
                 ))
             })?;
         }
@@ -556,20 +552,17 @@ impl CkksCiphertextVectorIndex {
         };
         let bytes = serde_json::to_vec(&graph_file).map_err(|err| {
             OperationError::service_error(format!(
-                "failed to serialize CKKS ciphertext HNSW graph file {}: {err}",
-                path.display(),
+                "failed to serialize CKKS ciphertext HNSW graph file: {err}",
             ))
         })?;
         if bytes.len() as u64 > CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_MAX_BYTES {
-            return Err(OperationError::service_error(format!(
-                "CKKS ciphertext HNSW graph file {} exceeds maximum size",
-                path.display(),
-            )));
+            return Err(OperationError::service_error(
+                "CKKS ciphertext HNSW graph file exceeds maximum size",
+            ));
         }
         write_graph_file(path, &bytes).map_err(|err| {
             OperationError::service_error(format!(
-                "failed to write CKKS ciphertext HNSW graph file {}: {err}",
-                path.display(),
+                "failed to write CKKS ciphertext HNSW graph file: {err}",
             ))
         })?;
         self.graph_file = Some(path.to_path_buf());
@@ -1148,7 +1141,7 @@ fn write_private_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("graph file {path:?} must not be a symlink"),
+            "graph file must not be a symlink",
         ));
     }
 
@@ -1176,7 +1169,7 @@ fn write_private_graph_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
 }
 
-fn validate_private_graph_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+fn validate_private_graph_file_metadata(_path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -1185,7 +1178,7 @@ fn validate_private_graph_file_metadata(path: &Path, metadata: &fs::Metadata) ->
         if mode & 0o077 != 0 {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                format!("graph file {path:?} must not be group/world accessible"),
+                "graph file must not be group/world accessible",
             ));
         }
 
@@ -1194,7 +1187,7 @@ fn validate_private_graph_file_metadata(path: &Path, metadata: &fs::Metadata) ->
         if owner != 0 && owner != effective_uid {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                format!("graph file {path:?} must be owned by root or the Qdrant process user"),
+                "graph file must be owned by root or the Qdrant process user",
             ));
         }
     }
@@ -1215,16 +1208,14 @@ fn validate_private_graph_parent(path: &Path) -> io::Result<()> {
             if !metadata.is_dir() {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    format!("graph file parent {directory:?} must be a directory"),
+                    "graph file parent must be a directory",
                 ));
             }
             let owner = metadata.uid();
             if owner != 0 && owner != effective_uid {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    format!(
-                        "graph file parent {directory:?} must be owned by root or the Qdrant process user"
-                    ),
+                    "graph file parent must be owned by root or the Qdrant process user",
                 ));
             }
             let mode = metadata.permissions().mode();
@@ -1237,7 +1228,7 @@ fn validate_private_graph_parent(path: &Path) -> io::Result<()> {
                 }
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    format!("graph file parent {directory:?} must not be group/world writable"),
+                    "graph file parent must not be group/world writable",
                 ));
             }
             parent = directory.parent();
@@ -2144,7 +2135,10 @@ mod tests {
     fn ciphertext_vector_index_rejects_group_accessible_graph_file() {
         use std::os::unix::fs::PermissionsExt;
 
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::Builder::new()
+            .prefix("ckks-graph-path-sentinel-")
+            .tempdir()
+            .unwrap();
         let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
         let mut index = CkksCiphertextVectorIndex::from_graph(
             vec![
@@ -2167,6 +2161,7 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("group/world accessible"));
+        assert_ciphertext_graph_file_error_redacts_paths(&err);
     }
 
     #[test]
@@ -2276,6 +2271,7 @@ mod tests {
         std::fs::set_permissions(directory.path(), PermissionsExt::from_mode(0o777)).unwrap();
         let err = index.persist_graph_file(&graph_file).unwrap_err();
         assert!(err.to_string().contains("must not be group/world writable"));
+        assert_ciphertext_graph_file_error_redacts_paths(&err);
 
         std::fs::set_permissions(directory.path(), PermissionsExt::from_mode(0o700)).unwrap();
         index.persist_graph_file(&graph_file).unwrap();
@@ -2291,6 +2287,7 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("must not be group/world writable"));
+        assert_ciphertext_graph_file_error_redacts_paths(&err);
         std::fs::set_permissions(directory.path(), PermissionsExt::from_mode(0o700)).unwrap();
     }
 
@@ -2346,6 +2343,7 @@ mod tests {
 
         let err = index.persist_graph_file(&graph_file).unwrap_err();
         assert!(err.to_string().contains("must be a directory"));
+        assert_ciphertext_graph_file_error_redacts_paths(&err);
 
         let real_graph_file = CkksCiphertextVectorIndex::graph_file_path(&real_parent);
         index.persist_graph_file(&real_graph_file).unwrap();
@@ -2358,6 +2356,7 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("must be a directory"));
+        assert_ciphertext_graph_file_error_redacts_paths(&err);
     }
 
     #[test]
@@ -2391,7 +2390,10 @@ mod tests {
 
     #[test]
     fn ciphertext_vector_index_rejects_graph_version_mismatch_on_open() {
-        let directory = tempfile::tempdir().unwrap();
+        let directory = tempfile::Builder::new()
+            .prefix("ckks-graph-path-sentinel-")
+            .tempdir()
+            .unwrap();
         let graph_file = CkksCiphertextVectorIndex::graph_file_path(directory.path());
         let graph = CkksCiphertextHnswGraphFile {
             version: CKKS_CIPHERTEXT_HNSW_GRAPH_FILE_VERSION + 1,
@@ -2419,6 +2421,7 @@ mod tests {
             err.to_string()
                 .contains("unsupported CKKS ciphertext HNSW graph file version")
         );
+        assert_ciphertext_graph_file_error_redacts_paths(&err);
     }
 
     #[test]
@@ -2894,6 +2897,23 @@ mod tests {
             assert!(
                 !rendered.contains(leaked),
                 "stored CKKS sidecar payload error leaked sensitive field {leaked}: {rendered}",
+            );
+        }
+    }
+
+    fn assert_ciphertext_graph_file_error_redacts_paths(err: &OperationError) {
+        let rendered = err.to_string();
+        for leaked in [
+            "ckks-graph-path-sentinel",
+            "writable-ancestor",
+            "graph-parent",
+            "real-parent",
+            "symlink-parent",
+            CKKS_CIPHERTEXT_HNSW_GRAPH_FILE,
+        ] {
+            assert!(
+                !rendered.contains(leaked),
+                "CKKS ciphertext graph file error leaked path component {leaked}: {rendered}",
             );
         }
     }
