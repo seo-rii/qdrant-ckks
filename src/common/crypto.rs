@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::fmt::{self, Debug, Formatter};
 use std::fs;
 use std::io::Read;
 use std::num::NonZeroUsize;
@@ -54,7 +55,7 @@ use crate::settings::{
     ZERO_TRUST_PROFILE_STRICT,
 };
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, PartialEq, Eq)]
 pub enum CryptoSetupError {
     #[error("crypto material {material} must specify exactly one source")]
     InvalidMaterialSourceCount { material: String },
@@ -137,6 +138,138 @@ pub enum CryptoSetupError {
         option: String,
         reason: String,
     },
+}
+
+impl Debug for CryptoSetupError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidMaterialSourceCount { .. } => f
+                .debug_struct("InvalidMaterialSourceCount")
+                .field("material", &"[redacted]")
+                .finish(),
+            Self::MissingMaterialSource { .. } => f
+                .debug_struct("MissingMaterialSource")
+                .field("material", &"[redacted]")
+                .finish(),
+            Self::UnsupportedMaterialSource { .. } => f
+                .debug_struct("UnsupportedMaterialSource")
+                .field("material", &"[redacted]")
+                .field("material_source", &"[redacted]")
+                .finish(),
+            Self::UnsupportedMaterialKind { .. } => f
+                .debug_struct("UnsupportedMaterialKind")
+                .field("material", &"[redacted]")
+                .field("kind", &"[redacted]")
+                .finish(),
+            Self::MaterialSourceMismatch { .. } => f
+                .debug_struct("MaterialSourceMismatch")
+                .field("material", &"[redacted]")
+                .finish(),
+            Self::InvalidMaterialFileSource { .. } => f
+                .debug_struct("InvalidMaterialFileSource")
+                .field("material", &"[redacted]")
+                .field("path", &"[redacted]")
+                .field("reason", &"[redacted]")
+                .finish(),
+            Self::InvalidWrappedMaterial { .. } => f
+                .debug_struct("InvalidWrappedMaterial")
+                .field("material", &"[redacted]")
+                .field("reason", &"[redacted]")
+                .finish(),
+            Self::UnknownWrappingMaterial { .. } => f
+                .debug_struct("UnknownWrappingMaterial")
+                .field("material", &"[redacted]")
+                .field("wrapped_by", &"[redacted]")
+                .finish(),
+            Self::UnsupportedWrappingMaterialKind { .. } => f
+                .debug_struct("UnsupportedWrappingMaterialKind")
+                .field("material", &"[redacted]")
+                .field("wrapped_by", &"[redacted]")
+                .field("kind", &"[redacted]")
+                .finish(),
+            Self::UnsupportedWrapAlgorithm { .. } => f
+                .debug_struct("UnsupportedWrapAlgorithm")
+                .field("material", &"[redacted]")
+                .field("algorithm", &"[redacted]")
+                .finish(),
+            Self::InlineMaterialDisabled { .. } => f
+                .debug_struct("InlineMaterialDisabled")
+                .field("material", &"[redacted]")
+                .finish(),
+            Self::MissingBackendProgram { .. } => f
+                .debug_struct("MissingBackendProgram")
+                .field("backend", &"[redacted]")
+                .field("kind", &"[redacted]")
+                .finish(),
+            Self::MissingBackendSha256Pin { .. } => f
+                .debug_struct("MissingBackendSha256Pin")
+                .field("backend", &"[redacted]")
+                .finish(),
+            Self::InvalidBackendProgram { .. } => f
+                .debug_struct("InvalidBackendProgram")
+                .field("backend", &"[redacted]")
+                .field("program", &"[redacted]")
+                .finish(),
+            Self::InvalidBackendSignature { .. } => f
+                .debug_struct("InvalidBackendSignature")
+                .field("backend", &"[redacted]")
+                .field("reason", &"[redacted]")
+                .finish(),
+            Self::InvalidBackendSize { .. } => f
+                .debug_struct("InvalidBackendSize")
+                .field("backend", &"[redacted]")
+                .field("reason", &"[redacted]")
+                .finish(),
+            Self::InvalidBackendTimeout { .. } => f
+                .debug_struct("InvalidBackendTimeout")
+                .field("backend", &"[redacted]")
+                .field("reason", &"[redacted]")
+                .finish(),
+            Self::InvalidBackendSandbox { .. } => f
+                .debug_struct("InvalidBackendSandbox")
+                .field("backend", &"[redacted]")
+                .field("reason", &"[redacted]")
+                .finish(),
+            Self::InvalidClusterKeyAttestation { .. } => f
+                .debug_struct("InvalidClusterKeyAttestation")
+                .field("reason", &"[redacted]")
+                .finish(),
+            Self::UnknownMaterial { .. } => f
+                .debug_struct("UnknownMaterial")
+                .field("instance", &"[redacted]")
+                .field("role", &"[redacted]")
+                .field("material_ref", &"[redacted]")
+                .finish(),
+            Self::UnknownBackend { .. } => f
+                .debug_struct("UnknownBackend")
+                .field("instance", &"[redacted]")
+                .field("backend_ref", &"[redacted]")
+                .finish(),
+            Self::InvalidInstanceName { .. } => f
+                .debug_struct("InvalidInstanceName")
+                .field("instance", &"[redacted]")
+                .finish(),
+            Self::InvalidMaterialName { .. } => f
+                .debug_struct("InvalidMaterialName")
+                .field("material", &"[redacted]")
+                .finish(),
+            Self::InvalidBackendName { .. } => f
+                .debug_struct("InvalidBackendName")
+                .field("backend", &"[redacted]")
+                .finish(),
+            Self::UnsupportedBackendKind { .. } => f
+                .debug_struct("UnsupportedBackendKind")
+                .field("backend", &"[redacted]")
+                .field("kind", &"[redacted]")
+                .finish(),
+            Self::InvalidInstanceOption { .. } => f
+                .debug_struct("InvalidInstanceOption")
+                .field("instance", &"[redacted]")
+                .field("option", &"[redacted]")
+                .field("reason", &"[redacted]")
+                .finish(),
+        }
+    }
 }
 
 const PAYLOAD_SYM_KEY_ROLE: &str = "sym_key";
@@ -9361,6 +9494,118 @@ mod tests {
 
     use super::*;
     use crate::settings::CryptoInstanceConfig;
+
+    #[test]
+    fn crypto_setup_error_debug_redacts_runtime_values() {
+        let sentinel = "crypto-setup-debug-sentinel";
+        let errors = vec![
+            CryptoSetupError::InvalidMaterialSourceCount {
+                material: format!("material-{sentinel}"),
+            },
+            CryptoSetupError::MissingMaterialSource {
+                material: format!("material-{sentinel}"),
+            },
+            CryptoSetupError::UnsupportedMaterialSource {
+                material: format!("material-{sentinel}"),
+                material_source: format!("source-{sentinel}"),
+            },
+            CryptoSetupError::UnsupportedMaterialKind {
+                material: format!("material-{sentinel}"),
+                kind: format!("kind-{sentinel}"),
+            },
+            CryptoSetupError::MaterialSourceMismatch {
+                material: format!("material-{sentinel}"),
+            },
+            CryptoSetupError::InvalidMaterialFileSource {
+                material: format!("material-{sentinel}"),
+                path: format!("/tmp/{sentinel}"),
+                reason: format!("reason-{sentinel}"),
+            },
+            CryptoSetupError::InvalidWrappedMaterial {
+                material: format!("material-{sentinel}"),
+                reason: format!("reason-{sentinel}"),
+            },
+            CryptoSetupError::UnknownWrappingMaterial {
+                material: format!("material-{sentinel}"),
+                wrapped_by: format!("wrapping-{sentinel}"),
+            },
+            CryptoSetupError::UnsupportedWrappingMaterialKind {
+                material: format!("material-{sentinel}"),
+                wrapped_by: format!("wrapping-{sentinel}"),
+                kind: format!("kind-{sentinel}"),
+            },
+            CryptoSetupError::UnsupportedWrapAlgorithm {
+                material: format!("material-{sentinel}"),
+                algorithm: format!("algorithm-{sentinel}"),
+            },
+            CryptoSetupError::InlineMaterialDisabled {
+                material: format!("material-{sentinel}"),
+            },
+            CryptoSetupError::MissingBackendProgram {
+                backend: format!("backend-{sentinel}"),
+                kind: format!("kind-{sentinel}"),
+            },
+            CryptoSetupError::MissingBackendSha256Pin {
+                backend: format!("backend-{sentinel}"),
+            },
+            CryptoSetupError::InvalidBackendProgram {
+                backend: format!("backend-{sentinel}"),
+                program: format!("/bin/{sentinel}"),
+            },
+            CryptoSetupError::InvalidBackendSignature {
+                backend: format!("backend-{sentinel}"),
+                reason: format!("reason-{sentinel}"),
+            },
+            CryptoSetupError::InvalidBackendSize {
+                backend: format!("backend-{sentinel}"),
+                reason: format!("reason-{sentinel}"),
+            },
+            CryptoSetupError::InvalidBackendTimeout {
+                backend: format!("backend-{sentinel}"),
+                reason: format!("reason-{sentinel}"),
+            },
+            CryptoSetupError::InvalidBackendSandbox {
+                backend: format!("backend-{sentinel}"),
+                reason: format!("reason-{sentinel}"),
+            },
+            CryptoSetupError::InvalidClusterKeyAttestation {
+                reason: format!("reason-{sentinel}"),
+            },
+            CryptoSetupError::UnknownMaterial {
+                instance: format!("instance-{sentinel}"),
+                role: format!("role-{sentinel}"),
+                material_ref: format!("material-ref-{sentinel}"),
+            },
+            CryptoSetupError::UnknownBackend {
+                instance: format!("instance-{sentinel}"),
+                backend_ref: format!("backend-ref-{sentinel}"),
+            },
+            CryptoSetupError::InvalidInstanceName {
+                instance: format!("instance-{sentinel}"),
+            },
+            CryptoSetupError::InvalidMaterialName {
+                material: format!("material-{sentinel}"),
+            },
+            CryptoSetupError::InvalidBackendName {
+                backend: format!("backend-{sentinel}"),
+            },
+            CryptoSetupError::UnsupportedBackendKind {
+                backend: format!("backend-{sentinel}"),
+                kind: format!("kind-{sentinel}"),
+            },
+            CryptoSetupError::InvalidInstanceOption {
+                instance: format!("instance-{sentinel}"),
+                option: format!("option-{sentinel}"),
+                reason: format!("reason-{sentinel}"),
+            },
+        ];
+
+        for err in errors {
+            let rendered = format!("{err:?}");
+            assert!(!rendered.contains(sentinel), "{rendered}");
+            assert!(rendered.contains("[redacted]"), "{rendered}");
+        }
+    }
 
     fn with_embedding_vector(mut params: CollectionParams, distance: Distance) -> CollectionParams {
         params.vectors = collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
