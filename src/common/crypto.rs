@@ -70,7 +70,7 @@ pub enum CryptoSetupError {
     UnsupportedMaterialKind { material: String, kind: String },
     #[error("crypto material {material} source does not match configured fields")]
     MaterialSourceMismatch { material: String },
-    #[error("crypto material {material} file source {path} is invalid: {reason}")]
+    #[error("crypto material {material} file source is invalid")]
     InvalidMaterialFileSource {
         material: String,
         path: String,
@@ -672,9 +672,9 @@ pub enum PayloadWriteSetupError {
     MissingMaterialFd { material: String },
     #[error("payload crypto material {material} inline value is missing")]
     MissingInlineMaterial { material: String },
-    #[error("payload crypto material {material} file {path} could not be read")]
+    #[error("payload crypto material {material} file could not be read")]
     UnreadableMaterialFile { material: String, path: String },
-    #[error("payload crypto material {material} file {path} is invalid: {reason}")]
+    #[error("payload crypto material {material} file is invalid")]
     InvalidMaterialFileSource {
         material: String,
         path: String,
@@ -9843,6 +9843,20 @@ mod tests {
     }
 
     #[test]
+    fn crypto_setup_error_display_redacts_material_file_path_and_reason() {
+        let sentinel = "crypto-material-display-sentinel";
+        let err = CryptoSetupError::InvalidMaterialFileSource {
+            material: "tenant-a/payload-v1".to_string(),
+            path: format!("/tmp/{sentinel}/payload.key"),
+            reason: format!("parent directory {sentinel} is not safe"),
+        };
+        let rendered = format!("{err}");
+
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(rendered.contains("file source is invalid"), "{rendered}");
+    }
+
+    #[test]
     fn payload_write_setup_error_debug_redacts_runtime_values() {
         let sentinel = "payload-write-debug-sentinel";
         let errors = vec![
@@ -10011,6 +10025,26 @@ mod tests {
             ) {
                 assert!(rendered.contains("[redacted]"), "{rendered}");
             }
+        }
+    }
+
+    #[test]
+    fn payload_write_setup_error_display_redacts_material_file_path_and_reason() {
+        let sentinel = "payload-write-display-sentinel";
+        let unreadable = PayloadWriteSetupError::UnreadableMaterialFile {
+            material: "tenant-a/payload-v1".to_string(),
+            path: format!("/tmp/{sentinel}/payload.key"),
+        };
+        let invalid = PayloadWriteSetupError::InvalidMaterialFileSource {
+            material: "tenant-a/payload-v1".to_string(),
+            path: format!("/tmp/{sentinel}/payload.key"),
+            reason: format!("parent directory {sentinel} is not safe"),
+        };
+
+        for err in [unreadable, invalid] {
+            let rendered = format!("{err}");
+            assert!(!rendered.contains(sentinel), "{rendered}");
+            assert!(rendered.contains("payload crypto material"), "{rendered}");
         }
     }
 
