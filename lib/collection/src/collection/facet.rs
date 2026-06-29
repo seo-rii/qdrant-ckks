@@ -90,13 +90,13 @@ fn ensure_facet_key_does_not_touch_encrypted_payload(
             .parse::<JsonPath>()
             .map_err(|err| {
                 CollectionError::bad_input(format!(
-                    "encrypted vector sidecar field path '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' is invalid: {err:?}",
+                    "encrypted vector sidecar field path is invalid: {err:?}",
                 ))
             })?;
         if key.compatible(&sidecar_path) {
-            return Err(CollectionError::bad_input(format!(
-                "cannot facet on encrypted vector sidecar field '{key}'; use encrypted vector search APIs instead",
-            )));
+            return Err(CollectionError::bad_input(
+                "cannot facet on encrypted vector sidecar field; use encrypted vector search APIs instead",
+            ));
         }
     }
 

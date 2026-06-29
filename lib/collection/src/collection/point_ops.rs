@@ -1069,14 +1069,14 @@ impl Collection {
                 return Ok(false);
             };
             let Some(point_id) = point_id else {
-                return Err(CollectionError::bad_input(format!(
-                    "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' replay requires point-specific binding",
-                )));
+                return Err(CollectionError::bad_input(
+                    "encrypted vector sidecar replay requires point-specific binding",
+                ));
             };
             let Some(sidecar) = value.as_object() else {
-                return Err(CollectionError::bad_input(format!(
-                    "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' must be an object",
-                )));
+                return Err(CollectionError::bad_input(
+                    "encrypted vector sidecar must be an object",
+                ));
             };
             for (vector_name, encrypted) in sidecar {
                 if !encrypted_vector_names.contains(vector_name) {
@@ -1265,9 +1265,9 @@ impl Collection {
                 CollectionUpdateOperations::PayloadOperation(
                     PayloadOps::ClearPayload { .. } | PayloadOps::ClearPayloadByFilter(_),
                 ) => {
-                    return Err(CollectionError::bad_input(format!(
-                        "peer update cannot clear encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}'",
-                    )));
+                    return Err(CollectionError::bad_input(
+                        "peer update cannot clear encrypted vector sidecar",
+                    ));
                 }
                 CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(
                     operation,
@@ -1277,9 +1277,9 @@ impl Collection {
                         .iter()
                         .any(|key| key.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD)
                     {
-                        return Err(CollectionError::bad_input(format!(
-                            "peer update cannot delete encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}'",
-                        )));
+                        return Err(CollectionError::bad_input(
+                            "peer update cannot delete encrypted vector sidecar",
+                        ));
                     }
                 }
                 CollectionUpdateOperations::VectorOperation(_)
@@ -1720,9 +1720,9 @@ impl Collection {
          -> CollectionResult<bool> {
             if let Some(key) = key {
                 if key.first_key == ENCRYPTED_VECTOR_SIDECAR_FIELD {
-                    return Err(CollectionError::bad_input(format!(
-                        "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' must be written as a full runtime-generated sidecar payload",
-                    )));
+                    return Err(CollectionError::bad_input(
+                        "encrypted vector sidecar must be written as a full runtime-generated sidecar payload",
+                    ));
                 }
                 return Ok(false);
             }
@@ -1731,9 +1731,9 @@ impl Collection {
             if let Some(value) = payload.0.get(ENCRYPTED_VECTOR_SIDECAR_FIELD) {
                 touches = true;
                 let Some(sidecar) = value.as_object() else {
-                    return Err(CollectionError::bad_input(format!(
-                        "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' must be an object",
-                    )));
+                    return Err(CollectionError::bad_input(
+                        "encrypted vector sidecar must be an object",
+                    ));
                 };
                 for (vector_name, encrypted) in sidecar {
                     if !encrypted_vector_names.contains(vector_name) {
@@ -1904,18 +1904,18 @@ impl Collection {
                         continue;
                     }
                     let Some(target) = target.as_ref() else {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar '{key}' can only be removed by targeted runtime delete_vectors operations",
-                        )));
+                        return Err(CollectionError::bad_input(
+                            "encrypted vector sidecar can only be removed by targeted runtime delete_vectors operations",
+                        ));
                     };
                     if !update_provenance.allows_vector_sidecar_delete_key(
                         &collection_crypto_id,
                         key,
                         target,
                     ) {
-                        return Err(CollectionError::bad_input(format!(
-                            "encrypted vector sidecar '{key}' can only be removed by runtime delete_vectors operations",
-                        )));
+                        return Err(CollectionError::bad_input(
+                            "encrypted vector sidecar can only be removed by runtime delete_vectors operations",
+                        ));
                     }
                 }
                 Ok(())
@@ -2017,9 +2017,9 @@ impl Collection {
                 PayloadOps::ClearPayload { .. } | PayloadOps::ClearPayloadByFilter(_),
             ) => {
                 if !encrypted_vector_names.is_empty() {
-                    return Err(CollectionError::bad_input(format!(
-                        "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' cannot be removed by clear_payload; use delete_vectors for encrypted vector names",
-                    )));
+                    return Err(CollectionError::bad_input(
+                        "encrypted vector sidecar cannot be removed by clear_payload; use delete_vectors for encrypted vector names",
+                    ));
                 }
                 false
             }
@@ -2029,9 +2029,9 @@ impl Collection {
             CollectionUpdateOperations::StagingOperation(_) => false,
         };
         if touches_vector_sidecar && !update_provenance.allows_vector_sidecars() {
-            return Err(CollectionError::bad_input(format!(
-                "encrypted vector sidecar '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' requires runtime CKKS vector encryption before collection write",
-            )));
+            return Err(CollectionError::bad_input(
+                "encrypted vector sidecar requires runtime CKKS vector encryption before collection write",
+            ));
         }
         if let Some(encryption) = encryption {
             let mut seen_client_nonces = std::collections::HashSet::new();
@@ -3272,11 +3272,11 @@ impl Collection {
         };
 
         if let Some(sidecar_path) = encrypted_vector_sidecar_path(&encryption)?
-            && let Some(filter_path) = filter_touches_encrypted_payload(filter, &sidecar_path)
+            && filter_touches_encrypted_payload(filter, &sidecar_path).is_some()
         {
-            return Err(CollectionError::bad_input(format!(
-                "cannot filter on encrypted vector sidecar field '{filter_path}'; use encrypted vector search APIs instead",
-            )));
+            return Err(CollectionError::bad_input(
+                "cannot filter on encrypted vector sidecar field; use encrypted vector search APIs instead",
+            ));
         }
 
         for rule in &encryption.rules {
@@ -3361,10 +3361,9 @@ impl Collection {
         if let Some(sidecar_path) = encrypted_vector_sidecar_path(&encryption)?
             && order_by.key.compatible(&sidecar_path)
         {
-            return Err(CollectionError::bad_input(format!(
-                "cannot order by encrypted vector sidecar field '{}'; use encrypted vector search APIs instead",
-                order_by.key,
-            )));
+            return Err(CollectionError::bad_input(
+                "cannot order by encrypted vector sidecar field; use encrypted vector search APIs instead",
+            ));
         }
 
         for rule in &encryption.rules {
@@ -3433,9 +3432,9 @@ impl Collection {
         if let Some(sidecar_path) = encrypted_vector_sidecar_path(&encryption)?
             && group_by.compatible(&sidecar_path)
         {
-            return Err(CollectionError::bad_input(format!(
-                "cannot group by encrypted vector sidecar field '{group_by}'; use encrypted vector search APIs instead",
-            )));
+            return Err(CollectionError::bad_input(
+                "cannot group by encrypted vector sidecar field; use encrypted vector search APIs instead",
+            ));
         }
 
         for rule in &encryption.rules {
@@ -3502,24 +3501,26 @@ impl Collection {
         };
 
         if let Some(sidecar_path) = encrypted_vector_sidecar_path(&encryption)? {
-            if let Some(formula_path) = formula
+            if formula
                 .payload_vars
                 .iter()
                 .find(|payload_var| payload_var.compatible(&sidecar_path))
+                .is_some()
             {
-                return Err(CollectionError::bad_input(format!(
-                    "cannot use encrypted vector sidecar field '{formula_path}' in formula; use encrypted vector search APIs instead",
-                )));
+                return Err(CollectionError::bad_input(
+                    "cannot use encrypted vector sidecar field in formula; use encrypted vector search APIs instead",
+                ));
             }
 
-            if let Some(condition_path) = formula
+            if formula
                 .conditions
                 .iter()
                 .find_map(|condition| condition_touches_encrypted_payload(condition, &sidecar_path))
+                .is_some()
             {
-                return Err(CollectionError::bad_input(format!(
-                    "cannot use formula condition on encrypted vector sidecar field '{condition_path}'; use encrypted vector search APIs instead",
-                )));
+                return Err(CollectionError::bad_input(
+                    "cannot use formula condition on encrypted vector sidecar field; use encrypted vector search APIs instead",
+                ));
             }
         }
 
@@ -3930,7 +3931,7 @@ fn encrypted_vector_sidecar_path(
         .map(Some)
         .map_err(|err| {
             CollectionError::bad_input(format!(
-                "encrypted vector sidecar field path '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' is invalid: {err:?}",
+                "encrypted vector sidecar field path is invalid: {err:?}",
             ))
         })
 }

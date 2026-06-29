@@ -44,7 +44,7 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
         for field_name in &field_names {
             if field_name.compatible(&sidecar_path) {
                 return Err(CollectionError::bad_input(format!(
-                    "cannot {action_label} on encrypted vector sidecar field '{field_name}'; use encrypted vector search APIs instead",
+                    "cannot {action_label} on encrypted vector sidecar field; use encrypted vector search APIs instead",
                 )));
             }
         }
@@ -306,7 +306,7 @@ fn encrypted_vector_sidecar_path() -> CollectionResult<JsonPath> {
         .parse::<JsonPath>()
         .map_err(|err| {
             CollectionError::bad_input(format!(
-                "encrypted vector sidecar field path '{ENCRYPTED_VECTOR_SIDECAR_FIELD}' is invalid: {err:?}",
+                "encrypted vector sidecar field path is invalid: {err:?}",
             ))
         })
 }
@@ -707,10 +707,10 @@ mod tests {
 
             assert!(matches!(
                 err,
-                CollectionError::BadInput { description }
+                CollectionError::BadInput { ref description }
                     if description.contains("recover payload index schema")
                         && description.contains("encrypted vector sidecar field")
-                        && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                        && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
             ));
         }
     }

@@ -8595,9 +8595,9 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("can only be removed by runtime delete_vectors")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
     let delete_points = vec![1.into()];
     let delete_target = ckks_vector_sidecar_delete_target(Some(&delete_points), None).unwrap();
@@ -8622,9 +8622,9 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("can only be removed by runtime delete_vectors")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
     let verified_delete_provenance =
         CollectionUpdateProvenance::runtime_encrypted_vector_deletes_for_target(
@@ -8653,9 +8653,9 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("can only be removed by runtime delete_vectors")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
     let filter_delete_sidecar =
         CollectionUpdateOperations::PayloadOperation(PayloadOps::DeletePayload(DeletePayloadOp {
@@ -8677,9 +8677,9 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("can only be removed by runtime delete_vectors")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
     let filter_delete_target = ckks_vector_sidecar_delete_target(None, Some(&Filter::default()))
         .expect("filter delete target");
@@ -8718,9 +8718,9 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("can only be removed by runtime delete_vectors")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
     let err = collection
         .update_from_client(
@@ -8753,9 +8753,9 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("clear_payload")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
 }
 
@@ -10115,9 +10115,9 @@ async fn encrypted_vector_rejects_sidecar_payload_query_surfaces() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("cannot filter on encrypted vector sidecar field")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
 
     let encrypted_sidecar_order_by = OrderBy {
@@ -10146,9 +10146,9 @@ async fn encrypted_vector_rejects_sidecar_payload_query_surfaces() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("cannot order by encrypted vector sidecar field")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
 
     let err = collection
@@ -10170,9 +10170,9 @@ async fn encrypted_vector_rejects_sidecar_payload_query_surfaces() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("cannot facet on encrypted vector sidecar field")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
 
     let err = collection
@@ -10188,9 +10188,9 @@ async fn encrypted_vector_rejects_sidecar_payload_query_surfaces() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("cannot create payload index on encrypted vector sidecar field")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
 
     let err = GroupBy::new(
@@ -10221,9 +10221,9 @@ async fn encrypted_vector_rejects_sidecar_payload_query_surfaces() {
     .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("cannot group by encrypted vector sidecar field")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
 
     let encrypted_sidecar_formula = FormulaInternal {
@@ -10257,9 +10257,9 @@ async fn encrypted_vector_rejects_sidecar_payload_query_surfaces() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
+        CollectionError::BadInput { ref description }
             if description.contains("cannot use encrypted vector sidecar field")
-                && description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
+                && !description.contains(ENCRYPTED_VECTOR_SIDECAR_FIELD)
     ));
 }
 
