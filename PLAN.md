@@ -410,6 +410,7 @@
 - private HNSW ORAM vector에 대한 `retrieve`/`scroll` `with_vector` 요청은 CKKS sidecar payload 안내가 아니라 private HNSW ORAM session API 안내로 fail closed 된다.
 - REST payload export의 `with_vector` 거절 메시지는 private HNSW ORAM 사용자를 일반 read API로 안내하지 않고 provider-appropriate vector read/private session API만 안내한다.
 - private HNSW/result ORAM gRPC telemetry wrapper는 collection label만 붙이고 vector name, session id, path label, bucket id/root hash sentinel을 telemetry extension으로 복사하지 않는 회귀 테스트를 둔다.
+- REST close-session path의 session id 길이/문자 검증은 actix path validator가 아니라 공통 private ORAM session validator를 타게 해서 129/257바이트 oversized sentinel과 malformed id 모두 redacted `session_id is invalid` 오류로 고정한다.
 - Common/gRPC read fixtures는 private HNSW ORAM collection에서도 vector를 요청하지 않는 허용 경로를 열어 두어, no-vector retrieve/scroll 요청이 private HNSW session을 요구하지 않는지도 고정한다.
 - runtime crypto settings가 없는 ordinary query/search/recommend/discover/group/search-matrix fallback도 private HNSW ORAM vector에서는 CKKS/OpenFHE runtime 안내가 아니라 private HNSW ORAM session API 안내로 fail closed 된다.
 - collection 내부 direct query/search/search-matrix entrypoint도 `private-hnsw-oram/v1` binding을 CKKS sidecar runtime 안내와 구분해 private HNSW ORAM session API 안내로 fail closed 한다.

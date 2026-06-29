@@ -626,6 +626,10 @@ API instead of the ordinary read API.
 The gRPC telemetry wrappers attach only the collection label for private HNSW
 and private result ORAM calls; vector names, session ids, path labels, bucket
 ids, and root hashes are not copied into telemetry extensions.
+REST close-session paths route session id shape and length failures through the
+same common validator as request bodies, so oversized or malformed session ids
+receive the redacted `session_id is invalid` error instead of an early path
+validation response.
 The private ORAM bucket store is canonical encrypted index data, not an
 untrusted acceleration hint: manifests, epoch files, Merkle metadata, and
 buckets must live under private non-symlink directories. Directory creation

@@ -355,7 +355,7 @@ struct PrivateResultOramClosePath {
     #[validate(nested)]
     #[serde(flatten)]
     private_result_oram: PrivateResultOramPath,
-    #[validate(length(min = 1, max = 256))]
+    #[validate(length(min = 1))]
     session_id: String,
 }
 
@@ -3149,9 +3149,11 @@ mod private_result_oram_rest_tests {
             );
 
             let oversized_close_session_id = "s".repeat(129);
+            let very_oversized_close_session_id = "s".repeat(257);
             let malformed_close_session_id = "bad.session-id";
             for invalid_session_id in [
                 oversized_close_session_id.as_str(),
+                very_oversized_close_session_id.as_str(),
                 malformed_close_session_id,
             ] {
                 let invalid_close_request = actix_test::TestRequest::post()
