@@ -71,15 +71,15 @@ impl LocalShard {
                     &payload,
                     vector_name,
                 )
-                .map_err(|err| {
-                    CollectionError::service_error(format!(
-                        "stored CKKS vector sidecar entry '{vector_name}' failed validation: {err}",
-                    ))
+                .map_err(|_err| {
+                    CollectionError::service_error(
+                        "stored CKKS vector sidecar entry failed validation",
+                    )
                 })?;
                 let Some(indexed_record) = indexed_record else {
-                    return Err(CollectionError::service_error(format!(
-                        "stored CKKS vector sidecar entry '{vector_name}' disappeared during validation",
-                    )));
+                    return Err(CollectionError::service_error(
+                        "stored CKKS vector sidecar entry disappeared during validation",
+                    ));
                 };
                 sidecar_by_offset.insert(
                     point_offset,
@@ -187,18 +187,18 @@ fn ckks_ciphertext_residual_records_from_read_segment(
         let Some(encrypted) = ckks_encrypted_vector_from_payload(&payload, vector_name)? else {
             continue;
         };
-        let Some(indexed_record) =
-            ckks_ciphertext_indexed_record_from_payload(0, &payload, vector_name).map_err(
-                |err| {
-                    CollectionError::service_error(format!(
-                        "stored CKKS vector sidecar entry '{vector_name}' failed validation: {err}",
-                    ))
-                },
-            )?
+        let Some(indexed_record) = ckks_ciphertext_indexed_record_from_payload(
+            0,
+            &payload,
+            vector_name,
+        )
+        .map_err(|_err| {
+            CollectionError::service_error("stored CKKS vector sidecar entry failed validation")
+        })?
         else {
-            return Err(CollectionError::service_error(format!(
-                "stored CKKS vector sidecar entry '{vector_name}' disappeared during validation",
-            )));
+            return Err(CollectionError::service_error(
+                "stored CKKS vector sidecar entry disappeared during validation",
+            ));
         };
         records.push(CkksCiphertextSegmentSearchRecord {
             id,
@@ -229,14 +229,12 @@ fn ckks_encrypted_vector_from_payload(
         .as_object()
         .and_then(|object| object.get(ENCRYPTED_CKKS_VECTOR_MARKER))
     else {
-        return Err(CollectionError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is malformed",
-        )));
+        return Err(CollectionError::service_error(
+            "stored CKKS vector sidecar entry is malformed",
+        ));
     };
-    let encrypted = serde_json::from_value(marker.clone()).map_err(|err| {
-        CollectionError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is malformed: {err}",
-        ))
+    let encrypted = serde_json::from_value(marker.clone()).map_err(|_err| {
+        CollectionError::service_error("stored CKKS vector sidecar entry is malformed")
     })?;
     Ok(Some(encrypted))
 }
@@ -257,6 +255,55 @@ mod tests {
     use tempfile::Builder;
 
     use super::*;
+
+    #[test]
+    fn ckks_encrypted_vector_from_payload_error_redacts_sidecar_identifiers() {
+        let payload = Payload(
+            serde_json::from_value(serde_json::json!({
+                ENCRYPTED_VECTOR_SIDECAR_FIELD: {
+                    "embedding-sensitive-sentinel": {
+                        ENCRYPTED_CKKS_VECTOR_MARKER: {
+                            "version": "version-sensitive-sentinel",
+                            "scheme": "openfhe-ckks",
+                            "envelope": {
+                                "version": 1,
+                                "algorithm": "AES-256-GCM",
+                                "key_id": "tenant-a:vector-sensitive-sentinel",
+                                "material_fingerprint": "tenant-a/vector-sensitive-sentinel@v1",
+                                "rk_id": "tenant-a/vector-rk-sensitive-sentinel@v1",
+                                "rk_epoch": 1,
+                                "nonce": "nonce-sensitive-sentinel",
+                                "ciphertext": "ciphertext-sensitive-sentinel"
+                            }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        );
+
+        let rendered = format!(
+            "{:?}",
+            ckks_encrypted_vector_from_payload(&payload, "embedding-sensitive-sentinel")
+                .expect_err("malformed local shard CKKS sidecar must be rejected")
+        );
+
+        assert!(rendered.contains("stored CKKS vector sidecar entry is malformed"));
+        for leaked in [
+            "embedding-sensitive-sentinel",
+            "version-sensitive-sentinel",
+            "tenant-a:vector-sensitive-sentinel",
+            "tenant-a/vector-sensitive-sentinel@v1",
+            "tenant-a/vector-rk-sensitive-sentinel@v1",
+            "nonce-sensitive-sentinel",
+            "ciphertext-sensitive-sentinel",
+        ] {
+            assert!(
+                !rendered.contains(leaked),
+                "local shard CKKS sidecar error leaked {leaked}: {rendered}",
+            );
+        }
+    }
 
     #[test]
     fn ckks_proxy_segment_visible_sidecars_are_residual_records() {
