@@ -829,13 +829,24 @@ impl Debug for PrivateHnswPrivateResultPayloadFetch {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswSearchAccessMetrics {
     pub path_accesses: usize,
     pub unique_leaf_labels: usize,
     pub fixed_steps: usize,
     pub exhausted_fixed_budget: bool,
+}
+
+impl Debug for PrivateHnswSearchAccessMetrics {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswSearchAccessMetrics")
+            .field("path_accesses", &"[redacted]")
+            .field("unique_leaf_labels", &"[redacted]")
+            .field("fixed_steps", &"[redacted]")
+            .field("exhausted_fixed_budget", &"[redacted]")
+            .finish()
+    }
 }
 
 impl PrivateHnswSearchResult {
@@ -5563,6 +5574,12 @@ mod tests {
             accessed_leaf_labels: vec!["leaf-label-sentinel".to_string()],
             completed_steps: 8,
         };
+        let access_metrics = PrivateHnswSearchAccessMetrics {
+            path_accesses: 5,
+            unique_leaf_labels: 3,
+            fixed_steps: 8,
+            exhausted_fixed_budget: true,
+        };
         let fetch_plan = PrivateHnswPrivateResultFetchPlan {
             payload_fetch_tokens: vec![[46; 32], [47; 32]],
             real_result_count: 1,
@@ -5785,6 +5802,7 @@ mod tests {
             format!("{params:?}"),
             format!("{hit:?}"),
             format!("{result:?}"),
+            format!("{access_metrics:?}"),
             format!("{fetch_plan:?}"),
             payload_debug.clone(),
             format!("{payload_fetch:?}"),
@@ -5893,6 +5911,13 @@ mod tests {
             (format!("{result:?}"), "hit_count: 1"),
             (format!("{result:?}"), "accessed_leaf_label_count: 1"),
             (format!("{result:?}"), "completed_steps: 8"),
+            (format!("{access_metrics:?}"), "path_accesses: 5"),
+            (format!("{access_metrics:?}"), "unique_leaf_labels: 3"),
+            (format!("{access_metrics:?}"), "fixed_steps: 8"),
+            (
+                format!("{access_metrics:?}"),
+                "exhausted_fixed_budget: true",
+            ),
             (format!("{fetch_plan:?}"), "payload_fetch_token_count: 2"),
             (format!("{fetch_plan:?}"), "real_result_count: 1"),
             (format!("{fetch_plan:?}"), "fixed_result_k: 2"),

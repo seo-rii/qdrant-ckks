@@ -2008,7 +2008,9 @@ query vector/embedding/plaintext, score/distance, candidate/node score,
 candidate/node distance, token, client-state, proof, and access-volume
 count/length aliases. REST private ORAM wire DTO `Debug` wrappers also redact
 upload/read bucket counts alongside roots, ciphertext bodies, commitments, and
-signatures. Audit events never include request bodies.
+signatures, and SDK private HNSW search access metrics redact path/leaf/fixed
+step counts and budget-exhaustion state. Audit events never include request
+bodies.
 Prometheus request metrics may include fixed REST/gRPC endpoint labels and the
 collection label for private ORAM manifest, session, read, and commit APIs, but
 they do not include path labels, bucket ids, session ids, ciphertext bodies, or
