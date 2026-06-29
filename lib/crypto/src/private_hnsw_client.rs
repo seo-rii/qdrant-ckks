@@ -442,8 +442,8 @@ pub struct PrivateHnswBucketAeadContext<'a> {
 impl Debug for PrivateHnswBucketAeadContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswBucketAeadContext")
-            .field("collection_id", &self.collection_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -465,8 +465,8 @@ pub struct PrivateHnswBucketAeadBaseContext<'a> {
 impl Debug for PrivateHnswBucketAeadBaseContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswBucketAeadBaseContext")
-            .field("collection_id", &self.collection_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -488,8 +488,8 @@ pub struct PrivateHnswClientStateAeadContext<'a> {
 impl Debug for PrivateHnswClientStateAeadContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswClientStateAeadContext")
-            .field("collection_id", &self.collection_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -1310,8 +1310,8 @@ pub struct PrivateHnswManifestBuildContext<'a> {
 impl Debug for PrivateHnswManifestBuildContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswManifestBuildContext")
-            .field("collection_id", &self.collection_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -1390,8 +1390,8 @@ pub struct PrivateHnswCommitSignatureContext<'a> {
 impl Debug for PrivateHnswCommitSignatureContext<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswCommitSignatureContext")
-            .field("collection_id", &self.collection_id)
-            .field("vector_name", &self.vector_name)
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
             .field("key_id", &"[redacted]")
             .field("rk_id", &"[redacted]")
             .field("rk_epoch", &self.rk_epoch)
@@ -5687,6 +5687,8 @@ mod tests {
             buckets: vec![encrypted_bucket.clone()],
         };
         let mut manifest = fixture_manifest();
+        manifest.collection_id = "HNSW-CLIENT-MANIFEST-COLLECTION-ID-SENTINEL".to_string();
+        manifest.vector_name = "HNSW-CLIENT-MANIFEST-VECTOR-NAME-SENTINEL".to_string();
         manifest.root_hash = "HNSW-MANIFEST-ROOT-SENTINEL".to_string();
         let upload_bundle = PrivateHnswOramUploadBundle {
             manifest: manifest.clone(),
@@ -5706,8 +5708,8 @@ mod tests {
         };
         let commit_refs = commit_plan.signature_bucket_refs();
         let commit_signature_input = PrivateHnswOramCommitSignatureInput {
-            collection_id: "collection-uuid-1",
-            vector_name: "text",
+            collection_id: "HNSW-CLIENT-COMMIT-COLLECTION-ID-SENTINEL",
+            vector_name: "HNSW-CLIENT-COMMIT-VECTOR-NAME-SENTINEL",
             key_id: "tenant-a/vector-private-rk",
             rk_id: "tenant-a/vector-private-rk",
             rk_epoch: 7,
@@ -5721,8 +5723,8 @@ mod tests {
         };
         let read_path_labels = ["leaf-label-sentinel"];
         let read_signature_input = PrivateHnswOramReadPathsSignatureInput {
-            collection_id: "collection-uuid-1",
-            vector_name: "text",
+            collection_id: "HNSW-CLIENT-READ-COLLECTION-ID-SENTINEL",
+            vector_name: "HNSW-CLIENT-READ-VECTOR-NAME-SENTINEL",
             key_id: "tenant-a/vector-private-rk",
             rk_id: "tenant-a/vector-private-rk",
             rk_epoch: 7,
@@ -5735,8 +5737,8 @@ mod tests {
             signature_key_id: "tenant-a/private-hnsw-signing-v1",
         };
         let bucket_aead_context = PrivateHnswBucketAeadContext {
-            collection_id: "collection-uuid-1",
-            vector_name: "text",
+            collection_id: "HNSW-CLIENT-AEAD-BUCKET-COLLECTION-ID-SENTINEL",
+            vector_name: "HNSW-CLIENT-AEAD-BUCKET-VECTOR-NAME-SENTINEL",
             key_id: "HNSW-AEAD-BUCKET-KEY-SENTINEL",
             rk_id: "HNSW-AEAD-BUCKET-RK-SENTINEL",
             rk_epoch: 7,
@@ -5744,15 +5746,15 @@ mod tests {
             index_epoch: 777_123,
         };
         let bucket_aead_base_context = PrivateHnswBucketAeadBaseContext {
-            collection_id: "collection-uuid-1",
-            vector_name: "text",
+            collection_id: "HNSW-CLIENT-AEAD-BASE-COLLECTION-ID-SENTINEL",
+            vector_name: "HNSW-CLIENT-AEAD-BASE-VECTOR-NAME-SENTINEL",
             key_id: "HNSW-AEAD-BASE-KEY-SENTINEL",
             rk_id: "HNSW-AEAD-BASE-RK-SENTINEL",
             rk_epoch: 7,
         };
         let client_state_aead_context = PrivateHnswClientStateAeadContext {
-            collection_id: "collection-uuid-1",
-            vector_name: "text",
+            collection_id: "HNSW-CLIENT-AEAD-STATE-COLLECTION-ID-SENTINEL",
+            vector_name: "HNSW-CLIENT-AEAD-STATE-VECTOR-NAME-SENTINEL",
             key_id: "HNSW-AEAD-STATE-KEY-SENTINEL",
             rk_id: "HNSW-AEAD-STATE-RK-SENTINEL",
             rk_epoch: 7,
@@ -5760,16 +5762,16 @@ mod tests {
             root_hash: "HNSW-AEAD-STATE-ROOT-SENTINEL",
         };
         let commit_signature_context = PrivateHnswCommitSignatureContext {
-            collection_id: "collection-uuid-1",
-            vector_name: "text",
+            collection_id: "HNSW-CLIENT-SIGN-CONTEXT-COLLECTION-ID-SENTINEL",
+            vector_name: "HNSW-CLIENT-SIGN-CONTEXT-VECTOR-NAME-SENTINEL",
             key_id: "HNSW-SIGN-CONTEXT-KEY-SENTINEL",
             rk_id: "HNSW-SIGN-CONTEXT-RK-SENTINEL",
             rk_epoch: 7,
             signing_key_id: "HNSW-SIGN-CONTEXT-SIGNING-KEY-SENTINEL",
         };
         let manifest_build_context = PrivateHnswManifestBuildContext {
-            collection_id: "collection-uuid-1",
-            vector_name: "text",
+            collection_id: "HNSW-CLIENT-MANIFEST-BUILD-COLLECTION-ID-SENTINEL",
+            vector_name: "HNSW-CLIENT-MANIFEST-BUILD-VECTOR-NAME-SENTINEL",
             key_id: "HNSW-MANIFEST-BUILD-KEY-SENTINEL",
             rk_id: "HNSW-MANIFEST-BUILD-RK-SENTINEL",
             rk_epoch: 7,
@@ -5878,20 +5880,36 @@ mod tests {
             "HNSW-PROOF-VALUE-SENTINEL".to_string(),
             "HNSW-OLD-ROOT-SENTINEL".to_string(),
             "HNSW-NEW-ROOT-SENTINEL".to_string(),
+            "HNSW-CLIENT-MANIFEST-COLLECTION-ID-SENTINEL".to_string(),
+            "HNSW-CLIENT-MANIFEST-VECTOR-NAME-SENTINEL".to_string(),
             "HNSW-MANIFEST-ROOT-SENTINEL".to_string(),
+            "HNSW-CLIENT-COMMIT-COLLECTION-ID-SENTINEL".to_string(),
+            "HNSW-CLIENT-COMMIT-VECTOR-NAME-SENTINEL".to_string(),
+            "HNSW-CLIENT-READ-COLLECTION-ID-SENTINEL".to_string(),
+            "HNSW-CLIENT-READ-VECTOR-NAME-SENTINEL".to_string(),
+            "HNSW-CLIENT-AEAD-BUCKET-COLLECTION-ID-SENTINEL".to_string(),
+            "HNSW-CLIENT-AEAD-BUCKET-VECTOR-NAME-SENTINEL".to_string(),
             "HNSW-AEAD-BUCKET-KEY-SENTINEL".to_string(),
             "HNSW-AEAD-BUCKET-RK-SENTINEL".to_string(),
             "888123".to_string(),
             "777123".to_string(),
+            "HNSW-CLIENT-AEAD-BASE-COLLECTION-ID-SENTINEL".to_string(),
+            "HNSW-CLIENT-AEAD-BASE-VECTOR-NAME-SENTINEL".to_string(),
             "HNSW-AEAD-BASE-KEY-SENTINEL".to_string(),
             "HNSW-AEAD-BASE-RK-SENTINEL".to_string(),
+            "HNSW-CLIENT-AEAD-STATE-COLLECTION-ID-SENTINEL".to_string(),
+            "HNSW-CLIENT-AEAD-STATE-VECTOR-NAME-SENTINEL".to_string(),
             "HNSW-AEAD-STATE-KEY-SENTINEL".to_string(),
             "HNSW-AEAD-STATE-RK-SENTINEL".to_string(),
             "777124".to_string(),
             "HNSW-AEAD-STATE-ROOT-SENTINEL".to_string(),
+            "HNSW-CLIENT-SIGN-CONTEXT-COLLECTION-ID-SENTINEL".to_string(),
+            "HNSW-CLIENT-SIGN-CONTEXT-VECTOR-NAME-SENTINEL".to_string(),
             "HNSW-SIGN-CONTEXT-KEY-SENTINEL".to_string(),
             "HNSW-SIGN-CONTEXT-RK-SENTINEL".to_string(),
             "HNSW-SIGN-CONTEXT-SIGNING-KEY-SENTINEL".to_string(),
+            "HNSW-CLIENT-MANIFEST-BUILD-COLLECTION-ID-SENTINEL".to_string(),
+            "HNSW-CLIENT-MANIFEST-BUILD-VECTOR-NAME-SENTINEL".to_string(),
             "HNSW-MANIFEST-BUILD-KEY-SENTINEL".to_string(),
             "HNSW-MANIFEST-BUILD-RK-SENTINEL".to_string(),
             "HNSW-MANIFEST-BUILD-OWNER-SIGNING-SENTINEL".to_string(),
