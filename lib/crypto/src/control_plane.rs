@@ -76,7 +76,7 @@ impl CryptoCapability {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
 pub struct CiphertextEnvelope {
@@ -90,6 +90,21 @@ pub struct CiphertextEnvelope {
     #[serde(default, skip_serializing_if = "Map::is_empty")]
     pub headers: Map<String, Value>,
     pub body: String,
+}
+
+impl fmt::Debug for CiphertextEnvelope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CiphertextEnvelope")
+            .field("version", &self.version)
+            .field("capability", &self.capability)
+            .field("provider", &self.provider)
+            .field("instance_fingerprint", &"[redacted]")
+            .field("key_id", &"[redacted]")
+            .field("binding", &self.binding)
+            .field("header_count", &self.headers.len())
+            .field("body_len", &"[redacted]")
+            .finish()
+    }
 }
 
 impl CiphertextEnvelope {
@@ -432,6 +447,36 @@ mod tests {
             assert!(!rendered.contains(sentinel), "{rendered}");
             assert!(rendered.contains("[redacted]"), "{rendered}");
         }
+    }
+
+    #[test]
+    fn ciphertext_envelope_debug_redacts_body_and_identifiers() {
+        let sentinel = "ciphertext-envelope-debug-sentinel";
+        let envelope = CiphertextEnvelope::new(
+            1,
+            CryptoCapability::PayloadValue,
+            PAYLOAD_AES_GCM_PROVIDER,
+            format!("sha256:{sentinel}"),
+            format!("tenant-a:{sentinel}"),
+            Some(PAYLOAD_FIELD_BINDING.to_string()),
+            Map::from_iter([(
+                "field".to_string(),
+                Value::String(format!("header-{sentinel}")),
+            )]),
+            format!("body-{sentinel}"),
+        )
+        .unwrap();
+        let rendered = format!("{envelope:?}");
+
+        assert!(rendered.contains("PayloadValue"), "{rendered}");
+        assert!(rendered.contains("header_count"), "{rendered}");
+        assert!(rendered.contains("body_len"), "{rendered}");
+        assert!(rendered.contains("[redacted]"), "{rendered}");
+        assert!(!rendered.contains("sha256:"), "{rendered}");
+        assert!(!rendered.contains("tenant-a:"), "{rendered}");
+        assert!(!rendered.contains("header-"), "{rendered}");
+        assert!(!rendered.contains("body-"), "{rendered}");
+        assert!(!rendered.contains(sentinel), "{rendered}");
     }
 
     #[test]
