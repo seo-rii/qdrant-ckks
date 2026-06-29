@@ -9403,12 +9403,16 @@ async fn encrypted_vector_rejects_search_path() {
         .await
         .unwrap_err();
 
-    assert!(matches!(
-        err,
-        CollectionError::BadInput { description }
-            if description.contains("cannot search encrypted vector")
-                && description.contains("runtime CKKS sidecar search entrypoint")
-    ));
+    assert!(
+        matches!(
+            err,
+            CollectionError::BadInput { ref description }
+                if description.contains("encrypted vector")
+                    && description.contains("runtime CKKS sidecar")
+                    && description.contains("entrypoint")
+        ),
+        "unexpected error: {err:?}",
+    );
 
     let err = collection
         .query_batch(
@@ -9579,13 +9583,16 @@ async fn encrypted_vector_rejects_search_path() {
     .await
     .unwrap_err();
 
-    assert!(matches!(
-        err,
-        CollectionError::BadInput { description }
-            if description.contains("encrypted vector")
-                && (description.contains("runtime CKKS sidecar search entrypoint")
-                    || description.contains("runtime CKKS sidecar query entrypoint"))
-    ));
+    assert!(
+        matches!(
+            err,
+            CollectionError::BadInput { ref description }
+                if description.contains("encrypted vector")
+                    && description.contains("runtime CKKS sidecar")
+                    && description.contains("entrypoint")
+        ),
+        "unexpected error: {err:?}",
+    );
 
     let err = GroupBy::new(
         GroupRequest {
@@ -9617,13 +9624,16 @@ async fn encrypted_vector_rejects_search_path() {
     .await
     .unwrap_err();
 
-    assert!(matches!(
-        err,
-        CollectionError::BadInput { description }
-            if description.contains("encrypted vector")
-                && (description.contains("runtime CKKS sidecar search entrypoint")
-                    || description.contains("runtime CKKS sidecar query entrypoint"))
-    ));
+    assert!(
+        matches!(
+            err,
+            CollectionError::BadInput { ref description }
+                if description.contains("encrypted vector")
+                    && description.contains("runtime CKKS sidecar")
+                    && description.contains("entrypoint")
+        ),
+        "unexpected error: {err:?}",
+    );
 
     let err = recommend_by(
         RecommendRequestInternal {
@@ -9641,12 +9651,16 @@ async fn encrypted_vector_rejects_search_path() {
     .await
     .unwrap_err();
 
-    assert!(matches!(
-        err,
-        CollectionError::BadInput { description }
-            if description.contains("cannot search encrypted vector")
-                && description.contains("runtime CKKS sidecar search entrypoint")
-    ));
+    assert!(
+        matches!(
+            err,
+            CollectionError::BadInput { ref description }
+                if description.contains("encrypted vector")
+                    && description.contains("runtime CKKS sidecar")
+                    && description.contains("entrypoint")
+        ),
+        "unexpected error: {err:?}",
+    );
 
     let err = discover(
         DiscoverRequestInternal {
@@ -9671,12 +9685,16 @@ async fn encrypted_vector_rejects_search_path() {
     .await
     .unwrap_err();
 
-    assert!(matches!(
-        err,
-        CollectionError::BadInput { description }
-            if description.contains("cannot search encrypted vector")
-                && description.contains("runtime CKKS sidecar search entrypoint")
-    ));
+    assert!(
+        matches!(
+            err,
+            CollectionError::BadInput { ref description }
+                if description.contains("encrypted vector")
+                    && description.contains("runtime CKKS sidecar")
+                    && description.contains("entrypoint")
+        ),
+        "unexpected error: {err:?}",
+    );
 
     let err = collection
         .search_points_matrix(

@@ -623,9 +623,7 @@ impl Collection {
                         let message = if encryption_rule_uses_private_hnsw_oram(rule) {
                             private_hnsw_oram_api_required_message(vector_name)
                         } else {
-                            format!(
-                                "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
-                            )
+                            "cannot query encrypted vector through direct collection query; use the runtime CKKS sidecar query entrypoint".to_string()
                         };
                         return Err(CollectionError::bad_input(message));
                     }
@@ -641,9 +639,7 @@ impl Collection {
                             let message = if encryption_rule_uses_private_hnsw_oram(rule) {
                                 private_hnsw_oram_api_required_message(vector_name)
                             } else {
-                                format!(
-                                    "cannot query encrypted vector '{vector_name}' through direct collection query; use the runtime CKKS sidecar query entrypoint",
-                                )
+                                "cannot query encrypted vector through direct collection query; use the runtime CKKS sidecar query entrypoint".to_string()
                             };
                             return Err(CollectionError::bad_input(message));
                         }

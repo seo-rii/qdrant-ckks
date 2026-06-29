@@ -170,9 +170,7 @@ impl Collection {
                     let message = if encryption_rule_uses_private_hnsw_oram(rule) {
                         private_hnsw_oram_api_required_message(&using)
                     } else {
-                        format!(
-                            "cannot build direct collection search matrix for encrypted vector '{using}'; use the runtime CKKS sidecar matrix entrypoint",
-                        )
+                        "cannot build direct collection search matrix for encrypted vector; use the runtime CKKS sidecar matrix entrypoint".to_string()
                     };
                     return Err(CollectionError::bad_input(message));
                 }

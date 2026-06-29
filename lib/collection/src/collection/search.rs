@@ -120,9 +120,7 @@ impl Collection {
                         let message = if encryption_rule_uses_private_hnsw_oram(rule) {
                             private_hnsw_oram_api_required_message(vector_name)
                         } else {
-                            format!(
-                                "cannot search encrypted vector '{vector_name}' through direct collection search; use the runtime CKKS sidecar search entrypoint",
-                            )
+                            "cannot search encrypted vector through direct collection search; use the runtime CKKS sidecar search entrypoint".to_string()
                         };
                         return Err(CollectionError::bad_input(message));
                     }
