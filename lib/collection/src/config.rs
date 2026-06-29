@@ -364,6 +364,31 @@ mod ckks_tests {
     }
 
     #[test]
+    fn encrypted_vector_return_request_debug_redacts_vector_names() {
+        let any = EncryptedVectorReturnRequest::Any {
+            encrypted_name: "CONFIG-ENCRYPTED-VECTOR-SENTINEL",
+        };
+        let named = EncryptedVectorReturnRequest::Named {
+            vector_name: "CONFIG-REQUESTED-VECTOR-SENTINEL",
+        };
+
+        for rendered in [format!("{any:?}"), format!("{named:?}")] {
+            assert!(rendered.contains("[redacted]"), "{rendered}");
+            assert!(
+                !rendered.contains("CONFIG-ENCRYPTED-VECTOR-SENTINEL"),
+                "{rendered}"
+            );
+            assert!(
+                !rendered.contains("CONFIG-REQUESTED-VECTOR-SENTINEL"),
+                "{rendered}"
+            );
+        }
+
+        assert_eq!(any.vector_name(), "CONFIG-ENCRYPTED-VECTOR-SENTINEL");
+        assert_eq!(named.vector_name(), "CONFIG-REQUESTED-VECTOR-SENTINEL");
+    }
+
+    #[test]
     fn private_hnsw_oram_vector_guard_message_uses_session_api() {
         let private_rule = EncryptionRuleRef {
             id: "embedding_private".to_string(),
@@ -2560,10 +2585,25 @@ impl EncryptionSelector {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum EncryptedVectorReturnRequest<'a> {
     Any { encrypted_name: &'a str },
     Named { vector_name: &'a str },
+}
+
+impl std::fmt::Debug for EncryptedVectorReturnRequest<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Any { .. } => f
+                .debug_struct("Any")
+                .field("encrypted_name", &"[redacted]")
+                .finish(),
+            Self::Named { .. } => f
+                .debug_struct("Named")
+                .field("vector_name", &"[redacted]")
+                .finish(),
+        }
+    }
 }
 
 impl<'a> EncryptedVectorReturnRequest<'a> {
