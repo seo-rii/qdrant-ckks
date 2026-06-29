@@ -296,9 +296,18 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "read_bucket_sequence"
                         | "read_bucket_sequences"
                         | "read_buckets"
+                        | "read_bucket_count"
+                        | "read_bucket_counts"
                         | "paths"
+                        | "path_count"
+                        | "path_counts"
+                        | "requested_paths"
+                        | "requested_path_count"
+                        | "dummy_paths_included"
                         | "access_path"
                         | "access_paths"
+                        | "access_count"
+                        | "access_counts"
                         | "block_plaintext"
                         | "block_plaintexts"
                         | "bucket_commitment"
@@ -335,16 +344,26 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "sibling_hashes"
                         | "bucket_id"
                         | "bucket_ids"
+                        | "bucket_id_count"
+                        | "bucket_id_counts"
                         | "bucket_id_sequence"
                         | "bucket_id_sequences"
                         | "bucket_sequence"
                         | "bucket_sequences"
+                        | "requested_bucket_count"
+                        | "requested_bucket_counts"
+                        | "returned_bucket_count"
+                        | "returned_bucket_counts"
                         | "updated_bucket"
                         | "updated_bucket_commitment"
                         | "updated_bucket_commitments"
                         | "updated_bucket_id"
                         | "updated_bucket_ids"
+                        | "updated_bucket_count"
+                        | "updated_bucket_counts"
                         | "updated_buckets"
+                        | "writeback_bucket_count"
+                        | "writeback_bucket_counts"
                         | "accessed_leaf_label"
                         | "accessed_leaf_labels"
                         | "oram_path"
@@ -353,6 +372,10 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "path_labels"
                         | "leaf_label"
                         | "leaf_labels"
+                        | "leaf_count"
+                        | "leaf_counts"
+                        | "sibling_count"
+                        | "sibling_counts"
                         | "client_state"
                         | "client_state_backup"
                         | "client_state_backups"
@@ -377,6 +400,9 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "encrypted_client_state_ciphertext_sha256"
                         | "encrypted_client_state_ciphertexts_sha256"
                         | "position_map"
+                        | "position_count"
+                        | "position_counts"
+                        | "position_map_len"
                         | "position_map_backup"
                         | "position_map_backups"
                         | "position_maps"
@@ -389,12 +415,15 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "oram_position_map_snapshot"
                         | "oram_position_map_snapshots"
                         | "token_position_map"
+                        | "token_count"
+                        | "token_counts"
                         | "token_position_map_backup"
                         | "token_position_map_backups"
                         | "token_position_maps"
                         | "token_position_map_snapshot"
                         | "token_position_map_snapshots"
                         | "stash"
+                        | "stash_len"
                         | "stash_backup"
                         | "stash_backups"
                         | "stash_snapshot"
@@ -410,6 +439,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "node_plaintext"
                         | "node_plaintexts"
                         | "neighbor"
+                        | "neighbor_count"
+                        | "neighbor_counts"
                         | "neighbor_id"
                         | "neighbors"
                         | "neighbor_ids"
@@ -440,6 +471,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "point_tokens"
                         | "fetch_token"
                         | "fetch_tokens"
+                        | "payload_len"
                         | "payload_bytes"
                         | "payload_fetch_token"
                         | "payload_fetch_tokens"
@@ -468,6 +500,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "visited_nodes"
                         | "visited_node_id"
                         | "visited_node_ids"
+                        | "hit_count"
+                        | "hit_counts"
+                        | "result_count"
+                        | "result_counts"
+                        | "real_path_count"
+                        | "real_path_counts"
                 ) || matches!(
                     key_without_separators,
                     "xapikey"
@@ -579,8 +617,17 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "readbucketsequence"
                         | "readbucketsequences"
                         | "readbuckets"
+                        | "readbucketcount"
+                        | "readbucketcounts"
+                        | "pathcount"
+                        | "pathcounts"
+                        | "requestedpaths"
+                        | "requestedpathcount"
+                        | "dummypathsincluded"
                         | "accesspath"
                         | "accesspaths"
+                        | "accesscount"
+                        | "accesscounts"
                         | "blockplaintext"
                         | "blockplaintexts"
                         | "bucketcommitment"
@@ -617,22 +664,36 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "siblinghashes"
                         | "bucketid"
                         | "bucketids"
+                        | "bucketidcount"
+                        | "bucketidcounts"
                         | "bucketidsequence"
                         | "bucketidsequences"
                         | "bucketsequence"
                         | "bucketsequences"
+                        | "requestedbucketcount"
+                        | "requestedbucketcounts"
+                        | "returnedbucketcount"
+                        | "returnedbucketcounts"
                         | "updatedbucket"
                         | "updatedbucketcommitment"
                         | "updatedbucketcommitments"
                         | "updatedbucketid"
                         | "updatedbucketids"
+                        | "updatedbucketcount"
+                        | "updatedbucketcounts"
                         | "updatedbuckets"
+                        | "writebackbucketcount"
+                        | "writebackbucketcounts"
                         | "accessedleaflabel"
                         | "accessedleaflabels"
                         | "orampath"
                         | "orampaths"
                         | "leaflabel"
                         | "leaflabels"
+                        | "leafcount"
+                        | "leafcounts"
+                        | "siblingcount"
+                        | "siblingcounts"
                         | "clientstate"
                         | "clientstatebackup"
                         | "clientstatebackups"
@@ -657,6 +718,9 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "stateciphertextsha256"
                         | "stateciphertextssha256"
                         | "positionmap"
+                        | "positioncount"
+                        | "positioncounts"
+                        | "positionmaplen"
                         | "positionmapbackup"
                         | "positionmapbackups"
                         | "positionmaps"
@@ -669,12 +733,15 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "orampositionmapsnapshot"
                         | "orampositionmapsnapshots"
                         | "tokenpositionmap"
+                        | "tokencount"
+                        | "tokencounts"
                         | "tokenpositionmapbackup"
                         | "tokenpositionmapbackups"
                         | "tokenpositionmaps"
                         | "tokenpositionmapsnapshot"
                         | "tokenpositionmapsnapshots"
                         | "stash"
+                        | "stashlen"
                         | "stashbackup"
                         | "stashbackups"
                         | "stashsnapshot"
@@ -691,6 +758,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "nodeplaintexts"
                         | "neighbor"
                         | "neighbors"
+                        | "neighborcount"
+                        | "neighborcounts"
                         | "neighborid"
                         | "neighborids"
                         | "neighborlevel"
@@ -719,6 +788,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "pointtokens"
                         | "fetchtoken"
                         | "fetchtokens"
+                        | "payloadlen"
                         | "payloadbytes"
                         | "payloadfetchtoken"
                         | "payloadfetchtokens"
@@ -747,6 +817,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "visitednodes"
                         | "visitednodeid"
                         | "visitednodeids"
+                        | "hitcount"
+                        | "hitcounts"
+                        | "resultcount"
+                        | "resultcounts"
+                        | "realpathcount"
+                        | "realpathcounts"
                         | "unknownfield"
                 ) {
                     *value = Value::String("[redacted]".to_string());
@@ -1807,6 +1883,96 @@ mod tests {
                 field_value,
             );
         }
+        for (key, field_value) in [
+            (
+                "path_count",
+                json!("qdrant-sec-private-oram-count-log-sentinel-path-count"),
+            ),
+            (
+                "pathCount",
+                json!("qdrant-sec-private-oram-count-log-sentinel-camel-path-count"),
+            ),
+            (
+                "requested_paths",
+                json!("qdrant-sec-private-oram-count-log-sentinel-requested-paths"),
+            ),
+            (
+                "dummyPathsIncluded",
+                json!("qdrant-sec-private-oram-count-log-sentinel-dummy-paths-included"),
+            ),
+            (
+                "returned_bucket_count",
+                json!("qdrant-sec-private-oram-count-log-sentinel-returned-bucket-count"),
+            ),
+            (
+                "updatedBucketCount",
+                json!("qdrant-sec-private-oram-count-log-sentinel-updated-bucket-count"),
+            ),
+            (
+                "writeback_bucket_count",
+                json!("qdrant-sec-private-oram-count-log-sentinel-writeback-bucket-count"),
+            ),
+            (
+                "leafCount",
+                json!("qdrant-sec-private-oram-count-log-sentinel-leaf-count"),
+            ),
+            (
+                "sibling_count",
+                json!("qdrant-sec-private-oram-count-log-sentinel-sibling-count"),
+            ),
+            (
+                "position_map_len",
+                json!("qdrant-sec-private-oram-count-log-sentinel-position-map-len"),
+            ),
+            (
+                "stashLen",
+                json!("qdrant-sec-private-oram-count-log-sentinel-stash-len"),
+            ),
+        ] {
+            insert_test_json_field(
+                &mut private_hnsw_oram_access,
+                &["private_hnsw"],
+                key,
+                field_value,
+            );
+        }
+        for (key, field_value) in [
+            (
+                "bucket_id_count",
+                json!("qdrant-sec-private-oram-count-log-sentinel-bucket-id-count"),
+            ),
+            (
+                "requestedBucketCount",
+                json!("qdrant-sec-private-oram-count-log-sentinel-requested-bucket-count"),
+            ),
+            (
+                "access_count",
+                json!("qdrant-sec-private-oram-count-log-sentinel-access-count"),
+            ),
+            (
+                "tokenCount",
+                json!("qdrant-sec-private-oram-count-log-sentinel-token-count"),
+            ),
+            (
+                "payload_len",
+                json!("qdrant-sec-private-oram-count-log-sentinel-payload-len"),
+            ),
+            (
+                "resultCount",
+                json!("qdrant-sec-private-oram-count-log-sentinel-result-count"),
+            ),
+            (
+                "real_path_count",
+                json!("qdrant-sec-private-oram-count-log-sentinel-real-path-count"),
+            ),
+        ] {
+            insert_test_json_field(
+                &mut private_result_oram,
+                &["private_result_oram"],
+                key,
+                field_value,
+            );
+        }
 
         redact_sensitive_log_fields(&mut private_hnsw_oram_access);
         redact_sensitive_log_fields(&mut private_hnsw_graph);
@@ -1821,6 +1987,7 @@ mod tests {
         for sentinel in [
             "qdrant-sec-private-hnsw-client-id-log-sentinel",
             "qdrant-sec-private-hnsw-session-id-log-sentinel",
+            "qdrant-sec-private-oram-count-log-sentinel",
             "qdrant-sec-private-hnsw-owner-signing-key-id-log-sentinel",
             "qdrant-sec-private-hnsw-camel-owner-signing-key-id-log-sentinel",
             "qdrant-sec-private-hnsw-signing-key-id-log-sentinel",
