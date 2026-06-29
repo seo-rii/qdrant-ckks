@@ -1992,6 +1992,10 @@ client-state fields, and payload/result tokens; snake_case and camelCase
 singular/plural aliases are covered for private ORAM access-pattern, bucket,
 commitment, signature, query, candidate, score/distance, client-state, and token
 fields.
+REST access-log and JSON-validation sanitizers recognize private ORAM markers
+only at the route position after `/collections/{collection}`; ordinary
+collections named `private-hnsw` or `private-result-oram` keep normal access-log
+query strings and validation errors.
 Collection telemetry has sentinel coverage so decrypted plaintext is not
 intentionally emitted there, and app telemetry serializes only the runtime
 capability fingerprint rather than private ORAM key ids, verifier key ids, or

@@ -453,8 +453,12 @@ fn is_private_oram_request_path(path: &str) -> bool {
 }
 
 fn path_has_private_oram_marker(path: &str) -> bool {
-    path.split('/')
-        .any(|segment| matches!(segment, "private-hnsw" | "private-result-oram"))
+    let segments = path.split('/').collect::<Vec<_>>();
+    segments.get(1) == Some(&"collections")
+        && matches!(
+            segments.get(3).copied(),
+            Some("private-hnsw" | "private-result-oram")
+        )
 }
 
 #[cfg(test)]
@@ -563,6 +567,10 @@ mod tests {
                     web::post().to(private_oram_validation_test_endpoint),
                 )
                 .route(
+                    "/collections/{collection_name}/points/search",
+                    web::post().to(private_oram_validation_test_endpoint),
+                )
+                .route(
                     "/collections/{collection_name}/private-hnswish/{vector_name}/session",
                     web::post().to(private_oram_validation_test_endpoint),
                 ),
@@ -663,6 +671,26 @@ mod tests {
         let lookalike_body = actix_test::read_body(lookalike_response).await;
         let lookalike_body = String::from_utf8_lossy(&lookalike_body);
         assert!(lookalike_body.contains(sentinel), "{lookalike_body}");
+
+        for ordinary_collection_name in ["private-hnsw", "private-result-oram"] {
+            let ordinary_request = actix_test::TestRequest::post()
+                .uri(&format!(
+                    "/collections/{ordinary_collection_name}/points/search"
+                ))
+                .set_json(body_with_unknown_field(
+                    sentinel,
+                    "collection-name-marker-still-renders-field",
+                ))
+                .to_request();
+            let ordinary_response = actix_test::call_service(&app, ordinary_request).await;
+            assert_eq!(
+                ordinary_response.status(),
+                actix_web::http::StatusCode::BAD_REQUEST
+            );
+            let ordinary_body = actix_test::read_body(ordinary_response).await;
+            let ordinary_body = String::from_utf8_lossy(&ordinary_body);
+            assert!(ordinary_body.contains(sentinel), "{ordinary_body}");
+        }
     }
 
     #[test]
@@ -830,6 +858,18 @@ mod tests {
                 "/collections/docs/private-result-oramish?token=query-sentinel"
             ),
             "/collections/docs/private-result-oramish?token=query-sentinel"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/private-hnsw/points/search?leaf=query-sentinel"
+            ),
+            "/collections/private-hnsw/points/search?leaf=query-sentinel"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/private-result-oram/points/search?token=query-sentinel"
+            ),
+            "/collections/private-result-oram/points/search?token=query-sentinel"
         );
     }
 
