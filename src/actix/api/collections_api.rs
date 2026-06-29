@@ -799,23 +799,23 @@ fn persist_payload_crypto_migration_run_record(
             .open(&temp_path)
             .map_err(|err| {
                 StorageError::service_error(format!(
-                    "failed to create payload crypto migration run record {temp_path:?}: {err}"
+                    "failed to create payload crypto migration run record temp file: {err}"
                 ))
             })?;
         file.write_all(&bytes).map_err(|err| {
             StorageError::service_error(format!(
-                "failed to write payload crypto migration run record {temp_path:?}: {err}"
+                "failed to write payload crypto migration run record temp file: {err}"
             ))
         })?;
         file.sync_all().map_err(|err| {
             StorageError::service_error(format!(
-                "failed to sync payload crypto migration run record {temp_path:?}: {err}"
+                "failed to sync payload crypto migration run record temp file: {err}"
             ))
         })?;
     }
     fs::rename(&temp_path, &record_path).map_err(|err| {
         StorageError::service_error(format!(
-            "failed to replace payload crypto migration run record {record_path:?}: {err}"
+            "failed to replace payload crypto migration run record: {err}"
         ))
     })?;
     set_private_payload_crypto_migration_record_permissions(&record_path)?;
@@ -827,7 +827,7 @@ fn persist_payload_crypto_migration_run_record(
     if let Ok(parent) = parent_options.open(collection_path) {
         parent.sync_all().map_err(|err| {
             StorageError::service_error(format!(
-                "failed to sync payload crypto migration run record parent {collection_path:?}: {err}"
+                "failed to sync payload crypto migration run record parent directory: {err}"
             ))
         })?;
     }
@@ -842,31 +842,31 @@ fn load_payload_crypto_migration_run_record(
     validate_payload_crypto_migration_record_target(&record_path)?;
     let metadata = fs::metadata(&record_path).map_err(|err| {
         StorageError::service_error(format!(
-            "failed to inspect payload crypto migration run record {record_path:?}: {err}",
+            "failed to inspect payload crypto migration run record: {err}",
         ))
     })?;
     if metadata.len() > PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_MAX_BYTES {
         return Err(StorageError::service_error(format!(
-            "payload crypto migration run record exceeds {} bytes: {record_path:?}",
+            "payload crypto migration run record exceeds {} bytes",
             PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_MAX_BYTES,
         )));
     }
 
     let bytes = fs::read(&record_path).map_err(|err| {
         StorageError::service_error(format!(
-            "failed to read payload crypto migration run record {record_path:?}: {err}",
+            "failed to read payload crypto migration run record: {err}",
         ))
     })?;
     if bytes.len() as u64 > PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_MAX_BYTES {
         return Err(StorageError::service_error(format!(
-            "payload crypto migration run record exceeds {} bytes after read: {record_path:?}",
+            "payload crypto migration run record exceeds {} bytes after read",
             PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_MAX_BYTES,
         )));
     }
 
     serde_json::from_slice(&bytes).map_err(|err| {
         StorageError::service_error(format!(
-            "failed to parse payload crypto migration run record {record_path:?}: {err}",
+            "failed to parse payload crypto migration run record: {err}",
         ))
     })
 }
@@ -963,26 +963,26 @@ fn validate_payload_crypto_migration_record_directory(
     while let Some(path) = directory {
         let metadata = fs::symlink_metadata(path).map_err(|err| {
             StorageError::service_error(format!(
-                "failed to inspect payload crypto migration run record directory {path:?}: {err}",
+                "failed to inspect payload crypto migration run record directory: {err}",
             ))
         })?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(StorageError::service_error(format!(
-                "payload crypto migration run record directory must be a regular non-symlink directory: {path:?}",
-            )));
+            return Err(StorageError::service_error(
+                "payload crypto migration run record directory must be a regular non-symlink directory",
+            ));
         }
 
         #[cfg(unix)]
         {
             if metadata.uid() != 0 && metadata.uid() != effective_uid {
-                return Err(StorageError::service_error(format!(
-                    "payload crypto migration run record directory must be owned by root or the Qdrant process user: {path:?}",
-                )));
+                return Err(StorageError::service_error(
+                    "payload crypto migration run record directory must be owned by root or the Qdrant process user",
+                ));
             }
             if metadata.permissions().mode() & 0o022 != 0 {
-                return Err(StorageError::service_error(format!(
-                    "payload crypto migration run record directory must not be group/world-writable: {path:?}",
-                )));
+                return Err(StorageError::service_error(
+                    "payload crypto migration run record directory must not be group/world-writable",
+                ));
             }
         }
 
@@ -999,16 +999,16 @@ fn validate_payload_crypto_migration_record_target(
         return Ok(());
     };
     if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(StorageError::service_error(format!(
-            "payload crypto migration run record target must be a regular non-symlink file: {record_path:?}",
-        )));
+        return Err(StorageError::service_error(
+            "payload crypto migration run record target must be a regular non-symlink file",
+        ));
     }
 
     #[cfg(unix)]
     if metadata.permissions().mode() & 0o077 != 0 {
-        return Err(StorageError::service_error(format!(
-            "payload crypto migration run record target must not be group/world-accessible: {record_path:?}",
-        )));
+        return Err(StorageError::service_error(
+            "payload crypto migration run record target must not be group/world-accessible",
+        ));
     }
 
     Ok(())
@@ -1022,14 +1022,14 @@ fn set_private_payload_crypto_migration_record_permissions(
         let mut permissions = fs::metadata(record_path)
             .map_err(|err| {
                 StorageError::service_error(format!(
-                    "failed to inspect payload crypto migration run record {record_path:?}: {err}",
+                    "failed to inspect payload crypto migration run record: {err}",
                 ))
             })?
             .permissions();
         permissions.set_mode(0o600);
         fs::set_permissions(record_path, permissions).map_err(|err| {
             StorageError::service_error(format!(
-                "failed to restrict payload crypto migration run record permissions {record_path:?}: {err}",
+                "failed to restrict payload crypto migration run record permissions: {err}",
             ))
         })?;
     }
@@ -2003,6 +2003,7 @@ mod tests {
             err.to_string().contains("non-symlink file"),
             "unexpected error: {err}",
         );
+        assert_payload_crypto_migration_run_record_error_redacts_paths(&err);
     }
 
     #[cfg(unix)]
@@ -2025,6 +2026,7 @@ mod tests {
             err.to_string().contains("group/world-writable"),
             "unexpected error: {err}",
         );
+        assert_payload_crypto_migration_run_record_error_redacts_paths(&err);
     }
 
     #[cfg(unix)]
@@ -2050,6 +2052,7 @@ mod tests {
             err.to_string().contains("group/world-writable"),
             "unexpected error: {err}",
         );
+        assert_payload_crypto_migration_run_record_error_redacts_paths(&err);
     }
 
     #[cfg(unix)]
@@ -2074,6 +2077,25 @@ mod tests {
             err.to_string().contains("non-symlink directory"),
             "unexpected error: {err}",
         );
+        assert_payload_crypto_migration_run_record_error_redacts_paths(&err);
+    }
+
+    fn assert_payload_crypto_migration_run_record_error_redacts_paths(err: &StorageError) {
+        let rendered = err.to_string();
+        for leaked in [
+            "qdrant-sec-payload-migration-record",
+            "attacker-controlled-record",
+            "writable-ancestor",
+            "real-parent",
+            "symlink-parent",
+            "collection",
+            PAYLOAD_CRYPTO_MIGRATION_LAST_RUN_FILE,
+        ] {
+            assert!(
+                !rendered.contains(leaked),
+                "payload crypto migration run record error leaked path component {leaked}: {rendered}",
+            );
+        }
     }
 
     #[test]
