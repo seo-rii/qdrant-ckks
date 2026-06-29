@@ -405,8 +405,8 @@ impl Debug for PrivateHnswOramReadPathsSignatureInput<'_> {
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("path_count", &self.paths.len())
-            .field("requested_paths", &self.requested_paths)
-            .field("dummy_paths_included", &self.dummy_paths_included)
+            .field("requested_paths", &"[redacted]")
+            .field("dummy_paths_included", &"[redacted]")
             .field("signature_alg", &self.signature_alg)
             .field("signature_key_id", &"[redacted]")
             .finish()
@@ -1179,8 +1179,8 @@ mod tests {
             index_epoch: 42,
             root_hash: "HNSW-ROOT-SENTINEL",
             paths: &paths,
-            requested_paths: 1,
-            dummy_paths_included: true,
+            requested_paths: 77,
+            dummy_paths_included: false,
             signature_alg: "ed25519",
             signature_key_id: "HNSW-READ-SIGNATURE-KEY-SENTINEL",
         };
@@ -1250,6 +1250,11 @@ mod tests {
         ] {
             assert!(!rendered.contains(leaked), "{rendered}");
         }
+        assert!(!rendered.contains("requested_paths: 77"), "{rendered}");
+        assert!(
+            !rendered.contains("dummy_paths_included: false"),
+            "{rendered}"
+        );
     }
 
     fn fixture_manifest() -> PrivateHnswOramManifest {
