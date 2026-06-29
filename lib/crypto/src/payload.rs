@@ -1014,13 +1014,25 @@ pub fn is_client_encrypted_payload_value(value: &Value) -> bool {
         .unwrap_or(false)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ServerPayloadValidationContext<'a> {
     pub field_path: &'a str,
     pub expected_kind: Option<&'a str>,
     pub key_id: Option<&'a str>,
     pub crypto_schema_version: u16,
     pub encryption_epoch: u64,
+}
+
+impl Debug for ServerPayloadValidationContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerPayloadValidationContext")
+            .field("field_path", &"[redacted]")
+            .field("expected_kind", &"[redacted]")
+            .field("key_id", &"[redacted]")
+            .field("crypto_schema_version", &self.crypto_schema_version)
+            .field("encryption_epoch", &self.encryption_epoch)
+            .finish()
+    }
 }
 
 pub fn validate_server_payload_value_metadata(
@@ -2181,6 +2193,20 @@ mod tests {
         assert!(!rendered.contains("SERVER-PAYLOAD-RK-SENTINEL"));
         assert!(!rendered.contains("SERVER-PAYLOAD-NONCE-SENTINEL"));
         assert!(!rendered.contains("SERVER-PAYLOAD-CIPHERTEXT-SHA-SENTINEL"));
+
+        let validation_context = ServerPayloadValidationContext {
+            field_path: "SERVER-PAYLOAD-CONTEXT-FIELD-SENTINEL",
+            expected_kind: Some("SERVER-PAYLOAD-CONTEXT-KIND-SENTINEL"),
+            key_id: Some("SERVER-PAYLOAD-CONTEXT-KEY-SENTINEL"),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+        };
+        let context_debug = format!("{validation_context:?}");
+        assert!(context_debug.contains("crypto_schema_version"));
+        assert!(context_debug.contains("encryption_epoch"));
+        assert!(!context_debug.contains("SERVER-PAYLOAD-CONTEXT-FIELD-SENTINEL"));
+        assert!(!context_debug.contains("SERVER-PAYLOAD-CONTEXT-KIND-SENTINEL"));
+        assert!(!context_debug.contains("SERVER-PAYLOAD-CONTEXT-KEY-SENTINEL"));
     }
 
     #[test]
