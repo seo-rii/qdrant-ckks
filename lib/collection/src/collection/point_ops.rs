@@ -489,17 +489,17 @@ impl Collection {
                         for value in encrypted_json_path.value_get(&payload.0) {
                             let envelope_key =
                                 match client_payload_envelope_key(value, encrypted_path).map_err(
-                                    |err| {
-                                        CollectionError::service_error(format!(
-                                            "stored client encrypted payload marker for field '{encrypted_path}' is invalid for nonce replay cache backfill: {err}",
-                                        ))
+                                    |_err| {
+                                        CollectionError::service_error(
+                                            "stored client encrypted payload marker is invalid for nonce replay cache backfill",
+                                        )
                                     },
                                 )? {
                                     Some(envelope_key) => envelope_key,
                                     None if is_client_encrypted_payload_value(value) => {
-                                        return Err(CollectionError::service_error(format!(
-                                            "stored client encrypted payload marker for field '{encrypted_path}' is incomplete for nonce replay cache backfill",
-                                        )));
+                                        return Err(CollectionError::service_error(
+                                            "stored client encrypted payload marker is incomplete for nonce replay cache backfill",
+                                        ));
                                     }
                                     None => continue,
                                 };
@@ -508,16 +508,16 @@ impl Collection {
                                 &point_id,
                                 encrypted_path,
                             ) {
-                                return Err(CollectionError::service_error(format!(
-                                    "stored client encrypted payload marker for field '{encrypted_path}' has AAD that does not match collection, point, and field binding; refuse to load replay cache backfill",
-                                )));
+                                return Err(CollectionError::service_error(
+                                    "stored client encrypted payload marker has AAD that does not match collection, point, and field binding; refuse to load replay cache backfill",
+                                ));
                             }
                             let Some(key) =
                                 client_payload_nonce_replay_key(value, encrypted_path).map_err(
-                                    |err| {
-                                        CollectionError::service_error(format!(
-                                            "stored client encrypted payload marker for field '{encrypted_path}' is invalid for nonce replay cache backfill: {err}",
-                                        ))
+                                    |_err| {
+                                        CollectionError::service_error(
+                                            "stored client encrypted payload marker is invalid for nonce replay cache backfill",
+                                        )
                                     },
                                 )?
                             else {
@@ -526,9 +526,9 @@ impl Collection {
                             let cache_key =
                                 client_nonce_replay_cache_key(&collection_crypto_id, &key);
                             if !scanned_keys.insert(cache_key.clone()) {
-                                return Err(CollectionError::service_error(format!(
-                                    "stored client encrypted payload nonce was reused for field '{encrypted_path}'; refuse to load replay cache backfill",
-                                )));
+                                return Err(CollectionError::service_error(
+                                    "stored client encrypted payload nonce was reused; refuse to load replay cache backfill",
+                                ));
                             }
                             cache_keys.push(cache_key);
                         }
@@ -545,10 +545,7 @@ impl Collection {
             .backfill_client_payload_nonce_replay_keys(cache_keys)
             .await?;
         if backfilled > 0 {
-            log::info!(
-                "Backfilled {backfilled} client encrypted payload nonce replay cache entries for collection {}",
-                self.name(),
-            );
+            log::info!("Backfilled client encrypted payload nonce replay cache entries",);
         }
 
         Ok(())
