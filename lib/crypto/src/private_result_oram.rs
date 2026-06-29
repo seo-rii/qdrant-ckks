@@ -1309,7 +1309,7 @@ impl Debug for PrivateResultOramReadBucketsSignatureInput<'_> {
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
-            .field("requested_bucket_count", &self.bucket_ids.len())
+            .field("requested_bucket_count", &"[redacted]")
             .field("signature_alg", &self.signature_alg)
             .field("signature_key_id", &"[redacted]")
             .finish()
@@ -4619,6 +4619,10 @@ mod tests {
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }
+        assert!(
+            !rendered.contains("requested_bucket_count: 2"),
+            "{rendered}"
+        );
     }
 
     #[test]
