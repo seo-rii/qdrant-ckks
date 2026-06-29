@@ -2450,155 +2450,153 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     signature_b64: &'a str,
 ) -> Result<CkksSidecarQuerySource<'a>, StorageError> {
     if version != 1 {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query version must be 1",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query version must be 1",
+        ));
     }
     if scheme != CKKS_SCHEME {
         return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query scheme must be {CKKS_SCHEME}",
+            "client CKKS query scheme must be {CKKS_SCHEME}",
         )));
     }
     if security_profile != CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50 {
         return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query profile must be {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
+            "client CKKS query profile must be {CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50}",
         )));
     }
     if collection_id.is_empty() {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query collection_id must not be empty",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query collection_id must not be empty",
+        ));
     }
     if envelope_vector_name != vector_name {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query vector_name must match request vector",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query vector_name must match request vector",
+        ));
     }
     if key_id.is_empty() {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query key_id must not be empty",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query key_id must not be empty",
+        ));
     }
     if rk_id.is_empty() {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query rk_id must not be empty",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query rk_id must not be empty",
+        ));
     }
     if rk_epoch == 0 {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query rk_epoch must be greater than 0",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query rk_epoch must be greater than 0",
+        ));
     }
     if query_nonce_b64.len() != 16 {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query nonce must be 16 base64url characters",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query nonce must be 16 base64url characters",
+        ));
     }
     let query_nonce = BASE64URL_NOPAD
         .decode(query_nonce_b64.as_bytes())
         .map_err(|err| {
-            StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' client CKKS query nonce is not base64url: {err}",
-            ))
+            StorageError::bad_input(format!("client CKKS query nonce is not base64url: {err}",))
         })?;
     if query_nonce.len() != 12 {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query nonce must decode to 12 bytes",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query nonce must decode to 12 bytes",
+        ));
     }
     if signature_alg != "ed25519" {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query signature alg must be ed25519",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query signature alg must be ed25519",
+        ));
     }
     if signature_key_id.is_empty() {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query signature key_id must not be empty",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query signature key_id must not be empty",
+        ));
     }
     if signature_b64.len() != 86 {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query signature must be 86 base64url characters",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query signature must be 86 base64url characters",
+        ));
     }
     let signature = BASE64URL_NOPAD
         .decode(signature_b64.as_bytes())
         .map_err(|err| {
             StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' client CKKS query signature is not base64url: {err}",
+                "client CKKS query signature is not base64url: {err}",
             ))
         })?;
     if signature.len() != 64 {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query signature must decode to 64 bytes",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query signature must decode to 64 bytes",
+        ));
     }
     if slots == 0 {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query slots must be greater than 0",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query slots must be greater than 0",
+        ));
     }
     if ciphertext_sha256_b64.len() != CKKS_CLIENT_QUERY_CIPHERTEXT_SHA256_B64_LEN {
         return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query ciphertext_sha256 must be {CKKS_CLIENT_QUERY_CIPHERTEXT_SHA256_B64_LEN} base64url characters",
+            "client CKKS query ciphertext_sha256 must be {CKKS_CLIENT_QUERY_CIPHERTEXT_SHA256_B64_LEN} base64url characters",
         )));
     }
     let ciphertext_sha256 = BASE64URL_NOPAD
         .decode(ciphertext_sha256_b64.as_bytes())
         .map_err(|err| {
             StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' client CKKS query ciphertext_sha256 is not base64url: {err}",
+                "client CKKS query ciphertext_sha256 is not base64url: {err}",
             ))
         })?;
     if ciphertext_sha256.len() != 32 {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query ciphertext_sha256 must decode to 32 bytes",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query ciphertext_sha256 must decode to 32 bytes",
+        ));
     }
     if context_digest_b64.len() != CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN {
         return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query context digest must be {CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN} base64url characters",
+            "client CKKS query context digest must be {CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN} base64url characters",
         )));
     }
     let context_digest = BASE64URL_NOPAD
         .decode(context_digest_b64.as_bytes())
         .map_err(|err| {
             StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' client CKKS query context digest is not base64url: {err}",
+                "client CKKS query context digest is not base64url: {err}",
             ))
         })?;
     if context_digest.len() != 32 {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query context digest must decode to 32 bytes",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query context digest must decode to 32 bytes",
+        ));
     }
     if ciphertext_b64.len() > CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_ENCODED_BYTES {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query ciphertext exceeds maximum size",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query ciphertext exceeds maximum size",
+        ));
     }
     let ciphertext = BASE64URL_NOPAD
         .decode(ciphertext_b64.as_bytes())
         .map_err(|err| {
             StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' client CKKS query ciphertext is not base64url: {err}",
+                "client CKKS query ciphertext is not base64url: {err}",
             ))
         })?;
     if ciphertext.is_empty() {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query ciphertext must not be empty",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query ciphertext must not be empty",
+        ));
     }
     if ciphertext.len() > CKKS_CLIENT_QUERY_CIPHERTEXT_MAX_BYTES {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query ciphertext exceeds maximum size",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query ciphertext exceeds maximum size",
+        ));
     }
     let actual_ciphertext_sha256 = Sha256::digest(&ciphertext);
     if ciphertext_sha256.as_slice() != &actual_ciphertext_sha256[..] {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' client CKKS query ciphertext_sha256 does not match ciphertext",
-        )));
+        return Err(StorageError::bad_input(
+            "client CKKS query ciphertext_sha256 does not match ciphertext",
+        ));
     }
 
     Ok(CkksSidecarQuerySource::ClientEncrypted {
@@ -10361,6 +10359,52 @@ mod tests {
         };
 
         assert!(err.to_string().contains("ciphertext_sha256"));
+    }
+
+    #[test]
+    fn ckks_client_encrypted_query_source_errors_redact_request_vector_name() {
+        let valid_signature = valid_query_signature_b64();
+        let valid_nonce = valid_query_nonce_b64();
+        let ciphertext = BASE64URL_NOPAD.encode(b"ciphertext");
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(b"ciphertext"));
+
+        let err = match ckks_client_encrypted_query_source_from_parts(
+            "embedding-sensitive-sentinel",
+            2,
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "docs-crypto-id-sensitive-sentinel",
+            "embedding-sensitive-sentinel",
+            "tenant-a:vector-sensitive-sentinel",
+            "tenant-a/vector-v1-sensitive-sentinel",
+            1,
+            &valid_nonce,
+            &BASE64URL_NOPAD.encode(&[3_u8; 32]),
+            2,
+            &ciphertext_sha256,
+            &ciphertext,
+            "ed25519",
+            "tenant-a:query-signing-sensitive-sentinel",
+            &valid_signature,
+        ) {
+            Ok(_) => panic!("invalid client CKKS query version must be rejected"),
+            Err(err) => err,
+        };
+
+        let rendered = err.to_string();
+        assert!(rendered.contains("client CKKS query version"));
+        for leaked in [
+            "embedding-sensitive-sentinel",
+            "docs-crypto-id-sensitive-sentinel",
+            "tenant-a:vector-sensitive-sentinel",
+            "tenant-a/vector-v1-sensitive-sentinel",
+            "tenant-a:query-signing-sensitive-sentinel",
+        ] {
+            assert!(
+                !rendered.contains(leaked),
+                "client CKKS query validation error leaked {leaked}: {rendered}",
+            );
+        }
     }
 
     #[test]
