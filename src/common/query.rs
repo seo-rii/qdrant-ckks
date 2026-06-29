@@ -6631,22 +6631,18 @@ async fn ckks_vector_sidecar_for_point_id(
     let record = records
         .into_iter()
         .find(|record| record.id == point_id)
-        .ok_or_else(|| {
-            StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' query point id {point_id} was not found",
-            ))
-        })?;
-    let payload = record.payload.as_ref().ok_or_else(|| {
-        StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' query point id {point_id} has no payload sidecar",
-        ))
-    })?;
+        .ok_or_else(|| ckks_point_id_query_error("point was not found"))?;
+    let payload = record
+        .payload
+        .as_ref()
+        .ok_or_else(|| ckks_point_id_query_error("point has no payload sidecar"))?;
 
-    encrypted_vector_from_payload(payload, vector_name)?.ok_or_else(|| {
-        StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' query point id {point_id} has no CKKS vector sidecar",
-        ))
-    })
+    encrypted_vector_from_payload(payload, vector_name)?
+        .ok_or_else(|| ckks_point_id_query_error("point has no CKKS vector sidecar"))
+}
+
+fn ckks_point_id_query_error(reason: &'static str) -> StorageError {
+    StorageError::bad_input(format!("encrypted vector point-id query failed: {reason}"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -12153,6 +12149,28 @@ mod tests {
             &plan,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn ckks_point_id_query_error_redacts_identifiers() {
+        let rendered = format!(
+            "{}",
+            ckks_point_id_query_error("point has no CKKS vector sidecar")
+        );
+
+        assert!(rendered.contains("point-id query failed"));
+        assert!(rendered.contains("CKKS vector sidecar"));
+        for leaked in [
+            "embedding-sensitive-sentinel",
+            "collection-sensitive-sentinel",
+            "point-id-sensitive-sentinel",
+            "123456789",
+        ] {
+            assert!(
+                !rendered.contains(leaked),
+                "point-id query error leaked identifier {leaked}: {rendered}",
+            );
+        }
     }
 
     #[test]
