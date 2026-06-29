@@ -678,71 +678,76 @@ pub fn ckks_ciphertext_from_payload<'a>(
         .as_object()
         .and_then(|object| object.get(CKKS_VECTOR_SIDECAR_MARKER))
     else {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is malformed",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry is malformed",
+        ));
     };
     let Some(marker) = marker.as_object() else {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is malformed",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry is malformed",
+        ));
     };
-    if let Some(key) = marker
+    if marker
         .keys()
         .find(|key| !matches!(key.as_str(), "version" | "scheme" | "envelope"))
+        .is_some()
     {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has unsupported metadata field '{key}'",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has unsupported metadata field",
+        ));
     }
     if marker.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has unsupported version",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has unsupported version",
+        ));
     }
     if marker.get("scheme").and_then(serde_json::Value::as_str) != Some("openfhe-ckks") {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has unsupported scheme",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has unsupported scheme",
+        ));
     }
     let Some(envelope) = marker
         .get("envelope")
         .and_then(serde_json::Value::as_object)
     else {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is missing envelope",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry is missing envelope",
+        ));
     };
-    if let Some(key) = envelope.keys().find(|key| {
-        !matches!(
-            key.as_str(),
-            "version"
-                | "algorithm"
-                | "key_id"
-                | "material_fingerprint"
-                | "rk_id"
-                | "rk_epoch"
-                | "nonce"
-                | "ciphertext"
-        )
-    }) {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has unsupported envelope field '{key}'",
-        )));
+    if envelope
+        .keys()
+        .find(|key| {
+            !matches!(
+                key.as_str(),
+                "version"
+                    | "algorithm"
+                    | "key_id"
+                    | "material_fingerprint"
+                    | "rk_id"
+                    | "rk_epoch"
+                    | "nonce"
+                    | "ciphertext"
+            )
+        })
+        .is_some()
+    {
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has unsupported envelope field",
+        ));
     }
     if envelope.get("version").and_then(serde_json::Value::as_u64) != Some(1) {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has unsupported envelope version",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has unsupported envelope version",
+        ));
     }
     if envelope
         .get("algorithm")
         .and_then(serde_json::Value::as_str)
         != Some("AES-256-GCM")
     {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has unsupported envelope algorithm",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has unsupported envelope algorithm",
+        ));
     }
     for required_field in ["key_id", "material_fingerprint", "rk_id", "nonce"] {
         if envelope
@@ -751,71 +756,67 @@ pub fn ckks_ciphertext_from_payload<'a>(
             .is_none_or(str::is_empty)
         {
             return Err(OperationError::service_error(format!(
-                "stored CKKS vector sidecar entry '{vector_name}' is missing {required_field}",
+                "stored CKKS vector sidecar entry is missing {required_field}",
             )));
         }
     }
     let Some(nonce) = envelope.get("nonce").and_then(serde_json::Value::as_str) else {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is missing nonce",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry is missing nonce",
+        ));
     };
     if nonce.len() != CKKS_CIPHERTEXT_SIDECAR_NONCE_B64_LEN {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has invalid nonce",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has invalid nonce",
+        ));
     }
     let nonce = BASE64URL_NOPAD.decode(nonce.as_bytes()).map_err(|_| {
-        OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has invalid nonce",
-        ))
+        OperationError::service_error("stored CKKS vector sidecar entry has invalid nonce")
     })?;
     if nonce.len() != 12 {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has invalid nonce",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has invalid nonce",
+        ));
     }
     if envelope
         .get("rk_epoch")
         .and_then(serde_json::Value::as_u64)
         .is_none()
     {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is missing rk_epoch",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry is missing rk_epoch",
+        ));
     }
     let Some(ciphertext) = envelope
         .get("ciphertext")
         .and_then(serde_json::Value::as_str)
     else {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is missing ciphertext",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry is missing ciphertext",
+        ));
     };
     if ciphertext.is_empty() {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has empty ciphertext",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has empty ciphertext",
+        ));
     }
     if ciphertext.len() > CKKS_CIPHERTEXT_SIDECAR_MAX_ENCODED_BYTES {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' exceeds maximum ciphertext size",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry exceeds maximum ciphertext size",
+        ));
     }
     let ciphertext_bytes = BASE64URL_NOPAD.decode(ciphertext.as_bytes()).map_err(|_| {
-        OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has invalid ciphertext",
-        ))
+        OperationError::service_error("stored CKKS vector sidecar entry has invalid ciphertext")
     })?;
     if ciphertext_bytes.len() > CKKS_CIPHERTEXT_SIDECAR_MAX_BYTES {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' exceeds maximum ciphertext size",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry exceeds maximum ciphertext size",
+        ));
     }
     if ciphertext_bytes.len() < 16 {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has invalid ciphertext",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has invalid ciphertext",
+        ));
     }
     Ok(Some(ciphertext))
 }
@@ -836,38 +837,38 @@ fn ckks_ciphertext_sidecar_identity_from_payload(
         .and_then(|value| value.get(CKKS_VECTOR_SIDECAR_MARKER))
         .and_then(serde_json::Value::as_object)
     else {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is malformed",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry is malformed",
+        ));
     };
     let Some(envelope) = marker
         .get("envelope")
         .and_then(serde_json::Value::as_object)
     else {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is missing envelope",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry is missing envelope",
+        ));
     };
 
     let mut digest = Sha256::new();
     digest.update(b"qdrant-sec/ckks-ciphertext-sidecar-identity/v1");
     update_digest_str(&mut digest, vector_name);
     let Some(marker_version) = marker.get("version").and_then(serde_json::Value::as_u64) else {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has unsupported version",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has unsupported version",
+        ));
     };
     update_digest_u64(&mut digest, marker_version);
     let Some(marker_scheme) = marker.get("scheme").and_then(serde_json::Value::as_str) else {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has unsupported scheme",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has unsupported scheme",
+        ));
     };
     update_digest_str(&mut digest, marker_scheme);
     let Some(envelope_version) = envelope.get("version").and_then(serde_json::Value::as_u64) else {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' has unsupported envelope version",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry has unsupported envelope version",
+        ));
     };
     update_digest_u64(&mut digest, envelope_version);
     for field in [
@@ -879,15 +880,15 @@ fn ckks_ciphertext_sidecar_identity_from_payload(
     ] {
         let Some(value) = envelope.get(field).and_then(serde_json::Value::as_str) else {
             return Err(OperationError::service_error(format!(
-                "stored CKKS vector sidecar entry '{vector_name}' is missing {field}",
+                "stored CKKS vector sidecar entry is missing {field}",
             )));
         };
         update_digest_str(&mut digest, value);
     }
     let Some(rk_epoch) = envelope.get("rk_epoch").and_then(serde_json::Value::as_u64) else {
-        return Err(OperationError::service_error(format!(
-            "stored CKKS vector sidecar entry '{vector_name}' is missing rk_epoch",
-        )));
+        return Err(OperationError::service_error(
+            "stored CKKS vector sidecar entry is missing rk_epoch",
+        ));
     };
     update_digest_u64(&mut digest, rk_epoch);
     update_digest_str(&mut digest, ciphertext);
@@ -2629,14 +2630,16 @@ mod tests {
         let payload = Payload(
             serde_json::from_value(serde_json::json!({
                 CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: {
-                    "embedding": { "not_the_marker": {} }
+                    "embedding-sensitive-sentinel": { "not_the_marker": {} }
                 }
             }))
             .unwrap(),
         );
 
-        let err = ckks_ciphertext_from_payload(&payload, "embedding").unwrap_err();
+        let err =
+            ckks_ciphertext_from_payload(&payload, "embedding-sensitive-sentinel").unwrap_err();
         assert!(err.to_string().contains("malformed"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
     }
 
     #[test]
@@ -2645,7 +2648,7 @@ mod tests {
             Payload(
                 serde_json::from_value(serde_json::json!({
                     CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: {
-                        "embedding": {
+                        "embedding-sensitive-sentinel": {
                             CKKS_VECTOR_SIDECAR_MARKER: marker
                         }
                     }
@@ -2664,10 +2667,11 @@ mod tests {
                     "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
-            "embedding",
+            "embedding-sensitive-sentinel",
         )
         .unwrap_err();
         assert!(err.to_string().contains("unsupported version"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
 
         let err = ckks_ciphertext_from_payload(
             &payload_with_marker(serde_json::json!({
@@ -2679,16 +2683,17 @@ mod tests {
                     "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
-            "embedding",
+            "embedding-sensitive-sentinel",
         )
         .unwrap_err();
         assert!(err.to_string().contains("unsupported scheme"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
 
         let err = ckks_ciphertext_from_payload(
             &payload_with_marker(serde_json::json!({
                 "version": 1,
                 "scheme": "openfhe-ckks",
-                "unexpected": true,
+                "unexpected-sensitive-sentinel": true,
                 "envelope": {
                     "version": 1,
                     "algorithm": "AES-128-GCM",
@@ -2700,10 +2705,11 @@ mod tests {
                     "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
-            "embedding",
+            "embedding-sensitive-sentinel",
         )
         .unwrap_err();
         assert!(err.to_string().contains("unsupported metadata field"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
 
         let err = ckks_ciphertext_from_payload(
             &payload_with_marker(serde_json::json!({
@@ -2718,13 +2724,14 @@ mod tests {
                     "rk_epoch": 1,
                     "nonce": "AAAAAAAAAAAAAAAA",
                     "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA",
-                    "unexpected": true
+                    "unexpected-sensitive-sentinel": true
                 }
             })),
-            "embedding",
+            "embedding-sensitive-sentinel",
         )
         .unwrap_err();
         assert!(err.to_string().contains("unsupported envelope field"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
 
         let err = ckks_ciphertext_from_payload(
             &payload_with_marker(serde_json::json!({
@@ -2739,10 +2746,11 @@ mod tests {
                     "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
-            "embedding",
+            "embedding-sensitive-sentinel",
         )
         .unwrap_err();
         assert!(err.to_string().contains("missing rk_id"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
 
         let err = ckks_ciphertext_from_payload(
             &payload_with_marker(serde_json::json!({
@@ -2759,10 +2767,11 @@ mod tests {
                     "ciphertext": ""
                 }
             })),
-            "embedding",
+            "embedding-sensitive-sentinel",
         )
         .unwrap_err();
         assert!(err.to_string().contains("empty ciphertext"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
 
         let oversized_ciphertext = "A".repeat(CKKS_CIPHERTEXT_SIDECAR_MAX_ENCODED_BYTES + 1);
         let err = ckks_ciphertext_from_payload(
@@ -2780,10 +2789,11 @@ mod tests {
                     "ciphertext": oversized_ciphertext
                 }
             })),
-            "embedding",
+            "embedding-sensitive-sentinel",
         )
         .unwrap_err();
         assert!(err.to_string().contains("maximum ciphertext size"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
 
         let err = ckks_ciphertext_from_payload(
             &payload_with_marker(serde_json::json!({
@@ -2796,14 +2806,15 @@ mod tests {
                     "material_fingerprint": "tenant-a/vector@v1",
                     "rk_id": "tenant-a/vector-rk@v1",
                     "rk_epoch": 1,
-                    "nonce": "not-base64url",
+                    "nonce": "not-base64url-sensitive-sentinel",
                     "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
-            "embedding",
+            "embedding-sensitive-sentinel",
         )
         .unwrap_err();
         assert!(err.to_string().contains("invalid nonce"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
 
         let err = ckks_ciphertext_from_payload(
             &payload_with_marker(serde_json::json!({
@@ -2820,10 +2831,11 @@ mod tests {
                     "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
-            "embedding",
+            "embedding-sensitive-sentinel",
         )
         .unwrap_err();
         assert!(err.to_string().contains("invalid nonce"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
 
         let err = ckks_ciphertext_from_payload(
             &payload_with_marker(serde_json::json!({
@@ -2837,13 +2849,14 @@ mod tests {
                     "rk_id": "tenant-a/vector-rk@v1",
                     "rk_epoch": 1,
                     "nonce": "AAAAAAAAAAAAAAAA",
-                    "ciphertext": "too-short"
+                    "ciphertext": "too-short-sensitive-sentinel!"
                 }
             })),
-            "embedding",
+            "embedding-sensitive-sentinel",
         )
         .unwrap_err();
         assert!(err.to_string().contains("invalid ciphertext"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
 
         let err = ckks_ciphertext_from_payload(
             &payload_with_marker(serde_json::json!({
@@ -2860,9 +2873,28 @@ mod tests {
                     "ciphertext": "AAAAAAAAAAAAAAAAAAAAAA"
                 }
             })),
-            "embedding",
+            "embedding-sensitive-sentinel",
         )
         .unwrap_err();
         assert!(err.to_string().contains("unsupported envelope algorithm"));
+        assert_ckks_sidecar_payload_error_redacts_sensitive_fields(&err);
+    }
+
+    fn assert_ckks_sidecar_payload_error_redacts_sensitive_fields(err: &OperationError) {
+        let rendered = err.to_string();
+        for leaked in [
+            "embedding-sensitive-sentinel",
+            "unexpected-sensitive-sentinel",
+            "tenant-a:vector",
+            "tenant-a/vector@v1",
+            "tenant-a/vector-rk@v1",
+            "not-base64url-sensitive-sentinel",
+            "too-short-sensitive-sentinel",
+        ] {
+            assert!(
+                !rendered.contains(leaked),
+                "stored CKKS sidecar payload error leaked sensitive field {leaked}: {rendered}",
+            );
+        }
     }
 }
