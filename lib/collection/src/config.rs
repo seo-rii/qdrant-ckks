@@ -389,6 +389,69 @@ mod ckks_tests {
     }
 
     #[test]
+    fn collection_encryption_config_debug_redacts_rules_and_selectors() {
+        let encryption = CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("CONFIG-ENCRYPTION-KEY-SENTINEL".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 9,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![
+                EncryptionRuleRef {
+                    id: "CONFIG-PAYLOAD-RULE-SENTINEL".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["payload.secret.sentinel".to_string()],
+                    },
+                    instance: "CONFIG-PAYLOAD-INSTANCE-SENTINEL".to_string(),
+                    binding: Some(CLIENT_PAYLOAD_ENVELOPE_BINDING.to_string()),
+                },
+                EncryptionRuleRef {
+                    id: "CONFIG-VECTOR-RULE-SENTINEL".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["CONFIG-VECTOR-NAME-SENTINEL".to_string()],
+                    },
+                    instance: "CONFIG-VECTOR-INSTANCE-SENTINEL".to_string(),
+                    binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                },
+                EncryptionRuleRef {
+                    id: "CONFIG-METADATA-RULE-SENTINEL".to_string(),
+                    selector: EncryptionSelector::MetadataKeys {
+                        keys: vec!["metadata.secret.sentinel".to_string()],
+                    },
+                    instance: "CONFIG-METADATA-INSTANCE-SENTINEL".to_string(),
+                    binding: Some(METADATA_EXACT_MATCH_TOKEN_BINDING.to_string()),
+                },
+            ],
+        };
+
+        for rendered in [
+            format!("{encryption:?}"),
+            format!("{:?}", encryption.rules[0]),
+            format!("{:?}", encryption.rules[1]),
+            format!("{:?}", encryption.rules[2]),
+            format!("{:?}", encryption.rules[0].selector),
+            format!("{:?}", encryption.rules[1].selector),
+            format!("{:?}", encryption.rules[2].selector),
+        ] {
+            assert!(rendered.contains("[redacted]"), "{rendered}");
+            for sentinel in [
+                "CONFIG-ENCRYPTION-KEY-SENTINEL",
+                "CONFIG-PAYLOAD-RULE-SENTINEL",
+                "payload.secret.sentinel",
+                "CONFIG-PAYLOAD-INSTANCE-SENTINEL",
+                "CONFIG-VECTOR-RULE-SENTINEL",
+                "CONFIG-VECTOR-NAME-SENTINEL",
+                "CONFIG-VECTOR-INSTANCE-SENTINEL",
+                "CONFIG-METADATA-RULE-SENTINEL",
+                "metadata.secret.sentinel",
+                "CONFIG-METADATA-INSTANCE-SENTINEL",
+            ] {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
+        }
+    }
+
+    #[test]
     fn private_hnsw_oram_vector_guard_message_uses_session_api() {
         let private_rule = EncryptionRuleRef {
             id: "embedding_private".to_string(),
@@ -2371,9 +2434,7 @@ fn validate_encryption_key_id(key_id: &str) -> Result<(), validator::ValidationE
 /// server-side metadata value AEAD and client-generated exact-match
 /// blind-index token fields; range, geo, and full-text filtering remain
 /// unsupported over encrypted metadata values.
-#[derive(
-    Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash,
-)]
+#[derive(Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq, Hash)]
 #[validate(schema(function = "validate_collection_encryption_config"))]
 #[serde(rename_all = "snake_case")]
 pub struct CollectionEncryptionConfig {
@@ -2397,6 +2458,19 @@ pub struct CollectionEncryptionConfig {
     pub migration_state: CryptoMigrationState,
     #[validate(nested)]
     pub rules: Vec<EncryptionRuleRef>,
+}
+
+impl std::fmt::Debug for CollectionEncryptionConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CollectionEncryptionConfig")
+            .field("version", &self.version)
+            .field("key_id", &self.key_id.as_ref().map(|_| "[redacted]"))
+            .field("crypto_schema_version", &self.crypto_schema_version)
+            .field("encryption_epoch", &self.encryption_epoch)
+            .field("migration_state", &self.migration_state)
+            .field("rule_count", &"[redacted]")
+            .finish()
+    }
 }
 
 const fn default_crypto_schema_version() -> u16 {
@@ -2470,7 +2544,7 @@ fn validate_collection_encryption_config(
     Ok(())
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Anonymize, Clone, PartialEq, Eq, Hash)]
+#[derive(Deserialize, Serialize, JsonSchema, Anonymize, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub struct EncryptionRuleRef {
     #[anonymize(false)]
@@ -2483,7 +2557,18 @@ pub struct EncryptionRuleRef {
     pub binding: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Anonymize, Clone, PartialEq, Eq, Hash)]
+impl std::fmt::Debug for EncryptionRuleRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptionRuleRef")
+            .field("id", &"[redacted]")
+            .field("selector", &self.selector)
+            .field("instance", &"[redacted]")
+            .field("binding", &self.binding)
+            .finish()
+    }
+}
+
+#[derive(Deserialize, Serialize, JsonSchema, Anonymize, Clone, PartialEq, Eq, Hash)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EncryptionSelector {
     PayloadPaths {
@@ -2505,6 +2590,25 @@ pub enum EncryptionSelector {
         #[anonymize(true)]
         keys: Vec<String>,
     },
+}
+
+impl std::fmt::Debug for EncryptionSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PayloadPaths { .. } => f
+                .debug_struct("PayloadPaths")
+                .field("path_count", &"[redacted]")
+                .finish(),
+            Self::VectorNames { .. } => f
+                .debug_struct("VectorNames")
+                .field("name_count", &"[redacted]")
+                .finish(),
+            Self::MetadataKeys { .. } => f
+                .debug_struct("MetadataKeys")
+                .field("key_count", &"[redacted]")
+                .finish(),
+        }
+    }
 }
 
 impl Validate for EncryptionSelector {
