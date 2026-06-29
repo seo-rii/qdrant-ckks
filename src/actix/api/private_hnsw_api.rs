@@ -137,11 +137,20 @@ pub struct OramReadPathsRequest {
     pub client_signature: PrivateHnswClientSignature,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 pub struct OramReadPadding {
     pub requested_paths: u32,
     pub dummy_paths_included: bool,
+}
+
+impl Debug for OramReadPadding {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OramReadPadding")
+            .field("requested_paths", &"[redacted]")
+            .field("dummy_paths_included", &"[redacted]")
+            .finish()
+    }
 }
 
 impl Debug for OramReadPathsRequest {
@@ -577,8 +586,8 @@ mod private_hnsw_rest_tests {
             root_hash: fixture.encrypted_build.root_hash.clone(),
             paths: vec![entry_leaf_label.clone()],
             padding: OramReadPadding {
-                requested_paths: 1,
-                dummy_paths_included: true,
+                requested_paths: 77,
+                dummy_paths_included: false,
             },
             client_signature: PrivateHnswClientSignature {
                 alg: "ed25519".to_string(),
@@ -652,6 +661,11 @@ mod private_hnsw_rest_tests {
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }
+        assert!(!rendered.contains("requested_paths: 77"), "{rendered}");
+        assert!(
+            !rendered.contains("dummy_paths_included: false"),
+            "{rendered}"
+        );
     }
 
     #[test]
