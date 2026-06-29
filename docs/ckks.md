@@ -2383,11 +2383,11 @@ On Linux, checked bridge workers are spawned through a
 `/proc/self/fd/<fd>` path backed by the same no-follow validated bridge file
 descriptor held open through `spawn`, which narrows the path-swap window between
 validation, hashing, and execution.
-On non-Linux platforms, checked workers still revalidate the absolute regular
-file path and optional SHA-256 pin immediately before spawn, but they do not have
-the Linux fd-backed exec mitigation. The runtime capability fingerprint includes
-the checked-spawn hardening level so mixed platform or policy drift is visible to
-cluster parity checks.
+On non-Linux platforms, checked OpenFHE bridge construction fails closed because
+qdrant-sec cannot provide the Linux fd-backed exec mitigation. Deployments that
+need the trusted OpenFHE bridge must run that provider on Linux; strict
+zero-trust deployments should use the client-led private HNSW ORAM provider
+instead of a trusted bridge.
 Treat any bridge path change as privileged code execution under the Qdrant
 service account. On Linux, the checked bridge spawn path also sets
 `no_new_privs`, parent-death `SIGKILL`, `RLIMIT_CORE=0`, and `RLIMIT_FSIZE=0`

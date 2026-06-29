@@ -220,6 +220,7 @@ impl CommandOpenFheBackend {
     pub fn new_checked(program: impl Into<PathBuf>) -> Result<Self, CkksError> {
         let program = program.into();
         validate_checked_bridge_program(&program)?;
+        ensure_checked_bridge_spawn_supported()?;
 
         let mut backend = Self::new_unchecked(program);
         backend.checked_program = true;
@@ -234,6 +235,7 @@ impl CommandOpenFheBackend {
         let expected_sha256_b64 = expected_sha256_b64.as_ref().to_string();
         validate_checked_bridge_program(&program)?;
         validate_bridge_program_sha256_b64(&program, &expected_sha256_b64)?;
+        ensure_checked_bridge_spawn_supported()?;
 
         let mut backend = Self::new_unchecked(program);
         backend.checked_program = true;
@@ -294,6 +296,18 @@ impl CommandOpenFheBackend {
         self.next_worker = Arc::new(AtomicUsize::new(0));
         self
     }
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_checked_bridge_spawn_supported() -> Result<(), CkksError> {
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ensure_checked_bridge_spawn_supported() -> Result<(), CkksError> {
+    Err(CkksError::Backend(
+        "OpenFHE checked bridge spawn requires Linux fd-backed /proc/self/fd execution".to_string(),
+    ))
 }
 
 fn validate_checked_bridge_program(path: &Path) -> Result<(), CkksError> {
@@ -554,10 +568,9 @@ fn checked_bridge_spawn_program(
     if let Some(expected_sha256_b64) = expected_sha256_b64 {
         validate_bridge_program_sha256_b64(program, expected_sha256_b64)?;
     }
-    Ok(BridgeSpawnProgram {
-        path: program.to_path_buf(),
-        _fd: None,
-    })
+    Err(CkksError::Backend(
+        "OpenFHE checked bridge spawn requires Linux fd-backed /proc/self/fd execution".to_string(),
+    ))
 }
 
 #[cfg(unix)]
@@ -2339,6 +2352,22 @@ mod tests {
 
         assert!(spawn_program.path().starts_with("/proc/self/fd"));
         assert!(spawn_program._fd.is_some());
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn checked_bridge_spawn_is_linux_only() {
+        let program = std::env::current_exe().unwrap();
+        let expected_sha256_b64 =
+            BASE64URL_NOPAD.encode(&Sha256::digest(std::fs::read(&program).unwrap()));
+
+        let err = CommandOpenFheBackend::new_checked_with_sha256_b64(&program, expected_sha256_b64)
+            .expect_err("non-Linux checked bridge spawn must fail closed");
+
+        assert!(
+            format!("{err}").contains("requires Linux fd-backed /proc/self/fd execution"),
+            "{err}"
+        );
     }
 
     #[test]

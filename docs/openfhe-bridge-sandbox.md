@@ -74,6 +74,9 @@ the runtime profile.
 
 - The bridge path configured in qdrant-sec must still be absolute, non-symlink,
   root/qdrant-owned, not group/world writable, and SHA-256 pinned.
+- Checked OpenFHE bridge backends require Linux fd-backed `/proc/self/fd`
+  execution; non-Linux builds fail closed instead of using a path-based
+  validation/hash/exec sequence.
 - Prefer `process_landlock` or `process_pool_landlock` backend kinds on Linux
   even when AppArmor/seccomp/container policies are present.
 - Do not pass Qdrant secrets to the bridge environment. Checked qdrant-sec
