@@ -2496,9 +2496,7 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     }
     let query_nonce = BASE64URL_NOPAD
         .decode(query_nonce_b64.as_bytes())
-        .map_err(|err| {
-            StorageError::bad_input(format!("client CKKS query nonce is not base64url: {err}",))
-        })?;
+        .map_err(|_| StorageError::bad_input("client CKKS query nonce is not base64url"))?;
     if query_nonce.len() != 12 {
         return Err(StorageError::bad_input(
             "client CKKS query nonce must decode to 12 bytes",
@@ -2521,11 +2519,7 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     }
     let signature = BASE64URL_NOPAD
         .decode(signature_b64.as_bytes())
-        .map_err(|err| {
-            StorageError::bad_input(format!(
-                "client CKKS query signature is not base64url: {err}",
-            ))
-        })?;
+        .map_err(|_| StorageError::bad_input("client CKKS query signature is not base64url"))?;
     if signature.len() != 64 {
         return Err(StorageError::bad_input(
             "client CKKS query signature must decode to 64 bytes",
@@ -2543,10 +2537,8 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     }
     let ciphertext_sha256 = BASE64URL_NOPAD
         .decode(ciphertext_sha256_b64.as_bytes())
-        .map_err(|err| {
-            StorageError::bad_input(format!(
-                "client CKKS query ciphertext_sha256 is not base64url: {err}",
-            ))
+        .map_err(|_| {
+            StorageError::bad_input("client CKKS query ciphertext_sha256 is not base64url")
         })?;
     if ciphertext_sha256.len() != 32 {
         return Err(StorageError::bad_input(
@@ -2560,10 +2552,8 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     }
     let context_digest = BASE64URL_NOPAD
         .decode(context_digest_b64.as_bytes())
-        .map_err(|err| {
-            StorageError::bad_input(format!(
-                "client CKKS query context digest is not base64url: {err}",
-            ))
+        .map_err(|_| {
+            StorageError::bad_input("client CKKS query context digest is not base64url")
         })?;
     if context_digest.len() != 32 {
         return Err(StorageError::bad_input(
@@ -2577,11 +2567,7 @@ fn ckks_client_encrypted_query_source_from_parts<'a>(
     }
     let ciphertext = BASE64URL_NOPAD
         .decode(ciphertext_b64.as_bytes())
-        .map_err(|err| {
-            StorageError::bad_input(format!(
-                "client CKKS query ciphertext is not base64url: {err}",
-            ))
-        })?;
+        .map_err(|_| StorageError::bad_input("client CKKS query ciphertext is not base64url"))?;
     if ciphertext.is_empty() {
         return Err(StorageError::bad_input(
             "client CKKS query ciphertext must not be empty",
@@ -10365,8 +10351,43 @@ mod tests {
     fn ckks_client_encrypted_query_source_errors_redact_request_vector_name() {
         let valid_signature = valid_query_signature_b64();
         let valid_nonce = valid_query_nonce_b64();
+        let valid_context_digest = BASE64URL_NOPAD.encode(&[3_u8; 32]);
         let ciphertext = BASE64URL_NOPAD.encode(b"ciphertext");
         let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(b"ciphertext"));
+        let mismatched_ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(&Sha256::digest(b"other-ciphertext"));
+        let invalid_nonce = "!!client-secret!".to_string();
+        let invalid_signature = "!".repeat(86);
+        let invalid_ciphertext_sha256 = "!".repeat(CKKS_CLIENT_QUERY_CIPHERTEXT_SHA256_B64_LEN);
+        let invalid_context_digest = "!".repeat(CKKS_CLIENT_QUERY_CONTEXT_DIGEST_B64_LEN);
+        let invalid_ciphertext = "client-query-ciphertext-secret!".to_string();
+        let forbidden = vec![
+            "embedding-sensitive-sentinel",
+            "docs-crypto-id-sensitive-sentinel",
+            "tenant-a:vector-sensitive-sentinel",
+            "tenant-a/vector-v1-sensitive-sentinel",
+            "tenant-a:vector-sensitive-wrong",
+            "tenant-a/vector-v1-sensitive-wrong",
+            "tenant-a:query-signing-sensitive-sentinel",
+            invalid_nonce.as_str(),
+            invalid_signature.as_str(),
+            invalid_ciphertext_sha256.as_str(),
+            invalid_context_digest.as_str(),
+            invalid_ciphertext.as_str(),
+        ];
+        let assert_redacted = |err: StorageError, expected: &str| {
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains(expected),
+                "unexpected validation error: {rendered}",
+            );
+            for leaked in &forbidden {
+                assert!(
+                    !rendered.contains(leaked),
+                    "client CKKS query validation error leaked {leaked}: {rendered}",
+                );
+            }
+        };
 
         let err = match ckks_client_encrypted_query_source_from_parts(
             "embedding-sensitive-sentinel",
@@ -10379,9 +10400,9 @@ mod tests {
             "tenant-a/vector-v1-sensitive-sentinel",
             1,
             &valid_nonce,
-            &BASE64URL_NOPAD.encode(&[3_u8; 32]),
+            &valid_context_digest,
             2,
-            &ciphertext_sha256,
+            &mismatched_ciphertext_sha256,
             &ciphertext,
             "ed25519",
             "tenant-a:query-signing-sensitive-sentinel",
@@ -10390,21 +10411,131 @@ mod tests {
             Ok(_) => panic!("invalid client CKKS query version must be rejected"),
             Err(err) => err,
         };
+        assert_redacted(err, "client CKKS query version");
 
-        let rendered = err.to_string();
-        assert!(rendered.contains("client CKKS query version"));
-        for leaked in [
-            "embedding-sensitive-sentinel",
-            "docs-crypto-id-sensitive-sentinel",
-            "tenant-a:vector-sensitive-sentinel",
-            "tenant-a/vector-v1-sensitive-sentinel",
-            "tenant-a:query-signing-sensitive-sentinel",
-        ] {
-            assert!(
-                !rendered.contains(leaked),
-                "client CKKS query validation error leaked {leaked}: {rendered}",
-            );
+        let cases = [
+            (
+                "nonce",
+                "embedding-sensitive-sentinel",
+                "tenant-a:vector-sensitive-sentinel",
+                "tenant-a/vector-v1-sensitive-sentinel",
+                invalid_nonce.as_str(),
+                valid_context_digest.as_str(),
+                ciphertext_sha256.as_str(),
+                ciphertext.as_str(),
+                "tenant-a:query-signing-sensitive-sentinel",
+                valid_signature.as_str(),
+            ),
+            (
+                "signature is not base64url",
+                "embedding-sensitive-sentinel",
+                "tenant-a:vector-sensitive-sentinel",
+                "tenant-a/vector-v1-sensitive-sentinel",
+                valid_nonce.as_str(),
+                valid_context_digest.as_str(),
+                ciphertext_sha256.as_str(),
+                ciphertext.as_str(),
+                "tenant-a:query-signing-sensitive-sentinel",
+                invalid_signature.as_str(),
+            ),
+            (
+                "ciphertext_sha256 is not base64url",
+                "embedding-sensitive-sentinel",
+                "tenant-a:vector-sensitive-sentinel",
+                "tenant-a/vector-v1-sensitive-sentinel",
+                valid_nonce.as_str(),
+                valid_context_digest.as_str(),
+                invalid_ciphertext_sha256.as_str(),
+                ciphertext.as_str(),
+                "tenant-a:query-signing-sensitive-sentinel",
+                valid_signature.as_str(),
+            ),
+            (
+                "context digest is not base64url",
+                "embedding-sensitive-sentinel",
+                "tenant-a:vector-sensitive-sentinel",
+                "tenant-a/vector-v1-sensitive-sentinel",
+                valid_nonce.as_str(),
+                invalid_context_digest.as_str(),
+                ciphertext_sha256.as_str(),
+                ciphertext.as_str(),
+                "tenant-a:query-signing-sensitive-sentinel",
+                valid_signature.as_str(),
+            ),
+            (
+                "ciphertext is not base64url",
+                "embedding-sensitive-sentinel",
+                "tenant-a:vector-sensitive-sentinel",
+                "tenant-a/vector-v1-sensitive-sentinel",
+                valid_nonce.as_str(),
+                valid_context_digest.as_str(),
+                ciphertext_sha256.as_str(),
+                invalid_ciphertext.as_str(),
+                "tenant-a:query-signing-sensitive-sentinel",
+                valid_signature.as_str(),
+            ),
+        ];
+        for (
+            expected,
+            request_vector_name,
+            key_id,
+            rk_id,
+            query_nonce,
+            context_digest,
+            ciphertext_sha256,
+            ciphertext,
+            signature_key_id,
+            signature,
+        ) in cases
+        {
+            let err = match ckks_client_encrypted_query_source_from_parts(
+                request_vector_name,
+                1,
+                CKKS_SCHEME,
+                CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                "docs-crypto-id-sensitive-sentinel",
+                "embedding-sensitive-sentinel",
+                key_id,
+                rk_id,
+                1,
+                query_nonce,
+                context_digest,
+                2,
+                ciphertext_sha256,
+                ciphertext,
+                "ed25519",
+                signature_key_id,
+                signature,
+            ) {
+                Ok(_) => panic!("invalid client CKKS query base64 input must be rejected"),
+                Err(err) => err,
+            };
+            assert_redacted(err, expected);
         }
+
+        let err = match ckks_client_encrypted_query_source_from_parts(
+            "embedding-sensitive-sentinel",
+            1,
+            CKKS_SCHEME,
+            CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+            "docs-crypto-id-sensitive-sentinel",
+            "embedding-sensitive-sentinel",
+            "tenant-a:vector-sensitive-wrong",
+            "tenant-a/vector-v1-sensitive-wrong",
+            1,
+            &valid_nonce,
+            &valid_context_digest,
+            2,
+            &mismatched_ciphertext_sha256,
+            &ciphertext,
+            "ed25519",
+            "tenant-a:query-signing-sensitive-sentinel",
+            &valid_signature,
+        ) {
+            Ok(_) => panic!("ciphertext hash mismatch must fail before bridge scoring"),
+            Err(err) => err,
+        };
+        assert_redacted(err, "ciphertext_sha256");
     }
 
     #[test]
