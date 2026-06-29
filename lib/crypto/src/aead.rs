@@ -507,7 +507,7 @@ impl Debug for WrappedKeyBlob {
         f.debug_struct("WrappedKeyBlob")
             .field("version", &self.version)
             .field("algorithm", &self.algorithm)
-            .field("mk_id", &self.mk_id)
+            .field("mk_id", &"[redacted]")
             .field("nonce", &"[redacted]")
             .field("wrapped_key_len", &self.wrapped_key.len())
             .finish()
@@ -549,7 +549,7 @@ pub struct LocalMasterKeyProvider {
 impl Debug for LocalMasterKeyProvider {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("LocalMasterKeyProvider")
-            .field("mk_id", &self.mk_id)
+            .field("mk_id", &"[redacted]")
             .field("key", &"[redacted; 32 bytes]")
             .finish()
     }
@@ -1070,6 +1070,38 @@ mod tests {
             assert!(!rendered.contains("[65"), "{rendered}");
             assert!(!rendered.contains("[66"), "{rendered}");
         }
+    }
+
+    #[test]
+    fn wrapped_resource_key_debug_redacts_key_metadata() {
+        let provider = LocalMasterKeyProvider::new(
+            "tenant-a/local-master-key-sentinel",
+            SecretKey::from_bytes([0x51; KEY_LEN]),
+        )
+        .unwrap();
+        let wrapped = provider
+            .wrap_resource_key(
+                &SecretKey::from_bytes([0x52; KEY_LEN]),
+                b"wrapped-resource-key-debug-test",
+            )
+            .unwrap();
+
+        let wrapped_debug = format!("{wrapped:?}");
+        let provider_debug = format!("{provider:?}");
+
+        for rendered in [&wrapped_debug, &provider_debug] {
+            assert!(rendered.contains("[redacted]"), "{rendered}");
+            assert!(
+                !rendered.contains("local-master-key-sentinel"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("[81"), "{rendered}");
+        }
+        assert!(!wrapped_debug.contains(&wrapped.nonce), "{wrapped_debug}");
+        assert!(
+            !wrapped_debug.contains(&wrapped.wrapped_key),
+            "{wrapped_debug}"
+        );
     }
 
     #[test]
