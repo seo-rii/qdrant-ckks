@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -48,7 +48,6 @@ pub struct CommandOpenFheBackend {
     sandbox: BridgeSandbox,
     sensitive_env_names: Vec<String>,
     workers: Arc<Mutex<Vec<Arc<WorkerProcess>>>>,
-    next_worker: Arc<AtomicUsize>,
 }
 
 impl std::fmt::Debug for CommandOpenFheBackend {
@@ -213,7 +212,6 @@ impl CommandOpenFheBackend {
             sandbox: BridgeSandbox::ProcessHardening,
             sensitive_env_names: Vec::new(),
             workers: Arc::new(Mutex::new(Vec::new())),
-            next_worker: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -250,35 +248,30 @@ impl CommandOpenFheBackend {
     {
         self.args.extend(args.into_iter().map(Into::into));
         self.workers = Arc::new(Mutex::new(Vec::new()));
-        self.next_worker = Arc::new(AtomicUsize::new(0));
         self
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self.workers = Arc::new(Mutex::new(Vec::new()));
-        self.next_worker = Arc::new(AtomicUsize::new(0));
         self
     }
 
     pub fn with_max_output_bytes(mut self, max_output_bytes: usize) -> Self {
         self.max_output_bytes = max_output_bytes;
         self.workers = Arc::new(Mutex::new(Vec::new()));
-        self.next_worker = Arc::new(AtomicUsize::new(0));
         self
     }
 
     pub fn with_pool_size(mut self, pool_size: NonZeroUsize) -> Self {
         self.pool_size = pool_size;
         self.workers = Arc::new(Mutex::new(Vec::new()));
-        self.next_worker = Arc::new(AtomicUsize::new(0));
         self
     }
 
     pub fn with_linux_landlock_write_deny_sandbox(mut self) -> Self {
         self.sandbox = BridgeSandbox::LinuxLandlockWriteDeny;
         self.workers = Arc::new(Mutex::new(Vec::new()));
-        self.next_worker = Arc::new(AtomicUsize::new(0));
         self
     }
 
@@ -293,7 +286,6 @@ impl CommandOpenFheBackend {
             .filter(|name| !name.is_empty())
             .collect();
         self.workers = Arc::new(Mutex::new(Vec::new()));
-        self.next_worker = Arc::new(AtomicUsize::new(0));
         self
     }
 }
