@@ -29,37 +29,85 @@ const CKKS_CIPHERTEXT_SIDECAR_NONCE_B64_LEN: usize = 16;
 pub const CKKS_VECTOR_SIDECAR_PAYLOAD_FIELD: &str = "$qdrant_sec_vectors";
 pub const CKKS_VECTOR_SIDECAR_MARKER: &str = "$qdrant_sec_ckks_vector";
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CkksCiphertextHnswGraph {
     links: Arc<Vec<Vec<usize>>>,
     max_degree: usize,
     kind: CkksCiphertextHnswGraphKind,
 }
 
-#[derive(Clone, Debug)]
+impl std::fmt::Debug for CkksCiphertextHnswGraph {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CkksCiphertextHnswGraph")
+            .field("node_count", &"[redacted]")
+            .field("max_degree", &"[redacted]")
+            .field("kind", &self.kind)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub struct CkksCiphertextHnswIndex<C> {
     records: Arc<Vec<C>>,
     graph: CkksCiphertextHnswGraph,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+impl<C> std::fmt::Debug for CkksCiphertextHnswIndex<C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CkksCiphertextHnswIndex")
+            .field("record_count", &"[redacted]")
+            .field("graph", &self.graph)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
 pub struct CkksCiphertextHnswHit {
     pub point_index: usize,
     pub score: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+impl std::fmt::Debug for CkksCiphertextHnswHit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CkksCiphertextHnswHit")
+            .field("point_index", &"[redacted]")
+            .field("score", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
 pub struct CkksCiphertextHnswRecordHit<'a, C> {
     pub point_index: usize,
     pub record: &'a C,
     pub score: f32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+impl<C> std::fmt::Debug for CkksCiphertextHnswRecordHit<'_, C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CkksCiphertextHnswRecordHit")
+            .field("point_index", &"[redacted]")
+            .field("record", &"[redacted]")
+            .field("score", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct CkksCiphertextIndexedRecord {
     pub point_offset: PointOffsetType,
     pub ciphertext: Vec<u8>,
     pub sidecar_identity: Vec<u8>,
+}
+
+impl std::fmt::Debug for CkksCiphertextIndexedRecord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CkksCiphertextIndexedRecord")
+            .field("point_offset", &"[redacted]")
+            .field("ciphertext_len", &"[redacted]")
+            .field("sidecar_identity_len", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -69,10 +117,22 @@ pub enum CkksCiphertextHnswGraphKind {
     OptimizerCandidate,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CkksCiphertextVectorIndex {
     index: CkksCiphertextHnswIndex<CkksCiphertextIndexedRecord>,
     graph_file: Option<PathBuf>,
+}
+
+impl std::fmt::Debug for CkksCiphertextVectorIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CkksCiphertextVectorIndex")
+            .field("index", &self.index)
+            .field(
+                "graph_file",
+                &self.graph_file.as_ref().map(|_| "[redacted]"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -1277,6 +1337,55 @@ fn compare_hits(
 mod tests {
     use super::*;
     use crate::index::vector_index_base::VectorIndexEnum;
+
+    #[test]
+    fn ckks_ciphertext_debug_redacts_graph_records_and_scores() {
+        let record = CkksCiphertextIndexedRecord::new_with_sidecar_identity(
+            12_345,
+            b"CKKS-CIPHERTEXT-SENTINEL".to_vec(),
+            b"CKKS-SIDECAR-SENTINEL".to_vec(),
+        );
+        let other_record =
+            CkksCiphertextIndexedRecord::new(12_346, b"CKKS-OTHER-SENTINEL".to_vec());
+        let graph = CkksCiphertextHnswGraph::from_validated_links(vec![vec![1], vec![0]])
+            .expect("test graph must be valid");
+        let index = CkksCiphertextHnswIndex::from_graph(
+            vec![record.clone(), other_record.clone()],
+            graph.clone(),
+        )
+        .expect("test index must match graph size");
+        let vector_index = CkksCiphertextVectorIndex::from_graph(
+            vec![record.clone(), other_record],
+            graph.clone(),
+        )
+        .expect("test vector index must match graph size");
+        let hit = CkksCiphertextHnswHit {
+            point_index: 7,
+            score: 42.125,
+        };
+        let record_hit = CkksCiphertextHnswRecordHit {
+            point_index: 7,
+            record: &record,
+            score: 42.125,
+        };
+
+        for rendered in [
+            format!("{record:?}"),
+            format!("{graph:?}"),
+            format!("{index:?}"),
+            format!("{vector_index:?}"),
+            format!("{hit:?}"),
+            format!("{record_hit:?}"),
+        ] {
+            assert!(rendered.contains("[redacted]"), "{rendered}");
+            assert!(!rendered.contains("CKKS-CIPHERTEXT-SENTINEL"), "{rendered}");
+            assert!(!rendered.contains("CKKS-SIDECAR-SENTINEL"), "{rendered}");
+            assert!(!rendered.contains("CKKS-OTHER-SENTINEL"), "{rendered}");
+            assert!(!rendered.contains("12345"), "{rendered}");
+            assert!(!rendered.contains("point_index: 7"), "{rendered}");
+            assert!(!rendered.contains("42.125"), "{rendered}");
+        }
+    }
 
     #[test]
     fn bounded_links_remain_reciprocal_when_pruned() {
