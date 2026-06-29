@@ -1124,8 +1124,8 @@ pub struct PrivateResultOramReadBucketBatchPlan {
 impl Debug for PrivateResultOramReadBucketBatchPlan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramReadBucketBatchPlan")
-            .field("bucket_id_count", &self.bucket_ids.len())
-            .field("token_count", &self.token_count)
+            .field("bucket_id_count", &"[redacted]")
+            .field("token_count", &"[redacted]")
             .finish()
     }
 }
@@ -1140,9 +1140,9 @@ pub struct PrivateResultOramReadBucketPlan {
 impl Debug for PrivateResultOramReadBucketPlan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramReadBucketPlan")
-            .field("batch_count", &self.batches.len())
-            .field("token_count", &self.token_count)
-            .field("path_batch_size", &self.path_batch_size)
+            .field("batch_count", &"[redacted]")
+            .field("token_count", &"[redacted]")
+            .field("path_batch_size", &"[redacted]")
             .finish()
     }
 }
@@ -1163,7 +1163,7 @@ impl Debug for PrivateResultOramEncryptedBucketBatch {
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
             .field("proof_value", &"[redacted]")
-            .field("returned_bucket_count", &self.buckets.len())
+            .field("returned_bucket_count", &"[redacted]")
             .finish()
     }
 }
@@ -4341,6 +4341,11 @@ mod tests {
             bucket_ids: vec![123_456, 123_457],
             token_count: 1,
         };
+        let read_plan = PrivateResultOramReadBucketPlan {
+            batches: vec![read_batch.clone()],
+            token_count: 77,
+            path_batch_size: 88,
+        };
         let token_access = PrivateResultOramTokenFetchAccess {
             payload_fetch_token: block.payload_fetch_token,
             old_leaf: 654_321,
@@ -4516,6 +4521,7 @@ mod tests {
             format!("{access:?}"),
             format!("{token_position:?}"),
             format!("{read_batch:?}"),
+            format!("{read_plan:?}"),
             format!("{fetch_result:?}"),
             format!("{encrypted_bucket:?}"),
             format!("{signature:?}"),
@@ -4623,6 +4629,16 @@ mod tests {
             !rendered.contains("requested_bucket_count: 2"),
             "{rendered}"
         );
+        for redacted_count in [
+            "bucket_id_count: 2",
+            "token_count: 1",
+            "batch_count: 1",
+            "token_count: 77",
+            "path_batch_size: 88",
+            "returned_bucket_count: 1",
+        ] {
+            assert!(!rendered.contains(redacted_count), "{rendered}");
+        }
     }
 
     #[test]
