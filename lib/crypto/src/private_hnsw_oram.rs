@@ -371,7 +371,7 @@ impl Debug for PrivateHnswOramCommitSignatureInput<'_> {
             .field("new_epoch", &self.new_epoch)
             .field("old_root_hash", &"[redacted]")
             .field("new_root_hash", &"[redacted]")
-            .field("updated_bucket_count", &self.updated_buckets.len())
+            .field("updated_bucket_count", &"[redacted]")
             .field("signature_alg", &self.signature_alg)
             .field("signature_key_id", &"[redacted]")
             .finish()
@@ -404,7 +404,7 @@ impl Debug for PrivateHnswOramReadPathsSignatureInput<'_> {
             .field("rk_epoch", &self.rk_epoch)
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("path_count", &self.paths.len())
+            .field("path_count", &"[redacted]")
             .field("requested_paths", &"[redacted]")
             .field("dummy_paths_included", &"[redacted]")
             .field("signature_alg", &self.signature_alg)
@@ -1255,6 +1255,8 @@ mod tests {
             !rendered.contains("dummy_paths_included: false"),
             "{rendered}"
         );
+        assert!(!rendered.contains("updated_bucket_count: 1"), "{rendered}");
+        assert!(!rendered.contains("path_count: 1"), "{rendered}");
     }
 
     fn fixture_manifest() -> PrivateHnswOramManifest {

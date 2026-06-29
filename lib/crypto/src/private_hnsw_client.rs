@@ -418,9 +418,9 @@ impl Debug for PrivateHnswNodeBlockPlaintext {
             .field("point_token", &"[redacted; 32 bytes]")
             .field("level_mask", &"[redacted]")
             .field("vector_encoding", &self.vector_encoding)
-            .field("vector_len", &self.vector.len())
-            .field("neighbor_count", &self.neighbors.len())
-            .field("neighbor_levels_len", &self.neighbor_levels.len())
+            .field("vector_len", &"[redacted]")
+            .field("neighbor_count", &"[redacted]")
+            .field("neighbor_levels_len", &"[redacted]")
             .field("deleted", &self.deleted)
             .field("generation", &self.generation)
             .field(
@@ -537,11 +537,8 @@ impl Debug for PrivateHnswOramPlaintextBucket {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswOramPlaintextBucket")
             .field("bucket_id", &"[redacted]")
-            .field("blocks_len", &self.blocks.len())
-            .field(
-                "occupied_blocks",
-                &self.blocks.iter().filter(|block| block.is_some()).count(),
-            )
+            .field("blocks_len", &"[redacted]")
+            .field("occupied_blocks", &"[redacted]")
             .finish()
     }
 }
@@ -560,8 +557,8 @@ impl Debug for PrivateHnswOramClientStateSnapshot {
         f.debug_struct("PrivateHnswOramClientStateSnapshot")
             .field("version", &self.version)
             .field("tree_height", &self.tree_height)
-            .field("position_count", &self.positions.len())
-            .field("stash_len", &self.stash.len())
+            .field("position_count", &"[redacted]")
+            .field("stash_len", &"[redacted]")
             .finish()
     }
 }
@@ -621,7 +618,7 @@ impl Debug for PrivateHnswOramMerkleProof {
             .field("index_epoch", &"[redacted]")
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
-            .field("leaf_count", &self.leaves.len())
+            .field("leaf_count", &"[redacted]")
             .finish()
     }
 }
@@ -639,7 +636,7 @@ impl Debug for PrivateHnswOramMerkleProofLeaf {
         f.debug_struct("PrivateHnswOramMerkleProofLeaf")
             .field("bucket_id", &"[redacted]")
             .field("leaf_hash", &"[redacted]")
-            .field("sibling_count", &self.siblings.len())
+            .field("sibling_count", &"[redacted]")
             .finish()
     }
 }
@@ -685,7 +682,7 @@ impl Debug for PrivateHnswEncryptedPathBatch {
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
             .field("proof_value", &"[redacted]")
-            .field("returned_bucket_count", &self.buckets.len())
+            .field("returned_bucket_count", &"[redacted]")
             .finish()
     }
 }
@@ -706,7 +703,7 @@ impl Debug for PrivateHnswOramAccessResult {
             .field("new_leaf", &"[redacted]")
             .field("old_leaf_label", &"[redacted]")
             .field("block", &"[redacted]")
-            .field("writeback_bucket_count", &self.writeback_buckets.len())
+            .field("writeback_bucket_count", &"[redacted]")
             .finish()
     }
 }
@@ -725,11 +722,11 @@ impl Debug for PrivateHnswSearchParams {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswSearchParams")
             .field("entry_node_id", &"[redacted; 32 bytes]")
-            .field("k", &self.k)
-            .field("ef", &self.ef)
-            .field("fixed_steps", &self.fixed_steps)
+            .field("k", &"[redacted]")
+            .field("ef", &"[redacted]")
+            .field("fixed_steps", &"[redacted]")
             .field("distance", &self.distance)
-            .field("has_padding_node_id", &self.padding_node_id.is_some())
+            .field("has_padding_node_id", &"[redacted]")
             .finish()
     }
 }
@@ -766,12 +763,9 @@ pub struct PrivateHnswSearchResult {
 impl Debug for PrivateHnswSearchResult {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswSearchResult")
-            .field("hit_count", &self.hits.len())
-            .field(
-                "accessed_leaf_label_count",
-                &self.accessed_leaf_labels.len(),
-            )
-            .field("completed_steps", &self.completed_steps)
+            .field("hit_count", &"[redacted]")
+            .field("accessed_leaf_label_count", &"[redacted]")
+            .field("completed_steps", &"[redacted]")
             .finish()
     }
 }
@@ -786,12 +780,9 @@ pub struct PrivateHnswPrivateResultFetchPlan {
 impl Debug for PrivateHnswPrivateResultFetchPlan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswPrivateResultFetchPlan")
-            .field(
-                "payload_fetch_token_count",
-                &self.payload_fetch_tokens.len(),
-            )
-            .field("real_result_count", &self.real_result_count)
-            .field("fixed_result_k", &self.fixed_result_k)
+            .field("payload_fetch_token_count", &"[redacted]")
+            .field("real_result_count", &"[redacted]")
+            .field("fixed_result_k", &"[redacted]")
             .finish()
     }
 }
@@ -813,8 +804,8 @@ impl Debug for PrivateHnswPrivateResultPayload {
             .field("point_token", &"[redacted; 32 bytes]")
             .field("payload_fetch_token", &"[redacted; 32 bytes]")
             .field("distance", &"[redacted]")
-            .field("payload_len", &self.payload.len())
-            .field("payload_generation", &self.payload_generation)
+            .field("payload_len", &"[redacted]")
+            .field("payload_generation", &"[redacted]")
             .finish()
     }
 }
@@ -830,10 +821,10 @@ pub struct PrivateHnswPrivateResultPayloadFetch {
 impl Debug for PrivateHnswPrivateResultPayloadFetch {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswPrivateResultPayloadFetch")
-            .field("result_count", &self.results.len())
-            .field("real_result_count", &self.real_result_count)
-            .field("fixed_result_k", &self.fixed_result_k)
-            .field("fetched_token_count", &self.fetched_token_count)
+            .field("result_count", &"[redacted]")
+            .field("real_result_count", &"[redacted]")
+            .field("fixed_result_k", &"[redacted]")
+            .field("fetched_token_count", &"[redacted]")
             .finish()
     }
 }
@@ -1062,8 +1053,8 @@ pub struct PrivateHnswSpeculativePrefetchPlan {
 impl Debug for PrivateHnswSpeculativePrefetchPlan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswSpeculativePrefetchPlan")
-            .field("leaf_label_count", &self.leaf_labels.len())
-            .field("real_path_count", &self.real_path_count)
+            .field("leaf_label_count", &"[redacted]")
+            .field("real_path_count", &"[redacted]")
             .finish()
     }
 }
@@ -1078,9 +1069,9 @@ pub struct PrivateHnswGraphTraversalPathBatchPlan {
 impl Debug for PrivateHnswGraphTraversalPathBatchPlan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswGraphTraversalPathBatchPlan")
-            .field("leaf_label_count", &self.leaf_labels.len())
-            .field("real_path_count", &self.real_path_count)
-            .field("retained_neighbor_count", &self.retained_neighbor_count)
+            .field("leaf_label_count", &"[redacted]")
+            .field("real_path_count", &"[redacted]")
+            .field("retained_neighbor_count", &"[redacted]")
             .finish()
     }
 }
@@ -1094,8 +1085,8 @@ pub struct PrivateHnswDirectionalNeighborFilterPlan {
 impl Debug for PrivateHnswDirectionalNeighborFilterPlan {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswDirectionalNeighborFilterPlan")
-            .field("node_id_count", &self.node_ids.len())
-            .field("retained_count", &self.retained_count)
+            .field("node_id_count", &"[redacted]")
+            .field("retained_count", &"[redacted]")
             .finish()
     }
 }
@@ -1137,8 +1128,8 @@ impl Debug for PrivateHnswPlaintextIndexBuild {
             .field("entry_node_id", &"[redacted; 32 bytes]")
             .field("state", &self.state)
             .field("bucket_count", &self.buckets.len())
-            .field("logical_node_count", &self.logical_node_count)
-            .field("dummy_node_count", &self.dummy_node_count)
+            .field("logical_node_count", &"[redacted]")
+            .field("dummy_node_count", &"[redacted]")
             .finish()
     }
 }
@@ -1161,9 +1152,9 @@ impl Debug for PrivateHnswEncryptedIndexBuild {
             .field("entry_node_id", &"[redacted; 32 bytes]")
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
-            .field("logical_node_count", &self.logical_node_count)
-            .field("dummy_node_count", &self.dummy_node_count)
-            .field("returned_bucket_count", &self.buckets.len())
+            .field("logical_node_count", &"[redacted]")
+            .field("dummy_node_count", &"[redacted]")
+            .field("returned_bucket_count", &"[redacted]")
             .finish()
     }
 }
@@ -1176,7 +1167,7 @@ pub struct PrivateHnswClientNodeCache {
 impl Debug for PrivateHnswClientNodeCache {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswClientNodeCache")
-            .field("node_count", &self.nodes.len())
+            .field("node_count", &"[redacted]")
             .finish()
     }
 }
@@ -1358,8 +1349,8 @@ impl Debug for PrivateHnswClientCommitPlan {
             .field("new_epoch", &self.new_epoch)
             .field("old_root_hash", &"[redacted]")
             .field("new_root_hash", &"[redacted]")
-            .field("leaf_commitment_count", &self.leaf_commitments.len())
-            .field("updated_bucket_count", &self.updated_buckets.len())
+            .field("leaf_commitment_count", &"[redacted]")
+            .field("updated_bucket_count", &"[redacted]")
             .finish()
     }
 }
@@ -5795,7 +5786,7 @@ mod tests {
             format!("{hit:?}"),
             format!("{result:?}"),
             format!("{fetch_plan:?}"),
-            payload_debug,
+            payload_debug.clone(),
             format!("{payload_fetch:?}"),
             format!("{speculative:?}"),
             format!("{traversal:?}"),
@@ -5807,6 +5798,8 @@ mod tests {
             format!("{state_snapshot:?}"),
             format!("{encrypted_state_snapshot:?}"),
             format!("{proof:?}"),
+            format!("{:?}", proof.leaves[0]),
+            format!("{:?}", proof.leaves[0].siblings[0]),
             format!("{encrypted_batch:?}"),
             format!("{encrypted_index:?}"),
             format!("{manifest:?}"),
@@ -5880,6 +5873,45 @@ mod tests {
             "HNSW-MANIFEST-BUILD-OWNER-SIGNING-SENTINEL".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
+        }
+        for (debug_rendered, redacted_count) in [
+            (format!("{block:?}"), "vector_len: 8"),
+            (format!("{block:?}"), "neighbor_count: 1"),
+            (format!("{block:?}"), "neighbor_levels_len: 1"),
+            (format!("{bucket:?}"), "blocks_len: 2"),
+            (format!("{bucket:?}"), "occupied_blocks: 1"),
+            (format!("{state_snapshot:?}"), "position_count: 1"),
+            (format!("{state_snapshot:?}"), "stash_len: 1"),
+            (format!("{proof:?}"), "leaf_count: 1"),
+            (format!("{:?}", proof.leaves[0]), "sibling_count: 1"),
+            (format!("{encrypted_batch:?}"), "returned_bucket_count: 1"),
+            (format!("{access:?}"), "writeback_bucket_count: 1"),
+            (format!("{params:?}"), "k: 1"),
+            (format!("{params:?}"), "ef: 4"),
+            (format!("{params:?}"), "fixed_steps: 8"),
+            (format!("{params:?}"), "has_padding_node_id: true"),
+            (format!("{result:?}"), "hit_count: 1"),
+            (format!("{result:?}"), "accessed_leaf_label_count: 1"),
+            (format!("{result:?}"), "completed_steps: 8"),
+            (format!("{fetch_plan:?}"), "payload_fetch_token_count: 2"),
+            (format!("{fetch_plan:?}"), "real_result_count: 1"),
+            (format!("{fetch_plan:?}"), "fixed_result_k: 2"),
+            (payload_debug.clone(), "payload_generation: 9"),
+            (format!("{payload_fetch:?}"), "result_count: 1"),
+            (format!("{payload_fetch:?}"), "fetched_token_count: 2"),
+            (format!("{speculative:?}"), "real_path_count: 1"),
+            (format!("{traversal:?}"), "real_path_count: 1"),
+            (format!("{traversal:?}"), "retained_neighbor_count: 1"),
+            (format!("{directional:?}"), "node_id_count: 1"),
+            (format!("{directional:?}"), "retained_count: 1"),
+            (format!("{node_cache:?}"), "node_count: 1"),
+            (format!("{commit_plan:?}"), "leaf_commitment_count: 1"),
+            (format!("{commit_plan:?}"), "updated_bucket_count: 1"),
+        ] {
+            assert!(
+                !debug_rendered.contains(redacted_count),
+                "leaked {redacted_count} in {debug_rendered}"
+            );
         }
     }
 
