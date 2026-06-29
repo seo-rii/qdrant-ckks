@@ -623,6 +623,9 @@ Qdrant does not expose a CKKS sidecar payload for this provider.
 Payload export rejects `with_vector` before applying encrypted payload policy
 and points callers at the provider-appropriate vector read or private session
 API instead of the ordinary read API.
+The gRPC telemetry wrappers attach only the collection label for private HNSW
+and private result ORAM calls; vector names, session ids, path labels, bucket
+ids, and root hashes are not copied into telemetry extensions.
 The private ORAM bucket store is canonical encrypted index data, not an
 untrusted acceleration hint: manifests, epoch files, Merkle metadata, and
 buckets must live under private non-symlink directories. Directory creation

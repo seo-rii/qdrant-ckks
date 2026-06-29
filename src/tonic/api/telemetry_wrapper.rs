@@ -416,8 +416,9 @@ impl<T: PrivateHnswOram> PrivateHnswOram for PrivateHnswOramTelemetryWrapper<T> 
     }
 }
 
-/// Wraps a [`PrivateResultOram`] service, attaching only `collection_name` to
-/// every response.
+/// Wraps a [`PrivateResultOram`] service, attaching `collection_name` to every
+/// response without exposing sessions, buckets, or roots to the telemetry
+/// extension.
 pub struct PrivateResultOramTelemetryWrapper<T> {
     inner: T,
 }
@@ -646,6 +647,21 @@ mod tests {
     use super::*;
     use crate::common::telemetry_ops::requests_telemetry::CollectionName;
 
+    fn assert_collection_label<T>(
+        response: &Response<T>,
+        expected: &str,
+        sensitive_sentinels: &[&str],
+    ) {
+        let label = &response.extensions().get::<CollectionName>().unwrap().0;
+        assert_eq!(label.as_str(), expected);
+        for sentinel in sensitive_sentinels {
+            assert!(
+                !label.contains(sentinel),
+                "telemetry wrapper must not attach sensitive request values as collection labels",
+            );
+        }
+    }
+
     // Points
     macro_rules! mock_and_test_points {
         ($($method:ident($req:ident) -> $resp:ident),* $(,)?) => {
@@ -742,17 +758,10 @@ mod tests {
                             }))
                             .await
                             .unwrap();
-                        assert_eq!(
-                            r.extensions().get::<CollectionName>().unwrap().0,
+                        assert_collection_label(
+                            &r,
                             stringify!($method),
-                        );
-                        assert!(
-                            r.extensions()
-                                .get::<CollectionName>()
-                                .unwrap()
-                                .0
-                                != "vector-name-sentinel",
-                            "telemetry wrapper must not attach vector names as collection labels",
+                            &["vector-name-sentinel"],
                         );
                     }
                 )*
@@ -768,6 +777,54 @@ mod tests {
         read_private_hnsw_paths(OramReadPathsRequest) -> OramReadPathsResponse,
         commit_private_hnsw_paths(OramCommitRequest) -> PrivateHnswEpochResponse,
         close_private_hnsw_session(ClosePrivateHnswSessionRequest) -> ClosePrivateHnswSessionResponse,
+    }
+
+    #[tokio::test]
+    async fn private_hnsw_wrapper_redacts_session_paths_and_roots_from_collection_label() {
+        let w = PrivateHnswOramTelemetryWrapper::new(MockPrivateHnswOram);
+        let sensitive = [
+            "vector-name-sentinel",
+            "session-id-sentinel",
+            "root-hash-sentinel",
+            "new-root-hash-sentinel",
+            "path-label-sentinel",
+        ];
+
+        let read = w
+            .read_private_hnsw_paths(Request::new(OramReadPathsRequest {
+                collection_name: "private-hnsw-collection-label".into(),
+                vector_name: "vector-name-sentinel".into(),
+                session_id: "session-id-sentinel".into(),
+                root_hash: "root-hash-sentinel".into(),
+                paths: vec!["path-label-sentinel".into()],
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        assert_collection_label(&read, "private-hnsw-collection-label", &sensitive);
+
+        let commit = w
+            .commit_private_hnsw_paths(Request::new(OramCommitRequest {
+                collection_name: "private-hnsw-collection-label".into(),
+                vector_name: "vector-name-sentinel".into(),
+                session_id: "session-id-sentinel".into(),
+                old_root_hash: "root-hash-sentinel".into(),
+                new_root_hash: "new-root-hash-sentinel".into(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        assert_collection_label(&commit, "private-hnsw-collection-label", &sensitive);
+
+        let close = w
+            .close_private_hnsw_session(Request::new(ClosePrivateHnswSessionRequest {
+                collection_name: "private-hnsw-collection-label".into(),
+                vector_name: "vector-name-sentinel".into(),
+                session_id: "session-id-sentinel".into(),
+            }))
+            .await
+            .unwrap();
+        assert_collection_label(&close, "private-hnsw-collection-label", &sensitive);
     }
 
     macro_rules! mock_and_test_private_result_oram {
@@ -799,9 +856,10 @@ mod tests {
                             }))
                             .await
                             .unwrap();
-                        assert_eq!(
-                            r.extensions().get::<CollectionName>().unwrap().0,
+                        assert_collection_label(
+                            &r,
                             stringify!($method),
+                            &[],
                         );
                     }
                 )*
@@ -817,6 +875,65 @@ mod tests {
         read_private_result_oram_buckets(ReadPrivateResultOramBucketsRequest) -> ReadPrivateResultOramBucketsResponse,
         commit_private_result_oram_buckets(CommitPrivateResultOramBucketsRequest) -> PrivateResultOramEpochResponse,
         close_private_result_oram_session(ClosePrivateResultOramSessionRequest) -> ClosePrivateResultOramSessionResponse,
+    }
+
+    #[tokio::test]
+    async fn private_result_wrapper_redacts_session_buckets_and_roots_from_collection_label() {
+        let w = PrivateResultOramTelemetryWrapper::new(MockPrivateResultOram);
+        let sensitive = [
+            "result-session-id-sentinel",
+            "result-root-hash-sentinel",
+            "result-new-root-hash-sentinel",
+        ];
+
+        let upload = w
+            .upload_private_result_oram_buckets(Request::new(
+                UploadPrivateResultOramBucketsRequest {
+                    collection_name: "private-result-collection-label".into(),
+                    root_hash: "result-root-hash-sentinel".into(),
+                    buckets: vec![Default::default()],
+                    ..Default::default()
+                },
+            ))
+            .await
+            .unwrap();
+        assert_collection_label(&upload, "private-result-collection-label", &sensitive);
+
+        let read = w
+            .read_private_result_oram_buckets(Request::new(ReadPrivateResultOramBucketsRequest {
+                collection_name: "private-result-collection-label".into(),
+                session_id: "result-session-id-sentinel".into(),
+                root_hash: "result-root-hash-sentinel".into(),
+                bucket_ids: vec![42],
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        assert_collection_label(&read, "private-result-collection-label", &sensitive);
+
+        let commit = w
+            .commit_private_result_oram_buckets(Request::new(
+                CommitPrivateResultOramBucketsRequest {
+                    collection_name: "private-result-collection-label".into(),
+                    session_id: "result-session-id-sentinel".into(),
+                    old_root_hash: "result-root-hash-sentinel".into(),
+                    new_root_hash: "result-new-root-hash-sentinel".into(),
+                    updated_buckets: vec![Default::default()],
+                    ..Default::default()
+                },
+            ))
+            .await
+            .unwrap();
+        assert_collection_label(&commit, "private-result-collection-label", &sensitive);
+
+        let close = w
+            .close_private_result_oram_session(Request::new(ClosePrivateResultOramSessionRequest {
+                collection_name: "private-result-collection-label".into(),
+                session_id: "result-session-id-sentinel".into(),
+            }))
+            .await
+            .unwrap();
+        assert_collection_label(&close, "private-result-collection-label", &sensitive);
     }
 
     // Snapshots
