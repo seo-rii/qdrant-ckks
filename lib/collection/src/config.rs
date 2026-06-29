@@ -452,6 +452,60 @@ mod ckks_tests {
     }
 
     #[test]
+    fn collection_params_debug_redacts_vector_names() {
+        let params = CollectionParams {
+            vectors: VectorsConfig::Multi(BTreeMap::from([(
+                "CONFIG-PARAMS-VECTOR-SENTINEL".into(),
+                VectorParams {
+                    size: std::num::NonZeroU64::new(4).unwrap(),
+                    distance: Distance::Cosine,
+                    hnsw_config: None,
+                    quantization_config: None,
+                    on_disk: None,
+                    datatype: None,
+                    multivector_config: None,
+                },
+            )])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("CONFIG-PARAMS-KEY-SENTINEL".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "CONFIG-PARAMS-RULE-SENTINEL".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["CONFIG-PARAMS-VECTOR-SENTINEL".to_string()],
+                    },
+                    instance: "CONFIG-PARAMS-INSTANCE-SENTINEL".to_string(),
+                    binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let rendered = format!("{params:?}");
+
+        assert!(rendered.contains("[redacted]"), "{rendered}");
+        assert!(
+            !rendered.contains("CONFIG-PARAMS-VECTOR-SENTINEL"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("CONFIG-PARAMS-KEY-SENTINEL"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("CONFIG-PARAMS-RULE-SENTINEL"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("CONFIG-PARAMS-INSTANCE-SENTINEL"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn private_hnsw_oram_vector_guard_message_uses_session_api() {
         let private_rule = EncryptionRuleRef {
             id: "embedding_private".to_string(),
@@ -3076,7 +3130,7 @@ fn validate_collection_encryption_sections(
     Ok(())
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq)]
 #[validate(schema(function = "validate_collection_encryption_sections"))]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct CollectionParams {
@@ -3134,6 +3188,26 @@ pub struct CollectionParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
     pub encryption: Option<CollectionEncryptionConfig>,
+}
+
+impl std::fmt::Debug for CollectionParams {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CollectionParams")
+            .field("vectors", &"[redacted]")
+            .field("shard_number", &self.shard_number)
+            .field("sharding_method", &self.sharding_method)
+            .field("replication_factor", &self.replication_factor)
+            .field("write_consistency_factor", &self.write_consistency_factor)
+            .field("read_fan_out_factor", &self.read_fan_out_factor)
+            .field("read_fan_out_delay_ms", &self.read_fan_out_delay_ms)
+            .field("on_disk_payload", &self.on_disk_payload)
+            .field(
+                "sparse_vectors",
+                &self.sparse_vectors.as_ref().map(|_| "[redacted]"),
+            )
+            .field("encryption", &self.encryption)
+            .finish()
+    }
 }
 
 impl CollectionParams {
