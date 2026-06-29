@@ -44,7 +44,7 @@ const fn base64url_nopad_encoded_len(decoded_len: usize) -> usize {
     }
 }
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, PartialEq, Eq)]
 pub enum PayloadEncryptionError {
     #[error("payload encryption policy must contain at least one field")]
     EmptyPolicy,
@@ -106,6 +106,84 @@ pub enum PayloadEncryptionError {
     InvalidUtf8(String),
     #[error(transparent)]
     Crypto(#[from] EncryptionError),
+}
+
+impl Debug for PayloadEncryptionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyPolicy => f.write_str("EmptyPolicy"),
+            Self::InvalidFieldPath(_) => f
+                .debug_tuple("InvalidFieldPath")
+                .field(&"[redacted]")
+                .finish(),
+            Self::MissingField(_) => f.debug_tuple("MissingField").field(&"[redacted]").finish(),
+            Self::ExpectedObjectParent(_) => f
+                .debug_tuple("ExpectedObjectParent")
+                .field(&"[redacted]")
+                .finish(),
+            Self::ExpectedString { found, .. } => f
+                .debug_struct("ExpectedString")
+                .field("field", &"[redacted]")
+                .field("found", found)
+                .finish(),
+            Self::ExpectedEncryptedEnvelope { found, .. } => f
+                .debug_struct("ExpectedEncryptedEnvelope")
+                .field("field", &"[redacted]")
+                .field("found", found)
+                .finish(),
+            Self::AlreadyEncrypted(_) => f
+                .debug_tuple("AlreadyEncrypted")
+                .field(&"[redacted]")
+                .finish(),
+            Self::MalformedEnvelope(_) => f
+                .debug_tuple("MalformedEnvelope")
+                .field(&"[redacted]")
+                .finish(),
+            Self::UnsupportedEnvelopeKind(_) => f
+                .debug_tuple("UnsupportedEnvelopeKind")
+                .field(&"[redacted]")
+                .finish(),
+            Self::UnsupportedClientAlgorithm(_) => f
+                .debug_tuple("UnsupportedClientAlgorithm")
+                .field(&"[redacted]")
+                .finish(),
+            Self::ClientEnvelopeAadMismatch(_) => f
+                .debug_tuple("ClientEnvelopeAadMismatch")
+                .field(&"[redacted]")
+                .finish(),
+            Self::MissingClientKeyId => f.write_str("MissingClientKeyId"),
+            Self::ClientKeyIdMismatch => f.write_str("ClientKeyIdMismatch"),
+            Self::ClientResourceKeyIdMismatch => f.write_str("ClientResourceKeyIdMismatch"),
+            Self::ClientResourceKeyEpochMismatch => f.write_str("ClientResourceKeyEpochMismatch"),
+            Self::ClientNonceReplay => f.write_str("ClientNonceReplay"),
+            Self::MalformedClientNonceReplayCacheKey => {
+                f.write_str("MalformedClientNonceReplayCacheKey")
+            }
+            Self::MissingClientSignature => f.write_str("MissingClientSignature"),
+            Self::ClientSignatureKeyIdMismatch => f.write_str("ClientSignatureKeyIdMismatch"),
+            Self::UnsupportedClientSignatureAlgorithm(_) => f
+                .debug_tuple("UnsupportedClientSignatureAlgorithm")
+                .field(&"[redacted]")
+                .finish(),
+            Self::InvalidClientSignature => f.write_str("InvalidClientSignature"),
+            Self::ClientCiphertextTooLarge(_) => f
+                .debug_tuple("ClientCiphertextTooLarge")
+                .field(&"[redacted]")
+                .finish(),
+            Self::ServerCiphertextTooLarge(_) => f
+                .debug_tuple("ServerCiphertextTooLarge")
+                .field(&"[redacted]")
+                .finish(),
+            Self::RuntimeEnvelopeProofMismatch => f.write_str("RuntimeEnvelopeProofMismatch"),
+            Self::UnsupportedSchemaVersion(version) => f
+                .debug_tuple("UnsupportedSchemaVersion")
+                .field(version)
+                .finish(),
+            Self::EncryptionEpochMismatch => f.write_str("EncryptionEpochMismatch"),
+            Self::InvalidUtf8(_) => f.debug_tuple("InvalidUtf8").field(&"[redacted]").finish(),
+            Self::Crypto(_) => f.debug_tuple("Crypto").field(&"[redacted]").finish(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

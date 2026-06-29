@@ -95,6 +95,42 @@ fn object(value: Value) -> Map<String, Value> {
     }
 }
 
+#[test]
+fn payload_encryption_error_debug_redacts_attacker_controlled_values() {
+    let sentinel = "payload-debug-secret-sentinel";
+    let errors = [
+        PayloadEncryptionError::InvalidFieldPath(format!("bad.{sentinel}")),
+        PayloadEncryptionError::MissingField(format!("missing.{sentinel}")),
+        PayloadEncryptionError::ExpectedObjectParent(format!("parent.{sentinel}")),
+        PayloadEncryptionError::ExpectedString {
+            field: format!("field.{sentinel}"),
+            found: "number",
+        },
+        PayloadEncryptionError::ExpectedEncryptedEnvelope {
+            field: format!("envelope.{sentinel}"),
+            found: "object",
+        },
+        PayloadEncryptionError::AlreadyEncrypted(format!("body.{sentinel}")),
+        PayloadEncryptionError::MalformedEnvelope(format!("malformed.{sentinel}")),
+        PayloadEncryptionError::UnsupportedEnvelopeKind(format!("kind.{sentinel}")),
+        PayloadEncryptionError::UnsupportedClientAlgorithm(format!("algorithm.{sentinel}")),
+        PayloadEncryptionError::ClientEnvelopeAadMismatch(format!("aad.{sentinel}")),
+        PayloadEncryptionError::UnsupportedClientSignatureAlgorithm(format!("sig.{sentinel}")),
+        PayloadEncryptionError::ClientCiphertextTooLarge(format!("client.{sentinel}")),
+        PayloadEncryptionError::ServerCiphertextTooLarge(format!("server.{sentinel}")),
+        PayloadEncryptionError::InvalidUtf8(format!("utf8.{sentinel}")),
+        PayloadEncryptionError::Crypto(EncryptionError::UnsupportedAlgorithm(format!(
+            "crypto.{sentinel}"
+        ))),
+    ];
+
+    for error in errors {
+        let rendered = format!("{error:?}");
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(rendered.contains("[redacted]"), "{rendered}");
+    }
+}
+
 fn client_envelope(point_id: &str, field_path: &str) -> Value {
     json!({
         CLIENT_ENCRYPTED_PAYLOAD_MARKER: {
