@@ -620,6 +620,9 @@ entrypoint guidance.
 Point-level `retrieve`/`scroll` requests that ask for this vector with
 `with_vector` also fail closed with the same private HNSW ORAM session guidance;
 Qdrant does not expose a CKKS sidecar payload for this provider.
+Payload export rejects `with_vector` before applying encrypted payload policy
+and points callers at the provider-appropriate vector read or private session
+API instead of the ordinary read API.
 The private ORAM bucket store is canonical encrypted index data, not an
 untrusted acceleration hint: manifests, epoch files, Merkle metadata, and
 buckets must live under private non-symlink directories. Directory creation

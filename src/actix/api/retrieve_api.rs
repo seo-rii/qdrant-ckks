@@ -99,7 +99,7 @@ fn prepare_payload_export_scroll_request(
 ) -> Result<shard::scroll::ScrollRequestInternal, StorageError> {
     if request.with_vector.is_enabled() {
         return Err(StorageError::bad_request(
-            "payload export does not support with_vector; use raw/redacted/decrypted payload policy and fetch vectors through the normal read API",
+            "payload export does not support with_vector; use raw/redacted/decrypted payload policy and fetch vectors through the appropriate vector read or private session API",
         ));
     }
 
@@ -484,5 +484,7 @@ mod tests {
                 .contains("payload export does not support with_vector"),
             "{err}",
         );
+        assert!(err.to_string().contains("private session API"), "{err}",);
+        assert!(!err.to_string().contains("normal read API"), "{err}");
     }
 }
