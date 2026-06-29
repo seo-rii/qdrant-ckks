@@ -186,10 +186,19 @@ impl Debug for PayloadEncryptionError {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PayloadEncryptionPolicy {
     fields: Vec<String>,
     strict_missing_fields: bool,
+}
+
+impl Debug for PayloadEncryptionPolicy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PayloadEncryptionPolicy")
+            .field("field_count", &"[redacted]")
+            .field("strict_missing_fields", &self.strict_missing_fields)
+            .finish()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2028,6 +2037,14 @@ mod tests {
 
     #[test]
     fn client_payload_debug_redacts_ciphertext_nonce_and_signature() {
+        let policy = PayloadEncryptionPolicy::new(["CLIENT-PAYLOAD-POLICY-FIELD-SENTINEL"])
+            .unwrap()
+            .with_strict_missing_fields(true);
+        let policy_debug = format!("{policy:?}");
+        assert!(policy_debug.contains("field_count"));
+        assert!(policy_debug.contains("strict_missing_fields"));
+        assert!(!policy_debug.contains("CLIENT-PAYLOAD-POLICY-FIELD-SENTINEL"));
+
         let mut value = valid_client_payload_value();
         let marker = value
             .get_mut(CLIENT_ENCRYPTED_PAYLOAD_MARKER)

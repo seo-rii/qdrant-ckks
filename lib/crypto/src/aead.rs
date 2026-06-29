@@ -219,13 +219,25 @@ impl EncryptionPurpose {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EncryptionContext<'a> {
     pub purpose: EncryptionPurpose,
     pub collection: &'a str,
     pub point_id: Option<&'a str>,
     pub field_path: Option<&'a str>,
     pub vector_name: Option<&'a str>,
+}
+
+impl Debug for EncryptionContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EncryptionContext")
+            .field("purpose", &self.purpose)
+            .field("collection", &"[redacted]")
+            .field("point_id", &"[redacted]")
+            .field("field_path", &"[redacted]")
+            .field("vector_name", &"[redacted]")
+            .finish()
+    }
 }
 
 impl<'a> EncryptionContext<'a> {
@@ -1057,6 +1069,34 @@ mod tests {
             assert!(!rendered.contains("retired-rk-sentinel"), "{rendered}");
             assert!(!rendered.contains("[65"), "{rendered}");
             assert!(!rendered.contains("[66"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn encryption_context_debug_redacts_identifiers() {
+        let payload_context = EncryptionContext::payload_text(
+            "AEAD-CONTEXT-COLLECTION-SENTINEL",
+            "AEAD-CONTEXT-POINT-SENTINEL",
+            "AEAD-CONTEXT-FIELD-SENTINEL",
+        );
+        let vector_context = EncryptionContext::ckks_vector(
+            "AEAD-CONTEXT-VECTOR-COLLECTION-SENTINEL",
+            "AEAD-CONTEXT-VECTOR-POINT-SENTINEL",
+            "AEAD-CONTEXT-VECTOR-NAME-SENTINEL",
+        );
+
+        for rendered in [
+            format!("{payload_context:?}"),
+            format!("{vector_context:?}"),
+        ] {
+            assert!(rendered.contains("purpose"), "{rendered}");
+            assert!(rendered.contains("[redacted]"), "{rendered}");
+            assert!(!rendered.contains("AEAD-CONTEXT-COLLECTION-SENTINEL"));
+            assert!(!rendered.contains("AEAD-CONTEXT-POINT-SENTINEL"));
+            assert!(!rendered.contains("AEAD-CONTEXT-FIELD-SENTINEL"));
+            assert!(!rendered.contains("AEAD-CONTEXT-VECTOR-COLLECTION-SENTINEL"));
+            assert!(!rendered.contains("AEAD-CONTEXT-VECTOR-POINT-SENTINEL"));
+            assert!(!rendered.contains("AEAD-CONTEXT-VECTOR-NAME-SENTINEL"));
         }
     }
 
