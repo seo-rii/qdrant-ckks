@@ -84,7 +84,7 @@ impl Debug for PrivateResultOramMerkleTree {
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
-            .field("leaf_hash_count", &self.leaf_hashes.len())
+            .field("leaf_hash_count", &"[redacted]")
             .finish()
     }
 }
@@ -1540,6 +1540,10 @@ mod tests {
         ] {
             assert!(!rendered.contains(leaked), "{rendered}");
         }
+        assert!(
+            !format!("{tree:?}").contains("leaf_hash_count: 1"),
+            "{tree:?}"
+        );
     }
 
     #[test]

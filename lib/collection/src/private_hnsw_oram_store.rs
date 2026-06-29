@@ -81,7 +81,7 @@ impl Debug for PrivateHnswOramMerkleProof {
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
-            .field("leaf_count", &self.leaves.len())
+            .field("leaf_count", &"[redacted]")
             .finish()
     }
 }
@@ -99,7 +99,7 @@ impl Debug for PrivateHnswOramMerkleProofLeaf {
         f.debug_struct("PrivateHnswOramMerkleProofLeaf")
             .field("bucket_id", &"[redacted]")
             .field("leaf_hash", &"[redacted]")
-            .field("sibling_count", &self.siblings.len())
+            .field("sibling_count", &"[redacted]")
             .finish()
     }
 }
@@ -146,7 +146,7 @@ impl Debug for PrivateHnswOramMerkleTree {
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
-            .field("leaf_hash_count", &self.leaf_hashes.len())
+            .field("leaf_hash_count", &"[redacted]")
             .finish()
     }
 }
@@ -1782,6 +1782,8 @@ mod tests {
             format!("{store:?}"),
             format!("{epoch:?}"),
             format!("{proof:?}"),
+            format!("{:?}", proof.leaves[0]),
+            format!("{:?}", proof.leaves[0].siblings[0]),
             format!("{tree:?}"),
             format!("{prepared:?}"),
         ]
@@ -1794,6 +1796,16 @@ mod tests {
             "123456",
         ] {
             assert!(!rendered.contains(leaked), "{rendered}");
+        }
+        for (debug_rendered, redacted_count) in [
+            (format!("{proof:?}"), "leaf_count: 1"),
+            (format!("{:?}", proof.leaves[0]), "sibling_count: 1"),
+            (format!("{tree:?}"), "leaf_hash_count: 1"),
+        ] {
+            assert!(
+                !debug_rendered.contains(redacted_count),
+                "leaked {redacted_count} in {debug_rendered}"
+            );
         }
     }
 
