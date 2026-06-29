@@ -135,17 +135,44 @@ impl std::fmt::Debug for CkksCiphertextVectorIndex {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(PartialEq)]
 pub enum CkksCiphertextVectorIndexBuildError<E> {
     DuplicatePointOffset,
     ScoreCountMismatch { expected: usize, actual: usize },
     Scoring(E),
 }
 
-#[derive(Debug, PartialEq)]
+impl<E> std::fmt::Debug for CkksCiphertextVectorIndexBuildError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DuplicatePointOffset => f.write_str("DuplicatePointOffset"),
+            Self::ScoreCountMismatch { .. } => f
+                .debug_struct("ScoreCountMismatch")
+                .field("expected", &"[redacted]")
+                .field("actual", &"[redacted]")
+                .finish(),
+            Self::Scoring(_) => f.debug_tuple("Scoring").field(&"[redacted]").finish(),
+        }
+    }
+}
+
+#[derive(PartialEq)]
 pub enum CkksCiphertextScoreError<E> {
     ScoreCountMismatch { expected: usize, actual: usize },
     Scoring(E),
+}
+
+impl<E> std::fmt::Debug for CkksCiphertextScoreError<E> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ScoreCountMismatch { .. } => f
+                .debug_struct("ScoreCountMismatch")
+                .field("expected", &"[redacted]")
+                .field("actual", &"[redacted]")
+                .finish(),
+            Self::Scoring(_) => f.debug_tuple("Scoring").field(&"[redacted]").finish(),
+        }
+    }
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -1384,6 +1411,42 @@ mod tests {
             assert!(!rendered.contains("12345"), "{rendered}");
             assert!(!rendered.contains("point_index: 7"), "{rendered}");
             assert!(!rendered.contains("42.125"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn ckks_ciphertext_error_debug_redacts_scoring_details() {
+        let build_scoring = CkksCiphertextVectorIndexBuildError::Scoring(
+            "CKKS-BUILD-SCORING-ERROR-SENTINEL".to_string(),
+        );
+        let build_count = CkksCiphertextVectorIndexBuildError::<String>::ScoreCountMismatch {
+            expected: 777,
+            actual: 333,
+        };
+        let score_scoring =
+            CkksCiphertextScoreError::Scoring("CKKS-SCORE-ERROR-SENTINEL".to_string());
+        let score_count = CkksCiphertextScoreError::<String>::ScoreCountMismatch {
+            expected: 777,
+            actual: 333,
+        };
+
+        for rendered in [
+            format!("{build_scoring:?}"),
+            format!("{build_count:?}"),
+            format!("{score_scoring:?}"),
+            format!("{score_count:?}"),
+        ] {
+            assert!(rendered.contains("[redacted]"), "{rendered}");
+            assert!(
+                !rendered.contains("CKKS-BUILD-SCORING-ERROR-SENTINEL"),
+                "{rendered}"
+            );
+            assert!(
+                !rendered.contains("CKKS-SCORE-ERROR-SENTINEL"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("777"), "{rendered}");
+            assert!(!rendered.contains("333"), "{rendered}");
         }
     }
 
