@@ -108,7 +108,7 @@ impl Debug for PrivateResultOramReadBucketsResponse {
         f.debug_struct("PrivateResultOramReadBucketsResponse")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.buckets.len())
+            .field("bucket_count", &"[redacted]")
             .field("proof", &self.proof)
             .finish()
     }
@@ -2216,6 +2216,11 @@ mod private_result_oram_tests {
         ] {
             assert!(!rendered.contains(leaked), "{rendered}");
         }
+        let read_response_debug = format!("{read_response:?}");
+        assert!(
+            !read_response_debug.contains("bucket_count: 1"),
+            "{read_response_debug}"
+        );
     }
 
     #[test]
