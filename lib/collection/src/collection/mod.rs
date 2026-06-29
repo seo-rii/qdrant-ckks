@@ -139,23 +139,23 @@ impl ClientPayloadNonceReplayCache {
                 Ok(file) => {
                     let metadata = file.metadata().map_err(|err| {
                         CollectionError::service_error(format!(
-                            "failed to inspect client payload nonce replay cache {cache_path:?}: {err}",
+                            "failed to inspect client payload nonce replay cache: {err}",
                         ))
                     })?;
                     if !metadata.is_file() {
-                        return Err(CollectionError::service_error(format!(
-                            "client payload nonce replay cache {cache_path:?} must be a regular file",
-                        )));
+                        return Err(CollectionError::service_error(
+                            "client payload nonce replay cache must be a regular file",
+                        ));
                     }
                     if metadata.permissions().mode() & 0o077 != 0 {
-                        return Err(CollectionError::service_error(format!(
-                            "client payload nonce replay cache {cache_path:?} must not be group/world accessible",
-                        )));
+                        return Err(CollectionError::service_error(
+                            "client payload nonce replay cache must not be group/world accessible",
+                        ));
                     }
                     if metadata.len() > CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_MAX_BYTES {
-                        return Err(CollectionError::service_error(format!(
-                            "client payload nonce replay cache {cache_path:?} exceeds maximum size",
-                        )));
+                        return Err(CollectionError::service_error(
+                            "client payload nonce replay cache exceeds maximum size",
+                        ));
                     }
                     file
                 }
@@ -164,7 +164,7 @@ impl ClientPayloadNonceReplayCache {
                 }
                 Err(err) => {
                     return Err(CollectionError::service_error(format!(
-                        "failed to open client payload nonce replay cache {cache_path:?}: {err}",
+                        "failed to open client payload nonce replay cache: {err}",
                     )));
                 }
             }
@@ -175,7 +175,7 @@ impl ClientPayloadNonceReplayCache {
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(err) => {
                 return Err(CollectionError::service_error(format!(
-                    "failed to open client payload nonce replay cache {cache_path:?}: {err}",
+                    "failed to open client payload nonce replay cache: {err}",
                 )));
             }
         };
@@ -183,13 +183,13 @@ impl ClientPayloadNonceReplayCache {
         {
             let metadata = file.metadata().map_err(|err| {
                 CollectionError::service_error(format!(
-                    "failed to inspect client payload nonce replay cache {cache_path:?}: {err}",
+                    "failed to inspect client payload nonce replay cache: {err}",
                 ))
             })?;
             if metadata.len() > CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_MAX_BYTES {
-                return Err(CollectionError::service_error(format!(
-                    "client payload nonce replay cache {cache_path:?} exceeds maximum size",
-                )));
+                return Err(CollectionError::service_error(
+                    "client payload nonce replay cache exceeds maximum size",
+                ));
             }
         }
 
@@ -197,19 +197,19 @@ impl ClientPayloadNonceReplayCache {
         for line in BufReader::new(file).lines() {
             let key = line.map_err(|err| {
                 CollectionError::service_error(format!(
-                    "failed to read client payload nonce replay cache {cache_path:?}: {err}",
+                    "failed to read client payload nonce replay cache: {err}",
                 ))
             })?;
             if !key.is_empty() {
                 if key.len() > CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_ENTRY_MAX_BYTES {
-                    return Err(CollectionError::service_error(format!(
-                        "client payload nonce replay cache {cache_path:?} contains oversized entry",
-                    )));
+                    return Err(CollectionError::service_error(
+                        "client payload nonce replay cache contains oversized entry",
+                    ));
                 }
                 qdrant_sec::ClientPayloadNonceReplayKey::validate_cache_key_for_collection(&key)
                     .map_err(|err| {
                         CollectionError::service_error(format!(
-                            "client payload nonce replay cache {cache_path:?} contains malformed entry: {err}",
+                            "client payload nonce replay cache contains malformed entry: {err}",
                         ))
                     })?;
                 cache.insert_loaded(key);
@@ -1264,7 +1264,7 @@ fn append_client_payload_nonce_replay_cache(path: &Path, keys: &[String]) -> Col
     }
     let mut file = options.open(path).map_err(|err| {
         CollectionError::service_error(format!(
-            "failed to open client payload nonce replay cache {path:?}: {err}",
+            "failed to open client payload nonce replay cache: {err}",
         ))
     })?;
     #[cfg(unix)]
@@ -1273,32 +1273,32 @@ fn append_client_payload_nonce_replay_cache(path: &Path, keys: &[String]) -> Col
 
         let permissions = file.metadata().map_err(|err| {
             CollectionError::service_error(format!(
-                "failed to inspect client payload nonce replay cache {path:?}: {err}",
+                "failed to inspect client payload nonce replay cache: {err}",
             ))
         })?;
         if permissions.permissions().mode() & 0o077 != 0 {
-            return Err(CollectionError::service_error(format!(
-                "client payload nonce replay cache {path:?} must not be group/world accessible",
-            )));
+            return Err(CollectionError::service_error(
+                "client payload nonce replay cache must not be group/world accessible",
+            ));
         }
     }
 
     for key in keys {
         writeln!(file, "{key}").map_err(|err| {
             CollectionError::service_error(format!(
-                "failed to write client payload nonce replay cache {path:?}: {err}",
+                "failed to write client payload nonce replay cache: {err}",
             ))
         })?;
     }
 
     file.flush().map_err(|err| {
         CollectionError::service_error(format!(
-            "failed to flush client payload nonce replay cache {path:?}: {err}",
+            "failed to flush client payload nonce replay cache: {err}",
         ))
     })?;
     file.sync_all().map_err(|err| {
         CollectionError::service_error(format!(
-            "failed to sync client payload nonce replay cache {path:?}: {err}",
+            "failed to sync client payload nonce replay cache: {err}",
         ))
     })?;
     sync_client_payload_nonce_replay_cache_parent(path)
@@ -1321,7 +1321,7 @@ fn rewrite_client_payload_nonce_replay_cache(
     }
     let mut file = options.open(&temp_path).map_err(|err| {
         CollectionError::service_error(format!(
-            "failed to create client payload nonce replay cache {temp_path:?}: {err}",
+            "failed to create client payload nonce replay cache temp file: {err}",
         ))
     })?;
     #[cfg(unix)]
@@ -1330,38 +1330,38 @@ fn rewrite_client_payload_nonce_replay_cache(
 
         let permissions = file.metadata().map_err(|err| {
             CollectionError::service_error(format!(
-                "failed to inspect client payload nonce replay cache {temp_path:?}: {err}",
+                "failed to inspect client payload nonce replay cache temp file: {err}",
             ))
         })?;
         if permissions.permissions().mode() & 0o077 != 0 {
-            return Err(CollectionError::service_error(format!(
-                "client payload nonce replay cache {temp_path:?} must not be group/world accessible",
-            )));
+            return Err(CollectionError::service_error(
+                "client payload nonce replay cache temp file must not be group/world accessible",
+            ));
         }
     }
 
     for key in keys {
         writeln!(file, "{key}").map_err(|err| {
             CollectionError::service_error(format!(
-                "failed to write client payload nonce replay cache {temp_path:?}: {err}",
+                "failed to write client payload nonce replay cache temp file: {err}",
             ))
         })?;
     }
 
     file.flush().map_err(|err| {
         CollectionError::service_error(format!(
-            "failed to flush client payload nonce replay cache {temp_path:?}: {err}",
+            "failed to flush client payload nonce replay cache temp file: {err}",
         ))
     })?;
     file.sync_all().map_err(|err| {
         CollectionError::service_error(format!(
-            "failed to sync client payload nonce replay cache {temp_path:?}: {err}",
+            "failed to sync client payload nonce replay cache temp file: {err}",
         ))
     })?;
 
     std::fs::rename(&temp_path, path).map_err(|err| {
         CollectionError::service_error(format!(
-            "failed to replace client payload nonce replay cache {path:?}: {err}",
+            "failed to replace client payload nonce replay cache: {err}",
         ))
     })?;
     sync_client_payload_nonce_replay_cache_parent(path)
@@ -1380,19 +1380,19 @@ fn validate_client_payload_nonce_replay_cache_parent(path: &Path) -> CollectionR
     while let Some(directory) = current {
         let metadata = std::fs::symlink_metadata(directory).map_err(|err| {
             CollectionError::service_error(format!(
-                "failed to inspect client payload nonce replay cache directory {directory:?}: {err}",
+                "failed to inspect client payload nonce replay cache directory: {err}",
             ))
         })?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(CollectionError::service_error(format!(
-                "client payload nonce replay cache directory {directory:?} must be a regular directory",
-            )));
+            return Err(CollectionError::service_error(
+                "client payload nonce replay cache directory must be a regular directory",
+            ));
         }
         let owner = metadata.uid();
         if owner != 0 && owner != effective_uid {
-            return Err(CollectionError::service_error(format!(
-                "client payload nonce replay cache directory {directory:?} must be owned by root or the Qdrant process user",
-            )));
+            return Err(CollectionError::service_error(
+                "client payload nonce replay cache directory must be owned by root or the Qdrant process user",
+            ));
         }
         let mode = metadata.permissions().mode();
         if mode & 0o022 != 0 {
@@ -1402,9 +1402,9 @@ fn validate_client_payload_nonce_replay_cache_parent(path: &Path) -> CollectionR
                 current = directory.parent();
                 continue;
             }
-            return Err(CollectionError::service_error(format!(
-                "client payload nonce replay cache directory {directory:?} must not be group/world writable",
-            )));
+            return Err(CollectionError::service_error(
+                "client payload nonce replay cache directory must not be group/world writable",
+            ));
         }
         current = directory.parent();
     }
@@ -1430,12 +1430,12 @@ fn sync_client_payload_nonce_replay_cache_parent(path: &Path) -> CollectionResul
         .open(parent)
         .map_err(|err| {
             CollectionError::service_error(format!(
-                "failed to open client payload nonce replay cache directory {parent:?}: {err}",
+                "failed to open client payload nonce replay cache directory: {err}",
             ))
         })?;
     directory.sync_all().map_err(|err| {
         CollectionError::service_error(format!(
-            "failed to sync client payload nonce replay cache directory {parent:?}: {err}",
+            "failed to sync client payload nonce replay cache directory: {err}",
         ))
     })
 }
@@ -1552,7 +1552,10 @@ mod tests {
 
     #[test]
     fn client_payload_nonce_replay_cache_rejects_oversized_entries() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("nonce-replay-path-sentinel-")
+            .tempdir()
+            .unwrap();
         let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
         std::fs::write(
             &cache_path,
@@ -1571,6 +1574,7 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("oversized entry"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
     }
 
     #[test]
@@ -1595,7 +1599,10 @@ mod tests {
 
     #[test]
     fn client_payload_nonce_replay_cache_rejects_malformed_entries() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("nonce-replay-path-sentinel-")
+            .tempdir()
+            .unwrap();
         let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
         std::fs::write(&cache_path, "not-a-valid-cache-key\n").unwrap();
         #[cfg(unix)]
@@ -1607,6 +1614,7 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("malformed entry"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
     }
 
     #[test]
@@ -1867,7 +1875,10 @@ mod tests {
     fn client_payload_nonce_replay_cache_load_rejects_group_world_accessible_files() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("nonce-replay-path-sentinel-")
+            .tempdir()
+            .unwrap();
         let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
         std::fs::write(
             &cache_path,
@@ -1878,6 +1889,7 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("must not be group/world accessible"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
     }
 
     #[cfg(unix)]
@@ -1885,21 +1897,27 @@ mod tests {
     fn client_payload_nonce_replay_cache_rejects_group_world_writable_parent() {
         use std::os::unix::fs::PermissionsExt;
 
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("nonce-replay-path-sentinel-")
+            .tempdir()
+            .unwrap();
         std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o777)).unwrap();
         let cache_path = dir.path().join(CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE);
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("must not be group/world writable"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
 
         let err = append_client_payload_nonce_replay_cache(&cache_path, &["nonce-a".to_string()])
             .unwrap_err();
         assert!(format!("{err:?}").contains("must not be group/world writable"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
 
         let mut keys = VecDeque::new();
         keys.push_back("nonce-b".to_string());
         let err = rewrite_client_payload_nonce_replay_cache(&cache_path, &keys).unwrap_err();
         assert!(format!("{err:?}").contains("must not be group/world writable"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
     }
 
     #[cfg(unix)]
@@ -1918,15 +1936,18 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(&collection_dir).unwrap_err();
         assert!(format!("{err:?}").contains("must not be group/world writable"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
 
         let err = append_client_payload_nonce_replay_cache(&cache_path, &["nonce-a".to_string()])
             .unwrap_err();
         assert!(format!("{err:?}").contains("must not be group/world writable"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
 
         let mut keys = VecDeque::new();
         keys.push_back("nonce-b".to_string());
         let err = rewrite_client_payload_nonce_replay_cache(&cache_path, &keys).unwrap_err();
         assert!(format!("{err:?}").contains("must not be group/world writable"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
     }
 
     #[cfg(unix)]
@@ -1942,6 +1963,7 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(dir.path()).unwrap_err();
         assert!(format!("{err:?}").contains("failed to open"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
         assert_eq!(
             std::fs::read_to_string(&target_path).unwrap(),
             "target-before\n"
@@ -1950,6 +1972,7 @@ mod tests {
         let err = append_client_payload_nonce_replay_cache(&cache_path, &["nonce-a".to_string()])
             .unwrap_err();
         assert!(format!("{err:?}").contains("failed to open"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
         assert_eq!(
             std::fs::read_to_string(&target_path).unwrap(),
             "target-before\n"
@@ -1962,6 +1985,7 @@ mod tests {
         keys.push_back("nonce-b".to_string());
         let err = rewrite_client_payload_nonce_replay_cache(&cache_path, &keys).unwrap_err();
         assert!(format!("{err:?}").contains("failed to create"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
         assert_eq!(
             std::fs::read_to_string(&target_path).unwrap(),
             "target-before\n"
@@ -1982,14 +2006,34 @@ mod tests {
 
         let err = ClientPayloadNonceReplayCache::load(&symlink_parent).unwrap_err();
         assert!(format!("{err:?}").contains("must be a regular directory"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
 
         let err = append_client_payload_nonce_replay_cache(&cache_path, &["nonce-a".to_string()])
             .unwrap_err();
         assert!(format!("{err:?}").contains("must be a regular directory"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
 
         let mut keys = VecDeque::new();
         keys.push_back("nonce-b".to_string());
         let err = rewrite_client_payload_nonce_replay_cache(&cache_path, &keys).unwrap_err();
         assert!(format!("{err:?}").contains("must be a regular directory"));
+        assert_client_payload_nonce_replay_cache_error_redacts_paths(&err);
+    }
+
+    fn assert_client_payload_nonce_replay_cache_error_redacts_paths(err: &CollectionError) {
+        let rendered = format!("{err:?}");
+        for leaked in [
+            "nonce-replay-path-sentinel",
+            "writable-ancestor",
+            "real-parent",
+            "symlink-parent",
+            "target",
+            CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_FILE,
+        ] {
+            assert!(
+                !rendered.contains(leaked),
+                "client payload nonce replay cache error leaked path component {leaked}: {rendered}",
+            );
+        }
     }
 }
