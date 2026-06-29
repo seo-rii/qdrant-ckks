@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::{self, Debug, Formatter};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -23,7 +24,7 @@ pub const PRIVATE_HNSW_ORAM_BINDING: &str = "private-hnsw-oram/v1";
 pub const METADATA_VALUE_BINDING: &str = "metadata-value/v1";
 pub const METADATA_EXACT_MATCH_TOKEN_BINDING: &str = "metadata-exact-match-token/v1";
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, PartialEq, Eq)]
 pub enum ControlPlaneError {
     #[error("crypto identifier is invalid: {0}")]
     InvalidIdentifier(String),
@@ -35,6 +36,24 @@ pub enum ControlPlaneError {
     InvalidEnvelopeVersion,
     #[error("stored ciphertext envelope is malformed")]
     MalformedEnvelope,
+}
+
+impl Debug for ControlPlaneError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidIdentifier(_) => f
+                .debug_tuple("InvalidIdentifier")
+                .field(&"[redacted]")
+                .finish(),
+            Self::InvalidEnvelopeKeyId(_) => f
+                .debug_tuple("InvalidEnvelopeKeyId")
+                .field(&"[redacted]")
+                .finish(),
+            Self::InvalidEnvelopeBody => f.write_str("InvalidEnvelopeBody"),
+            Self::InvalidEnvelopeVersion => f.write_str("InvalidEnvelopeVersion"),
+            Self::MalformedEnvelope => f.write_str("MalformedEnvelope"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -398,6 +417,21 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn control_plane_error_debug_redacts_identifier_values() {
+        let sentinel = "control-plane-debug-sentinel";
+        let errors = [
+            ControlPlaneError::InvalidIdentifier(format!("provider {sentinel}")),
+            ControlPlaneError::InvalidEnvelopeKeyId(format!("tenant-a/{sentinel}@v1")),
+        ];
+
+        for error in errors {
+            let rendered = format!("{error:?}");
+            assert!(!rendered.contains(sentinel), "{rendered}");
+            assert!(rendered.contains("[redacted]"), "{rendered}");
+        }
     }
 
     #[test]
