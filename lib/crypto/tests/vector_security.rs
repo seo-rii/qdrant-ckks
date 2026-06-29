@@ -601,6 +601,27 @@ fn debug_redacts_ckks_plaintext_and_ciphertext_material() {
     assert!(!verified_debug.contains(&BASE64URL_NOPAD.encode(ciphertext)));
 }
 
+#[test]
+fn ckks_error_debug_redacts_attacker_controlled_values() {
+    let sentinel = "ckks-error-debug-sentinel";
+    let errors = [
+        CkksError::InvalidContext(format!("context.{sentinel}")),
+        CkksError::InvalidParameters(format!("params.{sentinel}")),
+        CkksError::UnsupportedScheme(format!("scheme.{sentinel}")),
+        CkksError::MalformedEnvelope(format!("envelope.{sentinel}")),
+        CkksError::Backend(format!("backend.{sentinel}")),
+        CkksError::Envelope(EncryptionError::UnsupportedAlgorithm(format!(
+            "algorithm.{sentinel}"
+        ))),
+    ];
+
+    for error in errors {
+        let rendered = format!("{error:?}");
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(rendered.contains("[redacted]"), "{rendered}");
+    }
+}
+
 fn test_ckks_encryptor<B: CkksVectorBackend>(
     key_id: impl Into<String>,
     vector_name: impl Into<String>,

@@ -30,7 +30,7 @@ const CKKS_VECTOR_CIPHERTEXT_MAX_B64_LEN: usize = (CKKS_VECTOR_CIPHERTEXT_MAX_BY
 const CLIENT_CKKS_VECTOR_SIGNATURE_DOMAIN: &str = "qdrant-sec/client-ckks-vector-signature/v1";
 const CLIENT_CKKS_VECTOR_SIGNATURE_ALGORITHM: &str = "ed25519";
 
-#[derive(Error, Debug, PartialEq, Eq)]
+#[derive(Error, PartialEq, Eq)]
 pub enum CkksError {
     #[error("ckks key id is invalid")]
     InvalidKeyId,
@@ -68,6 +68,64 @@ pub enum CkksError {
     Backend(String),
     #[error(transparent)]
     Envelope(#[from] EncryptionError),
+}
+
+impl Debug for CkksError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidKeyId => f.write_str("InvalidKeyId"),
+            Self::InvalidVectorName => f.write_str("InvalidVectorName"),
+            Self::InvalidDeleteTarget => f.write_str("InvalidDeleteTarget"),
+            Self::InvalidContext(_) => f
+                .debug_tuple("InvalidContext")
+                .field(&"[redacted]")
+                .finish(),
+            Self::InvalidParameters(_) => f
+                .debug_tuple("InvalidParameters")
+                .field(&"[redacted]")
+                .finish(),
+            Self::EmptyVector => f.write_str("EmptyVector"),
+            Self::VectorTooWide { len, batch_size } => f
+                .debug_struct("VectorTooWide")
+                .field("len", len)
+                .field("batch_size", batch_size)
+                .finish(),
+            Self::NonFiniteValue { index } => f
+                .debug_struct("NonFiniteValue")
+                .field("index", index)
+                .finish(),
+            Self::EmptyCiphertext => f.write_str("EmptyCiphertext"),
+            Self::BackendBatchSizeMismatch { expected, actual } => f
+                .debug_struct("BackendBatchSizeMismatch")
+                .field("expected", expected)
+                .field("actual", actual)
+                .finish(),
+            Self::QueryDimensionMismatch { query_len, slots } => f
+                .debug_struct("QueryDimensionMismatch")
+                .field("query_len", query_len)
+                .field("slots", slots)
+                .finish(),
+            Self::UnsupportedEnvelopeVersion(version) => f
+                .debug_tuple("UnsupportedEnvelopeVersion")
+                .field(version)
+                .finish(),
+            Self::UnsupportedScheme(_) => f
+                .debug_tuple("UnsupportedScheme")
+                .field(&"[redacted]")
+                .finish(),
+            Self::MalformedEnvelope(_) => f
+                .debug_tuple("MalformedEnvelope")
+                .field(&"[redacted]")
+                .finish(),
+            Self::UnsupportedCryptoSchemaVersion(version) => f
+                .debug_tuple("UnsupportedCryptoSchemaVersion")
+                .field(version)
+                .finish(),
+            Self::EncryptionEpochMismatch => f.write_str("EncryptionEpochMismatch"),
+            Self::Backend(_) => f.debug_tuple("Backend").field(&"[redacted]").finish(),
+            Self::Envelope(_) => f.debug_tuple("Envelope").field(&"[redacted]").finish(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
