@@ -141,10 +141,19 @@ impl Debug for PrivateHnswReadProof {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrivateHnswReadPadding {
     pub requested_paths: u32,
     pub dummy_paths_included: bool,
+}
+
+impl Debug for PrivateHnswReadPadding {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswReadPadding")
+            .field("requested_paths", &"[redacted]")
+            .field("dummy_paths_included", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3368,12 +3377,17 @@ mod private_hnsw_tests {
             key_id: "hnsw-common-client-signature-key-sentinel".to_string(),
             sig: "hnsw-common-client-signature-body-sentinel".to_string(),
         };
+        let padding = PrivateHnswReadPadding {
+            requested_paths: 77,
+            dummy_paths_included: false,
+        };
 
         let rendered = [
             format!("{session:?}"),
             format!("{response:?}"),
             format!("{read_response:?}"),
             format!("{client_signature:?}"),
+            format!("{padding:?}"),
         ]
         .join("\n");
         for leaked in [
@@ -3385,6 +3399,8 @@ mod private_hnsw_tests {
             "hnsw-common-proof-sentinel",
             "hnsw-common-client-signature-key-sentinel",
             "hnsw-common-client-signature-body-sentinel",
+            "77",
+            "false",
         ] {
             assert!(!rendered.contains(leaked), "{rendered}");
         }
