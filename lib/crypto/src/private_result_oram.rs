@@ -289,9 +289,9 @@ impl Debug for PrivateResultOramPayloadBlockPlaintext {
             .field("version", &self.version)
             .field("payload_fetch_token", &"[redacted; 32 bytes]")
             .field("point_token", &"[redacted; 32 bytes]")
-            .field("payload_len", &self.payload.len())
-            .field("deleted", &self.deleted)
-            .field("generation", &self.generation)
+            .field("payload_len", &"[redacted]")
+            .field("deleted", &"[redacted]")
+            .field("generation", &"[redacted]")
             .finish()
     }
 }
@@ -313,11 +313,8 @@ impl Debug for PrivateResultOramPlaintextBucket {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramPlaintextBucket")
             .field("bucket_id", &"[redacted]")
-            .field("blocks_len", &self.blocks.len())
-            .field(
-                "occupied_blocks",
-                &self.blocks.iter().filter(|block| block.is_some()).count(),
-            )
+            .field("blocks_len", &"[redacted]")
+            .field("occupied_blocks", &"[redacted]")
             .finish()
     }
 }
@@ -360,7 +357,7 @@ impl Debug for PrivateResultOramAccessResult {
             .field("old_leaf", &"[redacted]")
             .field("new_leaf", &"[redacted]")
             .field("block", &"[redacted]")
-            .field("writeback_bucket_count", &self.writeback_buckets.len())
+            .field("writeback_bucket_count", &"[redacted]")
             .finish()
     }
 }
@@ -379,8 +376,8 @@ impl Debug for PrivateResultOramClientStateSnapshot {
         f.debug_struct("PrivateResultOramClientStateSnapshot")
             .field("version", &self.version)
             .field("tree_height", &self.tree_height)
-            .field("position_count", &self.positions.len())
-            .field("stash_len", &self.stash.len())
+            .field("position_count", &"[redacted]")
+            .field("stash_len", &"[redacted]")
             .finish()
     }
 }
@@ -432,8 +429,8 @@ pub struct PrivateResultOramClientState {
 impl Debug for PrivateResultOramClientState {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramClientState")
-            .field("position_map_len", &self.position_map.len())
-            .field("stash_len", &self.stash.len())
+            .field("position_map_len", &"[redacted]")
+            .field("stash_len", &"[redacted]")
             .finish()
     }
 }
@@ -849,7 +846,7 @@ impl Debug for PrivateResultOramMerkleProof {
             .field("index_epoch", &"[redacted]")
             .field("root_hash", &"[redacted]")
             .field("bucket_count", &self.bucket_count)
-            .field("leaf_count", &self.leaves.len())
+            .field("leaf_count", &"[redacted]")
             .finish()
     }
 }
@@ -867,7 +864,7 @@ impl Debug for PrivateResultOramMerkleProofLeaf {
         f.debug_struct("PrivateResultOramMerkleProofLeaf")
             .field("bucket_id", &"[redacted]")
             .field("leaf_hash", &"[redacted]")
-            .field("sibling_count", &self.siblings.len())
+            .field("sibling_count", &"[redacted]")
             .finish()
     }
 }
@@ -1196,8 +1193,8 @@ pub struct PrivateResultOramTokenFetchResult {
 impl Debug for PrivateResultOramTokenFetchResult {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOramTokenFetchResult")
-            .field("access_count", &self.accesses.len())
-            .field("updated_bucket_count", &self.updated_buckets.len())
+            .field("access_count", &"[redacted]")
+            .field("updated_bucket_count", &"[redacted]")
             .finish()
     }
 }
@@ -1219,8 +1216,8 @@ impl Debug for PrivateResultOramCommitPlan {
             .field("new_epoch", &self.new_epoch)
             .field("old_root_hash", &"[redacted]")
             .field("new_root_hash", &"[redacted]")
-            .field("leaf_commitment_count", &self.leaf_commitments.len())
-            .field("updated_bucket_count", &self.updated_buckets.len())
+            .field("leaf_commitment_count", &"[redacted]")
+            .field("updated_bucket_count", &"[redacted]")
             .finish()
     }
 }
@@ -1278,7 +1275,7 @@ impl Debug for PrivateResultOramCommitSignatureInput<'_> {
             .field("new_epoch", &self.new_epoch)
             .field("old_root_hash", &"[redacted]")
             .field("new_root_hash", &"[redacted]")
-            .field("updated_bucket_count", &self.updated_buckets.len())
+            .field("updated_bucket_count", &"[redacted]")
             .field("signature_alg", &self.signature_alg)
             .field("signature_key_id", &"[redacted]")
             .finish()
@@ -4528,6 +4525,8 @@ mod tests {
             format!("{state_snapshot:?}"),
             format!("{encrypted_state_snapshot:?}"),
             format!("{proof:?}"),
+            format!("{:?}", proof.leaves[0]),
+            format!("{:?}", proof.leaves[0].siblings[0]),
             format!("{manifest:?}"),
             format!("{upload_bundle:?}"),
             format!("{encrypted_batch:?}"),
@@ -4625,19 +4624,40 @@ mod tests {
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }
-        assert!(
-            !rendered.contains("requested_bucket_count: 2"),
-            "{rendered}"
-        );
-        for redacted_count in [
-            "bucket_id_count: 2",
-            "token_count: 1",
-            "batch_count: 1",
-            "token_count: 77",
-            "path_batch_size: 88",
-            "returned_bucket_count: 1",
+        for (debug_rendered, redacted_count) in [
+            (format!("{block:?}"), "payload_len: 3"),
+            (format!("{block:?}"), "deleted: false"),
+            (format!("{block:?}"), "generation: 44"),
+            (format!("{bucket:?}"), "blocks_len: 2"),
+            (format!("{bucket:?}"), "occupied_blocks: 1"),
+            (format!("{access:?}"), "writeback_bucket_count: 1"),
+            (format!("{state_snapshot:?}"), "position_count: 1"),
+            (format!("{state_snapshot:?}"), "stash_len: 1"),
+            (format!("{proof:?}"), "leaf_count: 1"),
+            (format!("{:?}", proof.leaves[0]), "sibling_count: 1"),
+            (format!("{read_batch:?}"), "bucket_id_count: 2"),
+            (format!("{read_batch:?}"), "token_count: 1"),
+            (format!("{read_plan:?}"), "batch_count: 1"),
+            (format!("{read_plan:?}"), "token_count: 77"),
+            (format!("{read_plan:?}"), "path_batch_size: 88"),
+            (format!("{fetch_result:?}"), "access_count: 1"),
+            (format!("{fetch_result:?}"), "updated_bucket_count: 0"),
+            (format!("{encrypted_batch:?}"), "returned_bucket_count: 1"),
+            (format!("{commit_plan:?}"), "leaf_commitment_count: 1"),
+            (format!("{commit_plan:?}"), "updated_bucket_count: 1"),
+            (
+                format!("{commit_signature_input:?}"),
+                "updated_bucket_count: 1",
+            ),
+            (
+                format!("{read_signature_input:?}"),
+                "requested_bucket_count: 2",
+            ),
         ] {
-            assert!(!rendered.contains(redacted_count), "{rendered}");
+            assert!(
+                !debug_rendered.contains(redacted_count),
+                "leaked {redacted_count} in {debug_rendered}"
+            );
         }
     }
 
@@ -6073,8 +6093,8 @@ mod tests {
         .unwrap();
         state.stash.insert(stash.payload_fetch_token, stash.clone());
         let debug = format!("{state:?}");
-        assert!(debug.contains("position_map_len: 2"), "{debug}");
-        assert!(debug.contains("stash_len: 1"), "{debug}");
+        assert!(!debug.contains("position_map_len: 2"), "{debug}");
+        assert!(!debug.contains("stash_len: 1"), "{debug}");
         assert!(!debug.contains(&BASE64URL_NOPAD.encode(&entry.payload_fetch_token)));
         assert!(!debug.contains(&BASE64URL_NOPAD.encode(&stash.payload_fetch_token)));
         assert!(!debug.contains(&serde_json::to_string(&stash.payload).unwrap()));
