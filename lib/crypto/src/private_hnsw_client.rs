@@ -1399,8 +1399,8 @@ pub struct PrivateHnswOramClientState {
 impl Debug for PrivateHnswOramClientState {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswOramClientState")
-            .field("position_map_len", &self.position_map.len())
-            .field("stash_len", &self.stash.len())
+            .field("position_map_len", &"[redacted]")
+            .field("stash_len", &"[redacted]")
             .finish()
     }
 }
@@ -8974,8 +8974,8 @@ mod tests {
         .unwrap();
         state.stash.insert(stash.node_id, stash.clone());
         let debug = format!("{state:?}");
-        assert!(debug.contains("position_map_len: 2"), "{debug}");
-        assert!(debug.contains("stash_len: 1"), "{debug}");
+        assert!(!debug.contains("position_map_len: 2"), "{debug}");
+        assert!(!debug.contains("stash_len: 1"), "{debug}");
         assert!(!debug.contains(&BASE64URL_NOPAD.encode(&entry.node_id)));
         assert!(!debug.contains(&BASE64URL_NOPAD.encode(&stash.node_id)));
         assert!(!debug.contains(&serde_json::to_string(&stash.vector).unwrap()));
