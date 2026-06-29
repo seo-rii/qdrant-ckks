@@ -227,7 +227,7 @@ fn record_ckks_client_query_nonce(
     rk_id: &str,
     rk_epoch: u64,
     query_nonce: &str,
-    signature_key_id: &str,
+    _signature_key_id: &str,
     plan: &crate::common::crypto::VectorWritePlan,
 ) -> Result<(), StorageError> {
     let key = format!(
@@ -245,13 +245,11 @@ fn record_ckks_client_query_nonce(
         return Ok(());
     }
 
-    log::warn!(
-        "rejected replayed client CKKS query nonce for collection_id={collection_id}, vector={vector_name}, key_id={key_id}, rk_id={rk_id}, rk_epoch={rk_epoch}, signature_key_id={signature_key_id}",
-    );
+    log::warn!("rejected replayed client CKKS query nonce for encrypted vector query");
 
-    Err(StorageError::bad_input(format!(
-        "encrypted query nonce for vector '{vector_name}' was already used recently; regenerate the client-side CKKS query envelope with a fresh query_nonce before retrying",
-    )))
+    Err(StorageError::bad_input(
+        "encrypted query nonce was already used recently; regenerate the client-side CKKS query envelope with a fresh query_nonce before retrying",
+    ))
 }
 
 const CKKS_SIDECAR_HNSW_GRAPH_CACHE_CAPACITY: usize = 16;
@@ -12123,6 +12121,18 @@ mod tests {
             format!("{err}").contains("already used recently"),
             "unexpected error: {err}",
         );
+        for leaked in [
+            "collection-uuid",
+            "embedding",
+            "tenant-a:key",
+            "tenant-a/rk",
+            "tenant-a/signing",
+        ] {
+            assert!(
+                !format!("{err}").contains(leaked),
+                "replay error leaked sensitive query nonce lineage field {leaked}: {err}",
+            );
+        }
 
         record_ckks_client_query_nonce(
             "collection-uuid",
@@ -12170,6 +12180,19 @@ mod tests {
             format!("{err}").contains("already used recently"),
             "unexpected error: {err}",
         );
+        for leaked in [
+            "collection-uuid",
+            "embedding",
+            "tenant-a:key",
+            "tenant-a/rk",
+            "tenant-a/signing-a",
+            "tenant-a/signing-b",
+        ] {
+            assert!(
+                !format!("{err}").contains(leaked),
+                "replay error leaked sensitive query nonce lineage field {leaked}: {err}",
+            );
+        }
     }
 
     #[test]
