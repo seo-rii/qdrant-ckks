@@ -93,8 +93,13 @@ struct WorkerProcess {
     registered_contexts: Mutex<HashSet<String>>,
     terminated: AtomicBool,
     reserved: AtomicBool,
-    stdout_thread: Mutex<Option<JoinHandle<()>>>,
-    stderr_thread: Mutex<Option<JoinHandle<io::Result<()>>>>,
+    reader_threads: Mutex<WorkerReaderThreads>,
+}
+
+#[derive(Default)]
+struct WorkerReaderThreads {
+    stdout: Option<JoinHandle<()>>,
+    stderr: Option<JoinHandle<io::Result<()>>>,
 }
 
 struct WorkerReservation {
@@ -139,30 +144,16 @@ impl WorkerProcess {
         }
 
         if join_readers {
-            if let Some(stdout_thread) = self
-                .stdout_thread
-                .lock()
-                .map_err(|_| {
-                    CkksError::Backend(
-                        "OpenFHE bridge stdout thread mutex was poisoned".to_string(),
-                    )
-                })?
-                .take()
-            {
+            let WorkerReaderThreads {
+                stdout: stdout_thread,
+                stderr: stderr_thread,
+            } = self.take_reader_threads()?;
+            if let Some(stdout_thread) = stdout_thread {
                 stdout_thread
                     .join()
                     .map_err(|_| CkksError::Backend("bridge stdout reader panicked".to_string()))?;
             }
-            if let Some(stderr_thread) = self
-                .stderr_thread
-                .lock()
-                .map_err(|_| {
-                    CkksError::Backend(
-                        "OpenFHE bridge stderr thread mutex was poisoned".to_string(),
-                    )
-                })?
-                .take()
-            {
+            if let Some(stderr_thread) = stderr_thread {
                 stderr_thread
                     .join()
                     .map_err(|_| CkksError::Backend("bridge stderr reader panicked".to_string()))?
@@ -170,16 +161,18 @@ impl WorkerProcess {
                         CkksError::Backend(format!("failed to drain OpenFHE bridge stderr: {err}"))
                     })?;
             }
-        } else {
-            if let Ok(mut stdout_thread) = self.stdout_thread.lock() {
-                let _ = stdout_thread.take();
-            }
-            if let Ok(mut stderr_thread) = self.stderr_thread.lock() {
-                let _ = stderr_thread.take();
-            }
+        } else if let Ok(mut reader_threads) = self.reader_threads.lock() {
+            let _ = std::mem::take(&mut *reader_threads);
         }
 
         Ok(())
+    }
+
+    fn take_reader_threads(&self) -> Result<WorkerReaderThreads, CkksError> {
+        let mut reader_threads = self.reader_threads.lock().map_err(|_| {
+            CkksError::Backend("OpenFHE bridge reader thread mutex was poisoned".to_string())
+        })?;
+        Ok(std::mem::take(&mut *reader_threads))
     }
 }
 
@@ -1419,8 +1412,10 @@ impl CommandOpenFheBackend {
             registered_contexts: Mutex::new(HashSet::new()),
             terminated: AtomicBool::new(false),
             reserved: AtomicBool::new(true),
-            stdout_thread: Mutex::new(Some(stdout_thread)),
-            stderr_thread: Mutex::new(Some(stderr_thread)),
+            reader_threads: Mutex::new(WorkerReaderThreads {
+                stdout: Some(stdout_thread),
+                stderr: Some(stderr_thread),
+            }),
         });
         workers.push(Arc::clone(&worker_process));
         Ok(WorkerReservation::reserved(worker_process))
