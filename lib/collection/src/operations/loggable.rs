@@ -311,6 +311,22 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "merkle_proofs"
                         | "proof"
                         | "proofs"
+                        | "leaf"
+                        | "leaves"
+                        | "leaf_id"
+                        | "leaf_ids"
+                        | "old_leaf"
+                        | "old_leaves"
+                        | "old_leaf_id"
+                        | "old_leaf_ids"
+                        | "old_leaf_label"
+                        | "old_leaf_labels"
+                        | "new_leaf"
+                        | "new_leaves"
+                        | "new_leaf_id"
+                        | "new_leaf_ids"
+                        | "new_leaf_label"
+                        | "new_leaf_labels"
                         | "leaf_hash"
                         | "leaf_hashes"
                         | "sibling"
@@ -577,6 +593,22 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "merkleproofs"
                         | "proof"
                         | "proofs"
+                        | "leaf"
+                        | "leaves"
+                        | "leafid"
+                        | "leafids"
+                        | "oldleaf"
+                        | "oldleaves"
+                        | "oldleafid"
+                        | "oldleafids"
+                        | "oldleaflabel"
+                        | "oldleaflabels"
+                        | "newleaf"
+                        | "newleaves"
+                        | "newleafid"
+                        | "newleafids"
+                        | "newleaflabel"
+                        | "newleaflabels"
                         | "leafhash"
                         | "leafhashes"
                         | "sibling"
@@ -2261,6 +2293,39 @@ mod tests {
             "qdrant-sec-private-oram-camel-node-distances-alias-log-sentinel",
         ] {
             assert!(!query_and_score_aliases_serialized.contains(leaked));
+        }
+
+        let mut leaf_aliases = json!({
+            "leaf": "qdrant-sec-private-oram-leaf-alias-log-sentinel",
+            "leaves": ["qdrant-sec-private-oram-leaves-alias-log-sentinel"],
+            "leaf_id": "qdrant-sec-private-oram-leaf-id-alias-log-sentinel",
+            "leafIds": ["qdrant-sec-private-oram-camel-leaf-ids-alias-log-sentinel"],
+            "old_leaf": "qdrant-sec-private-oram-old-leaf-alias-log-sentinel",
+            "oldLeaf": "qdrant-sec-private-oram-camel-old-leaf-alias-log-sentinel",
+            "old_leaf_id": "qdrant-sec-private-oram-old-leaf-id-alias-log-sentinel",
+            "oldLeafLabels": ["qdrant-sec-private-oram-camel-old-leaf-labels-alias-log-sentinel"],
+            "new_leaf": "qdrant-sec-private-oram-new-leaf-alias-log-sentinel",
+            "newLeaf": "qdrant-sec-private-oram-camel-new-leaf-alias-log-sentinel",
+            "new_leaf_id": "qdrant-sec-private-oram-new-leaf-id-alias-log-sentinel",
+            "newLeafLabels": ["qdrant-sec-private-oram-camel-new-leaf-labels-alias-log-sentinel"],
+        });
+        redact_sensitive_log_fields(&mut leaf_aliases);
+        let leaf_aliases_serialized = serde_json::to_string(&leaf_aliases).unwrap();
+        for leaked in [
+            "qdrant-sec-private-oram-leaf-alias-log-sentinel",
+            "qdrant-sec-private-oram-leaves-alias-log-sentinel",
+            "qdrant-sec-private-oram-leaf-id-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-leaf-ids-alias-log-sentinel",
+            "qdrant-sec-private-oram-old-leaf-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-old-leaf-alias-log-sentinel",
+            "qdrant-sec-private-oram-old-leaf-id-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-old-leaf-labels-alias-log-sentinel",
+            "qdrant-sec-private-oram-new-leaf-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-new-leaf-alias-log-sentinel",
+            "qdrant-sec-private-oram-new-leaf-id-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-new-leaf-labels-alias-log-sentinel",
+        ] {
+            assert!(!leaf_aliases_serialized.contains(leaked));
         }
 
         let mut first = json!({
