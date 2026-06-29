@@ -1106,7 +1106,7 @@ impl Debug for PrivateHnswBuildPoint {
         f.debug_struct("PrivateHnswBuildPoint")
             .field("node_id", &"[redacted; 32 bytes]")
             .field("point_token", &"[redacted; 32 bytes]")
-            .field("vector_len", &self.vector.len())
+            .field("vector_len", &"[redacted]")
             .field("has_payload_fetch_token", &"[redacted]")
             .finish()
     }
@@ -5925,6 +5925,7 @@ mod tests {
             (format!("{traversal:?}"), "retained_neighbor_count: 1"),
             (format!("{directional:?}"), "node_id_count: 1"),
             (format!("{directional:?}"), "retained_count: 1"),
+            (format!("{build_point:?}"), "vector_len: 2"),
             (format!("{build_point:?}"), "has_payload_fetch_token: true"),
             (format!("{node_cache:?}"), "node_count: 1"),
             (format!("{upload_bundle:?}"), "bucket_count: 1"),

@@ -2014,11 +2014,12 @@ step counts and budget-exhaustion state. Common private ORAM session debug outpu
 redacts bucket counts, tree height, path-batch size, and derived ciphertext byte
 budgets, and it does not render the embedded manifest. SDK private HNSW
 node/search/build debug output also redacts deleted/generation state,
-payload-token presence, build bucket counts, Merkle proof bucket counts, and
-encrypted bucket-batch bucket counts. Private result ORAM SDK debug output
-applies the same client-state tree-height and bucket-count redaction to Merkle
-proofs, encrypted bucket batches, and read-signature inputs. Collection-local
-private ORAM store debug output also redacts Merkle tree/proof bucket counts.
+payload-token presence, build-point vector lengths, build bucket counts, Merkle
+proof bucket counts, and encrypted bucket-batch bucket counts. Private result
+ORAM SDK debug output applies the same client-state tree-height and bucket-count
+redaction to Merkle proofs, encrypted bucket batches, and read-signature inputs.
+Collection-local private ORAM store debug output also redacts Merkle tree/proof
+bucket counts.
 Private HNSW ORAM commit errors use a fixed writeback-budget message and do not
 reflect the concrete max writeback bucket count.
 Private result ORAM bucket validation contexts redact expected epochs, bucket
