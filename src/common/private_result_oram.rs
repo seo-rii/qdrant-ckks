@@ -153,12 +153,9 @@ impl Debug for PrivateResultOramSession {
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("lease_expires_unix", &self.lease_expires_unix)
-            .field("bucket_count", &self.bucket_count)
-            .field(
-                "max_bucket_ciphertext_bytes",
-                &self.max_bucket_ciphertext_bytes,
-            )
-            .field("manifest", &self.manifest)
+            .field("bucket_count", &"[redacted]")
+            .field("max_bucket_ciphertext_bytes", &"[redacted]")
+            .field("manifest", &"[redacted]")
             .finish()
     }
 }
@@ -2206,6 +2203,20 @@ mod private_result_oram_tests {
             format!("{read_response:?}"),
         ]
         .join("\n");
+        let session_debug = format!("{session:?}");
+        for leaked_session_value in [
+            "PrivateResultOramManifest".to_string(),
+            format!("bucket_count: {}", session.bucket_count),
+            format!(
+                "max_bucket_ciphertext_bytes: {}",
+                session.max_bucket_ciphertext_bytes
+            ),
+        ] {
+            assert!(
+                !session_debug.contains(&leaked_session_value),
+                "{session_debug}"
+            );
+        }
         for leaked in [
             "result-common-session-sentinel",
             "result-common-client-sentinel",

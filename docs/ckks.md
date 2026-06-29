@@ -2010,8 +2010,11 @@ count/length aliases. REST private ORAM wire DTO `Debug` wrappers also redact
 upload/read bucket counts alongside roots, ciphertext bodies, commitments, and
 signatures, and SDK private ORAM upload bundle debug output redacts upload
 bucket counts. SDK private HNSW search access metrics redact path/leaf/fixed
-step counts and budget-exhaustion state. SDK private HNSW node/search/build
-debug output also redacts deleted/generation state and payload-token presence.
+step counts and budget-exhaustion state. Common private ORAM session debug output
+redacts bucket counts, tree height, path-batch size, and derived ciphertext byte
+budgets, and it does not render the embedded manifest. SDK private HNSW
+node/search/build debug output also redacts
+deleted/generation state and payload-token presence.
 Private HNSW ORAM commit errors use a fixed writeback-budget message and do not
 reflect the concrete max writeback bucket count.
 Private result ORAM bucket validation contexts redact expected epochs, bucket

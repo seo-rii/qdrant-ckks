@@ -201,14 +201,11 @@ impl Debug for PrivateHnswSession {
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
             .field("lease_expires_unix", &self.lease_expires_unix)
-            .field("bucket_count", &self.bucket_count)
-            .field("tree_height", &self.tree_height)
-            .field("path_batch_size", &self.path_batch_size)
-            .field(
-                "max_bucket_ciphertext_bytes",
-                &self.max_bucket_ciphertext_bytes,
-            )
-            .field("manifest", &self.manifest)
+            .field("bucket_count", &"[redacted]")
+            .field("tree_height", &"[redacted]")
+            .field("path_batch_size", &"[redacted]")
+            .field("max_bucket_ciphertext_bytes", &"[redacted]")
+            .field("manifest", &"[redacted]")
             .finish()
     }
 }
@@ -3390,6 +3387,22 @@ mod private_hnsw_tests {
             format!("{padding:?}"),
         ]
         .join("\n");
+        let session_debug = format!("{session:?}");
+        for leaked_session_value in [
+            "PrivateHnswOramManifest".to_string(),
+            format!("bucket_count: {}", session.bucket_count),
+            format!("tree_height: {}", session.tree_height),
+            format!("path_batch_size: {}", session.path_batch_size),
+            format!(
+                "max_bucket_ciphertext_bytes: {}",
+                session.max_bucket_ciphertext_bytes
+            ),
+        ] {
+            assert!(
+                !session_debug.contains(&leaked_session_value),
+                "{session_debug}"
+            );
+        }
         for leaked in [
             "hnsw-common-session-sentinel",
             "hnsw-common-client-sentinel",
