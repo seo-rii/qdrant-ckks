@@ -99,7 +99,7 @@ pub enum CryptoSetupError {
     MissingBackendProgram { backend: String, kind: String },
     #[error("crypto backend {backend} requires sha256_b64 program pin")]
     MissingBackendSha256Pin { backend: String },
-    #[error("crypto backend {backend} program path is invalid: {program}")]
+    #[error("crypto backend {backend} program path is invalid")]
     InvalidBackendProgram { backend: String, program: String },
     #[error("crypto backend {backend} program signature is invalid: {reason}")]
     InvalidBackendSignature { backend: String, reason: String },
@@ -9808,6 +9808,19 @@ mod tests {
             assert!(!rendered.contains(sentinel), "{rendered}");
             assert!(rendered.contains("[redacted]"), "{rendered}");
         }
+    }
+
+    #[test]
+    fn crypto_setup_error_display_redacts_invalid_backend_program_path() {
+        let sentinel = "crypto-setup-display-sentinel";
+        let err = CryptoSetupError::InvalidBackendProgram {
+            backend: "openfhe_local".to_string(),
+            program: format!("/tmp/{sentinel}/openfhe-bridge"),
+        };
+        let rendered = format!("{err}");
+
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(rendered.contains("program path is invalid"), "{rendered}");
     }
 
     #[test]

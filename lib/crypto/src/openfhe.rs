@@ -301,36 +301,27 @@ fn ensure_checked_bridge_spawn_supported() -> Result<(), CkksError> {
 
 fn validate_checked_bridge_program(path: &Path) -> Result<(), CkksError> {
     if !path.is_absolute() {
-        return Err(CkksError::Backend(format!(
-            "OpenFHE bridge program must be an absolute path: {}",
-            path.display(),
-        )));
+        return Err(CkksError::Backend(
+            "OpenFHE bridge program must be an absolute path".to_string(),
+        ));
     }
 
     let link_metadata = std::fs::symlink_metadata(path).map_err(|err| {
-        CkksError::Backend(format!(
-            "failed to inspect OpenFHE bridge program {}: {err}",
-            path.display(),
-        ))
+        CkksError::Backend(format!("failed to inspect OpenFHE bridge program: {err}"))
     })?;
     if link_metadata.file_type().is_symlink() || !link_metadata.is_file() {
-        return Err(CkksError::Backend(format!(
-            "OpenFHE bridge program must be a regular non-symlink file: {}",
-            path.display(),
-        )));
+        return Err(CkksError::Backend(
+            "OpenFHE bridge program must be a regular non-symlink file".to_string(),
+        ));
     }
 
     let metadata = std::fs::metadata(path).map_err(|err| {
-        CkksError::Backend(format!(
-            "failed to inspect OpenFHE bridge program {}: {err}",
-            path.display(),
-        ))
+        CkksError::Backend(format!("failed to inspect OpenFHE bridge program: {err}"))
     })?;
     if !metadata.is_file() {
-        return Err(CkksError::Backend(format!(
-            "OpenFHE bridge program must be a regular file: {}",
-            path.display(),
-        )));
+        return Err(CkksError::Backend(
+            "OpenFHE bridge program must be a regular file".to_string(),
+        ));
     }
 
     #[cfg(unix)]
@@ -343,47 +334,43 @@ fn validate_checked_bridge_program(path: &Path) -> Result<(), CkksError> {
 
         let mode = metadata.permissions().mode();
         if mode & 0o111 == 0 || mode & 0o022 != 0 {
-            return Err(CkksError::Backend(format!(
-                "OpenFHE bridge program must be executable and not group/world-writable: {}",
-                path.display(),
-            )));
+            return Err(CkksError::Backend(
+                "OpenFHE bridge program must be executable and not group/world-writable"
+                    .to_string(),
+            ));
         }
 
         let effective_uid = unsafe { geteuid() };
         let owner = metadata.uid();
         if owner != 0 && owner != effective_uid {
-            return Err(CkksError::Backend(format!(
-                "OpenFHE bridge program must be owned by root or the qdrant process user: {}",
-                path.display(),
-            )));
+            return Err(CkksError::Backend(
+                "OpenFHE bridge program must be owned by root or the qdrant process user"
+                    .to_string(),
+            ));
         }
 
         let mut parent = path.parent();
         while let Some(directory) = parent {
             let directory_metadata = std::fs::symlink_metadata(directory).map_err(|err| {
                 CkksError::Backend(format!(
-                    "failed to inspect OpenFHE bridge parent directory {}: {err}",
-                    directory.display(),
+                    "failed to inspect OpenFHE bridge parent directory: {err}"
                 ))
             })?;
             if directory_metadata.file_type().is_symlink() || !directory_metadata.is_dir() {
-                return Err(CkksError::Backend(format!(
-                    "OpenFHE bridge parent path must be a regular directory: {}",
-                    directory.display(),
-                )));
+                return Err(CkksError::Backend(
+                    "OpenFHE bridge parent path must be a regular directory".to_string(),
+                ));
             }
             if directory_metadata.permissions().mode() & 0o022 != 0 {
-                return Err(CkksError::Backend(format!(
-                    "OpenFHE bridge parent directory must not be group/world-writable: {}",
-                    directory.display(),
-                )));
+                return Err(CkksError::Backend(
+                    "OpenFHE bridge parent directory must not be group/world-writable".to_string(),
+                ));
             }
             let owner = directory_metadata.uid();
             if owner != 0 && owner != effective_uid {
-                return Err(CkksError::Backend(format!(
-                    "OpenFHE bridge parent directory must be owned by root or the qdrant process user: {}",
-                    directory.display(),
-                )));
+                return Err(CkksError::Backend(
+                    "OpenFHE bridge parent directory must be owned by root or the qdrant process user".to_string(),
+                ));
             }
             parent = directory.parent();
         }
@@ -401,41 +388,35 @@ fn validate_bridge_program_sha256_b64(
     validate_bridge_sha256_digest(path, &expected, &actual)
 }
 
-fn decode_bridge_sha256_pin(path: &Path, expected_sha256_b64: &str) -> Result<Vec<u8>, CkksError> {
+fn decode_bridge_sha256_pin(_path: &Path, expected_sha256_b64: &str) -> Result<Vec<u8>, CkksError> {
     if expected_sha256_b64.len() != BASE64URL_NOPAD_32_BYTE_LEN {
-        return Err(CkksError::Backend(format!(
-            "OpenFHE bridge sha256 pin must decode to 32 bytes: {}",
-            path.display(),
-        )));
+        return Err(CkksError::Backend(
+            "OpenFHE bridge sha256 pin must decode to 32 bytes".to_string(),
+        ));
     }
     let expected = BASE64URL_NOPAD
         .decode(expected_sha256_b64.as_bytes())
         .map_err(|_| {
-            CkksError::Backend(format!(
-                "OpenFHE bridge sha256 pin must be base64url-no-padding: {}",
-                path.display(),
-            ))
+            CkksError::Backend("OpenFHE bridge sha256 pin must be base64url-no-padding".to_string())
         })?;
     if expected.len() != 32 {
-        return Err(CkksError::Backend(format!(
-            "OpenFHE bridge sha256 pin must decode to 32 bytes: {}",
-            path.display(),
-        )));
+        return Err(CkksError::Backend(
+            "OpenFHE bridge sha256 pin must decode to 32 bytes".to_string(),
+        ));
     }
 
     Ok(expected)
 }
 
 fn validate_bridge_sha256_digest(
-    path: &Path,
+    _path: &Path,
     expected: &[u8],
     actual: &[u8],
 ) -> Result<(), CkksError> {
     if !constant_time_eq::constant_time_eq(actual, expected) {
-        return Err(CkksError::Backend(format!(
-            "OpenFHE bridge sha256 pin does not match: {}",
-            path.display(),
-        )));
+        return Err(CkksError::Backend(
+            "OpenFHE bridge sha256 pin does not match".to_string(),
+        ));
     }
 
     Ok(())
@@ -484,29 +465,25 @@ fn checked_bridge_spawn_program(
         .open(program)
         .map_err(|err| {
             CkksError::Backend(format!(
-                "failed to open OpenFHE bridge program {} for checked spawn: {err}",
-                program.display(),
+                "failed to open OpenFHE bridge program for checked spawn: {err}"
             ))
         })?;
     let metadata = file.metadata().map_err(|err| {
         CkksError::Backend(format!(
-            "failed to inspect OpenFHE bridge program {} for checked spawn: {err}",
-            program.display(),
+            "failed to inspect OpenFHE bridge program for checked spawn: {err}"
         ))
     })?;
     if !metadata.is_file() {
-        return Err(CkksError::Backend(format!(
-            "OpenFHE bridge program must remain a regular file for checked spawn: {}",
-            program.display(),
-        )));
+        return Err(CkksError::Backend(
+            "OpenFHE bridge program must remain a regular file for checked spawn".to_string(),
+        ));
     }
     validate_bridge_program_size(program, metadata.len())?;
 
     let mut prefix = [0u8; 2];
     let prefix_len = file.read(&mut prefix).map_err(|err| {
         CkksError::Backend(format!(
-            "failed to read OpenFHE bridge program {} for checked spawn: {err}",
-            program.display(),
+            "failed to read OpenFHE bridge program for checked spawn: {err}"
         ))
     })?;
     let is_shebang_script = prefix_len == 2 && prefix == *b"#!";
@@ -522,10 +499,9 @@ fn checked_bridge_spawn_program(
         // FD_CLOEXEC and do not inherit the checked executable fd.
         let flags = unsafe { nix::libc::fcntl(file.as_raw_fd(), nix::libc::F_GETFD) };
         if flags < 0 {
-            return Err(CkksError::Backend(format!(
-                "failed to inspect OpenFHE bridge executable fd for checked spawn: {}",
-                program.display(),
-            )));
+            return Err(CkksError::Backend(
+                "failed to inspect OpenFHE bridge executable fd for checked spawn".to_string(),
+            ));
         }
         let result = unsafe {
             nix::libc::fcntl(
@@ -535,10 +511,9 @@ fn checked_bridge_spawn_program(
             )
         };
         if result < 0 {
-            return Err(CkksError::Backend(format!(
-                "failed to prepare OpenFHE bridge script fd for checked spawn: {}",
-                program.display(),
-            )));
+            return Err(CkksError::Backend(
+                "failed to prepare OpenFHE bridge script fd for checked spawn".to_string(),
+            ));
         }
     }
 
@@ -573,21 +548,19 @@ fn hash_bridge_program_for_sha256(path: &Path) -> Result<[u8; 32], CkksError> {
         .open(path)
         .map_err(|err| {
             CkksError::Backend(format!(
-                "failed to open OpenFHE bridge program {} for sha256 pinning: {err}",
-                path.display(),
+                "failed to open OpenFHE bridge program for sha256 pinning: {err}"
             ))
         })?;
     let metadata = file.metadata().map_err(|err| {
         CkksError::Backend(format!(
-            "failed to inspect OpenFHE bridge program {} for sha256 pinning: {err}",
-            path.display(),
+            "failed to inspect OpenFHE bridge program for sha256 pinning: {err}"
         ))
     })?;
     if !metadata.is_file() {
-        return Err(CkksError::Backend(format!(
-            "OpenFHE bridge program must remain a regular file while hashing sha256 pin: {}",
-            path.display(),
-        )));
+        return Err(CkksError::Backend(
+            "OpenFHE bridge program must remain a regular file while hashing sha256 pin"
+                .to_string(),
+        ));
     }
     validate_bridge_program_size(path, metadata.len())?;
 
@@ -598,38 +571,35 @@ fn hash_bridge_program_for_sha256(path: &Path) -> Result<[u8; 32], CkksError> {
 fn hash_bridge_program_for_sha256(path: &Path) -> Result<[u8; 32], CkksError> {
     let mut file = std::fs::File::open(path).map_err(|err| {
         CkksError::Backend(format!(
-            "failed to read OpenFHE bridge program {} for sha256 pinning: {err}",
-            path.display(),
+            "failed to read OpenFHE bridge program for sha256 pinning: {err}"
         ))
     })?;
     let metadata = file.metadata().map_err(|err| {
         CkksError::Backend(format!(
-            "failed to inspect OpenFHE bridge program {} for sha256 pinning: {err}",
-            path.display(),
+            "failed to inspect OpenFHE bridge program for sha256 pinning: {err}"
         ))
     })?;
     if !metadata.is_file() {
-        return Err(CkksError::Backend(format!(
-            "OpenFHE bridge program must remain a regular file while hashing sha256 pin: {}",
-            path.display(),
-        )));
+        return Err(CkksError::Backend(
+            "OpenFHE bridge program must remain a regular file while hashing sha256 pin"
+                .to_string(),
+        ));
     }
     validate_bridge_program_size(path, metadata.len())?;
     hash_bridge_program_reader(path, &mut file, &[])
 }
 
-fn validate_bridge_program_size(path: &Path, size: u64) -> Result<(), CkksError> {
+fn validate_bridge_program_size(_path: &Path, size: u64) -> Result<(), CkksError> {
     if size > MAX_BRIDGE_PROGRAM_SHA256_BYTES {
         return Err(CkksError::Backend(format!(
-            "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin: {}",
-            path.display(),
+            "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin",
         )));
     }
     Ok(())
 }
 
 fn hash_bridge_program_reader(
-    path: &Path,
+    _path: &Path,
     reader: &mut impl Read,
     initial_bytes: &[u8],
 ) -> Result<[u8; 32], CkksError> {
@@ -637,8 +607,7 @@ fn hash_bridge_program_reader(
     let mut total_read = initial_bytes.len() as u64;
     if total_read > MAX_BRIDGE_PROGRAM_SHA256_BYTES {
         return Err(CkksError::Backend(format!(
-            "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin: {}",
-            path.display(),
+            "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin",
         )));
     }
     hasher.update(initial_bytes);
@@ -647,8 +616,7 @@ fn hash_bridge_program_reader(
     loop {
         let read = reader.read(&mut buffer).map_err(|err| {
             CkksError::Backend(format!(
-                "failed to read OpenFHE bridge program {} for sha256 pinning: {err}",
-                path.display(),
+                "failed to read OpenFHE bridge program for sha256 pinning: {err}"
             ))
         })?;
         if read == 0 {
@@ -656,14 +624,12 @@ fn hash_bridge_program_reader(
         }
         total_read = total_read.checked_add(read as u64).ok_or_else(|| {
             CkksError::Backend(format!(
-                "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin: {}",
-                path.display(),
+                "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin",
             ))
         })?;
         if total_read > MAX_BRIDGE_PROGRAM_SHA256_BYTES {
             return Err(CkksError::Backend(format!(
-                "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin: {}",
-                path.display(),
+                "OpenFHE bridge program exceeds {MAX_BRIDGE_PROGRAM_SHA256_BYTES} bytes while hashing sha256 pin",
             )));
         }
         hasher.update(&buffer[..read]);
@@ -2384,6 +2350,30 @@ mod tests {
         let err = CommandOpenFheBackend::new_checked_with_sha256_b64(&program, "A".repeat(1024))
             .expect_err("oversized sha256 pin must fail before bridge hash validation");
         assert!(format!("{err}").contains("must decode to 32 bytes"));
+    }
+
+    #[test]
+    fn checked_bridge_errors_do_not_reflect_program_path() {
+        let relative_program = PathBuf::from("qdrant-sec-openfhe-path-sentinel");
+        let err = CommandOpenFheBackend::new_checked(&relative_program)
+            .expect_err("relative checked bridge program path must be rejected");
+        let rendered = format!("{err}");
+        assert!(
+            !rendered.contains("qdrant-sec-openfhe-path-sentinel"),
+            "{rendered}"
+        );
+
+        let program = std::env::current_exe().unwrap();
+        let err = CommandOpenFheBackend::new_checked_with_sha256_b64(
+            &program,
+            BASE64URL_NOPAD.encode(&[0u8; 32]),
+        )
+        .expect_err("sha256 mismatch must be rejected");
+        let rendered = format!("{err}");
+        assert!(
+            !rendered.contains(&program.display().to_string()),
+            "{rendered}"
+        );
     }
 
     #[test]
