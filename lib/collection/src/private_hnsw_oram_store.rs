@@ -80,7 +80,7 @@ impl Debug for PrivateHnswOramMerkleProof {
             .field("kind", &self.kind)
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.bucket_count)
+            .field("bucket_count", &"[redacted]")
             .field("leaf_count", &"[redacted]")
             .finish()
     }
@@ -145,7 +145,7 @@ impl Debug for PrivateHnswOramMerkleTree {
             .field("version", &self.version)
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("bucket_count", &self.bucket_count)
+            .field("bucket_count", &"[redacted]")
             .field("leaf_hash_count", &"[redacted]")
             .finish()
     }
@@ -1798,8 +1798,10 @@ mod tests {
             assert!(!rendered.contains(leaked), "{rendered}");
         }
         for (debug_rendered, redacted_count) in [
+            (format!("{proof:?}"), "bucket_count: 8"),
             (format!("{proof:?}"), "leaf_count: 1"),
             (format!("{:?}", proof.leaves[0]), "sibling_count: 1"),
+            (format!("{tree:?}"), "bucket_count: 8"),
             (format!("{tree:?}"), "leaf_hash_count: 1"),
         ] {
             assert!(
