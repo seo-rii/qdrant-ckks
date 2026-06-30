@@ -786,10 +786,15 @@ mod tests {
             "vector-name-sentinel",
             "session-id-sentinel",
             "clientStateBackups-sentinel",
+            "client_state_ciphertext-sentinel",
+            "encrypted_client_state-sentinel",
             "oramPositionMapBackups-sentinel",
+            "oram_position_map_backups-sentinel",
             "positionMapBackups-sentinel",
+            "position_map_backups-sentinel",
             "stashBackups-sentinel",
             "tokenPositionMapBackups-sentinel",
+            "token_position_map_backups-sentinel",
             "root-hash-sentinel",
             "new-root-hash-sentinel",
             "path-label-sentinel",
@@ -799,9 +804,9 @@ mod tests {
             .read_private_hnsw_paths(Request::new(OramReadPathsRequest {
                 collection_name: "private-hnsw-collection-label".into(),
                 vector_name: "vector-name-sentinel".into(),
-                session_id: "clientStateBackups-sentinel".into(),
-                root_hash: "positionMapBackups-sentinel".into(),
-                paths: vec!["oramPositionMapBackups-sentinel".into()],
+                session_id: "client_state_ciphertext-sentinel".into(),
+                root_hash: "position_map_backups-sentinel".into(),
+                paths: vec!["oram_position_map_backups-sentinel".into()],
                 ..Default::default()
             }))
             .await
@@ -812,9 +817,9 @@ mod tests {
             .commit_private_hnsw_paths(Request::new(OramCommitRequest {
                 collection_name: "private-hnsw-collection-label".into(),
                 vector_name: "vector-name-sentinel".into(),
-                session_id: "stashBackups-sentinel".into(),
+                session_id: "encrypted_client_state-sentinel".into(),
                 old_root_hash: "root-hash-sentinel".into(),
-                new_root_hash: "tokenPositionMapBackups-sentinel".into(),
+                new_root_hash: "token_position_map_backups-sentinel".into(),
                 ..Default::default()
             }))
             .await
@@ -888,10 +893,15 @@ mod tests {
         let sensitive = [
             "result-session-id-sentinel",
             "clientStateBackups-sentinel",
+            "client_state_ciphertext-sentinel",
             "oramPositionMapBackups-sentinel",
+            "oram_position_map_backups-sentinel",
             "positionMapBackups-sentinel",
+            "position_map_backups-sentinel",
             "stashBackups-sentinel",
             "tokenPositionMapBackups-sentinel",
+            "token_position_map_backups-sentinel",
+            "state_ciphertext_hash-sentinel",
             "result-root-hash-sentinel",
             "result-new-root-hash-sentinel",
         ];
@@ -900,7 +910,7 @@ mod tests {
             .upload_private_result_oram_buckets(Request::new(
                 UploadPrivateResultOramBucketsRequest {
                     collection_name: "private-result-collection-label".into(),
-                    root_hash: "positionMapBackups-sentinel".into(),
+                    root_hash: "position_map_backups-sentinel".into(),
                     buckets: vec![Default::default()],
                     ..Default::default()
                 },
@@ -912,8 +922,8 @@ mod tests {
         let read = w
             .read_private_result_oram_buckets(Request::new(ReadPrivateResultOramBucketsRequest {
                 collection_name: "private-result-collection-label".into(),
-                session_id: "tokenPositionMapBackups-sentinel".into(),
-                root_hash: "oramPositionMapBackups-sentinel".into(),
+                session_id: "token_position_map_backups-sentinel".into(),
+                root_hash: "oram_position_map_backups-sentinel".into(),
                 bucket_ids: vec![42],
                 ..Default::default()
             }))
@@ -925,8 +935,8 @@ mod tests {
             .commit_private_result_oram_buckets(Request::new(
                 CommitPrivateResultOramBucketsRequest {
                     collection_name: "private-result-collection-label".into(),
-                    session_id: "stashBackups-sentinel".into(),
-                    old_root_hash: "clientStateBackups-sentinel".into(),
+                    session_id: "state_ciphertext_hash-sentinel".into(),
+                    old_root_hash: "client_state_ciphertext-sentinel".into(),
                     new_root_hash: "result-new-root-hash-sentinel".into(),
                     updated_buckets: vec![Default::default()],
                     ..Default::default()
