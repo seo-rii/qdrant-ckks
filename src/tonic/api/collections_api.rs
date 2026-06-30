@@ -145,10 +145,28 @@ impl Collections for CollectionsService {
 
     async fn update(
         &self,
-        request: Request<UpdateCollection>,
+        mut request: Request<UpdateCollection>,
     ) -> Result<Response<CollectionOperationResponse>, Status> {
         validate(request.get_ref())?;
-        self.perform_operation(request).await
+        let timing = Instant::now();
+        let auth = extract_auth(&mut request);
+        let operation = request.into_inner();
+        let wait_timeout = operation.wait_timeout();
+        let collection_name = operation.collection_name.clone();
+        let _private_oram_lifecycle_guard = begin_private_oram_collection_lifecycle_guard(
+            &self.dispatcher,
+            &auth,
+            &collection_name,
+        )
+        .await?;
+        let result = self
+            .dispatcher
+            .submit_collection_meta_op(operation.try_into()?, auth, wait_timeout)
+            .await?;
+
+        Ok(Response::new(CollectionOperationResponse::from((
+            timing, result,
+        ))))
     }
 
     async fn delete(

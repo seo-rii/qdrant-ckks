@@ -204,16 +204,22 @@ async fn update_collection(
 ) -> impl Responder {
     let timing = Instant::now();
     let name = collection.collection_name.clone();
-    let response = dispatcher
-        .submit_collection_meta_op(
-            CollectionMetaOperations::UpdateCollection(UpdateCollectionOperation::new(
-                name,
-                operation.into_inner(),
-            )),
-            auth,
-            query.timeout(),
-        )
-        .await;
+    let response = async {
+        let _private_oram_lifecycle_guard =
+            begin_private_oram_collection_lifecycle_guard(dispatcher.get_ref(), &auth, &name)
+                .await?;
+        dispatcher
+            .submit_collection_meta_op(
+                CollectionMetaOperations::UpdateCollection(UpdateCollectionOperation::new(
+                    name,
+                    operation.into_inner(),
+                )),
+                auth,
+                query.timeout(),
+            )
+            .await
+    }
+    .await;
     process_response(response, timing, None)
 }
 
