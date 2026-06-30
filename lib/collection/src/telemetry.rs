@@ -294,7 +294,7 @@ mod internal_conversions {
 
             Ok(ReshardingInfo {
                 uuid: Uuid::parse_str(&uuid)
-                    .map_err(|err| Status::invalid_argument(format!("cannot parse Uuid {err}")))?,
+                    .map_err(|_| Status::invalid_argument("cannot parse Uuid"))?,
                 direction: ReshardingDirection::from(
                     grpc::ReshardingDirection::try_from(direction).map_err(|_| {
                         Status::invalid_argument("cannot decode ReshardingDirection")
@@ -765,6 +765,15 @@ mod internal_conversions {
 
         #[test]
         fn telemetry_enum_decode_errors_do_not_reflect_unknown_values() {
+            let uuid_sentinel = "telemetry-uuid-secret-sentinel";
+            let err = ReshardingInfo::try_from(grpc::ReshardingTelemetry {
+                uuid: uuid_sentinel.to_string(),
+                ..Default::default()
+            })
+            .unwrap_err();
+            assert_eq!(err.message(), "cannot parse Uuid");
+            assert!(!err.message().contains(uuid_sentinel));
+
             let err = ShardTransferInfo::try_from(grpc::ShardTransferTelemetry {
                 method: Some(UNKNOWN_ENUM_VALUE),
                 ..Default::default()
