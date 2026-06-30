@@ -969,23 +969,56 @@ fn compact_vector_name_is_client_owned_oram_state_alias(value: &str) -> bool {
     matches!(
         value,
         "clientstate"
+            | "clientstates"
+            | "clientstatebackup"
+            | "clientstatebackups"
             | "clientstatesnapshot"
             | "clientstatesnapshots"
+            | "clientstateciphertext"
+            | "clientstateciphertexts"
+            | "clientstateciphertexthash"
+            | "clientstateciphertexthashes"
+            | "clientstateciphertextsha256"
+            | "clientstateciphertextssha256"
+            | "encryptedclientstate"
+            | "encryptedclientstates"
+            | "encryptedclientstatebackup"
+            | "encryptedclientstatebackups"
             | "encryptedclientstatesnapshot"
             | "encryptedclientstatesnapshots"
+            | "encryptedclientstateciphertext"
+            | "encryptedclientstateciphertexts"
+            | "encryptedclientstateciphertexthash"
+            | "encryptedclientstateciphertexthashes"
+            | "encryptedclientstateciphertextsha256"
+            | "encryptedclientstateciphertextssha256"
+            | "stateciphertext"
+            | "stateciphertexts"
+            | "stateciphertexthash"
+            | "stateciphertexthashes"
+            | "stateciphertextsha256"
+            | "stateciphertextssha256"
             | "positionmap"
             | "positionmaps"
+            | "positionmapbackup"
+            | "positionmapbackups"
             | "positionmapsnapshot"
             | "positionmapsnapshots"
             | "orampositionmap"
             | "orampositionmaps"
+            | "orampositionmapbackup"
+            | "orampositionmapbackups"
             | "orampositionmapsnapshot"
             | "orampositionmapsnapshots"
             | "tokenpositionmap"
             | "tokenpositionmaps"
+            | "tokenpositionmapbackup"
+            | "tokenpositionmapbackups"
             | "tokenpositionmapsnapshot"
             | "tokenpositionmapsnapshots"
             | "stash"
+            | "stashbackup"
+            | "stashbackups"
             | "stashsnapshot"
             | "stashsnapshots"
     )
@@ -1735,17 +1768,76 @@ mod tests {
 
     #[test]
     fn signature_message_builders_reject_client_state_vector_aliases() {
-        let mut manifest = fixture_manifest();
-        manifest.vector_name = "client.state".to_string();
-        assert_eq!(
-            try_private_hnsw_oram_manifest_signature_message(&manifest),
-            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
-        );
-
         let paths = ["AAAAAAAAAAA"];
-        let read_paths_input = PrivateHnswOramReadPathsSignatureInput {
+        let buckets = [PrivateHnswOramCommitBucketRef {
+            bucket_id: 9,
+            ciphertext_sha256: &BASE64URL_NOPAD.encode(&[9; 32]),
+        }];
+
+        for vector_alias in [
+            "client.state",
+            "client_states.json",
+            "clientStateCiphertexts.json",
+            "encryptedClientStates.json",
+            "encrypted_client_state_ciphertexts.json",
+            "stateCiphertexts.json",
+            "positionMapSnapshots.json",
+            "oram_position_map_backups.json",
+            "tokenPositionMapSnapshots.json",
+            "stash_snapshots.json",
+        ] {
+            let mut manifest = fixture_manifest();
+            manifest.vector_name = vector_alias.to_string();
+            assert_eq!(
+                try_private_hnsw_oram_manifest_signature_message(&manifest),
+                Err(PrivateHnswOramError::InvalidManifestField("vector_name")),
+                "manifest accepted private ORAM client-state vector alias {vector_alias}",
+            );
+
+            let read_paths_input = PrivateHnswOramReadPathsSignatureInput {
+                collection_id: "collection-uuid-1",
+                vector_name: vector_alias,
+                key_id: "tenant-a/vector-private-rk",
+                rk_id: "tenant-a/vector-private-rk",
+                rk_epoch: 7,
+                index_epoch: 42,
+                root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+                paths: &paths,
+                requested_paths: 1,
+                dummy_paths_included: true,
+                signature_alg: "ed25519",
+                signature_key_id: "tenant-a/private-hnsw-signing-v1",
+            };
+            assert_eq!(
+                try_private_hnsw_oram_read_paths_signature_message(read_paths_input),
+                Err(PrivateHnswOramError::InvalidManifestField("vector_name")),
+                "read_paths accepted private ORAM client-state vector alias {vector_alias}",
+            );
+
+            let commit_input = PrivateHnswOramCommitSignatureInput {
+                collection_id: "collection-uuid-1",
+                vector_name: vector_alias,
+                key_id: "tenant-a/vector-private-rk",
+                rk_id: "tenant-a/vector-private-rk",
+                rk_epoch: 7,
+                old_epoch: 42,
+                new_epoch: 43,
+                old_root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+                new_root_hash: &BASE64URL_NOPAD.encode(&[43; 32]),
+                updated_buckets: &buckets,
+                signature_alg: "ed25519",
+                signature_key_id: "tenant-a/private-hnsw-signing-v1",
+            };
+            assert_eq!(
+                try_private_hnsw_oram_commit_signature_message(commit_input),
+                Err(PrivateHnswOramError::InvalidManifestField("vector_name")),
+                "commit accepted private ORAM client-state vector alias {vector_alias}",
+            );
+        }
+
+        let valid_read_input = PrivateHnswOramReadPathsSignatureInput {
             collection_id: "collection-uuid-1",
-            vector_name: "client.state",
+            vector_name: "text",
             key_id: "tenant-a/vector-private-rk",
             rk_id: "tenant-a/vector-private-rk",
             rk_epoch: 7,
@@ -1756,38 +1848,6 @@ mod tests {
             dummy_paths_included: true,
             signature_alg: "ed25519",
             signature_key_id: "tenant-a/private-hnsw-signing-v1",
-        };
-        assert_eq!(
-            try_private_hnsw_oram_read_paths_signature_message(read_paths_input),
-            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
-        );
-
-        let buckets = [PrivateHnswOramCommitBucketRef {
-            bucket_id: 9,
-            ciphertext_sha256: &BASE64URL_NOPAD.encode(&[9; 32]),
-        }];
-        let commit_input = PrivateHnswOramCommitSignatureInput {
-            collection_id: "collection-uuid-1",
-            vector_name: "client.state",
-            key_id: "tenant-a/vector-private-rk",
-            rk_id: "tenant-a/vector-private-rk",
-            rk_epoch: 7,
-            old_epoch: 42,
-            new_epoch: 43,
-            old_root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
-            new_root_hash: &BASE64URL_NOPAD.encode(&[43; 32]),
-            updated_buckets: &buckets,
-            signature_alg: "ed25519",
-            signature_key_id: "tenant-a/private-hnsw-signing-v1",
-        };
-        assert_eq!(
-            try_private_hnsw_oram_commit_signature_message(commit_input),
-            Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
-        );
-
-        let valid_read_input = PrivateHnswOramReadPathsSignatureInput {
-            vector_name: "text",
-            ..read_paths_input
         };
         let unsupported_read_alg = PrivateHnswOramReadPathsSignatureInput {
             signature_alg: "rsa-pss-sentinel",
@@ -1809,8 +1869,18 @@ mod tests {
         );
 
         let valid_commit_input = PrivateHnswOramCommitSignatureInput {
+            collection_id: "collection-uuid-1",
             vector_name: "text",
-            ..commit_input
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            old_epoch: 42,
+            new_epoch: 43,
+            old_root_hash: &BASE64URL_NOPAD.encode(&[42; 32]),
+            new_root_hash: &BASE64URL_NOPAD.encode(&[43; 32]),
+            updated_buckets: &buckets,
+            signature_alg: "ed25519",
+            signature_key_id: "tenant-a/private-hnsw-signing-v1",
         };
         let unsupported_commit_alg = PrivateHnswOramCommitSignatureInput {
             signature_alg: "rsa-pss-sentinel",
