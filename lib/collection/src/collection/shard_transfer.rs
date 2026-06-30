@@ -625,13 +625,16 @@ mod tests {
             "clientStateCiphertext.json",
             "clientStateCiphertextHash.json",
             "clientStateCiphertextHashes.json",
+            "client_state_ciphertext_hashes.json",
             "encryptedClientStateCiphertext.json",
             "encryptedClientStateCiphertextHash.json",
             "encryptedClientStateCiphertextHashes.json",
             "encrypted_client_state_ciphertext_hash.json",
+            "encrypted_client_state_ciphertext_hashes.json",
             "stateCiphertext.json",
             "stateCiphertextHash.json",
             "stateCiphertextHashes.json",
+            "state_ciphertext_hashes.json",
             "tokenPositionMapBackups.json",
             "oramPositionMapBackups.json",
             "positionMapBackups.json",
@@ -651,13 +654,16 @@ mod tests {
             assert!(!rendered.contains("clientStateCiphertext"));
             assert!(!rendered.contains("clientStateCiphertextHash"));
             assert!(!rendered.contains("clientStateCiphertextHashes"));
+            assert!(!rendered.contains("client_state_ciphertext_hashes"));
             assert!(!rendered.contains("encryptedClientStateCiphertext"));
             assert!(!rendered.contains("encryptedClientStateCiphertextHash"));
             assert!(!rendered.contains("encryptedClientStateCiphertextHashes"));
             assert!(!rendered.contains("encrypted_client_state_ciphertext_hash"));
+            assert!(!rendered.contains("encrypted_client_state_ciphertext_hashes"));
             assert!(!rendered.contains("stateCiphertext"));
             assert!(!rendered.contains("stateCiphertextHash"));
             assert!(!rendered.contains("stateCiphertextHashes"));
+            assert!(!rendered.contains("state_ciphertext_hashes"));
             assert!(!rendered.contains("tokenPositionMapBackups"));
             assert!(!rendered.contains("oramPositionMapBackups"));
             assert!(!rendered.contains("positionMapBackups"));
