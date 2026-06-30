@@ -45,7 +45,6 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-use crate::common::crypto::PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX;
 use crate::settings::{CryptoInstanceConfig, CryptoSettings, Settings};
 
 pub(crate) const COLLECTION_NAME: &str = "docs";
@@ -142,6 +141,17 @@ impl PrivateResultOramRouteFixture {
         hnsw_fixture: &PrivateHnswRouteWireFixture,
     ) -> Settings {
         let mut settings = hnsw_fixture.route_settings();
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["result_privacy"] = json!("private_payload_oram_required");
+        self.insert_runtime_instance(&mut settings);
+        settings
+    }
+
+    fn insert_runtime_instance(&self, settings: &mut Settings) {
         settings.crypto.instances.insert(
             "docs_private_result_oram_v1".to_string(),
             CryptoInstanceConfig {
@@ -171,7 +181,6 @@ impl PrivateResultOramRouteFixture {
                 }),
             },
         );
-        settings
     }
 
     pub(crate) fn signing_public_key_b64(&self) -> String {
@@ -506,35 +515,7 @@ impl PrivateHnswRouteWireFixture {
             .get_mut("docs_private_hnsw_v1")
             .unwrap()
             .options["result_privacy"] = json!("private_payload_oram_required");
-        settings.crypto.instances.insert(
-            "docs_private_result_oram_v1".to_string(),
-            CryptoInstanceConfig {
-                provider: qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
-                materials: HashMap::new(),
-                backend_ref: None,
-                options: json!({
-                    "key_id": KEY_ID,
-                    "expected_rk_id": KEY_ID,
-                    "min_rk_epoch": RK_EPOCH,
-                    "max_rk_epoch": RK_EPOCH,
-                    "oram": {
-                        "kind": "path_oram",
-                        "bucket_size": 4,
-                        "block_size_bytes": 8192,
-                        "tree_height": PRIVATE_ORAM_JSON_MERKLE_TREE_HEIGHT_MAX,
-                        "path_batch_size": self.manifest.fixed_budget.fixed_result_k
-                    },
-                    "integrity": {
-                        "manifest_signature_required": true,
-                        "commit_signature_required": true,
-                        "merkle_root_required": true
-                    },
-                    "signature_public_keys": {
-                        RESULT_SIGNING_KEY_ID: BASE64URL_NOPAD.encode(&[13_u8; 32])
-                    }
-                }),
-            },
-        );
+        PrivateResultOramRouteFixture::build().insert_runtime_instance(&mut settings);
         settings
     }
 
