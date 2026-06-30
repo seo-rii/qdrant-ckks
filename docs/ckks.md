@@ -1060,11 +1060,12 @@ wrapper also reject token batches that are not an exact multiple of
 `oram.path_batch_size`. The private result ORAM client contract can now map that
 fixed token batch through the client-held token-position map into session
 `read_buckets` bucket-id sequences that preserve shared path bucket duplicates,
-so ORAM path volume is not reduced by deduplicating overlapping paths. Server
-read validation accepts duplicate bucket ids for shared path prefixes but
-rejects empty, repeated full-path, non-whole-path-shaped, non-canonical Path
-ORAM heap paths, or batches that do not exactly match the configured fixed path
-budget. The crypto crate also
+so ORAM path volume is not reduced by deduplicating overlapping paths. The SDK
+planner rejects repeated full paths within a single fixed-size read batch, and
+server read validation accepts duplicate bucket ids for shared path prefixes
+but rejects empty, repeated full-path, non-whole-path-shaped, non-canonical
+Path ORAM heap paths, or batches that do not exactly match the configured fixed
+path budget. The crypto crate also
 exposes canonical `read_buckets`
 message/sign/verify helpers that bind collection/key lineage, index epoch,
 root hash, bucket count, and the exact padded bucket-id sequence; REST and gRPC

@@ -1586,6 +1586,7 @@ pub fn plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
     let mut batches = Vec::new();
     for token_batch in payload_fetch_tokens.chunks(path_batch_size) {
         let mut bucket_ids = Vec::new();
+        let mut seen_batch_leaves = BTreeSet::new();
         for token in token_batch {
             if !seen_tokens.insert(*token) {
                 return Err(PrivateResultOramError::DuplicatePayloadFetchToken);
@@ -1594,6 +1595,9 @@ pub fn plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
                 .get(token)
                 .copied()
                 .ok_or(PrivateResultOramError::MissingPayloadFetchTokenPosition)?;
+            if !seen_batch_leaves.insert(leaf) {
+                return Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"));
+            }
             bucket_ids.extend(private_result_oram_bucket_ids_for_leaf(
                 leaf,
                 manifest.oram.tree_height,
@@ -2188,9 +2192,6 @@ where
             .batches
             .get(batch_index)
             .ok_or(PrivateResultOramError::InvalidFetchPlanField("batches"))?;
-        let encrypted_batch = encrypted_batches.get(batch_index).ok_or(
-            PrivateResultOramError::InvalidFetchPlanField("encrypted_batches"),
-        )?;
         if batch_plan.token_count != token_chunk.len() {
             return Err(PrivateResultOramError::InvalidFetchPlanField("token_count"));
         }
@@ -2204,10 +2205,14 @@ where
                 .checked_mul(path_len)
                 .ok_or(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))?,
         );
+        let mut seen_batch_leaves = BTreeSet::new();
         for payload_fetch_token in token_chunk {
             let old_leaf = working_state
                 .position(payload_fetch_token)
                 .ok_or(PrivateResultOramError::MissingPosition)?;
+            if !seen_batch_leaves.insert(old_leaf) {
+                return Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"));
+            }
             expected_bucket_ids.extend(private_result_oram_bucket_ids_for_leaf(
                 old_leaf,
                 config.tree_height,
@@ -2222,6 +2227,9 @@ where
         {
             return Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"));
         }
+        let encrypted_batch = encrypted_batches.get(batch_index).ok_or(
+            PrivateResultOramError::InvalidFetchPlanField("encrypted_batches"),
+        )?;
         if encrypted_batch.index_epoch != expected_epoch
             || encrypted_batch.root_hash != expected_root_hash
             || encrypted_batch.bucket_count != expected_bucket_count
@@ -6074,11 +6082,47 @@ mod tests {
                 config,
                 &[block.payload_fetch_token, block.payload_fetch_token],
                 &duplicate_plan,
-                &[duplicate_batch],
+                std::slice::from_ref(&duplicate_batch),
                 || Ok(0),
             ),
             Err(PrivateResultOramError::DuplicatePayloadFetchToken)
         );
+
+        let mut duplicate_leaf_state = PrivateResultOramClientState::with_position_map(
+            [(block.payload_fetch_token, 2), ([2; 32], 2)],
+            config.tree_height,
+        )
+        .unwrap();
+        let duplicate_path_plan = PrivateResultOramReadBucketPlan {
+            batches: vec![PrivateResultOramReadBucketBatchPlan {
+                bucket_ids: vec![0, 1, 4, 9, 0, 1, 4, 9],
+                token_count: 2,
+            }],
+            token_count: 2,
+            path_batch_size: 2,
+        };
+        assert_eq!(
+            fetch_private_result_oram_tokens_encrypted_verified(
+                &keys,
+                base_context,
+                42,
+                &root_hash,
+                bucket_count,
+                43,
+                &mut duplicate_leaf_state,
+                config,
+                &[block.payload_fetch_token, [2; 32]],
+                &duplicate_path_plan,
+                std::slice::from_ref(&duplicate_batch),
+                || Ok(0),
+            ),
+            Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))
+        );
+        assert_eq!(
+            duplicate_leaf_state.position(&block.payload_fetch_token),
+            Some(2)
+        );
+        assert_eq!(duplicate_leaf_state.position(&[2; 32]), Some(2));
 
         let partial_batch_plan = PrivateResultOramReadBucketPlan {
             batches: vec![
@@ -6584,6 +6628,22 @@ mod tests {
                 &duplicate_positions,
             ),
             Err(PrivateResultOramError::DuplicatePayloadFetchTokenPosition)
+        );
+
+        let duplicate_leaf_positions = vec![
+            position.clone(),
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [2; 32],
+                leaf: 5,
+            },
+        ];
+        assert_eq!(
+            plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
+                &manifest,
+                &[[1; 32], [2; 32]],
+                &duplicate_leaf_positions,
+            ),
+            Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))
         );
 
         let bad_leaf = PrivateResultOramFetchTokenPosition {
