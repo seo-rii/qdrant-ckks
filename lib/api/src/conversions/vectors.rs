@@ -225,10 +225,8 @@ impl TryFrom<grpc::Vectors> for rest::VectorStruct {
                     }
                     if let Some(vectors_count) = vectors_count {
                         let multi = convert_to_plain_multi_vector(data, vectors_count as usize)
-                            .map_err(|err| {
-                                Status::invalid_argument(format!(
-                                    "Unable to convert to multi-dense vector: {err}"
-                                ))
+                            .map_err(|_| {
+                                Status::invalid_argument("Unable to convert to multi-dense vector")
                             })?;
 
                         rest::VectorStruct::MultiDense(multi)
@@ -299,12 +297,8 @@ impl TryFrom<grpc::Vector> for rest::Vector {
         }
 
         if let Some(vectors_count) = vectors_count {
-            let multi =
-                convert_to_plain_multi_vector(data, vectors_count as usize).map_err(|err| {
-                    Status::invalid_argument(format!(
-                        "Unable to convert to multi-dense vector: {err}"
-                    ))
-                })?;
+            let multi = convert_to_plain_multi_vector(data, vectors_count as usize)
+                .map_err(|_| Status::invalid_argument("Unable to convert to multi-dense vector"))?;
             Ok(rest::Vector::MultiDense(multi))
         } else {
             Ok(rest::Vector::Dense(data))
@@ -531,11 +525,8 @@ impl TryFrom<grpc::Vector> for VectorInternal {
         if let Some(indices) = indices {
             let grpc::SparseIndices { data: data_indices } = indices;
             return Ok(VectorInternal::Sparse(
-                SparseVector::new(data_indices, data).map_err(|e| {
-                    Status::invalid_argument(format!(
-                        "Sparse indices does not match sparse vector conditions: {e}"
-                    ))
-                })?,
+                SparseVector::new(data_indices, data)
+                    .map_err(|_| Status::invalid_argument("Malformed sparse vector"))?,
             ));
         }
 
@@ -688,6 +679,26 @@ mod tests {
         }
     }
 
+    #[expect(deprecated)]
+    fn malformed_plain_multi_vector() -> grpc::Vector {
+        grpc::Vector {
+            data: vec![1.0, 2.0, 3.0],
+            indices: None,
+            vectors_count: Some(2),
+            vector: None,
+        }
+    }
+
+    #[expect(deprecated)]
+    fn malformed_sparse_vector() -> grpc::Vector {
+        grpc::Vector {
+            data: vec![1.0],
+            indices: Some(grpc::SparseIndices { data: vec![0, 1] }),
+            vectors_count: None,
+            vector: None,
+        }
+    }
+
     #[test]
     fn grpc_vector_conversion_errors_do_not_echo_inference_inputs() {
         let sentinel = "do-not-echo-api-vector-secret";
@@ -740,6 +751,36 @@ mod tests {
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert_eq!(err.message(), "Invalid object vector input");
         assert!(!err.message().contains(sentinel), "{err:?}");
+    }
+
+    #[test]
+    fn grpc_plain_multi_vector_conversion_errors_do_not_reflect_shape_detail() {
+        let err = rest::Vector::try_from(malformed_plain_multi_vector()).unwrap_err();
+        assert_eq!(err.message(), "Unable to convert to multi-dense vector");
+        assert!(!err.message().contains("expected"));
+        assert!(!err.message().contains("received"));
+        assert!(!err.message().contains("dimension"));
+
+        let err = rest::VectorStruct::try_from(grpc::Vectors {
+            vectors_options: Some(grpc::vectors::VectorsOptions::Vector(
+                malformed_plain_multi_vector(),
+            )),
+        })
+        .unwrap_err();
+        assert_eq!(err.message(), "Unable to convert to multi-dense vector");
+        assert!(!err.message().contains("expected"));
+        assert!(!err.message().contains("received"));
+        assert!(!err.message().contains("dimension"));
+    }
+
+    #[test]
+    fn grpc_vector_internal_rejects_malformed_sparse_without_shape_detail() {
+        let err = VectorInternal::try_from(malformed_sparse_vector()).unwrap_err();
+
+        assert_eq!(err.message(), "Malformed sparse vector");
+        assert!(!err.message().contains("indices"));
+        assert!(!err.message().contains("values"));
+        assert!(!err.message().contains("conditions"));
     }
 
     #[test]

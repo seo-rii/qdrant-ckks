@@ -2673,12 +2673,8 @@ pub fn into_named_vector_struct(
         }
         VectorInternal::Sparse(sparse) => {
             if let Some(name) = vector_name {
-                let sparse_vector =
-                    SparseVector::new(sparse.indices, sparse.values).map_err(|e| {
-                        Status::invalid_argument(format!(
-                            "Sparse indices does not match sparse vector conditions: {e}"
-                        ))
-                    })?;
+                let sparse_vector = SparseVector::new(sparse.indices, sparse.values)
+                    .map_err(|_| Status::invalid_argument("Malformed sparse vector"))?;
                 NamedVectorStruct::Sparse(NamedSparseVector {
                     name,
                     vector: sparse_vector,
@@ -3129,13 +3125,8 @@ impl TryFrom<SearchPointGroups> for rest::SearchGroupsRequestInternal {
         };
 
         if let Some(sparse_indices) = &search_points.sparse_indices {
-            validate_sparse_vector_impl(&sparse_indices.data, &search_points.vector).map_err(
-                |e| {
-                    Status::invalid_argument(format!(
-                        "Sparse indices does not match sparse vector conditions: {e}"
-                    ))
-                },
-            )?;
+            validate_sparse_vector_impl(&sparse_indices.data, &search_points.vector)
+                .map_err(|_| Status::invalid_argument("Malformed sparse vector"))?;
         }
 
         let rest::SearchRequestInternal {
@@ -3568,6 +3559,56 @@ mod tests {
             indexed_only: Some(false),
             acorn: None,
         }
+    }
+
+    fn malformed_sparse_vector_internal() -> VectorInternal {
+        VectorInternal::Sparse(sparse::common::sparse_vector::SparseVector {
+            indices: vec![0, 1],
+            values: vec![1.0],
+        })
+    }
+
+    #[test]
+    fn grpc_named_sparse_vector_error_does_not_reflect_shape_detail() {
+        let err = into_named_vector_struct(
+            Some("tenant-secret-vector".to_string()),
+            malformed_sparse_vector_internal(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.message(), "Malformed sparse vector");
+        assert!(!err.message().contains("indices"));
+        assert!(!err.message().contains("values"));
+        assert!(!err.message().contains("conditions"));
+        assert!(!err.message().contains("tenant-secret-vector"));
+    }
+
+    #[test]
+    fn grpc_search_points_sparse_validation_error_does_not_reflect_shape_detail() {
+        let request = SearchPoints {
+            collection_name: "docs".to_string(),
+            vector: vec![1.0],
+            filter: None,
+            limit: 1,
+            with_payload: None,
+            params: None,
+            score_threshold: None,
+            offset: None,
+            vector_name: Some("tenant-secret-vector".to_string()),
+            with_vectors: None,
+            read_consistency: None,
+            timeout: None,
+            shard_key_selector: None,
+            sparse_indices: Some(crate::grpc::qdrant::SparseIndices { data: vec![0, 1] }),
+            ckks_encrypted_query: None,
+        };
+
+        let err = rest::SearchRequestInternal::try_from(request).unwrap_err();
+        assert_eq!(err.message(), "Malformed sparse vector");
+        assert!(!err.message().contains("indices"));
+        assert!(!err.message().contains("values"));
+        assert!(!err.message().contains("conditions"));
+        assert!(!err.message().contains("tenant-secret-vector"));
     }
 
     #[test]
