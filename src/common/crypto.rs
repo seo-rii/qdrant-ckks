@@ -9572,9 +9572,9 @@ fn read_material_unix_socket_to_string(
             path,
             reason,
         },
-        err => PayloadWriteSetupError::UnreadableMaterialFile {
+        _err => PayloadWriteSetupError::UnreadableMaterialFile {
             material: material_name.to_string(),
-            path: format!("{path}: {err}"),
+            path: "Unix socket material source is invalid".to_string(),
         },
     })?;
 
@@ -9744,9 +9744,9 @@ fn validate_material_file_source_for_payload_read(
             path,
             reason,
         },
-        err => PayloadWriteSetupError::UnreadableMaterialFile {
+        _err => PayloadWriteSetupError::UnreadableMaterialFile {
             material: material_name.to_string(),
-            path: format!("{path}: {err}"),
+            path: "file material source is invalid".to_string(),
         },
     })
 }
