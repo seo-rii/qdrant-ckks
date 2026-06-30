@@ -1659,10 +1659,21 @@ mod tests {
                 body.contains("lifecycle operation requires no active private ORAM session"),
                 "{body}",
             );
-            assert!(!body.contains(COLLECTION_NAME), "{body}");
-            assert!(!body.contains(&session.session_id), "{body}");
             assert!(!body.contains(&fixture.encrypted_build.root_hash), "{body}");
-            assert!(!body.contains("private_hnsw_oram"), "{body}");
+            for forbidden in [
+                COLLECTION_NAME,
+                &session.session_id,
+                "tenant-a/sdk-active-session-route-test",
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-hnsw-signing-v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_hnsw_oram",
+            ] {
+                assert!(!body.contains(forbidden), "{body}");
+            }
 
             let request = actix_web::test::TestRequest::delete()
                 .uri("/collections/docs")
@@ -1677,10 +1688,21 @@ mod tests {
                 body.contains("lifecycle operation requires no active private ORAM session"),
                 "{body}",
             );
-            assert!(!body.contains(COLLECTION_NAME), "{body}");
-            assert!(!body.contains(&session.session_id), "{body}");
             assert!(!body.contains(&fixture.encrypted_build.root_hash), "{body}");
-            assert!(!body.contains("private_hnsw_oram"), "{body}");
+            for forbidden in [
+                COLLECTION_NAME,
+                &session.session_id,
+                "tenant-a/sdk-active-session-route-test",
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-hnsw-signing-v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_hnsw_oram",
+            ] {
+                assert!(!body.contains(forbidden), "{body}");
+            }
 
             do_close_private_hnsw_session(
                 &toc,
@@ -1766,11 +1788,25 @@ mod tests {
                 body.contains("lifecycle operation requires no active private ORAM session"),
                 "{body}",
             );
-            assert!(!body.contains(COLLECTION_NAME), "{body}");
-            assert!(!body.contains(&session.session_id), "{body}");
             assert!(!body.contains(&result_fixture.manifest.root_hash), "{body}");
-            assert!(!body.contains("private_result_oram"), "{body}");
-            assert!(!body.contains("payload_private_result_oram"), "{body}");
+            for forbidden in [
+                COLLECTION_NAME,
+                &session.session_id,
+                "tenant-a/result-sdk-active-route-test",
+                "payload_private_result_oram",
+                "docs_private_result_oram_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-result-signing-v1",
+                qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_result_oram",
+            ] {
+                assert!(!body.contains(forbidden), "{body}");
+            }
 
             let request = actix_web::test::TestRequest::delete()
                 .uri("/collections/docs")
@@ -1785,11 +1821,25 @@ mod tests {
                 body.contains("lifecycle operation requires no active private ORAM session"),
                 "{body}",
             );
-            assert!(!body.contains(COLLECTION_NAME), "{body}");
-            assert!(!body.contains(&session.session_id), "{body}");
             assert!(!body.contains(&result_fixture.manifest.root_hash), "{body}");
-            assert!(!body.contains("private_result_oram"), "{body}");
-            assert!(!body.contains("payload_private_result_oram"), "{body}");
+            for forbidden in [
+                COLLECTION_NAME,
+                &session.session_id,
+                "tenant-a/result-sdk-active-route-test",
+                "payload_private_result_oram",
+                "docs_private_result_oram_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-result-signing-v1",
+                qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_result_oram",
+            ] {
+                assert!(!body.contains(forbidden), "{body}");
+            }
 
             do_close_private_result_oram_session(
                 &toc,

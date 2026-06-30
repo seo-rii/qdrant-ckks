@@ -709,23 +709,25 @@ mod tests {
                 "{update_err}",
             );
             assert!(
-                !update_err.message().contains(COLLECTION_NAME),
-                "{update_err}"
-            );
-            assert!(
-                !update_err.message().contains(&session.session_id),
-                "{update_err}"
-            );
-            assert!(
                 !update_err
                     .message()
                     .contains(&fixture.encrypted_build.root_hash),
                 "{update_err}"
             );
-            assert!(
-                !update_err.message().contains("private_hnsw_oram"),
-                "{update_err}"
-            );
+            for forbidden in [
+                COLLECTION_NAME,
+                &session.session_id,
+                "tenant-a/sdk-active-session-tonic-route-test",
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-hnsw-signing-v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_hnsw_oram",
+            ] {
+                assert!(!update_err.message().contains(forbidden), "{update_err}");
+            }
 
             let delete_err = Collections::delete(
                 &service,
@@ -744,23 +746,25 @@ mod tests {
                 "{delete_err}",
             );
             assert!(
-                !delete_err.message().contains(COLLECTION_NAME),
-                "{delete_err}"
-            );
-            assert!(
-                !delete_err.message().contains(&session.session_id),
-                "{delete_err}"
-            );
-            assert!(
                 !delete_err
                     .message()
                     .contains(&fixture.encrypted_build.root_hash),
                 "{delete_err}"
             );
-            assert!(
-                !delete_err.message().contains("private_hnsw_oram"),
-                "{delete_err}"
-            );
+            for forbidden in [
+                COLLECTION_NAME,
+                &session.session_id,
+                "tenant-a/sdk-active-session-tonic-route-test",
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-hnsw-signing-v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_hnsw_oram",
+            ] {
+                assert!(!delete_err.message().contains(forbidden), "{delete_err}");
+            }
 
             do_close_private_hnsw_session(
                 &toc,
@@ -850,27 +854,29 @@ mod tests {
                 "{update_err}",
             );
             assert!(
-                !update_err.message().contains(COLLECTION_NAME),
-                "{update_err}"
-            );
-            assert!(
-                !update_err.message().contains(&session.session_id),
-                "{update_err}"
-            );
-            assert!(
                 !update_err
                     .message()
                     .contains(&result_fixture.manifest.root_hash),
                 "{update_err}"
             );
-            assert!(
-                !update_err.message().contains("private_result_oram"),
-                "{update_err}"
-            );
-            assert!(
-                !update_err.message().contains("payload_private_result_oram"),
-                "{update_err}"
-            );
+            for forbidden in [
+                COLLECTION_NAME,
+                &session.session_id,
+                "tenant-a/result-sdk-active-tonic-route-test",
+                "payload_private_result_oram",
+                "docs_private_result_oram_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-result-signing-v1",
+                qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_result_oram",
+            ] {
+                assert!(!update_err.message().contains(forbidden), "{update_err}");
+            }
 
             let delete_err = Collections::delete(
                 &service,
@@ -889,27 +895,29 @@ mod tests {
                 "{delete_err}",
             );
             assert!(
-                !delete_err.message().contains(COLLECTION_NAME),
-                "{delete_err}"
-            );
-            assert!(
-                !delete_err.message().contains(&session.session_id),
-                "{delete_err}"
-            );
-            assert!(
                 !delete_err
                     .message()
                     .contains(&result_fixture.manifest.root_hash),
                 "{delete_err}"
             );
-            assert!(
-                !delete_err.message().contains("private_result_oram"),
-                "{delete_err}"
-            );
-            assert!(
-                !delete_err.message().contains("payload_private_result_oram"),
-                "{delete_err}"
-            );
+            for forbidden in [
+                COLLECTION_NAME,
+                &session.session_id,
+                "tenant-a/result-sdk-active-tonic-route-test",
+                "payload_private_result_oram",
+                "docs_private_result_oram_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-result-signing-v1",
+                qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_result_oram",
+            ] {
+                assert!(!delete_err.message().contains(forbidden), "{delete_err}");
+            }
 
             do_close_private_result_oram_session(
                 &toc,
