@@ -321,8 +321,12 @@ mod tests {
              writebackBucketCount=writeback-bucket-count-camel-sentinel \
              writebackBucketCounts=writeback-bucket-counts-camel-sentinel \
              clientStateBackups=client-state-backups-camel-sentinel \
+             encryptedClientStateBackups=encrypted-client-state-backups-camel-sentinel \
              clientStateCiphertext=client-state-ciphertext-camel-sentinel \
              encryptedClientStateCiphertextHash=encrypted-client-state-ciphertext-hash-camel-sentinel \
+             oramPositionMapBackups=oram-position-map-backups-camel-sentinel \
+             positionMapBackups=position-map-backups-camel-sentinel \
+             stashBackups=stash-backups-camel-sentinel \
              stateCiphertext=state-ciphertext-camel-sentinel \
              stateCiphertextHash=state-ciphertext-hash-camel-sentinel \
              tokenPositionMapBackups=token-position-map-backups-camel-sentinel"
@@ -358,8 +362,12 @@ mod tests {
         assert!(!redacted.contains("writeback-bucket-count-camel-sentinel"));
         assert!(!redacted.contains("writeback-bucket-counts-camel-sentinel"));
         assert!(!redacted.contains("client-state-backups-camel-sentinel"));
+        assert!(!redacted.contains("encrypted-client-state-backups-camel-sentinel"));
         assert!(!redacted.contains("client-state-ciphertext-camel-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-hash-camel-sentinel"));
+        assert!(!redacted.contains("oram-position-map-backups-camel-sentinel"));
+        assert!(!redacted.contains("position-map-backups-camel-sentinel"));
+        assert!(!redacted.contains("stash-backups-camel-sentinel"));
         assert!(!redacted.contains("state-ciphertext-camel-sentinel"));
         assert!(!redacted.contains("state-ciphertext-hash-camel-sentinel"));
         assert!(!redacted.contains("token-position-map-backups-camel-sentinel"));

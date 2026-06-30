@@ -418,7 +418,12 @@ mod tests {
                             "stash",
                             "clientStateBackups.json",
                             "clientStateCiphertext.json",
+                            "encryptedClientStateBackups.json",
                             "encryptedClientStateCiphertextHash.json",
+                            "oramPositionMapBackups.json",
+                            "positionMapBackups.json",
+                            "stashBackups.json",
+                            "stateCiphertext.json",
                             "stateCiphertextHash.json",
                             "tokenPositionMapBackups.json"
                         ]
@@ -433,7 +438,12 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("stash"));
         assert!(!unsafe_store_name_message.contains("clientStateBackups"));
         assert!(!unsafe_store_name_message.contains("clientStateCiphertext"));
+        assert!(!unsafe_store_name_message.contains("encryptedClientStateBackups"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertextHash"));
+        assert!(!unsafe_store_name_message.contains("oramPositionMapBackups"));
+        assert!(!unsafe_store_name_message.contains("positionMapBackups"));
+        assert!(!unsafe_store_name_message.contains("stashBackups"));
+        assert!(!unsafe_store_name_message.contains("stateCiphertext"));
         assert!(!unsafe_store_name_message.contains("stateCiphertextHash"));
         assert!(!unsafe_store_name_message.contains("tokenPositionMapBackups"));
 
