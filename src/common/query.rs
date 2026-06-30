@@ -983,10 +983,9 @@ async fn ckks_vector_search_points(
     let (vector_name, scoring) = match &search.query {
         QueryEnum::Nearest(named_query) => {
             let VectorInternal::Dense(query_values) = &named_query.query else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{}' only supports dense query vectors",
-                    named_query.get_name(),
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector only supports dense query vectors",
+                ));
             };
             (
                 named_query.get_name(),
@@ -1025,10 +1024,9 @@ async fn ckks_vector_search_points(
         ),
         QueryEnum::Discover(named_query) => {
             let VectorInternal::Dense(target) = &named_query.query.target else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{}' discover cannot resolve point-id or non-dense target examples because plaintext vectors are not stored",
-                    named_query.get_name(),
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector discover cannot resolve point-id or non-dense target examples because plaintext vectors are not stored",
+                ));
             };
             (
                 named_query.get_name(),
@@ -1051,10 +1049,9 @@ async fn ckks_vector_search_points(
             },
         ),
         _ => {
-            return Err(StorageError::bad_input(format!(
-                "encrypted vector '{}' only supports dense nearest-neighbor search, raw-dense recommend, raw-dense discover, and raw-dense context over the CKKS sidecar",
-                search.query.get_vector_name(),
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted vector only supports dense nearest-neighbor search, raw-dense recommend, raw-dense discover, and raw-dense context over the CKKS sidecar",
+            ));
         }
     };
     ckks_vector_search_points_with_scoring(
@@ -2219,7 +2216,7 @@ fn sort_ckks_scored_points(order: Order, scored: &mut [ScoredPoint]) {
 
 fn query_vectors_as_dense_slices<'a>(
     vectors: &'a [VectorInternal],
-    vector_name: &str,
+    _vector_name: &str,
     role: &str,
 ) -> Result<Vec<&'a [f32]>, StorageError> {
     vectors
@@ -2227,7 +2224,7 @@ fn query_vectors_as_dense_slices<'a>(
         .map(|vector| match vector {
             VectorInternal::Dense(values) => Ok(values.as_slice()),
             _ => Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' recommend only supports raw dense {role} examples",
+                "encrypted vector recommend only supports raw dense {role} examples",
             ))),
         })
         .collect()
@@ -2235,20 +2232,20 @@ fn query_vectors_as_dense_slices<'a>(
 
 fn query_context_pairs_as_dense_slices<'a>(
     pairs: &'a [ContextPair<VectorInternal>],
-    vector_name: &str,
+    _vector_name: &str,
 ) -> Result<Vec<(&'a [f32], &'a [f32])>, StorageError> {
     pairs
         .iter()
         .map(|pair| {
             let VectorInternal::Dense(positive) = &pair.positive else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' discover only supports raw dense positive context examples",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector discover only supports raw dense positive context examples",
+                ));
             };
             let VectorInternal::Dense(negative) = &pair.negative else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' discover only supports raw dense negative context examples",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector discover only supports raw dense negative context examples",
+                ));
             };
             Ok((positive.as_slice(), negative.as_slice()))
         })
