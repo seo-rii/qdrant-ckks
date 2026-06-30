@@ -900,6 +900,60 @@ mod tests {
 
     use super::*;
 
+    const PRIVATE_ORAM_RECEIVING_SHARD_COLLECTION_NAMES: &[&str] = &[
+        "clientStateCiphertext.json",
+        "clientStateCiphertextHash.json",
+        "clientStateCiphertextHashes.json",
+        "client_state_ciphertext_hashes.json",
+        "encryptedClientStateCiphertext.json",
+        "encryptedClientStateCiphertextHash.json",
+        "encryptedClientStateCiphertextHashes.json",
+        "encrypted_client_state_ciphertext_hash.json",
+        "encrypted_client_state_ciphertext_hashes.json",
+        "encrypted_client_state.bin",
+        "encrypted_client_state_backup.bin",
+        "encrypted_client_state_backups.bin",
+        "encrypted_client_state_snapshot.bin",
+        "encrypted_client_state_snapshots.bin",
+        "stateCiphertext.json",
+        "stateCiphertextHash.json",
+        "stateCiphertextHashes.json",
+        "state_ciphertext_hashes.json",
+        "state_ciphertext.bin",
+        "state_ciphertext_hash.bin",
+        "tokenPositionMapBackups.json",
+        "oramPositionMapBackups.json",
+        "positionMapBackups.json",
+        "stashBackups.json",
+    ];
+
+    const PRIVATE_ORAM_RECEIVING_SHARD_REDACTION_STEMS: &[&str] = &[
+        "clientStateCiphertext",
+        "clientStateCiphertextHash",
+        "clientStateCiphertextHashes",
+        "client_state_ciphertext_hashes",
+        "encryptedClientStateCiphertext",
+        "encryptedClientStateCiphertextHash",
+        "encryptedClientStateCiphertextHashes",
+        "encrypted_client_state",
+        "encrypted_client_state_backup",
+        "encrypted_client_state_backups",
+        "encrypted_client_state_snapshot",
+        "encrypted_client_state_snapshots",
+        "encrypted_client_state_ciphertext_hash",
+        "encrypted_client_state_ciphertext_hashes",
+        "stateCiphertext",
+        "stateCiphertextHash",
+        "stateCiphertextHashes",
+        "state_ciphertext",
+        "state_ciphertext_hash",
+        "state_ciphertext_hashes",
+        "tokenPositionMapBackups",
+        "oramPositionMapBackups",
+        "positionMapBackups",
+        "stashBackups",
+    ];
+
     #[test]
     fn client_payload_nonce_replay_cache_rejects_malformed_scoped_keys() {
         let mut cache = ClientPayloadNonceReplayCache::default();
@@ -941,16 +995,24 @@ mod tests {
 
     #[test]
     fn receiving_shard_rejects_private_oram_collection_until_bucket_transfer_exists() {
-        reject_private_oram_receiving_shard_until_supported("stashBackups.json", false).unwrap();
+        for collection_name in PRIVATE_ORAM_RECEIVING_SHARD_COLLECTION_NAMES {
+            reject_private_oram_receiving_shard_until_supported(collection_name, false).unwrap();
 
-        let err = reject_private_oram_receiving_shard_until_supported("stashBackups.json", true)
-            .unwrap_err();
-        let rendered = err.to_string();
-        assert!(rendered.contains("private ORAM collections"));
-        assert!(rendered.contains("encrypted ORAM bucket transfer"));
-        assert!(!rendered.contains("stashBackups"));
-        assert!(!rendered.contains("private_hnsw_oram"));
-        assert!(!rendered.contains("private_result_oram"));
+            let err = reject_private_oram_receiving_shard_until_supported(collection_name, true)
+                .unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("private ORAM collections"));
+            assert!(rendered.contains("encrypted ORAM bucket transfer"));
+            assert!(rendered.contains("consensus-backed epoch/root"));
+            assert!(!rendered.contains(collection_name));
+            for &leaked_alias in PRIVATE_ORAM_RECEIVING_SHARD_REDACTION_STEMS {
+                assert!(!rendered.contains(leaked_alias), "{rendered}");
+            }
+            assert!(!rendered.contains("private_hnsw_oram"));
+            assert!(!rendered.contains("private_result_oram"));
+            assert!(!rendered.contains(PRIVATE_HNSW_ORAM_BINDING));
+            assert!(!rendered.contains(PRIVATE_RESULT_ORAM_BINDING));
+        }
     }
 
     #[test]
