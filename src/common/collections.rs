@@ -1868,19 +1868,23 @@ mod tests {
     fn private_oram_cluster_guards_redact_client_state_aliases() {
         let mut config = private_result_oram_collection_config();
         let encryption = config.params.encryption.as_mut().unwrap();
-        encryption.key_id = Some("clientStateCiphertextHash.json".to_string());
+        encryption.key_id = Some("clientStateCiphertextSha256.json".to_string());
         let rule = encryption.rules.first_mut().unwrap();
-        rule.id = "encryptedClientStateCiphertext.json".to_string();
-        rule.instance = "stateCiphertextHash.json".to_string();
+        rule.id = "encryptedClientStateCiphertextSha256.json".to_string();
+        rule.instance = "stateCiphertextSha256.json".to_string();
         if let collection::config::EncryptionSelector::PayloadPaths { paths } = &mut rule.selector {
             *paths = vec![
                 "clientStateBackups.json".to_string(),
                 "client_state_backups.json".to_string(),
                 "clientStateCiphertext.json".to_string(),
                 "clientStateCiphertextHashes.json".to_string(),
+                "clientStateCiphertextSha256.json".to_string(),
+                "clientStateCiphertextsSha256.json".to_string(),
                 "client_state_ciphertext.json".to_string(),
                 "client_state_ciphertext_hash.json".to_string(),
                 "client_state_ciphertext_hashes.json".to_string(),
+                "client_state_ciphertext_sha256.json".to_string(),
+                "client_state_ciphertexts_sha256.json".to_string(),
                 "encryptedClientStateBackups.json".to_string(),
                 "encrypted_client_state_backups.json".to_string(),
                 "encrypted_client_state.json".to_string(),
@@ -1890,8 +1894,12 @@ mod tests {
                 "encrypted_client_state_ciphertext.json".to_string(),
                 "encryptedClientStateCiphertextHash.json".to_string(),
                 "encryptedClientStateCiphertextHashes.json".to_string(),
+                "encryptedClientStateCiphertextSha256.json".to_string(),
+                "encryptedClientStateCiphertextsSha256.json".to_string(),
                 "encrypted_client_state_ciphertext_hash.json".to_string(),
                 "encrypted_client_state_ciphertext_hashes.json".to_string(),
+                "encrypted_client_state_ciphertext_sha256.json".to_string(),
+                "encrypted_client_state_ciphertexts_sha256.json".to_string(),
                 "tokenPositionMapBackups.json".to_string(),
                 "token_position_map_backups.json".to_string(),
                 "oramPositionMapBackups.json".to_string(),
@@ -1900,9 +1908,13 @@ mod tests {
                 "position_map_backups.json".to_string(),
                 "stateCiphertext.json".to_string(),
                 "stateCiphertextHashes.json".to_string(),
+                "stateCiphertextSha256.json".to_string(),
+                "stateCiphertextsSha256.json".to_string(),
                 "state_ciphertext.json".to_string(),
                 "state_ciphertext_hash.json".to_string(),
                 "state_ciphertext_hashes.json".to_string(),
+                "state_ciphertext_sha256.json".to_string(),
+                "state_ciphertexts_sha256.json".to_string(),
             ];
         }
 
@@ -1985,9 +1997,13 @@ mod tests {
                     "clientStateCiphertext",
                     "clientStateCiphertextHash",
                     "clientStateCiphertextHashes",
+                    "clientStateCiphertextSha256",
+                    "clientStateCiphertextsSha256",
                     "client_state_ciphertext",
                     "client_state_ciphertext_hash",
                     "client_state_ciphertext_hashes",
+                    "client_state_ciphertext_sha256",
+                    "client_state_ciphertexts_sha256",
                     "encryptedClientStateBackups",
                     "encrypted_client_state_backups",
                     "encrypted_client_state",
@@ -1998,8 +2014,12 @@ mod tests {
                     "encryptedClientStateCiphertext",
                     "encryptedClientStateCiphertextHash",
                     "encryptedClientStateCiphertextHashes",
+                    "encryptedClientStateCiphertextSha256",
+                    "encryptedClientStateCiphertextsSha256",
                     "encrypted_client_state_ciphertext_hash",
                     "encrypted_client_state_ciphertext_hashes",
+                    "encrypted_client_state_ciphertext_sha256",
+                    "encrypted_client_state_ciphertexts_sha256",
                     "token_position_map_backups",
                     "oramPositionMapBackups",
                     "oram_position_map_backups",
@@ -2009,9 +2029,13 @@ mod tests {
                     "stateCiphertext",
                     "stateCiphertextHash",
                     "stateCiphertextHashes",
+                    "stateCiphertextSha256",
+                    "stateCiphertextsSha256",
                     "state_ciphertext",
                     "state_ciphertext_hash",
                     "state_ciphertext_hashes",
+                    "state_ciphertext_sha256",
+                    "state_ciphertexts_sha256",
                     "tokenPositionMapBackups",
                     PRIVATE_RESULT_ORAM_BINDING,
                     "private_result_oram",

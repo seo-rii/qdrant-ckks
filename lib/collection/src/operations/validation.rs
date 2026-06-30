@@ -420,9 +420,13 @@ mod tests {
                             "clientStateCiphertext.json",
                             "clientStateCiphertextHash.json",
                             "clientStateCiphertextHashes.json",
+                            "clientStateCiphertextSha256.json",
+                            "clientStateCiphertextsSha256.json",
                             "client_state_ciphertext.json",
                             "client_state_ciphertext_hash.json",
                             "client_state_ciphertext_hashes.json",
+                            "client_state_ciphertext_sha256.json",
+                            "client_state_ciphertexts_sha256.json",
                             "encryptedClientStateBackups.json",
                             "encrypted_client_state.json",
                             "encrypted_client_state_backup.json",
@@ -433,8 +437,12 @@ mod tests {
                             "encrypted_client_state_ciphertext.json",
                             "encryptedClientStateCiphertextHash.json",
                             "encryptedClientStateCiphertextHashes.json",
+                            "encryptedClientStateCiphertextSha256.json",
+                            "encryptedClientStateCiphertextsSha256.json",
                             "encrypted_client_state_ciphertext_hash.json",
                             "encrypted_client_state_ciphertext_hashes.json",
+                            "encrypted_client_state_ciphertext_sha256.json",
+                            "encrypted_client_state_ciphertexts_sha256.json",
                             "oramPositionMapBackups.json",
                             "oram_position_map_backups.json",
                             "positionMapBackups.json",
@@ -443,9 +451,13 @@ mod tests {
                             "stateCiphertext.json",
                             "stateCiphertextHash.json",
                             "stateCiphertextHashes.json",
+                            "stateCiphertextSha256.json",
+                            "stateCiphertextsSha256.json",
                             "state_ciphertext.json",
                             "state_ciphertext_hash.json",
                             "state_ciphertext_hashes.json",
+                            "state_ciphertext_sha256.json",
+                            "state_ciphertexts_sha256.json",
                             "tokenPositionMapBackups.json",
                             "token_position_map_backups.json"
                         ]
@@ -462,9 +474,13 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("clientStateCiphertext"));
         assert!(!unsafe_store_name_message.contains("clientStateCiphertextHash"));
         assert!(!unsafe_store_name_message.contains("clientStateCiphertextHashes"));
+        assert!(!unsafe_store_name_message.contains("clientStateCiphertextSha256"));
+        assert!(!unsafe_store_name_message.contains("clientStateCiphertextsSha256"));
         assert!(!unsafe_store_name_message.contains("client_state_ciphertext"));
         assert!(!unsafe_store_name_message.contains("client_state_ciphertext_hash"));
         assert!(!unsafe_store_name_message.contains("client_state_ciphertext_hashes"));
+        assert!(!unsafe_store_name_message.contains("client_state_ciphertext_sha256"));
+        assert!(!unsafe_store_name_message.contains("client_state_ciphertexts_sha256"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStateBackups"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_backup"));
@@ -475,8 +491,12 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertextHash"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertextHashes"));
+        assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertextSha256"));
+        assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertextsSha256"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext_hash"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext_hashes"));
+        assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext_sha256"));
+        assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertexts_sha256"));
         assert!(!unsafe_store_name_message.contains("oramPositionMapBackups"));
         assert!(!unsafe_store_name_message.contains("oram_position_map_backups"));
         assert!(!unsafe_store_name_message.contains("positionMapBackups"));
@@ -485,9 +505,13 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("stateCiphertext"));
         assert!(!unsafe_store_name_message.contains("stateCiphertextHash"));
         assert!(!unsafe_store_name_message.contains("stateCiphertextHashes"));
+        assert!(!unsafe_store_name_message.contains("stateCiphertextSha256"));
+        assert!(!unsafe_store_name_message.contains("stateCiphertextsSha256"));
         assert!(!unsafe_store_name_message.contains("state_ciphertext"));
         assert!(!unsafe_store_name_message.contains("state_ciphertext_hash"));
         assert!(!unsafe_store_name_message.contains("state_ciphertext_hashes"));
+        assert!(!unsafe_store_name_message.contains("state_ciphertext_sha256"));
+        assert!(!unsafe_store_name_message.contains("state_ciphertexts_sha256"));
         assert!(!unsafe_store_name_message.contains("tokenPositionMapBackups"));
         assert!(!unsafe_store_name_message.contains("token_position_map_backups"));
 
