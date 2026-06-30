@@ -4389,10 +4389,16 @@ mod tests {
     #[test]
     fn private_hnsw_point_errors_redact_backup_alias_vector_name() {
         for vector_name in [
+            "clientStateBackups",
             "encryptedClientStateBackups",
             "clientStateCiphertext",
             "encryptedClientStateCiphertextHash",
+            "oramPositionMapBackups",
+            "positionMapBackups",
+            "stashBackups",
+            "stateCiphertext",
             "stateCiphertextHash",
+            "tokenPositionMapBackups",
         ] {
             let rule = private_hnsw_vector_rule(vector_name);
             let encryption = private_hnsw_encryption(vector_name);
@@ -4417,10 +4423,16 @@ mod tests {
                 assert!(message.contains("/private-hnsw/{vector}/session"));
                 assert!(!message.contains(vector_name), "{message}");
                 for sentinel in [
+                    "clientStateBackups",
                     "encryptedClientStateBackups",
                     "clientStateCiphertext",
                     "encryptedClientStateCiphertextHash",
+                    "oramPositionMapBackups",
+                    "positionMapBackups",
+                    "stashBackups",
+                    "stateCiphertext",
                     "stateCiphertextHash",
+                    "tokenPositionMapBackups",
                 ] {
                     assert!(!message.contains(sentinel), "{message}");
                 }
@@ -4939,9 +4951,15 @@ mod tests {
     fn private_result_oram_point_errors_redact_backup_alias_payload_path() {
         for payload_path in [
             "clientStateBackups",
+            "encryptedClientStateBackups",
             "clientStateCiphertext",
             "encryptedClientStateCiphertextHash",
+            "oramPositionMapBackups",
+            "positionMapBackups",
+            "stashBackups",
+            "stateCiphertext",
             "stateCiphertextHash",
+            "tokenPositionMapBackups",
         ] {
             let encryption = private_result_oram_encryption(payload_path);
             let delete_private_payload = CollectionUpdateOperations::PayloadOperation(
@@ -4964,9 +4982,15 @@ mod tests {
             assert!(!write_message.contains(payload_path), "{write_message}");
             for sentinel in [
                 "clientStateBackups",
+                "encryptedClientStateBackups",
                 "clientStateCiphertext",
                 "encryptedClientStateCiphertextHash",
+                "oramPositionMapBackups",
+                "positionMapBackups",
+                "stashBackups",
+                "stateCiphertext",
                 "stateCiphertextHash",
+                "tokenPositionMapBackups",
             ] {
                 assert!(!write_message.contains(sentinel), "{write_message}");
             }
@@ -4987,9 +5011,15 @@ mod tests {
             assert!(!read_message.contains(payload_path), "{read_message}");
             for sentinel in [
                 "clientStateBackups",
+                "encryptedClientStateBackups",
                 "clientStateCiphertext",
                 "encryptedClientStateCiphertextHash",
+                "oramPositionMapBackups",
+                "positionMapBackups",
+                "stashBackups",
+                "stateCiphertext",
                 "stateCiphertextHash",
+                "tokenPositionMapBackups",
             ] {
                 assert!(!read_message.contains(sentinel), "{read_message}");
             }
