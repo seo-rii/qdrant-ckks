@@ -568,7 +568,7 @@ impl TryFrom<StopwordsSet> for segment::data_types::index::StopwordsInterface {
                     .into_iter()
                     .map(|lang| segment::data_types::index::Language::from_str(&lang))
                     .collect::<Result<_, _>>()
-                    .map_err(|e| Status::invalid_argument(format!("unknown language: {e}")))?,
+                    .map_err(|_| Status::invalid_argument("unknown language"))?,
             )
         };
 
@@ -641,9 +641,8 @@ impl TryFrom<StemmingParams> for segment::data_types::index::StemmingAlgorithm {
     fn try_from(value: StemmingParams) -> Result<Self, Self::Error> {
         match value {
             StemmingParams::Snowball(params) => {
-                let language = SnowballLanguage::from_str(&params.language).map_err(|_| {
-                    Status::invalid_argument(format!("Language {:?} not found.", params.language))
-                })?;
+                let language = SnowballLanguage::from_str(&params.language)
+                    .map_err(|_| Status::invalid_argument("Language not found"))?;
                 Ok(segment::data_types::index::StemmingAlgorithm::Snowball(
                     segment::data_types::index::SnowballParams {
                         r#type: segment::data_types::index::Snowball::Snowball,
@@ -3795,6 +3794,28 @@ mod tests {
         let err = segment::data_types::order_by::OrderBy::try_from(order_by).unwrap_err();
         assert_eq!(err.message(), "Malformed datetime");
         assert!(!err.message().contains(datetime_sentinel));
+    }
+
+    #[test]
+    fn grpc_text_language_errors_do_not_reflect_inputs() {
+        let language_sentinel = "language-secret-sentinel";
+
+        let err = segment::data_types::index::StopwordsInterface::try_from(StopwordsSet {
+            languages: vec![language_sentinel.to_string()],
+            custom: Vec::new(),
+        })
+        .unwrap_err();
+        assert_eq!(err.message(), "unknown language");
+        assert!(!err.message().contains(language_sentinel));
+
+        let err = segment::data_types::index::StemmingAlgorithm::try_from(
+            StemmingParams::Snowball(SnowballParams {
+                language: language_sentinel.to_string(),
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err.message(), "Language not found");
+        assert!(!err.message().contains(language_sentinel));
     }
 
     #[test]
