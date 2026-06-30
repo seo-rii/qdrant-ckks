@@ -882,8 +882,12 @@ mod tests {
         );
         for session_alias in [
             "clientStateBackups-sentinel",
+            "clientStateCiphertextHashes-sentinel",
+            "client_state_ciphertext_hashes-sentinel",
             "client_state_ciphertext-sentinel",
+            "encryptedClientStateCiphertextHashes-sentinel",
             "encrypted_client_state-sentinel",
+            "encrypted_client_state_ciphertext_hashes-sentinel",
             "encrypted_client_state_ciphertext-sentinel",
             "oramPositionMapBackups-sentinel",
             "oram_position_map_backups-sentinel",
@@ -891,7 +895,9 @@ mod tests {
             "position_map_backups-sentinel",
             "stashBackups-sentinel",
             "stateCiphertext-sentinel",
+            "stateCiphertextHashes-sentinel",
             "state_ciphertext-sentinel",
+            "state_ciphertext_hashes-sentinel",
             "tokenPositionMapBackups-sentinel",
             "token_position_map_backups-sentinel",
         ] {
@@ -928,6 +934,10 @@ mod tests {
         );
         for session_alias in [
             "clientStateBackups-sentinel",
+            "clientStateCiphertextHashes-sentinel",
+            "client_state_ciphertext_hashes-sentinel",
+            "encryptedClientStateCiphertextHashes-sentinel",
+            "encrypted_client_state_ciphertext_hashes-sentinel",
             "client_state_ciphertext-sentinel",
             "oramPositionMapBackups-sentinel",
             "oram_position_map_backups-sentinel",
@@ -935,8 +945,10 @@ mod tests {
             "position_map_backups-sentinel",
             "stashBackups-sentinel",
             "stateCiphertext-sentinel",
+            "stateCiphertextHashes-sentinel",
             "state_ciphertext-sentinel",
             "state_ciphertext_hash-sentinel",
+            "state_ciphertext_hashes-sentinel",
             "token_position_map_backups-sentinel",
         ] {
             assert_eq!(
@@ -1238,7 +1250,11 @@ mod tests {
 
         for sentinel in [
             "clientStateBackups-sentinel",
+            "clientStateCiphertextHashes-sentinel",
+            "client_state_ciphertext_hashes-sentinel",
             "client_state_ciphertext-sentinel",
+            "encryptedClientStateCiphertextHashes-sentinel",
+            "encrypted_client_state_ciphertext_hashes-sentinel",
             "encrypted_client_state-sentinel",
             "encrypted_client_state_ciphertext-sentinel",
             "oramPositionMapBackups-sentinel",
@@ -1247,7 +1263,9 @@ mod tests {
             "position_map_backups-sentinel",
             "stashBackups-sentinel",
             "stateCiphertext-sentinel",
+            "stateCiphertextHashes-sentinel",
             "state_ciphertext-sentinel",
+            "state_ciphertext_hashes-sentinel",
             "tokenPositionMapBackups-sentinel",
             "token_position_map_backups-sentinel",
         ] {
@@ -1266,6 +1284,10 @@ mod tests {
 
         for sentinel in [
             "clientStateBackups-sentinel",
+            "clientStateCiphertextHashes-sentinel",
+            "client_state_ciphertext_hashes-sentinel",
+            "encryptedClientStateCiphertextHashes-sentinel",
+            "encrypted_client_state_ciphertext_hashes-sentinel",
             "client_state_ciphertext-sentinel",
             "oramPositionMapBackups-sentinel",
             "oram_position_map_backups-sentinel",
@@ -1273,8 +1295,10 @@ mod tests {
             "position_map_backups-sentinel",
             "stashBackups-sentinel",
             "stateCiphertext-sentinel",
+            "stateCiphertextHashes-sentinel",
             "state_ciphertext-sentinel",
             "state_ciphertext_hash-sentinel",
+            "state_ciphertext_hashes-sentinel",
             "token_position_map_backups-sentinel",
         ] {
             let uri = format!(
