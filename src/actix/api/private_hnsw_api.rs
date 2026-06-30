@@ -3592,6 +3592,16 @@ mod private_hnsw_rest_tests {
                 !mismatched_bucket_error.contains("private_hnsw_oram"),
                 "{mismatched_bucket_error}"
             );
+            assert_private_hnsw_guard_error_redacts(
+                &mismatched_bucket_error,
+                &[
+                    "private-hnsw-route-bucket-ciphertext-sentinel",
+                    mismatched_bucket.ciphertext.as_str(),
+                    fixture.encrypted_build.root_hash.as_str(),
+                    session_id.as_str(),
+                    "/tmp",
+                ],
+            );
             std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
 
             let mut proof_mismatched_bucket = read_response.buckets[0].clone();
@@ -3636,6 +3646,15 @@ mod private_hnsw_rest_tests {
                 !proof_mismatch_error.contains("/tmp"),
                 "{proof_mismatch_error}"
             );
+            assert_private_hnsw_guard_error_redacts(
+                &proof_mismatch_error,
+                &[
+                    proof_mismatched_bucket.ciphertext.as_str(),
+                    fixture.encrypted_build.root_hash.as_str(),
+                    session_id.as_str(),
+                    "/tmp",
+                ],
+            );
             std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
 
             let future_bucket = search_run.updated_buckets[0].clone();
@@ -3676,6 +3695,16 @@ mod private_hnsw_rest_tests {
             assert!(!future_bucket_error.contains(&fixture.encrypted_build.root_hash));
             assert!(!future_bucket_error.contains(&session_id));
             assert!(!future_bucket_error.contains("private_hnsw_oram"));
+            assert_private_hnsw_guard_error_redacts(
+                &future_bucket_error,
+                &[
+                    future_bucket.ciphertext.as_str(),
+                    "index_epoch",
+                    fixture.encrypted_build.root_hash.as_str(),
+                    session_id.as_str(),
+                    "/tmp",
+                ],
+            );
             std::fs::write(&future_bucket_path, &original_future_bucket_bytes).unwrap();
 
             let current_epoch_path = uploaded_store
