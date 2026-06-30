@@ -1121,6 +1121,7 @@ mod tests {
     use storage::rbac::{Access, AuthType};
 
     use super::*;
+    use crate::common::private_hnsw::begin_private_hnsw_collection_snapshot;
     use crate::common::private_hnsw_wire_fixture::{
         COLLECTION_NAME, create_private_hnsw_collection, route_e2e_guard, test_dispatcher,
     };
@@ -1398,6 +1399,69 @@ mod tests {
                 assert!(!body.contains("private_hnsw_oram"), "{uri}: {body}");
                 assert!(!body.contains("private_result_oram"), "{uri}: {body}");
             }
+        });
+    }
+
+    #[test]
+    fn recover_snapshot_rejects_private_oram_snapshot_window() {
+        let _guard = route_e2e_guard();
+        let (_temp, dispatcher) = test_dispatcher();
+        let dispatcher = web::Data::new(dispatcher);
+        let settings = Settings::new(None).unwrap();
+        let http_client = web::Data::new(HttpClient::from_settings(&settings).unwrap());
+        let settings = web::Data::new(settings);
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(dispatcher.get_ref()).await;
+
+            let auth = Auth::new_internal(Access::full("private ORAM snapshot recovery test"));
+            let pass = new_unchecked_verification_pass();
+            let collection_pass = auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new().manage(),
+                    "private_oram_recovery_route_test",
+                )
+                .unwrap();
+            let collection = dispatcher
+                .get_ref()
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let config = collection.config_snapshot().await;
+            let _snapshot_guard =
+                begin_private_hnsw_collection_snapshot(collection.name(), &config)
+                    .expect("private HNSW snapshot guard should open");
+
+            let app = actix_web::test::init_service(
+                actix_web::App::new()
+                    .app_data(dispatcher.clone())
+                    .app_data(http_client.clone())
+                    .app_data(settings.clone())
+                    .configure(config_snapshots_api),
+            )
+            .await;
+
+            let request = actix_web::test::TestRequest::put()
+                .uri("/collections/docs/snapshots/recover")
+                .set_json(serde_json::json!({
+                    "location": "file:///tmp/private-oram-recovery-sentinel.snapshot"
+                }))
+                .to_request();
+            let response = actix_web::test::call_service(&app, request).await;
+            assert_eq!(response.status(), actix_web::http::StatusCode::BAD_REQUEST);
+            let body = actix_web::body::to_bytes(response.into_body())
+                .await
+                .unwrap();
+            let body = std::str::from_utf8(&body).unwrap();
+            assert!(
+                body.contains("lifecycle operation requires no active collection snapshot"),
+                "{body}",
+            );
+            assert!(!body.contains(COLLECTION_NAME), "{body}");
+            assert!(!body.contains("private-oram-recovery-sentinel"), "{body}");
+            assert!(!body.contains("private_hnsw_oram"), "{body}");
         });
     }
 }
