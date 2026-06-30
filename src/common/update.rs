@@ -1529,9 +1529,9 @@ async fn ensure_payload_index_delete_allowed_by_encryption(
 fn collection_error_to_storage_error(err: CollectionError) -> StorageError {
     match err {
         CollectionError::BadInput { description } => StorageError::bad_input(description),
-        err => StorageError::service_error(format!(
-            "collection encryption payload index validation failed: {err}"
-        )),
+        _err => {
+            StorageError::service_error("collection encryption payload index validation failed")
+        }
     }
 }
 
@@ -2845,10 +2845,8 @@ async fn split_encrypted_vector_delete_names(
                 })?
                 .clone(),
         )
-        .map_err(|err| {
-            StorageError::bad_input(format!(
-                "encrypted vector sidecar delete provenance is invalid: {err}",
-            ))
+        .map_err(|_| {
+            StorageError::bad_input("encrypted vector sidecar delete provenance is invalid")
         })?
     };
     invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path(

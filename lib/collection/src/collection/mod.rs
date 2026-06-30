@@ -228,10 +228,10 @@ impl ClientPayloadNonceReplayCache {
 
         for key in keys {
             qdrant_sec::ClientPayloadNonceReplayKey::validate_cache_key_for_collection(&key)
-                .map_err(|err| {
-                    CollectionError::bad_input(format!(
-                        "client encrypted payload nonce replay cache key is invalid: {err}",
-                    ))
+                .map_err(|_| {
+                    CollectionError::bad_input(
+                        "client encrypted payload nonce replay cache key is invalid",
+                    )
                 })?;
             if self.seen.contains(&key) || !batch_seen.insert(key.clone()) {
                 return Ok(None);
@@ -596,10 +596,10 @@ impl Collection {
         let mut loaded_keys = HashSet::new();
         for key in &keys {
             qdrant_sec::ClientPayloadNonceReplayKey::validate_cache_key_for_collection(key)
-                .map_err(|err| {
-                    CollectionError::service_error(format!(
-                        "stored client encrypted payload nonce replay cache key is invalid: {err}",
-                    ))
+                .map_err(|_| {
+                    CollectionError::service_error(
+                        "stored client encrypted payload nonce replay cache key is invalid",
+                    )
                 })?;
             if !loaded_keys.insert(key) {
                 return Err(CollectionError::service_error(
@@ -1620,10 +1620,11 @@ mod tests {
     #[test]
     fn client_payload_nonce_replay_cache_rejects_malformed_pending_keys() {
         let cache = ClientPayloadNonceReplayCache::default();
-        let err = cache
-            .pending_keys(["not-a-valid-cache-key".to_string()])
-            .unwrap_err();
-        assert!(format!("{err:?}").contains("nonce replay cache key is invalid"));
+        let malformed_key = "not-a-valid-cache-key";
+        let err = cache.pending_keys([malformed_key.to_string()]).unwrap_err();
+        let rendered = format!("{err:?}");
+        assert!(rendered.contains("nonce replay cache key is invalid"));
+        assert!(!rendered.contains(malformed_key), "{rendered}");
     }
 
     #[test]
