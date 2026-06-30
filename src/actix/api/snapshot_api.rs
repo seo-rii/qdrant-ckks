@@ -1609,6 +1609,7 @@ mod tests {
                     "{uri}: {body}",
                 );
                 assert!(!body.contains(COLLECTION_NAME), "{uri}: {body}");
+                assert!(!body.contains("snapshot-1.snapshot"), "{uri}: {body}");
                 assert!(!body.contains("private_hnsw_oram"), "{uri}: {body}");
                 assert!(!body.contains("private_result_oram"), "{uri}: {body}");
             }
