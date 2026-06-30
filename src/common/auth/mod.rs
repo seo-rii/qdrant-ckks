@@ -300,6 +300,9 @@ mod tests {
         let error = AuthError::Forbidden(
             "private HNSW read failed readPath=read-path-camel-sentinel \
              readPathLabel=read-path-label-camel-sentinel \
+             requestedPathCount=requested-path-count-camel-sentinel \
+             readBucketIds=read-bucket-ids-camel-sentinel \
+             updatedBucketCount=updated-bucket-count-camel-sentinel \
              clientStateBackups=client-state-backups-camel-sentinel \
              tokenPositionMapBackups=token-position-map-backups-camel-sentinel"
                 .to_string(),
@@ -313,6 +316,9 @@ mod tests {
         );
         assert!(!redacted.contains("read-path-camel-sentinel"));
         assert!(!redacted.contains("read-path-label-camel-sentinel"));
+        assert!(!redacted.contains("requested-path-count-camel-sentinel"));
+        assert!(!redacted.contains("read-bucket-ids-camel-sentinel"));
+        assert!(!redacted.contains("updated-bucket-count-camel-sentinel"));
         assert!(!redacted.contains("client-state-backups-camel-sentinel"));
         assert!(!redacted.contains("token-position-map-backups-camel-sentinel"));
     }
