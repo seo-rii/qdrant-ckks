@@ -1705,11 +1705,7 @@ pub async fn do_reencrypt_stale_payloads_for_crypto_migration(
         &collection_crypto_id,
         &collection_config.params,
     )
-    .map_err(|err| {
-        StorageError::service_error(format!(
-            "payload encryption runtime for collection {collection_name} is invalid: {err}"
-        ))
-    })?
+    .map_err(payload_runtime_invalid_storage_error)?
     else {
         return Err(StorageError::bad_input(format!(
             "payload crypto migration for collection {collection_name} requires a server-side payload encryption rule",
@@ -1787,11 +1783,7 @@ pub async fn do_decrypt_payloads_for_crypto_migration(
         &collection_crypto_id,
         &collection_config.params,
     )
-    .map_err(|err| {
-        StorageError::service_error(format!(
-            "payload encryption runtime for collection {collection_name} is invalid: {err}"
-        ))
-    })?
+    .map_err(payload_runtime_invalid_storage_error)?
     else {
         return Err(StorageError::bad_input(format!(
             "payload crypto decryption migration for collection {collection_name} requires server-side payload encryption rules",
@@ -1856,11 +1848,7 @@ async fn maybe_encrypt_upsert_payloads(
         &collection_crypto_id,
         &collection_config.params,
     )
-    .map_err(|err| {
-        StorageError::service_error(format!(
-            "payload encryption runtime for collection {collection_name} is invalid: {err}"
-        ))
-    })?
+    .map_err(payload_runtime_invalid_storage_error)?
     else {
         return Ok((operation, CollectionUpdateProvenance::client_plaintext()));
     };
@@ -2935,11 +2923,7 @@ async fn maybe_encrypt_point_payload_update(
         &collection_crypto_id,
         &collection_config.params,
     )
-    .map_err(|err| {
-        StorageError::service_error(format!(
-            "payload encryption runtime for collection {collection_name} is invalid: {err}"
-        ))
-    })?
+    .map_err(payload_runtime_invalid_storage_error)?
     else {
         return Ok((
             PayloadUpdatePlan::Single(operation),
@@ -3185,9 +3169,7 @@ async fn ensure_payload_runtime_available_for_upsert(
     }
 
     if touches_encrypted_payload {
-        return Err(StorageError::bad_input(format!(
-            "payload encryption runtime for collection {collection_name} is required before writing encrypted payload fields",
-        )));
+        return Err(payload_runtime_required_storage_error());
     }
 
     Ok(())
@@ -3215,9 +3197,7 @@ async fn ensure_payload_runtime_available_for_payload_update(
     }
 
     if payload_touches_encrypted_config(&encryption, &operation.payload, operation.key.as_ref())? {
-        return Err(StorageError::bad_input(format!(
-            "payload encryption runtime for collection {collection_name} is required before writing encrypted payload fields",
-        )));
+        return Err(payload_runtime_required_storage_error());
     }
 
     Ok(())
@@ -3350,22 +3330,33 @@ fn payload_touches_encrypted_config(
 }
 
 fn payload_write_error_to_storage_error(
-    collection_name: &str,
+    _collection_name: &str,
     err: PayloadWriteSetupError,
 ) -> StorageError {
     match err {
         PayloadWriteSetupError::Payload(PayloadEncryptionError::ClientNonceReplay) => {
-            StorageError::bad_input(format!(
-                "failed to encrypt payload for collection {collection_name}: client envelope nonce was already used; regenerate the client-side envelope with a fresh nonce before retrying",
-            ))
+            StorageError::bad_input(
+                "failed to encrypt payload: client envelope nonce was already used; regenerate the client-side envelope with a fresh nonce before retrying",
+            )
         }
-        PayloadWriteSetupError::Payload(payload_err) => StorageError::bad_input(format!(
-            "failed to encrypt payload for collection {collection_name}: {payload_err}",
-        )),
-        err => StorageError::service_error(format!(
-            "payload encryption runtime for collection {collection_name} is invalid: {err}",
-        )),
+        PayloadWriteSetupError::Payload(PayloadEncryptionError::AlreadyEncrypted(_)) => {
+            StorageError::bad_input("failed to encrypt payload: payload field is already encrypted")
+        }
+        PayloadWriteSetupError::Payload(_) => StorageError::bad_input("failed to encrypt payload"),
+        err => payload_runtime_invalid_storage_error(err),
     }
+}
+
+fn payload_runtime_invalid_storage_error(_err: PayloadWriteSetupError) -> StorageError {
+    StorageError::service_error(
+        "payload encryption runtime is invalid for encrypted payload fields",
+    )
+}
+
+fn payload_runtime_required_storage_error() -> StorageError {
+    StorageError::bad_input(
+        "payload encryption runtime is required before writing encrypted payload fields",
+    )
 }
 
 #[cfg(test)]
@@ -11301,6 +11292,7 @@ esac
         assert!(message.contains("client envelope nonce was already used"));
         assert!(message.contains("regenerate the client-side envelope"));
         assert!(message.contains("fresh nonce before retrying"));
+        assert!(!message.contains("docs"));
     }
 
     fn encrypted_params() -> CollectionParams {
@@ -18359,6 +18351,8 @@ esac
                 StorageError::BadInput { description }
                     if description.contains("payload encryption runtime")
                         && description.contains("required")
+                        && !description.contains("docs")
+                        && !description.contains("body")
             ));
 
             let err = do_set_payload(
@@ -18393,6 +18387,8 @@ esac
                 StorageError::BadInput { description }
                     if description.contains("payload encryption runtime")
                         && description.contains("required")
+                        && !description.contains("docs")
+                        && !description.contains("body")
             ));
 
             let err = do_overwrite_payload(
@@ -18427,6 +18423,8 @@ esac
                 StorageError::BadInput { description }
                     if description.contains("payload encryption runtime")
                         && description.contains("required")
+                        && !description.contains("docs")
+                        && !description.contains("body")
             ));
 
             let operation = PointInsertOperations::PointsList(api::rest::schema::PointsList {
@@ -18581,6 +18579,8 @@ esac
                 StorageError::BadInput { description }
                     if description.contains("failed to encrypt payload")
                         && description.contains("already encrypted")
+                        && !description.contains("docs")
+                        && !description.contains("body")
             ));
 
             do_set_payload(
@@ -19453,7 +19453,10 @@ esac
             assert!(matches!(
                 err,
                 StorageError::BadInput { description }
-                    if description.contains("collection_id")
+                    if description.contains("failed to encrypt payload")
+                        && !description.contains("collection_id")
+                        && !description.contains("client_uuid_docs")
+                        && !description.contains("body")
             ));
 
             do_upsert_points(
@@ -19723,6 +19726,8 @@ esac
                 StorageError::BadInput { description }
                     if description.contains("payload encryption runtime")
                         && description.contains("required")
+                        && !description.contains("client_docs")
+                        && !description.contains("body")
             ));
 
             let encrypted_filter = || {
