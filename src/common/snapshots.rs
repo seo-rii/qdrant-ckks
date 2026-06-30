@@ -26,8 +26,12 @@ use tokio::sync::OwnedRwLockWriteGuard;
 use super::auth::Auth;
 use super::crypto::validate_recovered_collection_crypto_config;
 use super::http_client::HttpClient;
-use super::private_hnsw::begin_private_hnsw_collection_snapshot;
-use super::private_result_oram::begin_private_result_oram_collection_snapshot;
+use super::private_hnsw::{
+    PrivateHnswCollectionSnapshotGuard, begin_private_hnsw_collection_snapshot,
+};
+use super::private_result_oram::{
+    PrivateResultOramCollectionSnapshotGuard, begin_private_result_oram_collection_snapshot,
+};
 use crate::settings::Settings;
 
 pub fn validate_snapshot_url_api_key_policy(
@@ -107,6 +111,46 @@ pub(crate) fn redacted_snapshot_url_for_message(url: &Url) -> String {
     redacted.set_query(url.query().map(|_| "[redacted]"));
     redacted.set_fragment(url.fragment().map(|_| "[redacted]"));
     redacted.to_string()
+}
+
+#[derive(Default)]
+pub(crate) struct PrivateOramCollectionRecoveryGuards {
+    _private_hnsw_snapshot_guard: Option<PrivateHnswCollectionSnapshotGuard>,
+    _private_result_snapshot_guard: Option<PrivateResultOramCollectionSnapshotGuard>,
+}
+
+pub(crate) async fn begin_private_oram_collection_recovery(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    collection_name: &str,
+) -> Result<PrivateOramCollectionRecoveryGuards, StorageError> {
+    let collection_pass = auth
+        .check_global_access(
+            AccessRequirements::new().manage(),
+            "private_oram_collection_recovery",
+        )?
+        .issue_pass(collection_name)
+        .into_static();
+    let pass = new_unchecked_verification_pass();
+    let toc = dispatcher.toc(auth, &pass);
+    let collection = match toc.get_collection(&collection_pass).await {
+        Ok(collection) => collection,
+        Err(StorageError::NotFound { .. }) => {
+            return Ok(PrivateOramCollectionRecoveryGuards::default());
+        }
+        Err(err) => return Err(err),
+    };
+    let config = collection.config_snapshot().await;
+    Ok(PrivateOramCollectionRecoveryGuards {
+        _private_hnsw_snapshot_guard: begin_private_hnsw_collection_snapshot(
+            collection.name(),
+            &config,
+        )?,
+        _private_result_snapshot_guard: begin_private_result_oram_collection_snapshot(
+            collection.name(),
+            &config,
+        )?,
+    })
 }
 
 pub async fn do_create_full_snapshot(

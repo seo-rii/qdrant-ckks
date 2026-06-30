@@ -54,9 +54,9 @@ use crate::common::http_client::HttpClient;
 use crate::common::private_hnsw::validate_recovered_private_hnsw_oram_snapshot_signatures;
 use crate::common::private_result_oram::validate_recovered_private_result_oram_snapshot_signatures;
 use crate::common::snapshots::{
-    do_create_full_snapshot, redacted_snapshot_url_for_message,
-    try_take_partial_snapshot_recovery_lock, validate_snapshot_peer_base_url_policy,
-    validate_snapshot_url_api_key_policy,
+    begin_private_oram_collection_recovery, do_create_full_snapshot,
+    redacted_snapshot_url_for_message, try_take_partial_snapshot_recovery_lock,
+    validate_snapshot_peer_base_url_policy, validate_snapshot_url_api_key_policy,
 };
 use crate::settings::Settings;
 
@@ -285,6 +285,12 @@ async fn upload_snapshot(
             }
         }
 
+        let private_oram_recovery_guard = begin_private_oram_collection_recovery(
+            dispatcher.get_ref(),
+            &auth,
+            &collection.collection_name,
+        )
+        .await?;
         let (snapshot_location, uploaded_snapshot_path) = do_save_uploaded_snapshot(
             dispatcher.toc(&auth, &pass),
             &collection.collection_name,
@@ -293,6 +299,7 @@ async fn upload_snapshot(
         .await?;
 
         let recovery_result = async {
+            let _private_oram_recovery_guard = private_oram_recovery_guard;
             // Snapshot is a local file, we do not need an API key for that
             let http_client = http_client.client(None)?;
 
@@ -375,6 +382,12 @@ async fn recover_from_snapshot(
             "collection snapshot recovery",
         )?;
         let http_client = http_client.client(snapshot_recover.api_key.as_deref())?;
+        let _private_oram_recovery_guard = begin_private_oram_collection_recovery(
+            dispatcher.get_ref(),
+            &auth,
+            &collection.collection_name,
+        )
+        .await?;
 
         do_recover_from_snapshot(
             dispatcher.get_ref(),
