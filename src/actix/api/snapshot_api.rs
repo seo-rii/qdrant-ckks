@@ -1595,10 +1595,25 @@ mod tests {
                 body.contains("collection snapshot/restore preflight"),
                 "{body}"
             );
-            assert!(!body.contains(COLLECTION_NAME), "{body}");
-            assert!(!body.contains("partial shard snapshot manifest"), "{body}");
-            assert!(!body.contains("private_hnsw_oram"), "{body}");
-            assert!(!body.contains("private_result_oram"), "{body}");
+            for forbidden in [
+                COLLECTION_NAME,
+                "partial shard snapshot manifest",
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-hnsw-signing-v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "payload_private_result_oram",
+                "docs_private_result_oram_v1",
+                "tenant-a/private-result-signing-v1",
+                qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+                "private_hnsw_oram",
+                "private_result_oram",
+            ] {
+                assert!(!body.contains(forbidden), "{body}");
+            }
         });
     }
 
