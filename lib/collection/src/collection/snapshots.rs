@@ -431,6 +431,9 @@ impl Collection {
         &self,
         shard_id: ShardId,
     ) -> CollectionResult<Vec<SnapshotDescription>> {
+        self.validate_private_oram_shard_snapshot_allowed("shard snapshot listing")
+            .await?;
+
         self.shards_holder
             .read()
             .await
@@ -3179,6 +3182,8 @@ mod tests {
         let collection_name = "private-oram-shard-snapshot-secret-collection";
         for operation_name in [
             "shard snapshot creation",
+            "shard snapshot listing",
+            "shard snapshot deletion",
             "shard snapshot streaming",
             "shard snapshot download",
             "shard snapshot recovery",

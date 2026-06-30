@@ -156,6 +156,9 @@ pub async fn create_shard_snapshot(
         "create_shard_snapshot",
     )?;
     let collection = toc.get_collection(&collection_pass).await?;
+    collection
+        .validate_private_oram_shard_snapshot_allowed("shard snapshot creation")
+        .await?;
 
     let _telemetry_scope_guard = toc
         .snapshot_telemetry_collector(&collection_name)
@@ -238,6 +241,9 @@ pub async fn list_shard_snapshots(
         "list_shard_snapshots",
     )?;
     let collection = toc.get_collection(&collection_pass).await?;
+    collection
+        .validate_private_oram_shard_snapshot_allowed("shard snapshot listing")
+        .await?;
     let snapshots = collection.list_shard_snapshots(shard_id).await?;
     Ok(snapshots)
 }
@@ -258,6 +264,9 @@ pub async fn delete_shard_snapshot(
         "delete_shard_snapshot",
     )?;
     let collection = toc.get_collection(&collection_pass).await?;
+    collection
+        .validate_private_oram_shard_snapshot_allowed("shard snapshot deletion")
+        .await?;
     let snapshot_manager = collection.get_snapshots_storage_manager()?;
 
     let snapshot_path = collection
