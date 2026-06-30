@@ -2636,6 +2636,16 @@ mod private_hnsw_tests {
         assert!(!rendered.contains("session is missing or expired"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains(&malformed), "{rendered}");
+
+        let alias_label = "encrypted_client_state_ciphertext_hash".to_string();
+        let err =
+            validate_private_hnsw_read_path_label_request_shape(std::slice::from_ref(&alias_label))
+                .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains(&alias_label), "{rendered}");
     }
 
     #[test]
@@ -3295,6 +3305,12 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("session_id is invalid"));
         assert!(!rendered.contains(malformed));
+
+        let alias_session_id = "stashBackups/session";
+        let err = validate_private_hnsw_session_id_shape(alias_session_id).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("session_id is invalid"));
+        assert!(!rendered.contains(alias_session_id));
     }
 
     #[test]
@@ -3315,6 +3331,12 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("client_id is invalid"));
         assert!(!rendered.contains(malformed));
+
+        let alias_client_id = "client_state_ciphertext!sentinel";
+        let err = validate_private_hnsw_client_id_shape(alias_client_id).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("client_id is invalid"));
+        assert!(!rendered.contains(alias_client_id));
     }
 
     #[test]

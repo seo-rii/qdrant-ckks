@@ -2095,6 +2095,12 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("client_id is invalid"));
         assert!(!rendered.contains(malformed));
+
+        let alias_client_id = "client_state_ciphertext!sentinel";
+        let err = validate_private_result_oram_client_id_shape(alias_client_id).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("client_id is invalid"));
+        assert!(!rendered.contains(alias_client_id));
     }
 
     #[test]
@@ -2113,6 +2119,12 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("session_id is invalid"));
         assert!(!rendered.contains(malformed));
+
+        let alias_session_id = "stashBackups/session";
+        let err = validate_private_result_oram_session_id_shape(alias_session_id).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("session_id is invalid"));
+        assert!(!rendered.contains(alias_session_id));
     }
 
     #[test]
