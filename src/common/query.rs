@@ -6648,7 +6648,7 @@ async fn ckks_vector_input_as_query_source<'a>(
             "encrypted vector '{vector_name}' context query only supports raw dense or point-id {role} examples",
         ))),
         VectorInputInternal::InferredVector(_) => Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' does not allow inference-derived {role} query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
+            "encrypted vector search does not allow inference-derived {role} query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
         ))),
         VectorInputInternal::CkksEncryptedQuery(input) => {
             ckks_client_encrypted_query_source(vector_name, input)
@@ -8462,7 +8462,7 @@ fn ckks_query_as_core_query(
         }
         Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::InferredVector(_)))) => {
             Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' does not allow inference-derived query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
+                "encrypted vector search does not allow inference-derived query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
             )))
         }
         _ => Err(StorageError::bad_input(format!(
@@ -8505,7 +8505,7 @@ fn vector_inputs_as_dense_vectors(
                 "encrypted vector '{vector_name}' query only supports raw dense {role} examples",
             ))),
             VectorInputInternal::InferredVector(_) => Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' query does not allow inference-derived {role} examples",
+                "encrypted vector query does not allow inference-derived {role} examples",
             ))),
             VectorInputInternal::Id(_) => Err(StorageError::bad_input(format!(
                 "encrypted vector '{vector_name}' query cannot resolve point-id {role} examples because plaintext vectors are not stored",
@@ -8536,7 +8536,7 @@ fn ckks_discover_query_as_core_discover(
         VectorInputInternal::Vector(VectorInternal::Dense(target)) => target,
         VectorInputInternal::InferredVector(_) => {
             return Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' discover does not allow inference-derived target examples",
+                "encrypted vector discover does not allow inference-derived target examples",
             )));
         }
         _ => {
@@ -8553,7 +8553,7 @@ fn ckks_discover_query_as_core_discover(
                 VectorInputInternal::Vector(VectorInternal::Dense(positive)) => positive,
                 VectorInputInternal::InferredVector(_) => {
                     return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{vector_name}' discover does not allow inference-derived positive context examples",
+                        "encrypted vector discover does not allow inference-derived positive context examples",
                     )));
                 }
                 _ => {
@@ -8566,7 +8566,7 @@ fn ckks_discover_query_as_core_discover(
                 VectorInputInternal::Vector(VectorInternal::Dense(negative)) => negative,
                 VectorInputInternal::InferredVector(_) => {
                     return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{vector_name}' discover does not allow inference-derived negative context examples",
+                        "encrypted vector discover does not allow inference-derived negative context examples",
                     )));
                 }
                 _ => {
@@ -8600,7 +8600,7 @@ fn ckks_context_query_as_core_context(
                 VectorInputInternal::Vector(VectorInternal::Dense(positive)) => positive,
                 VectorInputInternal::InferredVector(_) => {
                     return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{vector_name}' context query does not allow inference-derived positive examples",
+                        "encrypted vector context query does not allow inference-derived positive examples",
                     )));
                 }
                 _ => {
@@ -8613,7 +8613,7 @@ fn ckks_context_query_as_core_context(
                 VectorInputInternal::Vector(VectorInternal::Dense(negative)) => negative,
                 VectorInputInternal::InferredVector(_) => {
                     return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{vector_name}' context query does not allow inference-derived negative examples",
+                        "encrypted vector context query does not allow inference-derived negative examples",
                     )));
                 }
                 _ => {
@@ -10703,8 +10703,9 @@ mod tests {
 
         assert!(matches!(
             err,
-            StorageError::BadInput { description }
+            StorageError::BadInput { ref description }
                 if description.contains("inference-derived query vectors")
+                    && !description.contains("embedding")
         ));
 
         let err = ckks_recommend_query_as_core_recommend(
@@ -10720,8 +10721,9 @@ mod tests {
 
         assert!(matches!(
             err,
-            StorageError::BadInput { description }
+            StorageError::BadInput { ref description }
                 if description.contains("inference-derived positive examples")
+                    && !description.contains("embedding")
         ));
 
         let err = ckks_discover_query_as_core_discover(
@@ -10738,8 +10740,9 @@ mod tests {
 
         assert!(matches!(
             err,
-            StorageError::BadInput { description }
+            StorageError::BadInput { ref description }
                 if description.contains("inference-derived target examples")
+                    && !description.contains("embedding")
         ));
 
         let err = ckks_discover_query_as_core_discover(
@@ -10758,8 +10761,9 @@ mod tests {
 
         assert!(matches!(
             err,
-            StorageError::BadInput { description }
+            StorageError::BadInput { ref description }
                 if description.contains("inference-derived positive context examples")
+                    && !description.contains("embedding")
         ));
 
         let err = ckks_context_query_as_core_context(
@@ -10775,8 +10779,9 @@ mod tests {
 
         assert!(matches!(
             err,
-            StorageError::BadInput { description }
+            StorageError::BadInput { ref description }
                 if description.contains("inference-derived negative examples")
+                    && !description.contains("embedding")
         ));
     }
 
