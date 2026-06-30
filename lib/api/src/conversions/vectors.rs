@@ -512,9 +512,8 @@ impl TryFrom<grpc::Vector> for VectorInternal {
                     sparse::common::sparse_vector::SparseVector::from(sparse),
                 )),
                 Vector::MultiDense(multi_dense) => Ok(VectorInternal::MultiDense(
-                    MultiDenseVectorInternal::try_from_matrix(multi_dense.into_matrix()).map_err(
-                        |e| Status::invalid_argument(format!("Malformed multi-dense vector: {e}")),
-                    )?,
+                    MultiDenseVectorInternal::try_from_matrix(multi_dense.into_matrix())
+                        .map_err(|_| Status::invalid_argument("Malformed multi-dense vector"))?,
                 )),
                 Vector::Document(_) => Err(Status::invalid_argument(
                     "Document can't be converted to VectorInternal".to_string(),
@@ -741,5 +740,23 @@ mod tests {
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert_eq!(err.message(), "Invalid object vector input");
         assert!(!err.message().contains(sentinel), "{err:?}");
+    }
+
+    #[test]
+    fn grpc_vector_internal_rejects_malformed_multi_dense_without_shape_detail() {
+        let malformed = crate::grpc::vector::Vector::MultiDense(grpc::MultiDenseVector {
+            vectors: vec![
+                grpc::DenseVector {
+                    data: vec![1.0, 2.0],
+                },
+                grpc::DenseVector { data: vec![3.0] },
+            ],
+        });
+
+        let err = VectorInternal::try_from(vector_with_variant(malformed)).unwrap_err();
+        assert_eq!(err.message(), "Malformed multi-dense vector");
+        assert!(!err.message().contains("expected"));
+        assert!(!err.message().contains("received"));
+        assert!(!err.message().contains("dimension"));
     }
 }

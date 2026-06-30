@@ -523,7 +523,7 @@ pub fn try_scored_point_from_grpc(
     let vector = vectors
         .map(|vectors| vectors.try_into())
         .transpose()
-        .map_err(|e| Status::invalid_argument(format!("Failed to parse vectors: {e}")))?;
+        .map_err(|_| Status::invalid_argument("Failed to parse vectors"))?;
 
     Ok(ScoredPoint {
         id,
@@ -534,4 +534,56 @@ pub fn try_scored_point_from_grpc(
         shard_key: convert_shard_key_from_grpc_opt(shard_key),
         order_value: order_value.map(TryFrom::try_from).transpose()?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[expect(deprecated)]
+    fn malformed_multi_dense_vectors_output() -> api::grpc::qdrant::VectorsOutput {
+        api::grpc::qdrant::VectorsOutput {
+            vectors_options: Some(api::grpc::qdrant::vectors_output::VectorsOptions::Vector(
+                api::grpc::qdrant::VectorOutput {
+                    data: Vec::new(),
+                    indices: None,
+                    vectors_count: None,
+                    vector: Some(api::grpc::qdrant::vector_output::Vector::MultiDense(
+                        api::grpc::qdrant::MultiDenseVector {
+                            vectors: vec![
+                                api::grpc::qdrant::DenseVector {
+                                    data: vec![1.0, 2.0],
+                                },
+                                api::grpc::qdrant::DenseVector { data: vec![3.0] },
+                            ],
+                        },
+                    )),
+                },
+            )),
+        }
+    }
+
+    #[test]
+    fn grpc_scored_point_vector_errors_do_not_reflect_inner_shape_detail() {
+        let err = try_scored_point_from_grpc(
+            api::grpc::qdrant::ScoredPoint {
+                id: Some(api::grpc::qdrant::PointId {
+                    point_id_options: Some(api::grpc::qdrant::point_id::PointIdOptions::Num(1)),
+                }),
+                payload: Default::default(),
+                score: 0.0,
+                version: 1,
+                vectors: Some(malformed_multi_dense_vectors_output()),
+                shard_key: None,
+                order_value: None,
+            },
+            false,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.message(), "Failed to parse vectors");
+        assert!(!err.message().contains("expected"));
+        assert!(!err.message().contains("received"));
+        assert!(!err.message().contains("dimension"));
+    }
 }

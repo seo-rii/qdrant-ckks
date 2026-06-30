@@ -140,7 +140,7 @@ pub fn try_record_from_grpc(
     let vector: Option<_> = vectors
         .map(VectorStructInternal::try_from)
         .transpose()
-        .map_err(|e| Status::invalid_argument(format!("Cannot convert vectors: {e}")))?;
+        .map_err(|_| Status::invalid_argument("Cannot convert vectors"))?;
 
     let order_value = order_value.map(TryFrom::try_from).transpose()?;
 
@@ -1997,6 +1997,35 @@ impl TryFrom<grpc::FeedbackStrategy> for FeedbackStrategy {
 mod tests {
     use super::*;
 
+    #[expect(deprecated)]
+    fn malformed_multi_dense_vectors_output() -> api::grpc::qdrant::VectorsOutput {
+        api::grpc::qdrant::VectorsOutput {
+            vectors_options: Some(api::grpc::qdrant::vectors_output::VectorsOptions::Vector(
+                api::grpc::qdrant::VectorOutput {
+                    data: Vec::new(),
+                    indices: None,
+                    vectors_count: None,
+                    vector: Some(api::grpc::qdrant::vector_output::Vector::MultiDense(
+                        api::grpc::qdrant::MultiDenseVector {
+                            vectors: vec![
+                                api::grpc::qdrant::DenseVector {
+                                    data: vec![1.0, 2.0],
+                                },
+                                api::grpc::qdrant::DenseVector { data: vec![3.0] },
+                            ],
+                        },
+                    )),
+                },
+            )),
+        }
+    }
+
+    fn numeric_point_id(id: u64) -> api::grpc::qdrant::PointId {
+        api::grpc::qdrant::PointId {
+            point_id_options: Some(api::grpc::qdrant::point_id::PointIdOptions::Num(id)),
+        }
+    }
+
     #[test]
     fn grpc_collection_enums_reject_unknown_values_without_reflecting_them() {
         const UNKNOWN_ENUM_VALUE: i32 = 99;
@@ -2034,5 +2063,25 @@ mod tests {
         let err = convert_datatype_from_proto(Some(UNKNOWN_ENUM_VALUE)).unwrap_err();
         assert_eq!(err.message(), "Cannot convert datatype");
         assert!(!err.message().contains("99"));
+    }
+
+    #[test]
+    fn grpc_retrieved_point_vector_errors_do_not_reflect_inner_shape_detail() {
+        let err = try_record_from_grpc(
+            api::grpc::qdrant::RetrievedPoint {
+                id: Some(numeric_point_id(1)),
+                payload: Default::default(),
+                vectors: Some(malformed_multi_dense_vectors_output()),
+                shard_key: None,
+                order_value: None,
+            },
+            false,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.message(), "Cannot convert vectors");
+        assert!(!err.message().contains("expected"));
+        assert!(!err.message().contains("received"));
+        assert!(!err.message().contains("dimension"));
     }
 }
