@@ -1181,120 +1181,23 @@ mod private_hnsw_rest_tests {
             )
             .await;
 
-            for (route_vector_name, unsafe_vector_name) in [
-                ("secret%20vector%20sentinel", "secret vector sentinel"),
-                ("text%2Fprivate", "text/private"),
-                ("client.state", "client.state"),
-                ("position.map", "position.map"),
-                ("stash.backup", "stash.backup"),
-                ("clientStateBackup.json", "clientStateBackup.json"),
-                ("clientStateBackups.json", "clientStateBackups.json"),
-                ("client_state_backup.json", "client_state_backup.json"),
-                ("clientStateSnapshot.json", "clientStateSnapshot.json"),
-                ("clientStateSnapshots.json", "clientStateSnapshots.json"),
-                ("client_state_snapshot.json", "client_state_snapshot.json"),
-                ("client_state_snapshots.json", "client_state_snapshots.json"),
-                ("clientStateCiphertext.json", "clientStateCiphertext.json"),
+            let mut unsafe_vector_names = vec![
                 (
-                    "clientStateCiphertextHashes.json",
-                    "clientStateCiphertextHashes.json",
+                    "secret%20vector%20sentinel".to_string(),
+                    "secret vector sentinel".to_string(),
                 ),
-                (
-                    "client_state_ciphertext_hashes.json",
-                    "client_state_ciphertext_hashes.json",
-                ),
-                (
-                    "clientStateCiphertextSha256.json",
-                    "clientStateCiphertextSha256.json",
-                ),
-                (
-                    "clientStateCiphertextsSha256.json",
-                    "clientStateCiphertextsSha256.json",
-                ),
-                (
-                    "client_state_ciphertext_sha256.json",
-                    "client_state_ciphertext_sha256.json",
-                ),
-                (
-                    "client_state_ciphertexts_sha256.json",
-                    "client_state_ciphertexts_sha256.json",
-                ),
-                (
-                    "encryptedClientStateBackup.json",
-                    "encryptedClientStateBackup.json",
-                ),
-                (
-                    "encryptedClientStateBackups.json",
-                    "encryptedClientStateBackups.json",
-                ),
-                (
-                    "encryptedClientStateSnapshot.json",
-                    "encryptedClientStateSnapshot.json",
-                ),
-                (
-                    "encryptedClientStateSnapshots.json",
-                    "encryptedClientStateSnapshots.json",
-                ),
-                (
-                    "encrypted_client_state_snapshot.json",
-                    "encrypted_client_state_snapshot.json",
-                ),
-                (
-                    "encrypted_client_state_snapshots.json",
-                    "encrypted_client_state_snapshots.json",
-                ),
-                (
-                    "encryptedClientStateCiphertextHash.json",
-                    "encryptedClientStateCiphertextHash.json",
-                ),
-                (
-                    "encryptedClientStateCiphertextHashes.json",
-                    "encryptedClientStateCiphertextHashes.json",
-                ),
-                (
-                    "encrypted_client_state_ciphertext_hashes.json",
-                    "encrypted_client_state_ciphertext_hashes.json",
-                ),
-                (
-                    "encryptedClientStateCiphertextSha256.json",
-                    "encryptedClientStateCiphertextSha256.json",
-                ),
-                (
-                    "encryptedClientStateCiphertextsSha256.json",
-                    "encryptedClientStateCiphertextsSha256.json",
-                ),
-                (
-                    "encrypted_client_state_ciphertext_sha256.json",
-                    "encrypted_client_state_ciphertext_sha256.json",
-                ),
-                (
-                    "encrypted_client_state_ciphertexts_sha256.json",
-                    "encrypted_client_state_ciphertexts_sha256.json",
-                ),
-                ("positionMapBackups.json", "positionMapBackups.json"),
-                ("oramPositionMapBackups.json", "oramPositionMapBackups.json"),
-                ("stateCiphertextHash.json", "stateCiphertextHash.json"),
-                ("stateCiphertextHashes.json", "stateCiphertextHashes.json"),
-                (
-                    "state_ciphertext_hashes.json",
-                    "state_ciphertext_hashes.json",
-                ),
-                ("stateCiphertextSha256.json", "stateCiphertextSha256.json"),
-                (
-                    "state_ciphertext_sha256.json",
-                    "state_ciphertext_sha256.json",
-                ),
-                ("stateCiphertextsSha256.json", "stateCiphertextsSha256.json"),
-                (
-                    "state_ciphertexts_sha256.json",
-                    "state_ciphertexts_sha256.json",
-                ),
-                (
-                    "tokenPositionMapBackups.json",
-                    "tokenPositionMapBackups.json",
-                ),
-                ("stashBackups.json", "stashBackups.json"),
-            ] {
+                ("text%2Fprivate".to_string(), "text/private".to_string()),
+                ("client.state".to_string(), "client.state".to_string()),
+                ("position.map".to_string(), "position.map".to_string()),
+                ("stash.backup".to_string(), "stash.backup".to_string()),
+            ];
+            unsafe_vector_names.extend(PRIVATE_HNSW_CLIENT_STATE_REDACTION_ALIASES.iter().map(
+                |alias| {
+                    let alias = format!("{alias}.json");
+                    (alias.clone(), alias)
+                },
+            ));
+            for (route_vector_name, unsafe_vector_name) in unsafe_vector_names {
                 let request = actix_test::TestRequest::get()
                     .uri(&format!(
                         "/collections/docs/private-hnsw/{route_vector_name}/manifest"
@@ -1307,8 +1210,8 @@ mod private_hnsw_rest_tests {
 
                 assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
                 assert!(body.contains("client-led private ORAM sessions"), "{body}");
-                assert!(!body.contains(unsafe_vector_name), "{body}");
-                assert!(!body.contains(route_vector_name), "{body}");
+                assert!(!body.contains(unsafe_vector_name.as_str()), "{body}");
+                assert!(!body.contains(route_vector_name.as_str()), "{body}");
                 assert!(!body.contains("secret"), "{body}");
                 assert!(!body.contains("client.state"), "{body}");
                 assert!(!body.contains("position.map"), "{body}");
@@ -1341,8 +1244,8 @@ mod private_hnsw_rest_tests {
                 assert_private_hnsw_route_error_redacts(
                     &body,
                     &[
-                        unsafe_vector_name,
-                        route_vector_name,
+                        unsafe_vector_name.as_str(),
+                        route_vector_name.as_str(),
                         "secret",
                         "client.state",
                         "position.map",

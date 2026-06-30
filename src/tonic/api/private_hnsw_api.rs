@@ -1165,56 +1165,24 @@ mod private_hnsw_grpc_tests {
             let service =
                 PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
 
-            for unsafe_vector_name in [
-                "secret vector sentinel",
-                "text/private",
-                "client.state",
-                "position.map",
-                "stash.backup",
-                "clientStateBackup.json",
-                "clientStateBackups.json",
-                "client_state_backup.json",
-                "clientStateSnapshot.json",
-                "clientStateSnapshots.json",
-                "client_state_snapshot.json",
-                "client_state_snapshots.json",
-                "clientStateCiphertext.json",
-                "clientStateCiphertextHashes.json",
-                "client_state_ciphertext_hashes.json",
-                "clientStateCiphertextSha256.json",
-                "clientStateCiphertextsSha256.json",
-                "client_state_ciphertext_sha256.json",
-                "client_state_ciphertexts_sha256.json",
-                "encryptedClientStateBackup.json",
-                "encryptedClientStateBackups.json",
-                "encryptedClientStateSnapshot.json",
-                "encryptedClientStateSnapshots.json",
-                "encrypted_client_state_snapshot.json",
-                "encrypted_client_state_snapshots.json",
-                "encryptedClientStateCiphertextHash.json",
-                "encryptedClientStateCiphertextHashes.json",
-                "encrypted_client_state_ciphertext_hashes.json",
-                "encryptedClientStateCiphertextSha256.json",
-                "encryptedClientStateCiphertextsSha256.json",
-                "encrypted_client_state_ciphertext_sha256.json",
-                "encrypted_client_state_ciphertexts_sha256.json",
-                "positionMapBackups.json",
-                "oramPositionMapBackups.json",
-                "stateCiphertextHash.json",
-                "stateCiphertextHashes.json",
-                "state_ciphertext_hashes.json",
-                "stateCiphertextSha256.json",
-                "stateCiphertextsSha256.json",
-                "state_ciphertext_sha256.json",
-                "state_ciphertexts_sha256.json",
-                "tokenPositionMapBackups.json",
-                "stashBackups.json",
-            ] {
+            let mut unsafe_vector_names = vec![
+                "secret vector sentinel".to_string(),
+                "text/private".to_string(),
+                "client.state".to_string(),
+                "position.map".to_string(),
+                "stash.backup".to_string(),
+            ];
+            unsafe_vector_names.extend(
+                PRIVATE_HNSW_CLIENT_STATE_REDACTION_ALIASES
+                    .iter()
+                    .map(|alias| format!("{alias}.json")),
+            );
+            for unsafe_vector_name in unsafe_vector_names {
                 let err = PrivateHnswOram::get_private_hnsw_manifest(
                     &service,
                     Request::new(grpc::GetPrivateHnswManifestRequest {
                         collection_name: COLLECTION_NAME.to_string(),
-                        vector_name: unsafe_vector_name.to_string(),
+                        vector_name: unsafe_vector_name.clone(),
                     }),
                 )
                 .await
@@ -1226,7 +1194,7 @@ mod private_hnsw_grpc_tests {
                     "{}",
                     err.message()
                 );
-                assert!(!err.message().contains(unsafe_vector_name));
+                assert!(!err.message().contains(unsafe_vector_name.as_str()));
                 assert!(!err.message().contains("secret"));
                 assert!(!err.message().contains("client.state"));
                 assert!(!err.message().contains("position.map"));
@@ -1256,7 +1224,7 @@ mod private_hnsw_grpc_tests {
                 assert_private_hnsw_route_message_redacts(
                     err.message(),
                     &[
-                        unsafe_vector_name,
+                        unsafe_vector_name.as_str(),
                         "secret",
                         "client.state",
                         "position.map",
