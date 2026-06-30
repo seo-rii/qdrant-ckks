@@ -5,7 +5,7 @@ receives plaintext embeddings before producing CKKS ciphertext. The in-process
 backend hardening verifies the executable path, owner, permissions, SHA-256 pin,
 and optional Ed25519 signature; checked Linux workers also use `no_new_privs`,
 core/file-size limits, stripped inherited environment, `/` as cwd, and optional
-Landlock write-deny rules.
+Landlock write-deny plus network namespace egress-deny rules.
 
 For production deployments, run the bridge behind an additional host or
 container sandbox. The exact profile depends on the bridge binary and OpenFHE

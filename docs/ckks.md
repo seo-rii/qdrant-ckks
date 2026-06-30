@@ -1828,7 +1828,7 @@ crypto:
       env: QDRANT_VECTOR_METADATA_KEY_B64
   backends:
     openfhe_local:
-      kind: process_pool_landlock
+      kind: process_pool_landlock_netns
       program: /usr/local/bin/openfhe-bridge
       sha256_b64: base64url-no-pad-sha256-of-bridge
 ```
