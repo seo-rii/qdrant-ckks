@@ -2028,7 +2028,7 @@ score/distance aliases, candidate heaps, candidate and node score/distance
 aliases, request/commit/read/manifest signatures, private result ORAM bucket
 ids, session ids, bucket commitments, leaf commitments, read bucket ids, bucket
 id sequences, updated bucket writebacks, access-volume count aliases,
-client-state fields, and payload/result tokens; snake_case and camelCase
+client-state/ciphertext/hash/sha256 fields, and payload/result tokens; snake_case and camelCase
 singular/plural aliases are covered for private ORAM access-pattern, bucket,
 commitment, signature, query, candidate, score/distance, client-state, and token
 fields.
@@ -2045,7 +2045,7 @@ redaction helper before serialization; they redact qdrant-sec envelope markers,
 secret-like crypto fields, private ORAM owner/signing key id aliases,
 signature-public-key registry aliases, and private ORAM path/root/bucket/node,
 query vector/embedding/plaintext, score/distance, candidate/node score,
-candidate/node distance, token, client-state, proof, and access-volume
+candidate/node distance, token, client-state ciphertext/hash/sha256, proof, and access-volume
 count/length aliases. REST private ORAM wire DTO `Debug` wrappers also redact
 upload/read bucket counts alongside roots, ciphertext bodies, commitments, and
 signatures, and SDK private ORAM upload bundle debug output redacts upload
@@ -2068,7 +2068,7 @@ counts, and ciphertext size limits. Audit events never include request bodies.
 Prometheus request metrics may include fixed REST/gRPC endpoint labels and the
 collection label for private ORAM manifest, session, read, and commit APIs, but
 they do not include path labels, bucket ids, session ids, ciphertext bodies, or
-client-state fields. The OpenAPI and gRPC consistency gates pin the private
+client-state fields, including `*_ciphertext_sha256` client-state aliases. The OpenAPI and gRPC consistency gates pin the private
 ORAM REST method/path/operation ids and generated gRPC method paths using exact
 route-shape matching. Metrics canonicalization strips query strings only for
 otherwise fixed routes and drops malformed/lookalike or extra-tail private ORAM
@@ -2076,7 +2076,7 @@ paths, so these metrics labels cannot silently drift away from the published
 API surface. gRPC private HNSW/result ORAM services use the same collection
 telemetry wrapper as other collection-scoped services, but the wrapper attaches
 only `collection_name` and not vector names, session ids, path labels, bucket
-ids, roots, ciphertext, or client-state fields.
+ids, roots, ciphertext, client-state fields, or `*_ciphertext_sha256` aliases.
 Client-side-only envelope collections must use `raw` or `redacted`; requesting
 `decrypted` fails closed because Qdrant has no client data key.
 The REST single-point `GET /collections/{collection}/points/{id}` endpoint has
