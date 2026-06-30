@@ -1378,6 +1378,14 @@ mod tests {
                     !body.contains(&fixture.encrypted_build.root_hash),
                     "{uri}: {body}"
                 );
+                assert!(
+                    !body.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                    "{uri}: {body}"
+                );
+                assert!(
+                    !body.contains(&fixture.manifest_signature.sig),
+                    "{uri}: {body}"
+                );
                 assert!(!body.contains("private_hnsw_oram"), "{uri}: {body}");
             }
 
@@ -1467,6 +1475,14 @@ mod tests {
                 assert!(!body.contains(&session.session_id), "{uri}: {body}");
                 assert!(
                     !body.contains(&result_fixture.manifest.root_hash),
+                    "{uri}: {body}"
+                );
+                assert!(
+                    !body.contains(&result_fixture.buckets[0].ciphertext),
+                    "{uri}: {body}"
+                );
+                assert!(
+                    !body.contains(&result_fixture.signature.sig),
                     "{uri}: {body}"
                 );
                 assert!(!body.contains("private_result_oram"), "{uri}: {body}");

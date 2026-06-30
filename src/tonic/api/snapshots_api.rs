@@ -459,6 +459,18 @@ mod tests {
                 "{create_err}"
             );
             assert!(
+                !create_err
+                    .message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{create_err}"
+            );
+            assert!(
+                !create_err
+                    .message()
+                    .contains(&fixture.manifest_signature.sig),
+                "{create_err}"
+            );
+            assert!(
                 !create_err.message().contains("private_hnsw_oram"),
                 "{create_err}"
             );
@@ -486,6 +498,18 @@ mod tests {
                 !create_full_err
                     .message()
                     .contains(&fixture.encrypted_build.root_hash),
+                "{create_full_err}"
+            );
+            assert!(
+                !create_full_err
+                    .message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{create_full_err}"
+            );
+            assert!(
+                !create_full_err
+                    .message()
+                    .contains(&fixture.manifest_signature.sig),
                 "{create_full_err}"
             );
             assert!(
@@ -587,6 +611,16 @@ mod tests {
                 "{create_err}"
             );
             assert!(
+                !create_err
+                    .message()
+                    .contains(&result_fixture.buckets[0].ciphertext),
+                "{create_err}"
+            );
+            assert!(
+                !create_err.message().contains(&result_fixture.signature.sig),
+                "{create_err}"
+            );
+            assert!(
                 !create_err.message().contains("private_result_oram"),
                 "{create_err}"
             );
@@ -618,6 +652,18 @@ mod tests {
                 !create_full_err
                     .message()
                     .contains(&result_fixture.manifest.root_hash),
+                "{create_full_err}"
+            );
+            assert!(
+                !create_full_err
+                    .message()
+                    .contains(&result_fixture.buckets[0].ciphertext),
+                "{create_full_err}"
+            );
+            assert!(
+                !create_full_err
+                    .message()
+                    .contains(&result_fixture.signature.sig),
                 "{create_full_err}"
             );
             assert!(
