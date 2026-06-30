@@ -785,6 +785,11 @@ mod tests {
         let sensitive = [
             "vector-name-sentinel",
             "session-id-sentinel",
+            "clientStateBackups-sentinel",
+            "oramPositionMapBackups-sentinel",
+            "positionMapBackups-sentinel",
+            "stashBackups-sentinel",
+            "tokenPositionMapBackups-sentinel",
             "root-hash-sentinel",
             "new-root-hash-sentinel",
             "path-label-sentinel",
@@ -794,9 +799,9 @@ mod tests {
             .read_private_hnsw_paths(Request::new(OramReadPathsRequest {
                 collection_name: "private-hnsw-collection-label".into(),
                 vector_name: "vector-name-sentinel".into(),
-                session_id: "session-id-sentinel".into(),
-                root_hash: "root-hash-sentinel".into(),
-                paths: vec!["path-label-sentinel".into()],
+                session_id: "clientStateBackups-sentinel".into(),
+                root_hash: "positionMapBackups-sentinel".into(),
+                paths: vec!["oramPositionMapBackups-sentinel".into()],
                 ..Default::default()
             }))
             .await
@@ -807,9 +812,9 @@ mod tests {
             .commit_private_hnsw_paths(Request::new(OramCommitRequest {
                 collection_name: "private-hnsw-collection-label".into(),
                 vector_name: "vector-name-sentinel".into(),
-                session_id: "session-id-sentinel".into(),
+                session_id: "stashBackups-sentinel".into(),
                 old_root_hash: "root-hash-sentinel".into(),
-                new_root_hash: "new-root-hash-sentinel".into(),
+                new_root_hash: "tokenPositionMapBackups-sentinel".into(),
                 ..Default::default()
             }))
             .await
@@ -882,6 +887,11 @@ mod tests {
         let w = PrivateResultOramTelemetryWrapper::new(MockPrivateResultOram);
         let sensitive = [
             "result-session-id-sentinel",
+            "clientStateBackups-sentinel",
+            "oramPositionMapBackups-sentinel",
+            "positionMapBackups-sentinel",
+            "stashBackups-sentinel",
+            "tokenPositionMapBackups-sentinel",
             "result-root-hash-sentinel",
             "result-new-root-hash-sentinel",
         ];
@@ -890,7 +900,7 @@ mod tests {
             .upload_private_result_oram_buckets(Request::new(
                 UploadPrivateResultOramBucketsRequest {
                     collection_name: "private-result-collection-label".into(),
-                    root_hash: "result-root-hash-sentinel".into(),
+                    root_hash: "positionMapBackups-sentinel".into(),
                     buckets: vec![Default::default()],
                     ..Default::default()
                 },
@@ -902,8 +912,8 @@ mod tests {
         let read = w
             .read_private_result_oram_buckets(Request::new(ReadPrivateResultOramBucketsRequest {
                 collection_name: "private-result-collection-label".into(),
-                session_id: "result-session-id-sentinel".into(),
-                root_hash: "result-root-hash-sentinel".into(),
+                session_id: "tokenPositionMapBackups-sentinel".into(),
+                root_hash: "oramPositionMapBackups-sentinel".into(),
                 bucket_ids: vec![42],
                 ..Default::default()
             }))
@@ -915,8 +925,8 @@ mod tests {
             .commit_private_result_oram_buckets(Request::new(
                 CommitPrivateResultOramBucketsRequest {
                     collection_name: "private-result-collection-label".into(),
-                    session_id: "result-session-id-sentinel".into(),
-                    old_root_hash: "result-root-hash-sentinel".into(),
+                    session_id: "stashBackups-sentinel".into(),
+                    old_root_hash: "clientStateBackups-sentinel".into(),
                     new_root_hash: "result-new-root-hash-sentinel".into(),
                     updated_buckets: vec![Default::default()],
                     ..Default::default()
