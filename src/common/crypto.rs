@@ -1318,6 +1318,7 @@ impl VectorWriteRule {
 
 pub(crate) struct VectorWritePlan {
     rules: Vec<VectorWriteRule>,
+    cluster_enabled: bool,
     ckks_grouped_max_candidates: usize,
     ckks_scoring_source_batch_max: usize,
     ckks_query_nonce_replay_ttl: std::time::Duration,
@@ -1329,6 +1330,7 @@ impl VectorWritePlan {
     pub(crate) fn empty_for_test() -> Self {
         Self {
             rules: Vec::new(),
+            cluster_enabled: false,
             ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
             ckks_scoring_source_batch_max: crate::settings::default_ckks_scoring_source_batch_max(),
             ckks_query_nonce_replay_ttl: std::time::Duration::from_secs(
@@ -1380,6 +1382,15 @@ impl VectorWritePlan {
 
     pub(crate) fn ckks_query_nonce_replay_cache_max_entries(&self) -> usize {
         self.ckks_query_nonce_replay_cache_max_entries
+    }
+
+    pub(crate) fn require_cluster_wide_ckks_query_nonce_ledger(&self) -> Result<(), StorageError> {
+        if self.cluster_enabled {
+            return Err(StorageError::bad_input(
+                "client-supplied CKKS encrypted query envelopes require a cluster-wide query nonce replay ledger when cluster.enabled=true",
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn encrypt_dense_vector_payload_value(
@@ -1681,6 +1692,7 @@ impl VectorWritePlan {
         signature_key_id: &str,
         signature_b64: &str,
     ) -> Result<Option<()>, StorageError> {
+        self.require_cluster_wide_ckks_query_nonce_ledger()?;
         let Some(rule) = self
             .rules
             .iter()
@@ -1896,6 +1908,7 @@ pub(crate) fn vector_write_plan_for_collection_with_crypto_id(
 
     generic_vector_write_plan(
         &effective_settings(settings),
+        settings.cluster.enabled,
         collection_name,
         collection_crypto_id,
         params,
@@ -1905,6 +1918,7 @@ pub(crate) fn vector_write_plan_for_collection_with_crypto_id(
 
 fn generic_vector_write_plan(
     runtime_settings: &CryptoSettings,
+    cluster_enabled: bool,
     collection_name: &str,
     collection_crypto_id: &str,
     params: &CollectionParams,
@@ -2268,6 +2282,7 @@ fn generic_vector_write_plan(
     } else {
         Ok(Some(VectorWritePlan {
             rules,
+            cluster_enabled,
             ckks_grouped_max_candidates: runtime_settings.ckks_grouped_max_candidates,
             ckks_scoring_source_batch_max: runtime_settings.ckks_scoring_source_batch_max,
             ckks_query_nonce_replay_ttl: std::time::Duration::from_secs(
@@ -22857,6 +22872,141 @@ mod tests {
             ),
             "verification failed",
         );
+    }
+
+    #[test]
+    fn vector_write_plan_rejects_client_ckks_query_envelopes_in_clustered_mode() {
+        let (_bridge_dir, bridge_program, bridge_sha256_b64) = test_bridge_program();
+        let collection_crypto_id = "docs-cluster-crypto-id";
+        let vector_name = "embedding";
+        let key_id = "tenant-a:vector";
+        let rk_id = "tenant-a/vector-rk";
+        let query_signing_key_id = "tenant-a/query-signing-v1";
+        let crypto_context = b"openfhe context";
+        let public_key = b"openfhe public key";
+        let public_material = CkksPublicMaterial::new(crypto_context, public_key).unwrap();
+        let context_digest = public_material.digest_for(&CkksParameters::openfhe_default_128_bit());
+        let mut settings = Settings {
+            crypto: CryptoSettings {
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_vector_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_OPENFHE_CKKS_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            rk_id.to_string(),
+                        )]),
+                        backend_ref: Some("openfhe_local".to_string()),
+                        options: json!({
+                            "key_id": key_id,
+                            "material_fingerprint_id": "tenant-a/vector@v1",
+                            "profile": CKKS_PROFILE_OPENFHE_128_N16384_D4_SCALE50,
+                            "crypto_context_b64": BASE64URL_NOPAD.encode(crypto_context),
+                            "public_key_b64": BASE64URL_NOPAD.encode(public_key),
+                            "score_plaintext_output_tcb_ack": SCORE_OUTPUT_TCB_ACK_VALUE,
+                            "signature_public_keys": {
+                                query_signing_key_id: BASE64URL_NOPAD.encode(&[12_u8; 32]),
+                            },
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    rk_id.to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[8_u8; 32])),
+                        rk_epoch: Some(3),
+                        state: Some(RESOURCE_KEY_STATE_ACTIVE.to_string()),
+                        scope: Some(format!("collection:{collection_crypto_id}")),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::from([(
+                    "openfhe_local".to_string(),
+                    CryptoBackendConfig {
+                        kind: "process_pool".to_string(),
+                        program: Some(bridge_program),
+                        sha256_b64: Some(bridge_sha256_b64),
+                        size: Some(1),
+                        timeout_ms: Some(5_000),
+                        ..CryptoBackendConfig::default()
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        settings.cluster.enabled = true;
+        let params = CollectionParams {
+            vectors: collection::operations::types::VectorsConfig::Multi(BTreeMap::from([(
+                vector_name.to_string(),
+                VectorParamsBuilder::new(2, Distance::Dot).build(),
+            )])),
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some(key_id.to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 3,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "embedding_conf".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec![vector_name.to_string()],
+                    },
+                    instance: "docs_vector_v1".to_string(),
+                    binding: Some(VECTOR_ENVELOPE_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let plan = vector_write_plan_for_collection_with_crypto_id(
+            &settings,
+            "docs",
+            collection_crypto_id,
+            &params,
+        )
+        .unwrap()
+        .expect("trusted CKKS vector should produce a write plan");
+
+        let err = plan
+            .validate_client_encrypted_query(
+                "docs",
+                vector_name,
+                collection_crypto_id,
+                vector_name,
+                key_id,
+                rk_id,
+                3,
+                "AAAAAAAAAAAAAAAA",
+                &context_digest,
+                2,
+                b"ciphertext",
+                "ed25519",
+                query_signing_key_id,
+                &BASE64URL_NOPAD.encode(&[0_u8; 64]),
+            )
+            .expect_err("clustered client encrypted query must fail without a replay ledger");
+
+        let StorageError::BadInput { description } = err else {
+            panic!("unexpected error type: {err:?}");
+        };
+        assert!(description.contains("cluster-wide query nonce replay ledger"));
+        assert!(description.contains("cluster.enabled=true"));
+        for forbidden in [
+            "docs",
+            collection_crypto_id,
+            vector_name,
+            key_id,
+            rk_id,
+            query_signing_key_id,
+        ] {
+            assert!(
+                !description.contains(forbidden),
+                "error leaked {forbidden}: {description}",
+            );
+        }
     }
 
     #[test]

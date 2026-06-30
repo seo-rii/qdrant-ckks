@@ -2197,9 +2197,10 @@ rejecting recent replays with an error that instructs clients to create a fresh
 envelope. The signer key is still validated and included in non-secret warning
 metadata, but it is not part of the freshness key; the same CKKS resource-key
 lineage cannot reuse a query nonce by switching signers. This is a replay guard,
-not a cluster-wide ledger; clustered strict zero-trust query deployments need a
-consensus-backed nonce ledger before local replay caches can be treated as a
-distributed freshness guarantee. The
+not a cluster-wide ledger. When `cluster.enabled=true`, client-supplied CKKS
+encrypted query envelopes fail closed until a consensus-backed query nonce
+ledger exists, so local replay caches are not silently treated as a distributed
+freshness guarantee. The
 `context_digest` must match the active OpenFHE public material and CKKS parameter profile for that rule,
 `slots` must match each stored sidecar envelope being scored,
 `ciphertext_sha256` must match the decoded ciphertext bytes, and `ciphertext` is
