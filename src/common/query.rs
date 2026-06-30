@@ -4723,9 +4723,9 @@ async fn recommend_request_as_ckks_resolved_scoring<'a>(
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<CkksSidecarScoring<'a>, StorageError> {
     if request.lookup_from.is_some() {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' recommend does not support lookup_from; provide examples from the same encrypted vector sidecar",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector recommend does not support lookup_from; provide examples from the same encrypted vector sidecar",
+        ));
     }
     let positives = recommend_examples_as_ckks_query_sources(
         collection,
@@ -4773,9 +4773,9 @@ fn recommend_request_as_ckks_search_request(
     vector_name: &str,
 ) -> Result<CoreSearchRequest, StorageError> {
     if request.lookup_from.is_some() {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' recommend does not support lookup_from or point-id examples; provide raw dense vectors",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector recommend does not support lookup_from or point-id examples; provide raw dense vectors",
+        ));
     }
     let positive = recommend_examples_as_dense_vectors(&request.positive, vector_name, "positive")?;
     let negative = recommend_examples_as_dense_vectors(&request.negative, vector_name, "negative")?;
@@ -4812,7 +4812,7 @@ fn recommend_request_as_ckks_search_request(
 
 fn recommend_examples_as_dense_vectors(
     examples: &[RecommendExample],
-    vector_name: &str,
+    _vector_name: &str,
     role: &str,
 ) -> Result<Vec<VectorInternal>, StorageError> {
     examples
@@ -4820,10 +4820,10 @@ fn recommend_examples_as_dense_vectors(
         .map(|example| match example {
             RecommendExample::Dense(vector) => Ok(VectorInternal::Dense(vector.clone())),
             RecommendExample::Sparse(_) => Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' recommend only supports raw dense {role} examples",
+                "encrypted vector recommend only supports raw dense {role} examples",
             ))),
             RecommendExample::PointId(_) => Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' recommend cannot resolve point-id {role} examples because plaintext vectors are not stored",
+                "encrypted vector recommend cannot resolve point-id {role} examples because plaintext vectors are not stored",
             ))),
         })
         .collect()
@@ -5379,9 +5379,9 @@ async fn try_ckks_vector_discover_batch_points(
         has_encrypted_discover = true;
         if discover_request_needs_sidecar_resolution(request) {
             if request.lookup_from.is_some() {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' discover does not support lookup_from; provide examples from the same encrypted vector sidecar",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector discover does not support lookup_from; provide examples from the same encrypted vector sidecar",
+                ));
             }
             let scoring = discover_request_as_ckks_resolved_scoring(
                 &collection,
@@ -5553,7 +5553,7 @@ async fn recommend_example_as_ckks_query_source<'a>(
             })
         }
         RecommendExample::Sparse(_) => Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' discover only supports raw dense or point-id {role} examples",
+            "encrypted vector discover only supports raw dense or point-id {role} examples",
         ))),
     }
 }
@@ -5569,9 +5569,9 @@ async fn discover_request_as_ckks_resolved_scoring<'a>(
     hw_measurement_acc: HwMeasurementAcc,
 ) -> Result<CkksSidecarScoring<'a>, StorageError> {
     let Some(target) = request.target.as_ref() else {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' discover requires a raw dense or point-id target vector",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector discover requires a raw dense or point-id target vector",
+        ));
     };
     let target = recommend_example_as_ckks_query_source(
         collection,
@@ -5619,19 +5619,19 @@ fn discover_request_as_ckks_search_request(
     vector_name: &str,
 ) -> Result<CoreSearchRequest, StorageError> {
     if request.lookup_from.is_some() {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' discover does not support lookup_from or point-id examples; provide a raw dense target vector",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector discover does not support lookup_from or point-id examples; provide a raw dense target vector",
+        ));
     }
     let Some(target) = request.target.as_ref() else {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' discover requires a raw dense target vector",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector discover requires a raw dense target vector",
+        ));
     };
     let RecommendExample::Dense(query_values) = target else {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' discover cannot resolve point-id or sparse target examples because plaintext vectors are not stored",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector discover cannot resolve point-id or sparse target examples because plaintext vectors are not stored",
+        ));
     };
     let pairs = request
         .context
@@ -5640,14 +5640,14 @@ fn discover_request_as_ckks_search_request(
         .iter()
         .map(|pair| {
             let RecommendExample::Dense(positive) = &pair.positive else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' discover cannot resolve point-id or sparse positive context examples because plaintext vectors are not stored",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector discover cannot resolve point-id or sparse positive context examples because plaintext vectors are not stored",
+                ));
             };
             let RecommendExample::Dense(negative) = &pair.negative else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' discover cannot resolve point-id or sparse negative context examples because plaintext vectors are not stored",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector discover cannot resolve point-id or sparse negative context examples because plaintext vectors are not stored",
+                ));
             };
             Ok(ContextPair {
                 positive: VectorInternal::Dense(positive.clone()),
@@ -6576,7 +6576,7 @@ async fn ckks_vector_input_as_query_source<'a>(
             Ok(CkksSidecarQuerySource::Dense(values))
         }
         VectorInputInternal::Vector(_) => Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' context query only supports raw dense or point-id {role} examples",
+            "encrypted vector context query only supports raw dense or point-id {role} examples",
         ))),
         VectorInputInternal::InferredVector(_) => Err(StorageError::bad_input(format!(
             "encrypted vector search does not allow inference-derived {role} query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
