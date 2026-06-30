@@ -114,20 +114,20 @@ pub(crate) fn redacted_snapshot_url_for_message(url: &Url) -> String {
 }
 
 #[derive(Default)]
-pub(crate) struct PrivateOramCollectionRecoveryGuards {
+pub(crate) struct PrivateOramCollectionLifecycleGuard {
     _private_hnsw_snapshot_guard: Option<PrivateHnswCollectionSnapshotGuard>,
     _private_result_snapshot_guard: Option<PrivateResultOramCollectionSnapshotGuard>,
 }
 
-pub(crate) async fn begin_private_oram_collection_recovery(
+pub(crate) async fn begin_private_oram_collection_lifecycle_guard(
     dispatcher: &Dispatcher,
     auth: &Auth,
     collection_name: &str,
-) -> Result<PrivateOramCollectionRecoveryGuards, StorageError> {
+) -> Result<PrivateOramCollectionLifecycleGuard, StorageError> {
     let collection_pass = auth
         .check_global_access(
             AccessRequirements::new().manage(),
-            "private_oram_collection_recovery",
+            "private_oram_collection_lifecycle",
         )?
         .issue_pass(collection_name)
         .into_static();
@@ -136,12 +136,12 @@ pub(crate) async fn begin_private_oram_collection_recovery(
     let collection = match toc.get_collection(&collection_pass).await {
         Ok(collection) => collection,
         Err(StorageError::NotFound { .. }) => {
-            return Ok(PrivateOramCollectionRecoveryGuards::default());
+            return Ok(PrivateOramCollectionLifecycleGuard::default());
         }
         Err(err) => return Err(err),
     };
     let config = collection.config_snapshot().await;
-    Ok(PrivateOramCollectionRecoveryGuards {
+    Ok(PrivateOramCollectionLifecycleGuard {
         _private_hnsw_snapshot_guard: begin_private_hnsw_collection_snapshot(
             collection.name(),
             &config,
@@ -151,6 +151,14 @@ pub(crate) async fn begin_private_oram_collection_recovery(
             &config,
         )?,
     })
+}
+
+pub(crate) async fn begin_private_oram_collection_recovery(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    collection_name: &str,
+) -> Result<PrivateOramCollectionLifecycleGuard, StorageError> {
+    begin_private_oram_collection_lifecycle_guard(dispatcher, auth, collection_name).await
 }
 
 pub async fn do_create_full_snapshot(
@@ -791,7 +799,7 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_collection_recovery_guard_blocks_private_hnsw_upload() {
+    fn private_oram_collection_lifecycle_guard_blocks_private_hnsw_upload() {
         let _guard = route_e2e_guard();
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
@@ -799,11 +807,11 @@ mod tests {
 
         actix_web::rt::System::new().block_on(async {
             create_private_hnsw_collection(&dispatcher).await;
-            let auth = Auth::new_internal(Access::full("private ORAM recovery guard test"));
+            let auth = Auth::new_internal(Access::full("private ORAM lifecycle guard test"));
             let recovery_guard =
-                begin_private_oram_collection_recovery(&dispatcher, &auth, COLLECTION_NAME)
+                begin_private_oram_collection_lifecycle_guard(&dispatcher, &auth, COLLECTION_NAME)
                     .await
-                    .expect("private ORAM recovery guard should open");
+                    .expect("private ORAM lifecycle guard should open");
             let pass = new_unchecked_verification_pass();
 
             let err = do_upload_private_hnsw_manifest(

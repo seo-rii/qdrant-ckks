@@ -23,6 +23,7 @@ use tonic::{Request, Response, Status};
 use super::validate;
 use crate::common::collections::*;
 use crate::common::crypto::validate_create_collection_crypto_runtime;
+use crate::common::snapshots::begin_private_oram_collection_lifecycle_guard;
 use crate::settings::Settings;
 use crate::tonic::api::collections_common::get;
 use crate::tonic::auth::extract_auth;
@@ -152,10 +153,28 @@ impl Collections for CollectionsService {
 
     async fn delete(
         &self,
-        request: Request<DeleteCollection>,
+        mut request: Request<DeleteCollection>,
     ) -> Result<Response<CollectionOperationResponse>, Status> {
         validate(request.get_ref())?;
-        self.perform_operation(request).await
+        let timing = Instant::now();
+        let auth = extract_auth(&mut request);
+        let operation = request.into_inner();
+        let wait_timeout = operation.wait_timeout();
+        let collection_name = operation.collection_name.clone();
+        let _private_oram_lifecycle_guard = begin_private_oram_collection_lifecycle_guard(
+            &self.dispatcher,
+            &auth,
+            &collection_name,
+        )
+        .await?;
+        let result = self
+            .dispatcher
+            .submit_collection_meta_op(operation.try_into()?, auth, wait_timeout)
+            .await?;
+
+        Ok(Response::new(CollectionOperationResponse::from((
+            timing, result,
+        ))))
     }
 
     async fn update_aliases(

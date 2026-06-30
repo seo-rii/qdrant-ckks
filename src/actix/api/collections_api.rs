@@ -38,6 +38,7 @@ use crate::common::collections::*;
 use crate::common::crypto::{
     validate_collection_crypto_runtime_with_crypto_id, validate_create_collection_crypto_runtime,
 };
+use crate::common::snapshots::begin_private_oram_collection_lifecycle_guard;
 use crate::common::update::{
     do_decrypt_payloads_for_crypto_migration, do_reencrypt_stale_payloads_for_crypto_migration,
 };
@@ -1204,15 +1205,24 @@ async fn delete_collection(
     ActixAuth(auth): ActixAuth,
 ) -> impl Responder {
     let timing = Instant::now();
-    let response = dispatcher
-        .submit_collection_meta_op(
-            CollectionMetaOperations::DeleteCollection(DeleteCollectionOperation(
-                collection.collection_name.clone(),
-            )),
-            auth,
-            query.timeout(),
+    let response = async {
+        let _private_oram_lifecycle_guard = begin_private_oram_collection_lifecycle_guard(
+            dispatcher.get_ref(),
+            &auth,
+            &collection.collection_name,
         )
-        .await;
+        .await?;
+        dispatcher
+            .submit_collection_meta_op(
+                CollectionMetaOperations::DeleteCollection(DeleteCollectionOperation(
+                    collection.collection_name.clone(),
+                )),
+                auth,
+                query.timeout(),
+            )
+            .await
+    }
+    .await;
     process_response(response, timing, None)
 }
 
