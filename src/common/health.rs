@@ -466,10 +466,13 @@ mod tests {
              clientStateSnapshots=client-state-snapshots-camel-sentinel, \
              client_state_snapshot=client-state-snapshot-snake-sentinel, \
              client_state_snapshots=client-state-snapshots-snake-sentinel, \
+             clientStateBackup=client-state-backup-camel-sentinel, \
+             client_state_backup=client-state-backup-snake-sentinel, \
              clientStateBackups=client-state-backups-camel-sentinel, \
              client_state_backups=client-state-backups-snake-sentinel, \
              encryptedClientStateSnapshot=encrypted-client-state-snapshot-camel-sentinel, \
              encryptedClientStateSnapshots=encrypted-client-state-snapshots-camel-sentinel, \
+             encryptedClientStateBackup=encrypted-client-state-backup-camel-sentinel, \
              encryptedClientStateBackups=encrypted-client-state-backups-camel-sentinel, \
              encrypted_client_state_backups=encrypted-client-state-backups-snake-sentinel, \
              clientStateCiphertext=client-state-ciphertext-camel-sentinel, \
@@ -534,10 +537,13 @@ mod tests {
         assert!(!message.contains("client-state-snapshots-camel-sentinel"));
         assert!(!message.contains("client-state-snapshot-snake-sentinel"));
         assert!(!message.contains("client-state-snapshots-snake-sentinel"));
+        assert!(!message.contains("client-state-backup-camel-sentinel"));
+        assert!(!message.contains("client-state-backup-snake-sentinel"));
         assert!(!message.contains("client-state-backups-camel-sentinel"));
         assert!(!message.contains("client-state-backups-snake-sentinel"));
         assert!(!message.contains("encrypted-client-state-snapshot-camel-sentinel"));
         assert!(!message.contains("encrypted-client-state-snapshots-camel-sentinel"));
+        assert!(!message.contains("encrypted-client-state-backup-camel-sentinel"));
         assert!(!message.contains("encrypted-client-state-backups-camel-sentinel"));
         assert!(!message.contains("encrypted-client-state-backups-snake-sentinel"));
         assert!(!message.contains("client-state-ciphertext-camel-sentinel"));

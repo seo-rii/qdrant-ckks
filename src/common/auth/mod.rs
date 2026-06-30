@@ -324,10 +324,13 @@ mod tests {
              clientStateSnapshots=client-state-snapshots-camel-sentinel \
              client_state_snapshot=client-state-snapshot-snake-sentinel \
              client_state_snapshots=client-state-snapshots-snake-sentinel \
+             clientStateBackup=client-state-backup-camel-sentinel \
+             client_state_backup=client-state-backup-snake-sentinel \
              clientStateBackups=client-state-backups-camel-sentinel \
              client_state_backups=client-state-backups-snake-sentinel \
              encryptedClientStateSnapshot=encrypted-client-state-snapshot-camel-sentinel \
              encryptedClientStateSnapshots=encrypted-client-state-snapshots-camel-sentinel \
+             encryptedClientStateBackup=encrypted-client-state-backup-camel-sentinel \
              encryptedClientStateBackups=encrypted-client-state-backups-camel-sentinel \
              encrypted_client_state_backups=encrypted-client-state-backups-snake-sentinel \
              clientStateCiphertext=client-state-ciphertext-camel-sentinel \
@@ -415,10 +418,13 @@ mod tests {
         assert!(!redacted.contains("client-state-snapshots-camel-sentinel"));
         assert!(!redacted.contains("client-state-snapshot-snake-sentinel"));
         assert!(!redacted.contains("client-state-snapshots-snake-sentinel"));
+        assert!(!redacted.contains("client-state-backup-camel-sentinel"));
+        assert!(!redacted.contains("client-state-backup-snake-sentinel"));
         assert!(!redacted.contains("client-state-backups-camel-sentinel"));
         assert!(!redacted.contains("client-state-backups-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-snapshot-camel-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-snapshots-camel-sentinel"));
+        assert!(!redacted.contains("encrypted-client-state-backup-camel-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-backups-camel-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-backups-snake-sentinel"));
         assert!(!redacted.contains("client-state-ciphertext-camel-sentinel"));
