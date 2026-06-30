@@ -2564,6 +2564,15 @@ mod private_result_oram_rest_tests {
             assert!(!proof_mismatch_error.contains(&session_id));
             assert!(!proof_mismatch_error.contains("private_result_oram"));
             assert!(!proof_mismatch_error.contains("/tmp"));
+            assert_private_result_guard_error_redacts(
+                &proof_mismatch_error,
+                &[
+                    proof_mismatched_bucket.ciphertext.as_str(),
+                    fixture.manifest.root_hash.as_str(),
+                    session_id.as_str(),
+                    "/tmp",
+                ],
+            );
             std::fs::write(&bucket_path, &original_bucket_bytes).unwrap();
 
             let (future_bucket, _, _) = fixture.commit_bucket();
@@ -2594,6 +2603,16 @@ mod private_result_oram_rest_tests {
             assert!(!future_bucket_error.contains(&fixture.manifest.root_hash));
             assert!(!future_bucket_error.contains(&session_id));
             assert!(!future_bucket_error.contains("private_result_oram"));
+            assert_private_result_guard_error_redacts(
+                &future_bucket_error,
+                &[
+                    future_bucket.ciphertext.as_str(),
+                    "index_epoch",
+                    fixture.manifest.root_hash.as_str(),
+                    session_id.as_str(),
+                    "/tmp",
+                ],
+            );
             std::fs::write(&future_bucket_path, &original_future_bucket_bytes).unwrap();
 
             let read_wrong_root = BASE64URL_NOPAD.encode(&[9; 32]);
