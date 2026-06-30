@@ -418,13 +418,19 @@ mod tests {
                             "stash",
                             "clientStateBackups.json",
                             "clientStateCiphertext.json",
+                            "clientStateCiphertextHash.json",
+                            "clientStateCiphertextHashes.json",
                             "encryptedClientStateBackups.json",
+                            "encryptedClientStateCiphertext.json",
                             "encryptedClientStateCiphertextHash.json",
+                            "encryptedClientStateCiphertextHashes.json",
+                            "encrypted_client_state_ciphertext_hash.json",
                             "oramPositionMapBackups.json",
                             "positionMapBackups.json",
                             "stashBackups.json",
                             "stateCiphertext.json",
                             "stateCiphertextHash.json",
+                            "stateCiphertextHashes.json",
                             "tokenPositionMapBackups.json"
                         ]
                     },
@@ -438,13 +444,19 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("stash"));
         assert!(!unsafe_store_name_message.contains("clientStateBackups"));
         assert!(!unsafe_store_name_message.contains("clientStateCiphertext"));
+        assert!(!unsafe_store_name_message.contains("clientStateCiphertextHash"));
+        assert!(!unsafe_store_name_message.contains("clientStateCiphertextHashes"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStateBackups"));
+        assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertext"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertextHash"));
+        assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertextHashes"));
+        assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext_hash"));
         assert!(!unsafe_store_name_message.contains("oramPositionMapBackups"));
         assert!(!unsafe_store_name_message.contains("positionMapBackups"));
         assert!(!unsafe_store_name_message.contains("stashBackups"));
         assert!(!unsafe_store_name_message.contains("stateCiphertext"));
         assert!(!unsafe_store_name_message.contains("stateCiphertextHash"));
+        assert!(!unsafe_store_name_message.contains("stateCiphertextHashes"));
         assert!(!unsafe_store_name_message.contains("tokenPositionMapBackups"));
 
         let mut overlap = ValidationError::new("overlapping_encryption_selector");
