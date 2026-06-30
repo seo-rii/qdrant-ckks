@@ -426,3 +426,98 @@ impl_with_timeout!(UpdateCollection);
 impl_with_timeout!(DeleteCollection);
 impl_with_timeout!(ChangeAliases);
 impl_with_timeout!(UpdateCollectionClusterSetupRequest);
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use api::grpc::qdrant::collections_server::Collections;
+    use storage::rbac::{Access, Auth};
+
+    use super::*;
+    use crate::common::private_hnsw::begin_private_hnsw_collection_snapshot;
+    use crate::common::private_hnsw_wire_fixture::{
+        COLLECTION_NAME, create_private_hnsw_collection, route_e2e_guard, test_dispatcher,
+    };
+
+    #[test]
+    fn update_and_delete_collection_reject_private_oram_snapshot_window() {
+        let _guard = route_e2e_guard();
+        let (_temp, dispatcher) = test_dispatcher();
+        let dispatcher = Arc::new(dispatcher);
+        let service = CollectionsService::new(dispatcher.clone(), Settings::new(None).unwrap());
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(dispatcher.as_ref()).await;
+
+            let auth = Auth::new_internal(Access::full("private ORAM collection tonic route test"));
+            let pass = new_unchecked_verification_pass();
+            let collection_pass = auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    storage::rbac::AccessRequirements::new().manage(),
+                    "private_oram_tonic_collection_route_test",
+                )
+                .unwrap();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let config = collection.config_snapshot().await;
+            let _snapshot_guard =
+                begin_private_hnsw_collection_snapshot(collection.name(), &config)
+                    .expect("private HNSW snapshot guard should open");
+
+            let update_err = Collections::update(
+                &service,
+                Request::new(UpdateCollection {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    optimizers_config: None,
+                    timeout: None,
+                    params: None,
+                    hnsw_config: None,
+                    vectors_config: None,
+                    quantization_config: None,
+                    sparse_vectors_config: None,
+                    strict_mode_config: None,
+                    metadata: Default::default(),
+                }),
+            )
+            .await
+            .expect_err("private ORAM collection update must reject active snapshot");
+            assert_eq!(update_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                update_err
+                    .message()
+                    .contains("lifecycle operation requires no active collection snapshot"),
+                "{update_err}",
+            );
+            assert!(
+                !update_err.message().contains(COLLECTION_NAME),
+                "{update_err}"
+            );
+
+            let delete_err = Collections::delete(
+                &service,
+                Request::new(DeleteCollection {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    timeout: None,
+                }),
+            )
+            .await
+            .expect_err("private ORAM collection delete must reject active snapshot");
+            assert_eq!(delete_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                delete_err
+                    .message()
+                    .contains("lifecycle operation requires no active collection snapshot"),
+                "{delete_err}",
+            );
+            assert!(
+                !delete_err.message().contains(COLLECTION_NAME),
+                "{delete_err}"
+            );
+        });
+    }
+}
