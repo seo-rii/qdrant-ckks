@@ -1750,14 +1750,49 @@ mod tests {
         ));
     }
 
+    const PRIVATE_ORAM_CLIENT_STATE_COLLECTION_NAMES: &[&str] = &[
+        "stashBackups.json",
+        "tokenPositionMapBackups.json",
+        "oramPositionMapBackups.json",
+        "positionMapBackups.json",
+        "clientStateCiphertext.json",
+        "clientStateCiphertextHash.json",
+        "clientStateCiphertextHashes.json",
+        "encryptedClientStateCiphertext.json",
+        "encryptedClientStateCiphertextHash.json",
+        "encrypted_client_state_ciphertext_hash.json",
+        "encrypted_client_state.bin",
+        "encrypted_client_state_backup.bin",
+        "encrypted_client_state_snapshot.bin",
+        "stateCiphertext.json",
+        "stateCiphertextHash.json",
+        "state_ciphertext.bin",
+        "state_ciphertext_hash.bin",
+    ];
+
+    const PRIVATE_ORAM_CLIENT_STATE_REDACTION_STEMS: &[&str] = &[
+        "stashBackups",
+        "tokenPositionMapBackups",
+        "oramPositionMapBackups",
+        "positionMapBackups",
+        "clientStateCiphertext",
+        "clientStateCiphertextHash",
+        "clientStateCiphertextHashes",
+        "encryptedClientStateCiphertext",
+        "encryptedClientStateCiphertextHash",
+        "encrypted_client_state",
+        "encrypted_client_state_backup",
+        "encrypted_client_state_snapshot",
+        "encrypted_client_state_ciphertext_hash",
+        "stateCiphertext",
+        "stateCiphertextHash",
+        "state_ciphertext",
+        "state_ciphertext_hash",
+    ];
+
     #[test]
     fn private_oram_automatic_transfer_recovery_fails_closed_until_bucket_transfer_supported() {
-        for collection_name in [
-            "stashBackups.json",
-            "tokenPositionMapBackups.json",
-            "oramPositionMapBackups.json",
-            "positionMapBackups.json",
-        ] {
+        for &collection_name in PRIVATE_ORAM_CLIENT_STATE_COLLECTION_NAMES {
             validate_private_oram_automatic_transfer_recovery_until_supported(
                 collection_name,
                 3,
@@ -1776,10 +1811,9 @@ mod tests {
             assert!(rendered.contains("encrypted ORAM bucket transfer"));
             assert!(rendered.contains("consensus-backed epoch/root"));
             assert!(!rendered.contains(collection_name));
-            assert!(!rendered.contains("stashBackups"));
-            assert!(!rendered.contains("tokenPositionMapBackups"));
-            assert!(!rendered.contains("oramPositionMapBackups"));
-            assert!(!rendered.contains("positionMapBackups"));
+            for &leaked_alias in PRIVATE_ORAM_CLIENT_STATE_REDACTION_STEMS {
+                assert!(!rendered.contains(leaked_alias), "{rendered}");
+            }
             assert!(!rendered.contains("shard 3"));
             assert!(!rendered.contains("private_hnsw_oram"));
             assert!(!rendered.contains("private_result_oram"));
@@ -1852,6 +1886,9 @@ mod tests {
             assert!(rendered.contains("consensus-backed epoch/root"));
             assert!(!rendered.contains("private_hnsw_oram"));
             assert!(!rendered.contains("private_result_oram"));
+            for &leaked_alias in PRIVATE_ORAM_CLIENT_STATE_REDACTION_STEMS {
+                assert!(!rendered.contains(leaked_alias), "{rendered}");
+            }
             assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
         }

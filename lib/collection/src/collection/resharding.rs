@@ -329,20 +329,54 @@ fn validate_private_oram_resharding_until_supported(
 mod tests {
     use super::*;
 
+    const PRIVATE_ORAM_RESHARDING_OPERATION_NAMES: &[&str] = &[
+        "start resharding",
+        "commit read hash ring",
+        "private-resharding-operation-sentinel",
+        "stashBackups.json",
+        "tokenPositionMapBackups.json",
+        "oramPositionMapBackups.json",
+        "positionMapBackups.json",
+        "clientStateCiphertext.json",
+        "clientStateCiphertextHash.json",
+        "clientStateCiphertextHashes.json",
+        "encryptedClientStateCiphertext.json",
+        "encryptedClientStateCiphertextHash.json",
+        "encrypted_client_state_ciphertext_hash.json",
+        "encrypted_client_state.bin",
+        "encrypted_client_state_backup.bin",
+        "encrypted_client_state_snapshot.bin",
+        "stateCiphertext.json",
+        "stateCiphertextHash.json",
+        "state_ciphertext.bin",
+        "state_ciphertext_hash.bin",
+    ];
+
+    const PRIVATE_ORAM_RESHARDING_REDACTION_STEMS: &[&str] = &[
+        "stashBackups",
+        "tokenPositionMapBackups",
+        "oramPositionMapBackups",
+        "positionMapBackups",
+        "clientStateCiphertext",
+        "clientStateCiphertextHash",
+        "clientStateCiphertextHashes",
+        "encryptedClientStateCiphertext",
+        "encryptedClientStateCiphertextHash",
+        "encrypted_client_state",
+        "encrypted_client_state_backup",
+        "encrypted_client_state_snapshot",
+        "encrypted_client_state_ciphertext_hash",
+        "stateCiphertext",
+        "stateCiphertextHash",
+        "state_ciphertext",
+        "state_ciphertext_hash",
+    ];
+
     #[test]
     fn private_oram_resharding_operation_guard_redacts_collection_details() {
         validate_private_oram_resharding_until_supported("start resharding", false).unwrap();
 
-        for operation_name in [
-            "start resharding",
-            "commit read hash ring",
-            "private-resharding-operation-sentinel",
-            "encryptedClientStateCiphertextHash.json",
-            "tokenPositionMapBackups.json",
-            "oramPositionMapBackups.json",
-            "positionMapBackups.json",
-            "stashBackups.json",
-        ] {
+        for &operation_name in PRIVATE_ORAM_RESHARDING_OPERATION_NAMES {
             let err =
                 validate_private_oram_resharding_until_supported(operation_name, true).unwrap_err();
             let rendered = format!("{err:?}");
@@ -355,11 +389,9 @@ mod tests {
             assert!(!rendered.contains(operation_name));
             assert!(!rendered.contains("private_hnsw_oram"));
             assert!(!rendered.contains("private_result_oram"));
-            assert!(!rendered.contains("encryptedClientStateCiphertextHash"));
-            assert!(!rendered.contains("tokenPositionMapBackups"));
-            assert!(!rendered.contains("oramPositionMapBackups"));
-            assert!(!rendered.contains("positionMapBackups"));
-            assert!(!rendered.contains("stashBackups"));
+            for &leaked_alias in PRIVATE_ORAM_RESHARDING_REDACTION_STEMS {
+                assert!(!rendered.contains(leaked_alias), "{rendered}");
+            }
             assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
         }

@@ -371,19 +371,54 @@ fn validate_private_oram_replica_set_creation_until_supported(
 mod tests {
     use super::*;
 
+    const PRIVATE_ORAM_SHARD_KEY_OPERATION_NAMES: &[&str] = &[
+        "create shard key",
+        "drop shard key",
+        "private-shard-key-operation-sentinel",
+        "stashBackups.json",
+        "tokenPositionMapBackups.json",
+        "oramPositionMapBackups.json",
+        "positionMapBackups.json",
+        "clientStateCiphertext.json",
+        "clientStateCiphertextHash.json",
+        "clientStateCiphertextHashes.json",
+        "encryptedClientStateCiphertext.json",
+        "encryptedClientStateCiphertextHash.json",
+        "encrypted_client_state_ciphertext_hash.json",
+        "encrypted_client_state.bin",
+        "encrypted_client_state_backup.bin",
+        "encrypted_client_state_snapshot.bin",
+        "stateCiphertext.json",
+        "stateCiphertextHash.json",
+        "state_ciphertext.bin",
+        "state_ciphertext_hash.bin",
+    ];
+
+    const PRIVATE_ORAM_SHARD_KEY_REDACTION_STEMS: &[&str] = &[
+        "stashBackups",
+        "tokenPositionMapBackups",
+        "oramPositionMapBackups",
+        "positionMapBackups",
+        "clientStateCiphertext",
+        "clientStateCiphertextHash",
+        "clientStateCiphertextHashes",
+        "encryptedClientStateCiphertext",
+        "encryptedClientStateCiphertextHash",
+        "encrypted_client_state",
+        "encrypted_client_state_backup",
+        "encrypted_client_state_snapshot",
+        "encrypted_client_state_ciphertext_hash",
+        "stateCiphertext",
+        "stateCiphertextHash",
+        "state_ciphertext",
+        "state_ciphertext_hash",
+    ];
+
     #[test]
     fn private_oram_shard_key_change_guard_redacts_collection_details() {
         validate_private_oram_shard_key_change_until_supported("create shard key", false).unwrap();
 
-        for operation_name in [
-            "create shard key",
-            "drop shard key",
-            "private-shard-key-operation-sentinel",
-            "positionMapBackups.json",
-            "tokenPositionMapBackups.json",
-            "oramPositionMapBackups.json",
-            "stashBackups.json",
-        ] {
+        for &operation_name in PRIVATE_ORAM_SHARD_KEY_OPERATION_NAMES {
             let err = validate_private_oram_shard_key_change_until_supported(operation_name, true)
                 .unwrap_err();
             let rendered = format!("{err:?}");
@@ -394,10 +429,9 @@ mod tests {
             assert!(rendered.contains("collection-local encrypted ORAM buckets"));
             assert!(rendered.contains("consensus-backed epoch/root"));
             assert!(!rendered.contains(operation_name));
-            assert!(!rendered.contains("positionMapBackups"));
-            assert!(!rendered.contains("tokenPositionMapBackups"));
-            assert!(!rendered.contains("oramPositionMapBackups"));
-            assert!(!rendered.contains("stashBackups"));
+            for &leaked_alias in PRIVATE_ORAM_SHARD_KEY_REDACTION_STEMS {
+                assert!(!rendered.contains(leaked_alias), "{rendered}");
+            }
             assert!(!rendered.contains("private_hnsw_oram"));
             assert!(!rendered.contains("private_result_oram"));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
@@ -415,6 +449,9 @@ mod tests {
         assert!(rendered.contains("cannot create replica set for private ORAM collections"));
         assert!(rendered.contains("collection-local encrypted ORAM buckets"));
         assert!(rendered.contains("consensus-backed epoch/root"));
+        for &leaked_alias in PRIVATE_ORAM_SHARD_KEY_REDACTION_STEMS {
+            assert!(!rendered.contains(leaked_alias), "{rendered}");
+        }
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
