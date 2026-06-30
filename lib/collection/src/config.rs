@@ -554,8 +554,12 @@ mod ckks_tests {
             "clientStateCiphertext",
             "encryptedClientStateBackups",
             "encryptedClientStateCiphertextHash",
+            "oramPositionMapBackups",
+            "positionMapBackups",
+            "stashBackups",
             "stateCiphertext",
             "stateCiphertextHash",
+            "tokenPositionMapBackups",
         ] {
             let message = private_hnsw_oram_api_required_message(private_alias);
             assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
@@ -617,8 +621,12 @@ mod ckks_tests {
             "clientStateCiphertext",
             "encryptedClientStateBackups",
             "encryptedClientStateCiphertextHash",
+            "oramPositionMapBackups",
+            "positionMapBackups",
+            "stashBackups",
             "stateCiphertext",
             "stateCiphertextHash",
+            "tokenPositionMapBackups",
         ] {
             let message = private_result_oram_api_required_message(private_alias);
             assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
