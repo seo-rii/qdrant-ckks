@@ -1955,9 +1955,9 @@ async fn maybe_encrypt_upsert_vectors(
             return Err(private_hnsw_oram_api_required_error(&vector_name));
         }
         if upsert_vectors_touch_encrypted_config(operation, &collection_config.params)? {
-            return Err(StorageError::bad_input(format!(
-                "CKKS vector encryption runtime for collection {collection_name} is required before writing encrypted vectors",
-            )));
+            return Err(StorageError::bad_input(
+                "CKKS vector encryption runtime is required before writing encrypted vectors",
+            ));
         }
         return Ok(CollectionUpdateProvenance::client_plaintext());
     };
@@ -2046,9 +2046,9 @@ async fn maybe_encrypt_update_vectors(
             return Err(private_hnsw_oram_api_required_error(&vector_name));
         }
         if point_vectors_touch_encrypted_config(points, &collection_config.params)? {
-            return Err(StorageError::bad_input(format!(
-                "CKKS vector encryption runtime for collection {collection_name} is required before writing encrypted vectors",
-            )));
+            return Err(StorageError::bad_input(
+                "CKKS vector encryption runtime is required before writing encrypted vectors",
+            ));
         }
         return Ok((Vec::new(), CollectionUpdateProvenance::client_plaintext()));
     };
@@ -2264,28 +2264,28 @@ fn rest_vector_requires_inference(vector: &Vector) -> bool {
 }
 
 fn ensure_not_mixed_encrypted_and_plaintext_vector_mutation(
-    collection_name: &str,
+    _collection_name: &str,
     encrypted_count: usize,
     plaintext_count: usize,
     operation: &str,
 ) -> Result<(), StorageError> {
     if encrypted_count > 0 && plaintext_count > 0 {
         return Err(StorageError::bad_input(format!(
-            "collection {collection_name} cannot mix encrypted vector sidecar mutations and plaintext vector mutations in one {operation} request; split the request until atomic mixed vector updates are implemented",
+            "cannot mix encrypted vector sidecar mutations and plaintext vector mutations in one {operation} request; split the request until atomic mixed vector updates are implemented",
         )));
     }
     Ok(())
 }
 
 fn ensure_encrypted_vector_update_sidecar_fanout_is_atomic(
-    collection_name: &str,
+    _collection_name: &str,
     encrypted_point_count: usize,
 ) -> Result<(), StorageError> {
     if encrypted_point_count > 1 {
         return Err(StorageError::bad_input(format!(
-            "collection {collection_name} cannot update encrypted vectors for multiple points in \
-             one update_vectors request until atomic encrypted vector sidecar fanout is \
-             implemented; split the request into one point per update_vectors call",
+            "cannot update encrypted vectors for multiple points in one update_vectors request \
+             until atomic encrypted vector sidecar fanout is implemented; split the request into \
+             one point per update_vectors call",
         )));
     }
     Ok(())
@@ -5527,9 +5527,10 @@ esac
 
         assert!(matches!(
             err,
-            StorageError::BadInput { description }
+                StorageError::BadInput { description }
                 if description.contains("cannot mix encrypted vector sidecar mutations")
                     && description.contains("update_vectors")
+                    && !description.contains("docs")
         ));
 
         ensure_not_mixed_encrypted_and_plaintext_vector_mutation("docs", 1, 0, "update_vectors")
@@ -7959,9 +7960,10 @@ esac
 
         assert!(matches!(
             err,
-            StorageError::BadInput { description }
+                StorageError::BadInput { description }
                 if description.contains("cannot update encrypted vectors for multiple points")
                     && description.contains("atomic encrypted vector sidecar fanout")
+                    && !description.contains("docs")
         ));
 
         ensure_encrypted_vector_update_sidecar_fanout_is_atomic("docs", 1).unwrap();
