@@ -2422,7 +2422,7 @@ fn openfhe_backend_from_config(
         backend.signature_public_key_b64.as_deref(),
         backend.signature_b64.as_deref(),
     )
-    .map_err(|err| StorageError::bad_input(format!("crypto backend {backend_name}: {err}")))?;
+    .map_err(openfhe_backend_signature_storage_error)?;
     let pool_size = match backend.kind.as_str() {
         OPENFHE_BACKEND_KIND_PROCESS_POOL
         | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK
@@ -2458,13 +2458,8 @@ fn openfhe_backend_from_config(
     }
 
     let mut command_backend =
-        CommandOpenFheBackend::new_checked_with_sha256_b64(program, expected_sha256_b64).map_err(
-            |err| {
-                StorageError::bad_input(format!(
-                    "crypto backend {backend_name} program path is invalid: {err}",
-                ))
-            },
-        )?;
+        CommandOpenFheBackend::new_checked_with_sha256_b64(program, expected_sha256_b64)
+            .map_err(|_| StorageError::bad_input("crypto backend program path is invalid"))?;
     if let Some(timeout_ms) = backend.timeout_ms {
         command_backend = command_backend.with_timeout(Duration::from_millis(timeout_ms));
     }
@@ -2477,6 +2472,10 @@ fn openfhe_backend_from_config(
     }
     command_backend = command_backend.with_pool_size(pool_size);
     Ok(cache_openfhe_backend(cache_key, command_backend))
+}
+
+fn openfhe_backend_signature_storage_error(_err: CryptoSetupError) -> StorageError {
+    StorageError::bad_input("crypto backend signature policy is invalid")
 }
 
 #[derive(Clone, Eq, Hash, PartialEq)]
@@ -6274,10 +6273,8 @@ fn validate_collection_runtime_backend_metadata(
         backend.signature_public_key_b64.as_deref(),
         backend.signature_b64.as_deref(),
     )
-    .map_err(|err| {
-        StorageError::bad_input(format!(
-            "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} signature policy is invalid: {err}",
-        ))
+    .map_err(|_| {
+        StorageError::bad_input("collection vector crypto backend signature policy is invalid")
     })?;
 
     if backend.timeout_ms == Some(0) {
@@ -17498,6 +17495,96 @@ mod tests {
             StorageError::BadInput { description }
                 if description.contains("requires sha256_b64 program pin")
         ));
+    }
+
+    #[test]
+    fn openfhe_backend_factory_redacts_program_path_errors() {
+        let _guard = openfhe_backend_factory_test_guard();
+        let sentinel = "openfhe-backend-program-path-sentinel";
+        let err = openfhe_backend_from_config(
+            &format!("backend-{sentinel}"),
+            &CryptoBackendConfig {
+                kind: "process".to_string(),
+                program: Some(format!("relative-{sentinel}/openfhe-bridge")),
+                sha256_b64: Some(BASE64URL_NOPAD.encode(&[0_u8; 32])),
+                signature_public_key_b64: None,
+                signature_b64: None,
+                size: None,
+                timeout_ms: Some(5_000),
+            },
+            &CryptoSettings::default(),
+        )
+        .expect_err("backend construction must reject invalid bridge program path");
+        let rendered = err.to_string();
+
+        assert!(
+            rendered.contains("crypto backend program path is invalid"),
+            "{rendered}",
+        );
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(!rendered.contains("relative-"), "{rendered}");
+    }
+
+    #[test]
+    fn openfhe_backend_factory_redacts_signature_policy_errors() {
+        let _guard = openfhe_backend_factory_test_guard();
+        let sentinel = "openfhe-backend-signature-policy-sentinel";
+        let program = std::env::current_exe().unwrap();
+        let err = openfhe_backend_from_config(
+            &format!("backend-{sentinel}"),
+            &CryptoBackendConfig {
+                kind: "process".to_string(),
+                program: Some(program.to_string_lossy().to_string()),
+                sha256_b64: Some(BASE64URL_NOPAD.encode(&[0_u8; 32])),
+                signature_public_key_b64: Some(format!("public-key-{sentinel}")),
+                signature_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 64])),
+                size: None,
+                timeout_ms: Some(5_000),
+            },
+            &CryptoSettings::default(),
+        )
+        .expect_err("backend construction must reject invalid bridge signature policy");
+        let rendered = err.to_string();
+
+        assert!(
+            rendered.contains("crypto backend signature policy is invalid"),
+            "{rendered}",
+        );
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(!rendered.contains("public-key"), "{rendered}");
+        assert!(!rendered.contains("signature_public_key_b64"), "{rendered}");
+        assert!(!rendered.contains("signature_b64"), "{rendered}");
+    }
+
+    #[test]
+    fn validate_collection_runtime_backend_metadata_redacts_signature_policy_errors() {
+        let sentinel = "collection-backend-signature-policy-sentinel";
+        let program = std::env::current_exe().unwrap();
+        let err = validate_collection_runtime_backend_metadata(
+            &format!("collection-{sentinel}"),
+            &format!("instance-{sentinel}"),
+            &format!("backend-{sentinel}"),
+            &CryptoBackendConfig {
+                kind: "process".to_string(),
+                program: Some(program.to_string_lossy().to_string()),
+                sha256_b64: Some(BASE64URL_NOPAD.encode(&[0_u8; 32])),
+                signature_public_key_b64: Some(format!("public-key-{sentinel}")),
+                signature_b64: Some(BASE64URL_NOPAD.encode(&[1_u8; 64])),
+                size: None,
+                timeout_ms: Some(5_000),
+            },
+        )
+        .expect_err("collection runtime validation must reject invalid bridge signature policy");
+        let rendered = err.to_string();
+
+        assert!(
+            rendered.contains("collection vector crypto backend signature policy is invalid"),
+            "{rendered}",
+        );
+        assert!(!rendered.contains(sentinel), "{rendered}");
+        assert!(!rendered.contains("public-key"), "{rendered}");
+        assert!(!rendered.contains("signature_public_key_b64"), "{rendered}");
+        assert!(!rendered.contains("signature_b64"), "{rendered}");
     }
 
     #[test]
