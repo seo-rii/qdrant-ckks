@@ -1067,7 +1067,10 @@ leaf-collision schedules before a server request is built. Server read
 validation accepts duplicate bucket ids for shared path prefixes but rejects
 empty, repeated full-path, non-whole-path-shaped, non-canonical Path ORAM heap
 paths, or batches that do not exactly match the configured fixed path budget.
-The crypto crate also
+New SDK integrations should use
+`plan_private_result_oram_ordered_read_bucket_batches_for_fetch_tokens` before
+signing `read_buckets` requests when token positions may share a leaf. The
+crypto crate also
 exposes canonical `read_buckets`
 message/sign/verify helpers that bind collection/key lineage, index epoch,
 root hash, bucket count, and the exact padded bucket-id sequence; REST and gRPC
