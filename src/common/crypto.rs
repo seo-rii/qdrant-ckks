@@ -2070,18 +2070,12 @@ fn generic_vector_write_plan(
                 &rule.instance,
                 CKKS_PUBLIC_KEY_B64_OPTION,
             )?;
-            let public_material = CkksPublicMaterial::new(crypto_context, public_key).map_err(|err| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto instance {} public material is invalid: {err}",
-                    rule.instance
-                ))
-            })?;
-            let signature_verifier = client_payload_signature_verifier(instance, &rule.instance).map_err(|err| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto instance {} client vector signature verifier is invalid: {err}",
-                    rule.instance
-                ))
-            })?;
+            let public_material = CkksPublicMaterial::new(crypto_context, public_key)
+                .map_err(|_| StorageError::bad_input("vector CKKS public material is invalid"))?;
+            let signature_verifier = client_payload_signature_verifier(instance, &rule.instance)
+                .map_err(|_| {
+                    StorageError::bad_input("vector client signature verifier is invalid")
+                })?;
             let min_rk_epoch =
                 instance
                     .options
@@ -2162,38 +2156,19 @@ fn generic_vector_write_plan(
             &rule.instance,
             CKKS_PUBLIC_KEY_B64_OPTION,
         )?;
-        let public_material = CkksPublicMaterial::new(crypto_context, public_key).map_err(|err| {
-            StorageError::bad_input(format!(
-                "collection {collection_name} vector crypto instance {} public material is invalid: {err}",
-                rule.instance
-            ))
-        })?;
-        let allow_plaintext_queries = vector_plaintext_queries_allowed(instance).map_err(|err| {
-            StorageError::bad_input(format!(
-                "collection {collection_name} vector crypto instance {} plaintext query policy is invalid: {err}",
-                rule.instance
-            ))
-        })?;
-        vector_score_output_tcb_acknowledged(instance).map_err(|err| {
-            StorageError::bad_input(format!(
-                "collection {collection_name} vector crypto instance {} score output TCB policy is invalid: {err}",
-                rule.instance
-            ))
-        })?;
-        let query_signature_verifier =
-            client_payload_signature_verifier(instance, &rule.instance).map_err(|err| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto instance {} client query signature verifier is invalid: {err}",
-                    rule.instance
-                ))
+        let public_material = CkksPublicMaterial::new(crypto_context, public_key)
+            .map_err(|_| StorageError::bad_input("vector CKKS public material is invalid"))?;
+        let allow_plaintext_queries = vector_plaintext_queries_allowed(instance)
+            .map_err(|_| StorageError::bad_input("vector plaintext query policy is invalid"))?;
+        vector_score_output_tcb_acknowledged(instance)
+            .map_err(|_| StorageError::bad_input("vector score output TCB policy is invalid"))?;
+        let query_signature_verifier = client_payload_signature_verifier(instance, &rule.instance)
+            .map_err(|_| {
+                StorageError::bad_input("vector client query signature verifier is invalid")
             })?;
 
         let key_id = resolve_payload_key_id(collection_name, encryption, &rule.instance, instance)
-            .map_err(|err| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto key id validation failed: {err}"
-                ))
-            })?;
+            .map_err(|_| StorageError::bad_input("vector crypto key id validation failed"))?;
         let material_ref = instance
             .materials
             .get(PAYLOAD_SYM_KEY_ROLE)
@@ -2215,13 +2190,8 @@ fn generic_vector_write_plan(
                 rule.instance
             )));
         };
-        let resource_key = decode_resource_key(runtime_settings, material_ref, material).map_err(
-            |err| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto metadata key validation failed: {err}"
-                ))
-            },
-        )?;
+        let resource_key = decode_resource_key(runtime_settings, material_ref, material)
+            .map_err(|_| StorageError::bad_input("vector crypto metadata key validation failed"))?;
         let material_fingerprint_id =
             required_string_option(instance, &rule.instance, MATERIAL_FINGERPRINT_ID_OPTION)?;
         let backend_ref = instance.backend_ref.as_deref().ok_or_else(|| {
@@ -2252,12 +2222,7 @@ fn generic_vector_write_plan(
             )
             .and_then(|encryptor| encryptor.with_collection_identity(collection_crypto_id))
             .map(|encryptor| encryptor.with_encryption_epoch(encryption.encryption_epoch))
-            .map_err(|err| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto instance {} is invalid for vector '{vector_name}': {err}",
-                    rule.instance
-                ))
-            })?;
+            .map_err(|_| StorageError::bad_input("vector crypto instance is invalid"))?;
             rules.push(VectorWriteRule::TrustedBridge {
                 vector_name: vector_name.clone(),
                 collection_id: collection_crypto_id.to_string(),
@@ -7431,17 +7396,10 @@ fn validate_generic_collection_crypto_runtime(
                 &rule.instance,
                 CKKS_PUBLIC_KEY_B64_OPTION,
             )?;
-            CkksPublicMaterial::new(crypto_context, public_key).map_err(|err| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto instance {} public material is invalid: {err}",
-                    rule.instance
-                ))
-            })?;
-            client_payload_signature_verifier(instance, &rule.instance).map_err(|err| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto instance {} client vector signature verifier is invalid: {err}",
-                    rule.instance
-                ))
+            CkksPublicMaterial::new(crypto_context, public_key)
+                .map_err(|_| StorageError::bad_input("vector CKKS public material is invalid"))?;
+            client_payload_signature_verifier(instance, &rule.instance).map_err(|_| {
+                StorageError::bad_input("vector client signature verifier is invalid")
             })?;
             let min_rk_epoch = instance
                 .options
@@ -7517,17 +7475,12 @@ fn validate_generic_collection_crypto_runtime(
             &rule.instance,
             CKKS_PUBLIC_KEY_B64_OPTION,
         )?;
-        CkksPublicMaterial::new(crypto_context, public_key).map_err(|err| {
-            StorageError::bad_input(format!(
-                "collection {collection_name} vector crypto instance {} public material is invalid: {err}",
-                rule.instance
-            ))
-        })?;
-        if let Err(err) = vector_plaintext_queries_allowed(instance) {
-            return Err(StorageError::bad_input(format!(
-                "collection {collection_name} vector crypto instance {} plaintext query policy is invalid: {err}",
-                rule.instance,
-            )));
+        CkksPublicMaterial::new(crypto_context, public_key)
+            .map_err(|_| StorageError::bad_input("vector CKKS public material is invalid"))?;
+        if vector_plaintext_queries_allowed(instance).is_err() {
+            return Err(StorageError::bad_input(
+                "vector plaintext query policy is invalid",
+            ));
         }
 
         let instance_key_id = match instance.options.get("key_id") {
@@ -7615,11 +7568,8 @@ fn validate_generic_collection_crypto_runtime(
                 rule.instance
             )));
         };
-        let resource_key = decode_resource_key(runtime_settings, material_ref, material).map_err(|err| {
-            StorageError::bad_input(format!(
-                "collection {collection_name} vector crypto metadata key validation failed: {err}"
-            ))
-        })?;
+        let resource_key = decode_resource_key(runtime_settings, material_ref, material)
+            .map_err(|_| StorageError::bad_input("vector crypto metadata key validation failed"))?;
         if instance
             .options
             .get(MATERIAL_FINGERPRINT_ID_OPTION)
@@ -7638,27 +7588,22 @@ fn validate_generic_collection_crypto_runtime(
                     rule.instance
                 )));
             };
-            let metadata_key = resource_key.derive_subkey(CKKS_VECTOR_KEY_DOMAIN).map_err(|err| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto metadata key validation failed: {err}"
-                ))
-            })?;
+            let metadata_key =
+                resource_key
+                    .derive_subkey(CKKS_VECTOR_KEY_DOMAIN)
+                    .map_err(|_| {
+                        StorageError::bad_input("vector crypto metadata key validation failed")
+                    })?;
             let metadata_cipher = AeadCipher::new_with_material_fingerprint(
                 key_id,
                 metadata_key,
                 material_fingerprint_id,
             )
-            .map_err(|err| {
-                StorageError::bad_input(format!(
-                    "collection {collection_name} vector crypto metadata key validation failed: {err}"
-                ))
-            })?;
+            .map_err(|_| StorageError::bad_input("vector crypto metadata key validation failed"))?;
             metadata_cipher
                 .with_resource_key_metadata(material_ref, rk_epoch)
-                .map_err(|err| {
-                    StorageError::bad_input(format!(
-                        "collection {collection_name} vector crypto metadata key validation failed: {err}"
-                    ))
+                .map_err(|_| {
+                    StorageError::bad_input("vector crypto metadata key validation failed")
                 })?;
         }
         for vector_name in names {
@@ -21143,8 +21088,9 @@ mod tests {
         .expect_err("runtime validation must also reject plaintext query opt-in without TCB ack");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains("plaintext query policy is invalid")
-                    && description.contains(PLAINTEXT_QUERIES_TCB_ACK_OPTION)),
+                if description.contains("vector plaintext query policy is invalid")
+                    && !description.contains(PLAINTEXT_QUERIES_TCB_ACK_OPTION)
+                    && !description.contains(PLAINTEXT_QUERIES_TCB_ACK_VALUE)),
             "unexpected error: {err:?}",
         );
 
