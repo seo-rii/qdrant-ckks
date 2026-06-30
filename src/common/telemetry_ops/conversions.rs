@@ -11,9 +11,10 @@ use crate::common::telemetry_ops::cluster_telemetry::ClusterTelemetry;
 
 fn try_convert_opt_role_from_grpc(role: Option<i32>) -> Result<Option<StateRole>, Status> {
     role.map(|role| {
-        Result::<_, Status>::Ok(StateRole::from(grpc::StateRole::try_from(role).map_err(
-            |err| Status::invalid_argument(format!("Invalid state role: {err}")),
-        )?))
+        Result::<_, Status>::Ok(StateRole::from(
+            grpc::StateRole::try_from(role)
+                .map_err(|_| Status::invalid_argument("Invalid state role"))?,
+        ))
     })
     .transpose()
 }
@@ -215,5 +216,13 @@ mod tests {
             restored.crypto_runtime_capability_fingerprint,
             app.crypto_runtime_capability_fingerprint,
         );
+    }
+
+    #[test]
+    fn grpc_state_role_rejects_unknown_value_without_reflecting_it() {
+        let unsupported = 987_654;
+        let err = try_convert_opt_role_from_grpc(Some(unsupported)).unwrap_err();
+        assert!(err.message().contains("Invalid state role"));
+        assert!(!err.message().contains(&unsupported.to_string()));
     }
 }
