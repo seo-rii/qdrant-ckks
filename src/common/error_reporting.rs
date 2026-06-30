@@ -701,6 +701,7 @@ mod tests {
             "oramPositionMapSnapshot=private-oram-position-map-snapshot-camel-sentinel",
             "tokenPositionMap=private-token-position-map-sentinel",
             "tokenPositionMapBackup=private-token-position-map-backup-sentinel",
+            "token_position_map_backup=private-token-position-map-backup-snake-sentinel",
             "token_position_map_backups=[private-token-position-map-backups-snake-sentinel]",
             "tokenPositionMapBackups=[private-token-position-map-backups-sentinel]",
             "token_position_maps=[private-token-position-maps-snake-sentinel]",

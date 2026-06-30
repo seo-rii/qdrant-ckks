@@ -359,13 +359,18 @@ mod tests {
              encrypted_client_state_ciphertext_hashes=encrypted-client-state-ciphertext-hashes-snake-sentinel \
              encryptedClientStateCiphertextHash=encrypted-client-state-ciphertext-hash-camel-sentinel \
              encryptedClientStateCiphertextHashes=encrypted-client-state-ciphertext-hashes-camel-sentinel \
+             oramPositionMapBackup=oram-position-map-backup-camel-sentinel \
+             oram_position_map_backup=oram-position-map-backup-snake-sentinel \
              oramPositionMapBackups=oram-position-map-backups-camel-sentinel \
              oram_position_maps=oram-position-maps-snake-sentinel \
              oram_position_map_snapshots=oram-position-map-snapshots-snake-sentinel \
+             positionMapBackup=position-map-backup-camel-sentinel \
+             position_map_backup=position-map-backup-snake-sentinel \
              positionMapBackups=position-map-backups-camel-sentinel \
              position_map_backups=position-map-backups-snake-sentinel \
              position_maps=position-maps-snake-sentinel \
              position_map_snapshots=position-map-snapshots-snake-sentinel \
+             stashBackup=stash-backup-camel-sentinel \
              stashBackups=stash-backups-camel-sentinel \
              stash_snapshots=stash-snapshots-snake-sentinel \
              stateCiphertext=state-ciphertext-camel-sentinel \
@@ -381,6 +386,8 @@ mod tests {
              state_ciphertext_hashes=state-ciphertext-hashes-snake-sentinel \
              token_position_maps=token-position-maps-snake-sentinel \
              token_position_map_snapshots=token-position-map-snapshots-snake-sentinel \
+             tokenPositionMapBackup=token-position-map-backup-camel-singular-sentinel \
+             token_position_map_backup=token-position-map-backup-snake-singular-sentinel \
              token_position_map_backups=token-position-map-backups-snake-sentinel \
              tokenPositionMapBackups=token-position-map-backups-camel-sentinel"
                 .to_string(),
@@ -453,13 +460,18 @@ mod tests {
         assert!(!redacted.contains("encrypted-client-state-ciphertext-hashes-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-hash-camel-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-hashes-camel-sentinel"));
+        assert!(!redacted.contains("oram-position-map-backup-camel-sentinel"));
+        assert!(!redacted.contains("oram-position-map-backup-snake-sentinel"));
         assert!(!redacted.contains("oram-position-map-backups-camel-sentinel"));
         assert!(!redacted.contains("oram-position-maps-snake-sentinel"));
         assert!(!redacted.contains("oram-position-map-snapshots-snake-sentinel"));
+        assert!(!redacted.contains("position-map-backup-camel-sentinel"));
+        assert!(!redacted.contains("position-map-backup-snake-sentinel"));
         assert!(!redacted.contains("position-map-backups-camel-sentinel"));
         assert!(!redacted.contains("position-map-backups-snake-sentinel"));
         assert!(!redacted.contains("position-maps-snake-sentinel"));
         assert!(!redacted.contains("position-map-snapshots-snake-sentinel"));
+        assert!(!redacted.contains("stash-backup-camel-sentinel"));
         assert!(!redacted.contains("stash-backups-camel-sentinel"));
         assert!(!redacted.contains("stash-snapshots-snake-sentinel"));
         assert!(!redacted.contains("state-ciphertext-camel-sentinel"));
@@ -475,6 +487,8 @@ mod tests {
         assert!(!redacted.contains("state-ciphertext-hashes-snake-sentinel"));
         assert!(!redacted.contains("token-position-maps-snake-sentinel"));
         assert!(!redacted.contains("token-position-map-snapshots-snake-sentinel"));
+        assert!(!redacted.contains("token-position-map-backup-camel-singular-sentinel"));
+        assert!(!redacted.contains("token-position-map-backup-snake-singular-sentinel"));
         assert!(!redacted.contains("token-position-map-backups-snake-sentinel"));
         assert!(!redacted.contains("token-position-map-backups-camel-sentinel"));
     }

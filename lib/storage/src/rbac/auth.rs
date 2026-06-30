@@ -574,6 +574,7 @@ mod tests {
             "private result ORAM read failed point_tokens=private-point-tokens-sentinel",
             "private result ORAM read failed payload_plaintext=private-payload-sentinel",
             "private result ORAM read failed tokenPositionMap=private-token-position-sentinel",
+            "private result ORAM read failed tokenPositionMapBackup=private-token-position-backup-singular-sentinel",
             "private result ORAM read failed tokenPositionMapBackups=private-token-position-backup-sentinel",
             "private result ORAM read failed token_position_maps=private-token-position-maps-sentinel",
             "private result ORAM read failed token_position_map_snapshots=private-token-position-map-snapshots-sentinel",
@@ -643,6 +644,7 @@ mod tests {
             "private ORAM client backup failed position_maps=private-position-maps-sentinel",
             "private ORAM client backup failed position_map_snapshots=private-position-map-snapshots-sentinel",
             "private ORAM client backup failed stash_snapshots=private-stash-snapshots-sentinel",
+            "private ORAM client backup failed stashBackup=private-stash-backup-sentinel",
             "private ORAM client backup failed stashBackups=private-stash-backups-sentinel",
         ] {
             let redacted = redact_audit_error(error);
