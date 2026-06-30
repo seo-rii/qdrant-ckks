@@ -4400,6 +4400,7 @@ mod tests {
         "encrypted_client_state_backup",
         "encrypted_client_state_backups",
         "encrypted_client_state_snapshot",
+        "encrypted_client_state_snapshots",
         "encryptedClientStateCiphertext",
         "encrypted_client_state_ciphertext",
         "encryptedClientStateCiphertextHash",

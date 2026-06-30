@@ -11511,6 +11511,7 @@ esac
         "encrypted_client_state",
         "encrypted_client_state_backup",
         "encrypted_client_state_snapshot",
+        "encrypted_client_state_snapshots",
         "encrypted_client_state_ciphertext",
         "encrypted_client_state_ciphertext_hash",
         "encrypted_client_state_ciphertext_hashes",
