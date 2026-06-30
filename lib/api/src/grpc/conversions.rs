@@ -2176,9 +2176,8 @@ impl TryFrom<OrderBy> for segment::data_types::order_by::OrderBy {
                         Ok(StartFrom::Datetime(try_date_time_from_proto(timestamp)?))
                     }
                     Value::Datetime(datetime_str) => Ok(StartFrom::Datetime(
-                        segment::types::DateTimeWrapper::from_str(&datetime_str).map_err(|e| {
-                            Status::invalid_argument(format!("Malformed datetime: {e}"))
-                        })?,
+                        segment::types::DateTimeWrapper::from_str(&datetime_str)
+                            .map_err(|_| Status::invalid_argument("Malformed datetime"))?,
                     )),
                 }
             })
@@ -3780,6 +3779,22 @@ mod tests {
         assert_eq!(err.message(), "Unable to parse timestamp");
         assert!(!err.message().contains(&i64::MAX.to_string()));
         assert!(!err.message().contains("999999999"));
+    }
+
+    #[test]
+    fn grpc_order_by_datetime_parse_error_does_not_reflect_input() {
+        let datetime_sentinel = "datetime-secret-sentinel";
+        let order_by = OrderBy {
+            key: "created_at".to_string(),
+            direction: None,
+            start_from: Some(StartFrom {
+                value: Some(start_from::Value::Datetime(datetime_sentinel.to_string())),
+            }),
+        };
+
+        let err = segment::data_types::order_by::OrderBy::try_from(order_by).unwrap_err();
+        assert_eq!(err.message(), "Malformed datetime");
+        assert!(!err.message().contains(datetime_sentinel));
     }
 
     #[test]

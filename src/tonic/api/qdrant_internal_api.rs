@@ -47,6 +47,19 @@ impl QdrantInternalService {
     }
 }
 
+fn parse_audit_log_time(
+    value: Option<&str>,
+    field: &'static str,
+) -> Result<Option<DateTime<chrono::Utc>>, Status> {
+    value
+        .map(|s| {
+            DateTime::parse_from_rfc3339(s)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .map_err(|_| Status::invalid_argument(format!("Invalid {field}")))
+        })
+        .transpose()
+}
+
 #[tonic::async_trait]
 impl QdrantInternal for QdrantInternalService {
     async fn get_consensus_commit(
@@ -137,23 +150,9 @@ impl QdrantInternal for QdrantInternalService {
             .as_ref()
             .ok_or_else(|| Status::failed_precondition("Audit logging is not configured"))?;
 
-        let time_from = time_from
-            .as_deref()
-            .map(|s| {
-                DateTime::parse_from_rfc3339(s)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .map_err(|e| Status::invalid_argument(format!("Invalid time_from: {e}")))
-            })
-            .transpose()?;
+        let time_from = parse_audit_log_time(time_from.as_deref(), "time_from")?;
 
-        let time_to = time_to
-            .as_deref()
-            .map(|s| {
-                DateTime::parse_from_rfc3339(s)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .map_err(|e| Status::invalid_argument(format!("Invalid time_to: {e}")))
-            })
-            .transpose()?;
+        let time_to = parse_audit_log_time(time_to.as_deref(), "time_to")?;
 
         let filters: HashMap<String, String> = filters;
 
@@ -179,5 +178,23 @@ impl QdrantInternal for QdrantInternalService {
             .collect();
 
         Ok(Response::new(GetAuditLogResponse { entries }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn audit_log_time_parse_errors_do_not_reflect_inputs() {
+        let time_sentinel = "audit-time-secret-sentinel";
+
+        let err = parse_audit_log_time(Some(time_sentinel), "time_from").unwrap_err();
+        assert_eq!(err.message(), "Invalid time_from");
+        assert!(!err.message().contains(time_sentinel));
+
+        let err = parse_audit_log_time(Some(time_sentinel), "time_to").unwrap_err();
+        assert_eq!(err.message(), "Invalid time_to");
+        assert!(!err.message().contains(time_sentinel));
     }
 }
