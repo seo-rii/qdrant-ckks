@@ -1046,14 +1046,23 @@ mod tests {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
-                key_id: Some("clientStateCiphertext.json".to_string()),
+                key_id: Some("clientStateCiphertextHash.json".to_string()),
                 crypto_schema_version: 1,
                 encryption_epoch: 7,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
-                    id: "encryptedClientStateCiphertextHash.json".to_string(),
+                    id: "encryptedClientStateCiphertext.json".to_string(),
                     selector: EncryptionSelector::PayloadPaths {
-                        paths: vec!["tokenPositionMapBackups.json".to_string()],
+                        paths: vec![
+                            "tokenPositionMapBackups.json".to_string(),
+                            "clientStateCiphertext.json".to_string(),
+                            "clientStateCiphertextHashes.json".to_string(),
+                            "encryptedClientStateCiphertextHash.json".to_string(),
+                            "encryptedClientStateCiphertextHashes.json".to_string(),
+                            "encrypted_client_state_ciphertext_hash.json".to_string(),
+                            "stateCiphertext.json".to_string(),
+                            "stateCiphertextHashes.json".to_string(),
+                        ],
                     },
                     instance: "stateCiphertextHash.json".to_string(),
                     binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
@@ -1075,9 +1084,16 @@ mod tests {
         assert!(err.contains("encrypted ORAM bucket transfer"));
         for sentinel in [
             "clientStateCiphertext",
+            "clientStateCiphertextHash",
+            "clientStateCiphertextHashes",
+            "encryptedClientStateCiphertext",
             "encryptedClientStateCiphertextHash",
+            "encryptedClientStateCiphertextHashes",
+            "encrypted_client_state_ciphertext_hash",
             "tokenPositionMapBackups",
+            "stateCiphertext",
             "stateCiphertextHash",
+            "stateCiphertextHashes",
             "stashBackups",
             PRIVATE_RESULT_ORAM_BINDING,
             PRIVATE_RESULT_ORAM_DIR,
