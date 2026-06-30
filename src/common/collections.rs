@@ -1909,12 +1909,20 @@ mod tests {
                 "encrypted_client_state_ciphertext_hashes.json".to_string(),
                 "encrypted_client_state_ciphertext_sha256.json".to_string(),
                 "encrypted_client_state_ciphertexts_sha256.json".to_string(),
+                "tokenPositionMapBackup.json".to_string(),
                 "tokenPositionMapBackups.json".to_string(),
+                "token_position_map_backup.json".to_string(),
                 "token_position_map_backups.json".to_string(),
+                "oramPositionMapBackup.json".to_string(),
                 "oramPositionMapBackups.json".to_string(),
+                "oram_position_map_backup.json".to_string(),
                 "oram_position_map_backups.json".to_string(),
+                "positionMapBackup.json".to_string(),
                 "positionMapBackups.json".to_string(),
+                "position_map_backup.json".to_string(),
                 "position_map_backups.json".to_string(),
+                "stashBackup.json".to_string(),
+                "stash_backup.json".to_string(),
                 "stateCiphertext.json".to_string(),
                 "stateCiphertextHashes.json".to_string(),
                 "stateCiphertextSha256.json".to_string(),
@@ -1927,7 +1935,7 @@ mod tests {
             ];
         }
 
-        let collection_name = "stashBackups.json";
+        let collection_name = "stashBackup.json";
         let transfer_operation = private_hnsw_transfer_start_operations()
             .into_iter()
             .next()
@@ -2038,12 +2046,20 @@ mod tests {
                     "encrypted_client_state_ciphertext_hashes",
                     "encrypted_client_state_ciphertext_sha256",
                     "encrypted_client_state_ciphertexts_sha256",
+                    "tokenPositionMapBackup",
+                    "token_position_map_backup",
                     "token_position_map_backups",
+                    "oramPositionMapBackup",
                     "oramPositionMapBackups",
+                    "oram_position_map_backup",
                     "oram_position_map_backups",
+                    "positionMapBackup",
                     "positionMapBackups",
+                    "position_map_backup",
                     "position_map_backups",
+                    "stashBackup",
                     "stashBackups",
+                    "stash_backup",
                     "stateCiphertext",
                     "stateCiphertextHash",
                     "stateCiphertextHashes",

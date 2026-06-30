@@ -1751,10 +1751,18 @@ mod tests {
     }
 
     const PRIVATE_ORAM_CLIENT_STATE_COLLECTION_NAMES: &[&str] = &[
+        "stashBackup.json",
         "stashBackups.json",
+        "stash_backup.json",
+        "tokenPositionMapBackup.json",
         "tokenPositionMapBackups.json",
+        "token_position_map_backup.json",
+        "oramPositionMapBackup.json",
         "oramPositionMapBackups.json",
+        "oram_position_map_backup.json",
+        "positionMapBackup.json",
         "positionMapBackups.json",
+        "position_map_backup.json",
         "clientStateCiphertext.json",
         "clientStateSnapshot.json",
         "clientStateSnapshots.json",
@@ -1796,10 +1804,18 @@ mod tests {
     ];
 
     const PRIVATE_ORAM_CLIENT_STATE_REDACTION_STEMS: &[&str] = &[
+        "stashBackup",
         "stashBackups",
+        "stash_backup",
+        "tokenPositionMapBackup",
         "tokenPositionMapBackups",
+        "token_position_map_backup",
+        "oramPositionMapBackup",
         "oramPositionMapBackups",
+        "oram_position_map_backup",
+        "positionMapBackup",
         "positionMapBackups",
+        "position_map_backup",
         "clientStateCiphertext",
         "clientStateSnapshot",
         "clientStateSnapshots",

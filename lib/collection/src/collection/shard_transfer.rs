@@ -658,10 +658,18 @@ mod tests {
         "state_ciphertexts_sha256.json",
         "state_ciphertext.bin",
         "state_ciphertext_hash.bin",
+        "tokenPositionMapBackup.json",
         "tokenPositionMapBackups.json",
+        "token_position_map_backup.json",
+        "oramPositionMapBackup.json",
         "oramPositionMapBackups.json",
+        "oram_position_map_backup.json",
+        "positionMapBackup.json",
         "positionMapBackups.json",
+        "position_map_backup.json",
+        "stashBackup.json",
         "stashBackups.json",
+        "stash_backup.json",
     ];
 
     const PRIVATE_ORAM_TRANSFER_REDACTION_STEMS: &[&str] = &[
@@ -703,10 +711,18 @@ mod tests {
         "state_ciphertext_hashes",
         "state_ciphertext_sha256",
         "state_ciphertexts_sha256",
+        "tokenPositionMapBackup",
         "tokenPositionMapBackups",
+        "token_position_map_backup",
+        "oramPositionMapBackup",
         "oramPositionMapBackups",
+        "oram_position_map_backup",
+        "positionMapBackup",
         "positionMapBackups",
+        "position_map_backup",
+        "stashBackup",
         "stashBackups",
+        "stash_backup",
     ];
 
     #[test]
