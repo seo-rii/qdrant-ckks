@@ -1442,6 +1442,7 @@ mod private_result_oram_rest_tests {
                 "manifest"
             );
             assert!(!missing_manifest.contains("private_result_oram"));
+            assert_private_result_guard_error_redacts(&missing_manifest, &["/tmp"]);
 
             let missing_manifest_upload = post_json_error_contains!(
                 "/collections/docs/private-result-oram/buckets",
@@ -1454,6 +1455,7 @@ mod private_result_oram_rest_tests {
                 "manifest"
             );
             assert!(!missing_manifest_upload.contains("private_result_oram"));
+            assert_private_result_guard_error_redacts(&missing_manifest_upload, &["/tmp"]);
 
             let upload_root_before_manifest_sentinel = "AAAA";
             let malformed_root_before_manifest = post_json_error_contains!(
@@ -1469,6 +1471,10 @@ mod private_result_oram_rest_tests {
             assert!(!malformed_root_before_manifest.contains(upload_root_before_manifest_sentinel));
             assert!(!malformed_root_before_manifest.contains("private_result_oram"));
             assert!(!malformed_root_before_manifest.contains("manifest"));
+            assert_private_result_guard_error_redacts(
+                &malformed_root_before_manifest,
+                &[upload_root_before_manifest_sentinel, "manifest"],
+            );
 
             let malformed_bucket_hash_before_manifest_sentinel = "result-rest-upload-hash-sentinel";
             let mut malformed_bucket_hash_before_manifest_buckets = fixture.buckets.clone();
@@ -1494,6 +1500,15 @@ mod private_result_oram_rest_tests {
             );
             assert!(!malformed_bucket_hash_before_manifest.contains("private_result_oram"));
             assert!(!malformed_bucket_hash_before_manifest.contains("manifest"));
+            assert_private_result_guard_error_redacts(
+                &malformed_bucket_hash_before_manifest,
+                &[
+                    malformed_bucket_hash_before_manifest_sentinel,
+                    fixture.manifest.root_hash.as_str(),
+                    fixture.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let malformed_bucket_commitment_before_manifest_sentinel =
                 "result-rest-upload-commitment-sentinel";
@@ -1523,6 +1538,15 @@ mod private_result_oram_rest_tests {
             );
             assert!(!malformed_bucket_commitment_before_manifest.contains("private_result_oram"));
             assert!(!malformed_bucket_commitment_before_manifest.contains("manifest"));
+            assert_private_result_guard_error_redacts(
+                &malformed_bucket_commitment_before_manifest,
+                &[
+                    malformed_bucket_commitment_before_manifest_sentinel,
+                    fixture.manifest.root_hash.as_str(),
+                    fixture.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let empty_upload_before_manifest = post_json_error_contains!(
                 "/collections/docs/private-result-oram/buckets",
@@ -1538,6 +1562,14 @@ mod private_result_oram_rest_tests {
             assert!(!empty_upload_before_manifest.contains(&fixture.buckets[0].ciphertext));
             assert!(!empty_upload_before_manifest.contains("private_result_oram"));
             assert!(!empty_upload_before_manifest.contains("manifest"));
+            assert_private_result_guard_error_redacts(
+                &empty_upload_before_manifest,
+                &[
+                    fixture.manifest.root_hash.as_str(),
+                    fixture.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let mut duplicate_upload_before_manifest_buckets = fixture.buckets.clone();
             assert!(
@@ -1560,6 +1592,14 @@ mod private_result_oram_rest_tests {
             assert!(!duplicate_upload_before_manifest.contains(&fixture.buckets[0].ciphertext));
             assert!(!duplicate_upload_before_manifest.contains("private_result_oram"));
             assert!(!duplicate_upload_before_manifest.contains("manifest"));
+            assert_private_result_guard_error_redacts(
+                &duplicate_upload_before_manifest,
+                &[
+                    fixture.manifest.root_hash.as_str(),
+                    fixture.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let unsupported_manifest_alg_sentinel = "rsa-pss-result-manifest-sentinel";
             let mut unsupported_alg_manifest_signature = fixture.signature.clone();
@@ -1673,6 +1713,10 @@ mod private_result_oram_rest_tests {
                     assert!(!$body.contains(&fixture.manifest.root_hash), "{}", $body);
                     assert!(!$body.contains($signature_sig), "{}", $body);
                     assert!(!$body.contains("private_result_oram"), "{}", $body);
+                    assert_private_result_guard_error_redacts(
+                        &$body,
+                        &[fixture.manifest.root_hash.as_str(), $signature_sig],
+                    );
                 }};
             }
 

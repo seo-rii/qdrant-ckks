@@ -1282,6 +1282,7 @@ mod private_result_oram_grpc_tests {
             .unwrap_err();
             assert_eq!(missing_manifest.code(), Code::NotFound);
             assert!(!missing_manifest.message().contains("private_result_oram"));
+            assert_private_result_guard_message_redacts(missing_manifest.message(), &["/tmp"]);
 
             let upload_root_before_manifest_sentinel = "AAAA";
             let malformed_root_before_manifest =
@@ -1321,6 +1322,10 @@ mod private_result_oram_grpc_tests {
                 !malformed_root_before_manifest
                     .message()
                     .contains("manifest")
+            );
+            assert_private_result_guard_message_redacts(
+                malformed_root_before_manifest.message(),
+                &[upload_root_before_manifest_sentinel, "manifest"],
             );
 
             let malformed_bucket_hash_before_manifest_sentinel = "result-grpc-upload-hash-sentinel";
@@ -1375,6 +1380,15 @@ mod private_result_oram_grpc_tests {
                 !malformed_bucket_hash_before_manifest
                     .message()
                     .contains("manifest")
+            );
+            assert_private_result_guard_message_redacts(
+                malformed_bucket_hash_before_manifest.message(),
+                &[
+                    malformed_bucket_hash_before_manifest_sentinel,
+                    fixture.manifest.root_hash.as_str(),
+                    fixture.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
             );
 
             let malformed_bucket_commitment_before_manifest_sentinel =
@@ -1431,6 +1445,15 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains("manifest")
             );
+            assert_private_result_guard_message_redacts(
+                malformed_bucket_commitment_before_manifest.message(),
+                &[
+                    malformed_bucket_commitment_before_manifest_sentinel,
+                    fixture.manifest.root_hash.as_str(),
+                    fixture.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let empty_upload_before_manifest =
                 PrivateResultOram::upload_private_result_oram_buckets(
@@ -1466,6 +1489,14 @@ mod private_result_oram_grpc_tests {
                     .contains("private_result_oram")
             );
             assert!(!empty_upload_before_manifest.message().contains("manifest"));
+            assert_private_result_guard_message_redacts(
+                empty_upload_before_manifest.message(),
+                &[
+                    fixture.manifest.root_hash.as_str(),
+                    fixture.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let mut duplicate_upload_before_manifest_buckets = fixture.buckets.clone();
             assert!(
@@ -1517,6 +1548,14 @@ mod private_result_oram_grpc_tests {
                 !duplicate_upload_before_manifest
                     .message()
                     .contains("manifest")
+            );
+            assert_private_result_guard_message_redacts(
+                duplicate_upload_before_manifest.message(),
+                &[
+                    fixture.manifest.root_hash.as_str(),
+                    fixture.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
             );
 
             let unsupported_manifest_alg_sentinel = "rsa-pss-result-manifest-sentinel";
@@ -1703,6 +1742,10 @@ mod private_result_oram_grpc_tests {
                     );
                     assert!(!$message.contains($signature_sig), "{}", $message);
                     assert!(!$message.contains("private_result_oram"), "{}", $message);
+                    assert_private_result_guard_message_redacts(
+                        $message,
+                        &[fixture.manifest.root_hash.as_str(), $signature_sig],
+                    );
                 }};
             }
 
