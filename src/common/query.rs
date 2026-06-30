@@ -12590,7 +12590,11 @@ mod tests {
             "clientStateBackups",
             "clientStateCiphertext",
             "encryptedClientStateCiphertextHash",
+            "oramPositionMapBackups",
+            "positionMapBackups",
+            "stashBackups",
             "stateCiphertextHash",
+            "tokenPositionMapBackups",
         ] {
             let encryption = CollectionEncryptionConfig {
                 version: 1,
@@ -12624,7 +12628,11 @@ mod tests {
                 "clientStateBackups",
                 "clientStateCiphertext",
                 "encryptedClientStateCiphertextHash",
+                "oramPositionMapBackups",
+                "positionMapBackups",
+                "stashBackups",
                 "stateCiphertextHash",
+                "tokenPositionMapBackups",
             ] {
                 assert!(!message.contains(sentinel), "{message}");
             }
@@ -12963,7 +12971,11 @@ mod tests {
             "clientStateBackups",
             "clientStateCiphertext",
             "encryptedClientStateCiphertextHash",
+            "oramPositionMapBackups",
+            "positionMapBackups",
+            "stashBackups",
             "stateCiphertextHash",
+            "tokenPositionMapBackups",
         ] {
             let message = private_result_oram_raw_payload_read_error(payload_path).to_string();
             assert!(
@@ -12978,7 +12990,11 @@ mod tests {
                 "clientStateBackups",
                 "clientStateCiphertext",
                 "encryptedClientStateCiphertextHash",
+                "oramPositionMapBackups",
+                "positionMapBackups",
+                "stashBackups",
                 "stateCiphertextHash",
+                "tokenPositionMapBackups",
             ] {
                 assert!(!message.contains(sentinel), "{message}");
             }

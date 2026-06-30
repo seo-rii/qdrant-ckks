@@ -11501,7 +11501,11 @@ esac
             "clientStateBackups",
             "clientStateCiphertext",
             "encryptedClientStateCiphertextHash",
+            "oramPositionMapBackups",
+            "positionMapBackups",
+            "stashBackups",
             "stateCiphertextHash",
+            "tokenPositionMapBackups",
         ] {
             for operation_kind in [
                 "upsert points",
@@ -11530,7 +11534,11 @@ esac
                     "clientStateBackups",
                     "clientStateCiphertext",
                     "encryptedClientStateCiphertextHash",
+                    "oramPositionMapBackups",
+                    "positionMapBackups",
+                    "stashBackups",
                     "stateCiphertextHash",
+                    "tokenPositionMapBackups",
                 ] {
                     assert!(!err.contains(sentinel), "{err}");
                 }
