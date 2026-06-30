@@ -829,7 +829,7 @@ mod tests {
             .expect_err("active collection recovery must block private HNSW upload");
             let rendered = err.to_string();
             assert!(
-                rendered.contains("upload requires no active collection snapshot"),
+                rendered.contains("upload requires no active collection lifecycle operation"),
                 "{rendered}",
             );
             assert!(

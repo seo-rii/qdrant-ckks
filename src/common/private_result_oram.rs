@@ -165,6 +165,7 @@ struct PrivateResultOramSessionRegistry {
     sessions: HashMap<String, PrivateResultOramSession>,
     active_writer_by_collection: HashMap<String, String>,
     active_snapshot_by_collection: HashMap<String, usize>,
+    active_lifecycle_by_collection: HashSet<String>,
     active_upload_by_collection: HashSet<String>,
 }
 
@@ -186,6 +187,14 @@ impl PrivateResultOramSessionRegistry {
         {
             return Err(StorageError::bad_request(
                 "private result ORAM session open requires no active collection snapshot",
+            ));
+        }
+        if self
+            .active_lifecycle_by_collection
+            .contains(&session.collection_id)
+        {
+            return Err(StorageError::bad_request(
+                "private result ORAM session open requires no active collection lifecycle operation",
             ));
         }
         if self
@@ -250,6 +259,11 @@ impl PrivateResultOramSessionRegistry {
         collection_id: &str,
         now_unix: u64,
     ) -> StorageResult<()> {
+        if self.active_lifecycle_by_collection.contains(collection_id) {
+            return Err(StorageError::bad_request(
+                "private result ORAM collection snapshot requires no active collection lifecycle operation",
+            ));
+        }
         ensure_no_active_private_result_oram_collection_session_in_registry(
             self,
             collection_id,
@@ -270,20 +284,26 @@ impl PrivateResultOramSessionRegistry {
         collection_id: &str,
         now_unix: u64,
     ) -> StorageResult<()> {
+        if self
+            .active_snapshot_by_collection
+            .contains_key(collection_id)
+        {
+            return Err(StorageError::bad_request(
+                "private result ORAM collection lifecycle operation requires no active collection snapshot",
+            ));
+        }
+        if self.active_lifecycle_by_collection.contains(collection_id) {
+            return Err(StorageError::bad_request(
+                "private result ORAM collection lifecycle operation requires no active collection lifecycle operation",
+            ));
+        }
         ensure_no_active_private_result_oram_collection_lifecycle_in_registry(
             self,
             collection_id,
             now_unix,
         )?;
-        let count = self
-            .active_snapshot_by_collection
-            .entry(collection_id.to_string())
-            .or_insert(0);
-        *count = count.checked_add(1).ok_or_else(|| {
-            StorageError::service_error(
-                "private result ORAM collection lifecycle reference count overflowed",
-            )
-        })?;
+        self.active_lifecycle_by_collection
+            .insert(collection_id.to_string());
         Ok(())
     }
 
@@ -296,6 +316,10 @@ impl PrivateResultOramSessionRegistry {
         } else {
             *count -= 1;
         }
+    }
+
+    fn release_collection_lifecycle_operation(&mut self, collection_id: &str) {
+        self.active_lifecycle_by_collection.remove(collection_id);
     }
 
     fn begin_upload(&mut self, collection_id: &str, now_unix: u64) -> StorageResult<()> {
@@ -456,8 +480,14 @@ fn session_registry() -> &'static Mutex<PrivateResultOramSessionRegistry> {
     REGISTRY.get_or_init(|| Mutex::new(PrivateResultOramSessionRegistry::default()))
 }
 
+enum PrivateResultOramCollectionGuardKind {
+    Snapshot,
+    Lifecycle,
+}
+
 pub(crate) struct PrivateResultOramCollectionSnapshotGuard {
     collection_id: String,
+    kind: PrivateResultOramCollectionGuardKind,
 }
 
 struct PrivateResultOramUploadGuard {
@@ -467,7 +497,14 @@ struct PrivateResultOramUploadGuard {
 impl Drop for PrivateResultOramCollectionSnapshotGuard {
     fn drop(&mut self) {
         if let Ok(mut registry) = session_registry().lock() {
-            registry.release_collection_snapshot(&self.collection_id);
+            match self.kind {
+                PrivateResultOramCollectionGuardKind::Snapshot => {
+                    registry.release_collection_snapshot(&self.collection_id)
+                }
+                PrivateResultOramCollectionGuardKind::Lifecycle => {
+                    registry.release_collection_lifecycle_operation(&self.collection_id)
+                }
+            }
         }
     }
 }
@@ -1323,6 +1360,7 @@ pub(crate) fn begin_private_result_oram_collection_snapshot(
     registry.begin_collection_snapshot(&collection_crypto_id, now_unix)?;
     Ok(Some(PrivateResultOramCollectionSnapshotGuard {
         collection_id: collection_crypto_id,
+        kind: PrivateResultOramCollectionGuardKind::Snapshot,
     }))
 }
 
@@ -1342,6 +1380,7 @@ pub(crate) fn begin_private_result_oram_collection_lifecycle(
     registry.begin_collection_lifecycle_operation(&collection_crypto_id, now_unix)?;
     Ok(Some(PrivateResultOramCollectionSnapshotGuard {
         collection_id: collection_crypto_id,
+        kind: PrivateResultOramCollectionGuardKind::Lifecycle,
     }))
 }
 
@@ -1369,6 +1408,14 @@ fn ensure_private_result_oram_write_window_in_registry(
     {
         return Err(StorageError::bad_request(
             "private result ORAM upload requires no active collection snapshot",
+        ));
+    }
+    if registry
+        .active_lifecycle_by_collection
+        .contains(collection_id)
+    {
+        return Err(StorageError::bad_request(
+            "private result ORAM upload requires no active collection lifecycle operation",
         ));
     }
     if registry.has_active_collection(collection_id, now_unix) {
@@ -3047,7 +3094,70 @@ mod private_result_oram_tests {
                 .begin_collection_lifecycle_operation("other-private-result-collection", now)
                 .is_ok()
         );
-        registry.release_collection_snapshot("other-private-result-collection");
+        registry.release_collection_lifecycle_operation("other-private-result-collection");
+    }
+
+    #[test]
+    fn session_registry_blocks_snapshot_during_collection_lifecycle() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .begin_collection_lifecycle_operation("collection-private-result-test", now)
+            .unwrap();
+
+        let err = registry
+            .begin_collection_snapshot("collection-private-result-test", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("snapshot requires no active collection lifecycle operation"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
+
+        let err = registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("session open requires no active collection lifecycle operation")
+        );
+        assert_private_result_registry_error_redacts_ids(&rendered);
+
+        let err = ensure_private_result_oram_write_window_in_registry(
+            &mut registry,
+            "collection-private-result-test",
+            now,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("upload requires no active collection lifecycle operation"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
+
+        registry.release_collection_lifecycle_operation("collection-private-result-test");
+        registry
+            .begin_collection_snapshot("collection-private-result-test", now)
+            .unwrap();
+        registry.release_collection_snapshot("collection-private-result-test");
+    }
+
+    #[test]
+    fn collection_lifecycle_guard_rejects_active_collection_snapshot() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .begin_collection_snapshot("collection-private-result-test", now)
+            .unwrap();
+
+        let err = registry
+            .begin_collection_lifecycle_operation("collection-private-result-test", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("lifecycle operation requires no active collection snapshot"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
+
+        registry.release_collection_snapshot("collection-private-result-test");
+        registry
+            .begin_collection_lifecycle_operation("collection-private-result-test", now)
+            .unwrap();
+        registry.release_collection_lifecycle_operation("collection-private-result-test");
     }
 
     #[test]
