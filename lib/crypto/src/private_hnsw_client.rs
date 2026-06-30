@@ -3004,7 +3004,7 @@ where
     validate_oram_client_config(config)?;
     validate_search_params(query, params)?;
 
-    let mut pending = vec![params.entry_node_id];
+    let mut pending = VecDeque::from([params.entry_node_id]);
     let mut queued = BTreeSet::from([params.entry_node_id]);
     let mut visited = BTreeSet::new();
     let mut hits = Vec::new();
@@ -3013,8 +3013,7 @@ where
     'search: for _ in 0..params.fixed_steps {
         let (node_id, padding_access) = loop {
             if hits.len() < params.ef {
-                if !pending.is_empty() {
-                    let candidate_node_id = pending.remove(0);
+                if let Some(candidate_node_id) = pending.pop_front() {
                     queued.remove(&candidate_node_id);
                     if visited.insert(candidate_node_id) {
                         break (candidate_node_id, false);
@@ -3079,7 +3078,7 @@ where
                 if state.position(neighbor_id).is_some()
                     || node_cache.is_some_and(|cache| cache.contains(neighbor_id))
                 {
-                    pending.push(*neighbor_id);
+                    pending.push_back(*neighbor_id);
                 }
             }
         }
