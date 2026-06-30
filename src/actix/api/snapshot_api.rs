@@ -1121,6 +1121,10 @@ mod tests {
     use storage::rbac::{Access, AuthType};
 
     use super::*;
+    use crate::common::private_hnsw_wire_fixture::{
+        COLLECTION_NAME, create_private_hnsw_collection, route_e2e_guard, test_dispatcher,
+    };
+    use crate::common::snapshots::begin_private_oram_collection_lifecycle_guard;
 
     #[test]
     fn snapshot_export_encrypted_payload_mode_is_raw_only() {
@@ -1223,6 +1227,67 @@ mod tests {
             .expect("snapshot manage auth extractor is ready");
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn collection_and_full_snapshot_reject_private_oram_lifecycle_window() {
+        let _guard = route_e2e_guard();
+        let (_temp, dispatcher) = test_dispatcher();
+        let dispatcher = web::Data::new(dispatcher);
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(dispatcher.get_ref()).await;
+
+            let auth = Auth::new_internal(Access::full("private ORAM snapshot route test"));
+            let _lifecycle_guard = begin_private_oram_collection_lifecycle_guard(
+                dispatcher.get_ref(),
+                &auth,
+                COLLECTION_NAME,
+            )
+            .await
+            .expect("private ORAM lifecycle guard should open");
+
+            let app = actix_web::test::init_service(
+                actix_web::App::new()
+                    .app_data(dispatcher.clone())
+                    .configure(config_snapshots_api),
+            )
+            .await;
+
+            let request = actix_web::test::TestRequest::post()
+                .uri("/collections/docs/snapshots")
+                .to_request();
+            let response = actix_web::test::call_service(&app, request).await;
+            assert_eq!(response.status(), actix_web::http::StatusCode::BAD_REQUEST);
+            let body = actix_web::body::to_bytes(response.into_body())
+                .await
+                .unwrap();
+            let body = std::str::from_utf8(&body).unwrap();
+            assert!(
+                body.contains(
+                    "collection snapshot requires no active collection lifecycle operation"
+                ),
+                "{body}",
+            );
+            assert!(!body.contains(COLLECTION_NAME), "{body}");
+
+            let request = actix_web::test::TestRequest::post()
+                .uri("/snapshots")
+                .to_request();
+            let response = actix_web::test::call_service(&app, request).await;
+            assert_eq!(response.status(), actix_web::http::StatusCode::BAD_REQUEST);
+            let body = actix_web::body::to_bytes(response.into_body())
+                .await
+                .unwrap();
+            let body = std::str::from_utf8(&body).unwrap();
+            assert!(
+                body.contains(
+                    "collection snapshot requires no active collection lifecycle operation"
+                ),
+                "{body}",
+            );
+            assert!(!body.contains(COLLECTION_NAME), "{body}");
+        });
     }
 }
 
