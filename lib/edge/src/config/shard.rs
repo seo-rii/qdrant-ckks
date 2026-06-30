@@ -268,18 +268,14 @@ impl EdgeConfig {
 }
 
 fn reject_ckks_ciphertext_index(segment: &SegmentConfig) -> OperationResult<()> {
-    if let Some(vector_name) =
-        segment
-            .vector_data
-            .iter()
-            .find_map(|(vector_name, vector_config)| match vector_config.index {
-                Indexes::CkksCiphertextHnsw { .. } => Some(vector_name),
-                Indexes::Plain {} | Indexes::Hnsw(_) => None,
-            })
+    if segment
+        .vector_data
+        .values()
+        .any(|vector_config| matches!(vector_config.index, Indexes::CkksCiphertextHnsw { .. }))
     {
-        return Err(OperationError::service_error(format!(
-            "edge shards do not support qdrant-sec CKKS ciphertext indexes; vector {vector_name} must be opened through the encrypted collection runtime"
-        )));
+        return Err(OperationError::service_error(
+            "edge shards do not support qdrant-sec CKKS ciphertext indexes; open the segment through the encrypted collection runtime",
+        ));
     }
 
     Ok(())
@@ -327,6 +323,7 @@ mod tests {
             err.to_string()
                 .contains("edge shards do not support qdrant-sec CKKS ciphertext indexes")
         );
+        assert!(!err.to_string().contains("secure-vector"));
     }
 
     #[test]
@@ -336,5 +333,6 @@ mod tests {
             .expect_err("edge must not accept encrypted CKKS index segments");
 
         assert!(err.contains("edge shards do not support qdrant-sec CKKS ciphertext indexes"));
+        assert!(!err.contains("secure-vector"));
     }
 }

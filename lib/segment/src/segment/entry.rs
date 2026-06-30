@@ -106,9 +106,7 @@ impl Segment {
             ));
             index.persist_graph_file(&graph_file)?;
             let vector_data = self.vector_data.get(&index_vector_name).ok_or_else(|| {
-                OperationError::service_error(format!(
-                    "CKKS ciphertext index vector data '{index_vector_name}' is missing"
-                ))
+                OperationError::service_error("CKKS ciphertext index vector data is missing")
             })?;
             *vector_data.vector_index.borrow_mut() = VectorIndexEnum::CkksCiphertextHnsw(index);
             self.version_tracker
