@@ -290,3 +290,76 @@ impl ShardSnapshots for ShardSnapshotsService {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use api::grpc::qdrant::snapshots_server::Snapshots;
+    use storage::rbac::{Access, Auth};
+
+    use super::*;
+    use crate::common::private_hnsw_wire_fixture::{
+        COLLECTION_NAME, create_private_hnsw_collection, route_e2e_guard, test_dispatcher,
+    };
+    use crate::common::snapshots::begin_private_oram_collection_lifecycle_guard;
+
+    #[test]
+    fn collection_and_full_snapshot_reject_private_oram_lifecycle_window() {
+        let _guard = route_e2e_guard();
+        let (_temp, dispatcher) = test_dispatcher();
+        let dispatcher = Arc::new(dispatcher);
+        let service = SnapshotsService::new(dispatcher.clone());
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(dispatcher.as_ref()).await;
+
+            let auth = Auth::new_internal(Access::full("private ORAM snapshot tonic route test"));
+            let _lifecycle_guard = begin_private_oram_collection_lifecycle_guard(
+                dispatcher.as_ref(),
+                &auth,
+                COLLECTION_NAME,
+            )
+            .await
+            .expect("private ORAM lifecycle guard should open");
+
+            let create_err = Snapshots::create(
+                &service,
+                Request::new(CreateSnapshotRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                }),
+            )
+            .await
+            .expect_err("private ORAM collection snapshot must reject active lifecycle operation");
+            assert_eq!(create_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                create_err.message().contains(
+                    "collection snapshot requires no active collection lifecycle operation"
+                ),
+                "{create_err}",
+            );
+            assert!(
+                !create_err.message().contains(COLLECTION_NAME),
+                "{create_err}"
+            );
+
+            let create_full_err =
+                Snapshots::create_full(&service, Request::new(CreateFullSnapshotRequest {}))
+                    .await
+                    .expect_err(
+                        "private ORAM full snapshot must reject active lifecycle operation",
+                    );
+            assert_eq!(create_full_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                create_full_err.message().contains(
+                    "collection snapshot requires no active collection lifecycle operation"
+                ),
+                "{create_full_err}",
+            );
+            assert!(
+                !create_full_err.message().contains(COLLECTION_NAME),
+                "{create_full_err}"
+            );
+        });
+    }
+}
