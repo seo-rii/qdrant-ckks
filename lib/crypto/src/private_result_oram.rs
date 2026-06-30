@@ -4492,6 +4492,10 @@ mod tests {
             token_count: 77,
             path_batch_size: 88,
         };
+        let ordered_read_plan = PrivateResultOramOrderedReadBucketPlan {
+            payload_fetch_tokens: vec![block.payload_fetch_token, [64; 32]],
+            read_plan: read_plan.clone(),
+        };
         let token_access = PrivateResultOramTokenFetchAccess {
             payload_fetch_token: block.payload_fetch_token,
             old_leaf: 654_321,
@@ -4675,6 +4679,7 @@ mod tests {
             format!("{token_position:?}"),
             format!("{read_batch:?}"),
             format!("{read_plan:?}"),
+            format!("{ordered_read_plan:?}"),
             format!("{fetch_result:?}"),
             format!("{encrypted_bucket:?}"),
             format!("{signature:?}"),
@@ -4815,6 +4820,10 @@ mod tests {
             (format!("{read_plan:?}"), "batch_count: 1"),
             (format!("{read_plan:?}"), "token_count: 77"),
             (format!("{read_plan:?}"), "path_batch_size: 88"),
+            (
+                format!("{ordered_read_plan:?}"),
+                "payload_fetch_token_count: 2",
+            ),
             (format!("{fetch_result:?}"), "access_count: 1"),
             (format!("{fetch_result:?}"), "updated_bucket_count: 0"),
             (format!("{upload_bundle:?}"), "bucket_count: 1"),
