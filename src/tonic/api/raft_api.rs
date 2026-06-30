@@ -33,14 +33,15 @@ impl RaftService {
     }
 }
 
+fn decode_raft_message(bytes: &[u8]) -> Result<RaftMessage, Status> {
+    <RaftMessage as prost_for_raft::Message>::decode(bytes)
+        .map_err(|_| Status::invalid_argument("Failed to parse raft message"))
+}
+
 #[async_trait]
 impl Raft for RaftService {
     async fn send(&self, mut request: Request<RaftMessageBytes>) -> Result<Response<()>, Status> {
-        let message =
-            <RaftMessage as prost_for_raft::Message>::decode(&request.get_mut().message[..])
-                .map_err(|err| {
-                    Status::invalid_argument(format!("Failed to parse raft message: {err}"))
-                })?;
+        let message = decode_raft_message(&request.get_mut().message[..])?;
         self.message_sender
             .send(consensus::Message::FromPeer(Box::new(message)))
             .await
@@ -183,5 +184,21 @@ impl Raft for RaftService {
         _request: tonic::Request<PeerId>,
     ) -> Result<tonic::Response<()>, tonic::Status> {
         Ok(Response::new(()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raft_message_parse_error_does_not_reflect_payload_or_decoder_detail() {
+        let payload = b"raft-message-secret-sentinel";
+        let err = decode_raft_message(payload).unwrap_err();
+
+        assert_eq!(err.message(), "Failed to parse raft message");
+        assert!(!err.message().contains("raft-message-secret-sentinel"));
+        assert!(!err.message().contains("invalid wire type"));
+        assert!(!err.message().contains("buffer"));
     }
 }
