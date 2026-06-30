@@ -1050,8 +1050,10 @@ fails closed when `private_payload_oram_required` hits do not all carry payload
 fetch tokens. A follow-on SDK helper turns those hit tokens into an exactly
 `fixed_result_k` private result ORAM fetch-token batch, padding from a caller
 provided distinct dummy-token pool so the eventual result fetch has fixed
-logical volume. Collection runtime validation requires a compatible result ORAM
-binding whose `oram.path_batch_size` divides the private HNSW
+logical volume. The helper validates the whole supplied dummy-token pool,
+including unused extra tokens, and rejects any duplicate or hit-token collision
+before it emits a fetch plan. Collection runtime validation requires a
+compatible result ORAM binding whose `oram.path_batch_size` divides the private HNSW
 `fixed_budget.fixed_result_k`, so SDKs do not emit a smaller final
 `read_buckets` batch. The result ORAM client fetch planner and verified fetch
 wrapper also reject token batches that are not an exact multiple of
