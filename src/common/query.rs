@@ -6940,8 +6940,12 @@ pub async fn do_query_batch_points(
                                 let weights_slice = weights.as_ref().map(|weights| {
                                     weights.iter().map(|w| w.into_inner()).collect::<Vec<_>>()
                                 });
-                                rrf_scoring(intermediates, *k, weights_slice.as_deref())
-                                    .map_err(|err| StorageError::bad_input(err.to_string()))?
+                                ckks_rrf_scoring(
+                                    intermediates,
+                                    *k,
+                                    weights_slice.as_deref(),
+                                    "encrypted vector prefetch fusion failed",
+                                )?
                             }
                             FusionInternal::Dbsf => {
                                 score_fusion(intermediates, ScoreFusion::dbsf())
@@ -7673,8 +7677,12 @@ async fn try_ckks_vector_query_groups(
                     let weights_slice = weights
                         .as_ref()
                         .map(|weights| weights.iter().map(|w| w.into_inner()).collect::<Vec<_>>());
-                    rrf_scoring(intermediates, *k, weights_slice.as_deref())
-                        .map_err(|err| StorageError::bad_input(err.to_string()))?
+                    ckks_rrf_scoring(
+                        intermediates,
+                        *k,
+                        weights_slice.as_deref(),
+                        "encrypted vector prefetch fusion groups failed",
+                    )?
                 }
                 FusionInternal::Dbsf => score_fusion(intermediates, ScoreFusion::dbsf()),
             };
@@ -8353,6 +8361,15 @@ fn ckks_recommend_query_as_dense_search_vector(
         ));
     };
     Ok(query_values)
+}
+
+fn ckks_rrf_scoring(
+    intermediates: Vec<Vec<ScoredPoint>>,
+    k: usize,
+    weights: Option<&[f32]>,
+    message: &'static str,
+) -> Result<Vec<ScoredPoint>, StorageError> {
+    rrf_scoring(intermediates, k, weights).map_err(|_| StorageError::bad_input(message))
 }
 
 fn vector_inputs_as_dense_vectors(
@@ -10687,6 +10704,27 @@ mod tests {
                     && !description.contains("embedding")
                     && !description.contains("dimension")
                     && !description.contains("positive")
+        ));
+    }
+
+    #[test]
+    fn ckks_rrf_fusion_errors_do_not_reflect_weight_counts() {
+        let err = ckks_rrf_scoring(
+            vec![vec![scored_point(1, 1.0)], vec![scored_point(2, 1.0)]],
+            60,
+            Some(&[1.0]),
+            "encrypted vector prefetch fusion failed",
+        )
+        .expect_err("RRF weight count mismatch must fail");
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { ref description }
+                if description == "encrypted vector prefetch fusion failed"
+                    && !description.contains("got")
+                    && !description.contains("expected")
+                    && !description.contains("1")
+                    && !description.contains("2")
         ));
     }
 
