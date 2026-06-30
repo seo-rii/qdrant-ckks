@@ -830,10 +830,7 @@ impl TryFrom<WithPayloadSelector> for segment::types::WithPayloadInterface {
                     segment::types::PayloadEncryptedReadPolicy {
                         encrypted_payload: match GrpcEncryptedPayloadReadMode::try_from(s.mode)
                             .map_err(|_| {
-                                Status::invalid_argument(format!(
-                                    "invalid encrypted payload read mode {}",
-                                    s.mode
-                                ))
+                                Status::invalid_argument("invalid encrypted payload read mode")
                             })? {
                             GrpcEncryptedPayloadReadMode::EncryptedPayloadRaw => {
                                 segment::types::EncryptedPayloadReadMode::Raw
@@ -3705,9 +3702,10 @@ mod tests {
 
     #[test]
     fn grpc_payload_selector_rejects_invalid_encrypted_read_mode() {
+        let unsupported = 99;
         let selector = WithPayloadSelector {
             selector_options: Some(SelectorOptions::Encrypted(PayloadEncryptedSelector {
-                mode: 99,
+                mode: unsupported,
             })),
         };
 
@@ -3716,6 +3714,7 @@ mod tests {
             err.message()
                 .contains("invalid encrypted payload read mode")
         );
+        assert!(!err.message().contains(&unsupported.to_string()));
     }
 
     #[test]
