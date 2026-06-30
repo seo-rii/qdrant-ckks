@@ -3901,7 +3901,7 @@ fn ensure_group_path_does_not_touch_encrypted_crypto_selectors(
                             ));
                         }
                         return Err(StorageError::bad_input(format!(
-                            "cannot group by encrypted payload field '{group_by}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                            "cannot group by encrypted payload field because it overlaps an encrypted payload selector; configure a blind index provider instead",
                         )));
                     }
                 }
@@ -3913,7 +3913,7 @@ fn ensure_group_path_does_not_touch_encrypted_crypto_selectors(
                     })?;
                     if group_by.compatible(&metadata_path) {
                         return Err(StorageError::bad_input(format!(
-                            "cannot group by encrypted metadata field '{group_by}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                            "cannot group by encrypted metadata field because it overlaps an encrypted metadata selector; configure a blind index provider instead",
                         )));
                     }
                 }
@@ -12496,10 +12496,13 @@ mod tests {
                 &group_by,
             )
             .expect_err("CKKS grouping by encrypted payload or metadata paths must fail");
+            let message = format!("{err}");
             assert!(
-                format!("{err}").contains(expected),
+                message.contains(expected),
                 "unexpected error for {group_by}: {err}",
             );
+            assert!(!message.contains("document.body"), "{message}");
+            assert!(!message.contains("meta.owner"), "{message}");
         }
     }
 
