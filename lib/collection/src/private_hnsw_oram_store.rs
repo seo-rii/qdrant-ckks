@@ -1892,8 +1892,11 @@ mod tests {
             "client_state.json",
             "client_state_backup",
             "clientStateBackups.json",
+            "client_state_ciphertext",
             "clientStateCiphertext.json",
+            "client_state_ciphertext_hash",
             "client_state_ciphertext_hash.bin",
+            "client_state_ciphertext_hashes",
             "clientStateCiphertextHashes.json",
             "encrypted_client_state",
             "encrypted.client.state",
@@ -1901,20 +1904,28 @@ mod tests {
             "encrypted_client_state_backup",
             "encryptedClientStateBackup.json",
             "encryptedClientStateBackups.json",
+            "encrypted_client_state_ciphertext",
             "encryptedClientStateCiphertext.json",
+            "encrypted_client_state_ciphertext_hash",
             "encrypted_client_state_ciphertext_hash.bin",
+            "encrypted_client_state_ciphertext_hashes",
             "encryptedClientStateCiphertextHashes.json",
+            "state_ciphertext",
             "stateCiphertext.json",
+            "state_ciphertext_hash",
             "state_ciphertext_hash.bin",
             "position_map",
             "position_map_backup",
+            "position_map_backups",
             "positionMapBackups.json",
             "position.map",
             "oram-position-map",
             "oramPositionMapBackup",
+            "oram_position_map_backups",
             "oramPositionMapBackups.json",
             "token.position.map",
             "token_position_map_backup",
+            "token_position_map_backups",
             "tokenPositionMapBackups.json",
             "stash",
             "stash_backup",
@@ -1945,6 +1956,33 @@ mod tests {
 
     #[test]
     fn private_hnsw_client_error_mapping_redacts_structured_values() {
+        let client_state_alias_needles = [
+            "client_state_ciphertext",
+            "clientStateCiphertext",
+            "client_state_ciphertext_hash",
+            "clientStateCiphertextHash",
+            "encrypted_client_state",
+            "encryptedClientState",
+            "encrypted_client_state_ciphertext",
+            "encryptedClientStateCiphertext",
+            "encrypted_client_state_ciphertext_hash",
+            "encryptedClientStateCiphertextHash",
+            "encrypted_client_state_ciphertext_hashes",
+            "encryptedClientStateCiphertextHashes",
+            "oram_position_map_backups",
+            "oramPositionMapBackups",
+            "position_map_backups",
+            "positionMapBackups",
+            "state_ciphertext",
+            "stateCiphertext",
+            "state_ciphertext_hash",
+            "stateCiphertextHash",
+            "payload_fetch_token",
+            "payloadFetchToken",
+            "token_position_map_backups",
+            "tokenPositionMapBackups",
+            "stashBackups",
+        ];
         let cases = [
             (
                 private_hnsw_client_error(PrivateHnswClientError::Encryption(
@@ -2090,6 +2128,9 @@ mod tests {
         for (err, needles) in cases {
             let rendered = err.to_string();
             for needle in needles {
+                assert!(!rendered.contains(needle), "{rendered}");
+            }
+            for needle in client_state_alias_needles.iter().copied() {
                 assert!(!rendered.contains(needle), "{rendered}");
             }
         }

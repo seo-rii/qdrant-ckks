@@ -1630,6 +1630,33 @@ mod tests {
 
     #[test]
     fn private_result_oram_error_mapping_redacts_structured_values() {
+        let client_state_alias_needles = [
+            "client_state_ciphertext",
+            "clientStateCiphertext",
+            "client_state_ciphertext_hash",
+            "clientStateCiphertextHash",
+            "encrypted_client_state",
+            "encryptedClientState",
+            "encrypted_client_state_ciphertext",
+            "encryptedClientStateCiphertext",
+            "encrypted_client_state_ciphertext_hash",
+            "encryptedClientStateCiphertextHash",
+            "encrypted_client_state_ciphertext_hashes",
+            "encryptedClientStateCiphertextHashes",
+            "oram_position_map_backups",
+            "oramPositionMapBackups",
+            "position_map_backups",
+            "positionMapBackups",
+            "state_ciphertext",
+            "stateCiphertext",
+            "state_ciphertext_hash",
+            "stateCiphertextHash",
+            "payload_fetch_token",
+            "payloadFetchToken",
+            "token_position_map_backups",
+            "tokenPositionMapBackups",
+            "stashBackups",
+        ];
         let cases = [
             (
                 private_result_oram_error(PrivateResultOramError::Encryption(
@@ -1745,6 +1772,9 @@ mod tests {
         for (err, needles) in cases {
             let rendered = err.to_string();
             for needle in needles {
+                assert!(!rendered.contains(needle), "{rendered}");
+            }
+            for needle in client_state_alias_needles.iter().copied() {
                 assert!(!rendered.contains(needle), "{rendered}");
             }
         }
