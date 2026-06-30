@@ -799,9 +799,9 @@ impl Collection {
                         let original_values = json_path.value_get(&original_payload.0);
                         let updated_values = json_path.value_get(&payload.0);
                         if original_values.len() != updated_values.len() {
-                            return Err(CollectionError::bad_input(format!(
-                                "crypto payload migration must not add or remove server-side encrypted field '{server_rewrite_path}'",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "crypto payload migration must not add or remove server-side encrypted field",
+                            ));
                         }
                         match migration_state {
                             CryptoMigrationState::Encrypting | CryptoMigrationState::Rotating => {
@@ -812,14 +812,14 @@ impl Collection {
                                         &record.id.to_string(),
                                         server_rewrite_path,
                                     )
-                                    .map_err(|err| {
+                                    .map_err(|_| {
                                         CollectionError::bad_input(format!(
-                                            "crypto payload migration must leave server-side encrypted field '{server_rewrite_path}' as an encrypted marker during {migration_state:?}: {err}",
+                                            "crypto payload migration must leave server-side encrypted field as an encrypted marker during {migration_state:?}",
                                         ))
                                     })?
                                     else {
                                         return Err(CollectionError::bad_input(format!(
-                                            "crypto payload migration must leave server-side encrypted field '{server_rewrite_path}' as an encrypted marker during {migration_state:?}",
+                                            "crypto payload migration must leave server-side encrypted field as an encrypted marker during {migration_state:?}",
                                         )));
                                     };
                                     let Some(verified_envelope_key) = rewrite
@@ -828,7 +828,7 @@ impl Collection {
                                         .find(|verified| verified.envelope_key() == &envelope_key)
                                     else {
                                         return Err(CollectionError::bad_input(format!(
-                                            "crypto payload migration must provide a runtime server-envelope proof for field '{server_rewrite_path}' during {migration_state:?}",
+                                            "crypto payload migration must provide a runtime server-envelope proof for server-side encrypted field during {migration_state:?}",
                                         )));
                                     };
                                     validate_server_payload_value_after_runtime_encryption(
@@ -844,9 +844,9 @@ impl Collection {
                                         },
                                         verified_envelope_key,
                                     )
-                                    .map_err(|err| {
+                                    .map_err(|_| {
                                         CollectionError::bad_input(format!(
-                                            "crypto payload migration must leave server-side encrypted field '{server_rewrite_path}' as an encrypted marker during {migration_state:?}: {err}",
+                                            "crypto payload migration must leave server-side encrypted field as an encrypted marker during {migration_state:?}",
                                         ))
                                     })?;
                                 }
@@ -857,7 +857,7 @@ impl Collection {
                                     .any(|value| is_encrypted_payload_value(value))
                                 {
                                     return Err(CollectionError::bad_input(format!(
-                                        "crypto payload migration must decrypt server-side encrypted field '{server_rewrite_path}' during decrypting migration",
+                                        "crypto payload migration must decrypt server-side encrypted field during decrypting migration",
                                     )));
                                 }
                             }

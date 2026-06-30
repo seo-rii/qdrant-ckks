@@ -1948,7 +1948,8 @@ async fn crypto_migration_decrypts_payload_envelopes_and_returns_checkpoints() {
         .unwrap_err();
     assert!(
         matches!(err, CollectionError::BadInput { ref description }
-            if description.contains("must decrypt server-side encrypted field 'document.body' during decrypting migration")),
+            if description.contains("must decrypt server-side encrypted field during decrypting migration")
+                && !description.contains("document.body")),
         "unexpected error: {err:?}",
     );
 
@@ -2250,7 +2251,8 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
         .unwrap_err();
     assert!(
         matches!(err, CollectionError::BadInput { ref description }
-            if description.contains("must provide a runtime server-envelope proof for field 'document.body'")),
+            if description.contains("must provide a runtime server-envelope proof for server-side encrypted field")
+                && !description.contains("document.body")),
         "unexpected error: {err:?}",
     );
 
@@ -2268,7 +2270,8 @@ async fn crypto_migration_rewrites_payload_when_closure_underreports_change() {
         .unwrap_err();
     assert!(
         matches!(err, CollectionError::BadInput { ref description }
-            if description.contains("must leave server-side encrypted field 'document.body' as an encrypted marker")),
+            if description.contains("must leave server-side encrypted field as an encrypted marker")
+                && !description.contains("document.body")),
         "unexpected error: {err:?}",
     );
 
