@@ -1608,10 +1608,25 @@ mod tests {
                     body.contains("collection snapshot/restore preflight"),
                     "{uri}: {body}",
                 );
-                assert!(!body.contains(COLLECTION_NAME), "{uri}: {body}");
-                assert!(!body.contains("snapshot-1.snapshot"), "{uri}: {body}");
-                assert!(!body.contains("private_hnsw_oram"), "{uri}: {body}");
-                assert!(!body.contains("private_result_oram"), "{uri}: {body}");
+                for forbidden in [
+                    COLLECTION_NAME,
+                    "text_private_hnsw",
+                    "docs_private_hnsw_v1",
+                    "tenant-a/vector-private-rk",
+                    "tenant-a/private-hnsw-signing-v1",
+                    qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                    qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                    "payload_private_result_oram",
+                    "docs_private_result_oram_v1",
+                    "tenant-a/private-result-signing-v1",
+                    qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+                    qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+                    "snapshot-1.snapshot",
+                    "private_hnsw_oram",
+                    "private_result_oram",
+                ] {
+                    assert!(!body.contains(forbidden), "{uri}: {body}");
+                }
             }
         });
     }
@@ -1679,15 +1694,27 @@ mod tests {
                     body.contains("collection snapshot/restore preflight"),
                     "{uri}: {body}",
                 );
-                assert!(!body.contains(COLLECTION_NAME), "{uri}: {body}");
-                assert!(!body.contains("private-oram-shard-recovery-sentinel"), "{uri}: {body}");
-                assert!(!body.contains("private-oram-partial-token-sentinel"), "{uri}: {body}");
-                assert!(
-                    !body.contains("private-oram-partial-api-key-sentinel"),
-                    "{uri}: {body}"
-                );
-                assert!(!body.contains("private_hnsw_oram"), "{uri}: {body}");
-                assert!(!body.contains("private_result_oram"), "{uri}: {body}");
+                for forbidden in [
+                    COLLECTION_NAME,
+                    "text_private_hnsw",
+                    "docs_private_hnsw_v1",
+                    "tenant-a/vector-private-rk",
+                    "tenant-a/private-hnsw-signing-v1",
+                    qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                    qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                    "payload_private_result_oram",
+                    "docs_private_result_oram_v1",
+                    "tenant-a/private-result-signing-v1",
+                    qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+                    qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+                    "private-oram-shard-recovery-sentinel",
+                    "private-oram-partial-token-sentinel",
+                    "private-oram-partial-api-key-sentinel",
+                    "private_hnsw_oram",
+                    "private_result_oram",
+                ] {
+                    assert!(!body.contains(forbidden), "{uri}: {body}");
+                }
             }
         });
     }

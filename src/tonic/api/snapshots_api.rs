@@ -715,38 +715,29 @@ mod tests {
                     .contains("collection snapshot/restore preflight"),
                 "{operation}: {err}",
             );
-            assert!(!err.message().contains(operation), "{operation}: {err}");
-            assert!(
-                !err.message().contains(COLLECTION_NAME),
-                "{operation}: {err}"
-            );
-            assert!(
-                !err.message().contains("private_hnsw_oram"),
-                "{operation}: {err}"
-            );
-            assert!(
-                !err.message().contains("private_result_oram"),
-                "{operation}: {err}"
-            );
-            assert!(
-                !err.message().contains("snapshot-1.snapshot"),
-                "{operation}: {err}"
-            );
-            assert!(
-                !err.message()
-                    .contains("private-oram-shard-recovery-sentinel"),
-                "{operation}: {err}"
-            );
-            assert!(
-                !err.message()
-                    .contains("private-oram-shard-checksum-sentinel"),
-                "{operation}: {err}"
-            );
-            assert!(
-                !err.message()
-                    .contains("private-oram-shard-api-key-sentinel"),
-                "{operation}: {err}"
-            );
+            for forbidden in [
+                operation,
+                COLLECTION_NAME,
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-hnsw-signing-v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "payload_private_result_oram",
+                "docs_private_result_oram_v1",
+                "tenant-a/private-result-signing-v1",
+                qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+                "snapshot-1.snapshot",
+                "private-oram-shard-recovery-sentinel",
+                "private-oram-shard-checksum-sentinel",
+                "private-oram-shard-api-key-sentinel",
+                "private_hnsw_oram",
+                "private_result_oram",
+            ] {
+                assert!(!err.message().contains(forbidden), "{operation}: {err}");
+            }
         }
 
         actix_web::rt::System::new().block_on(async {
