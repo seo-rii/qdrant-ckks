@@ -1956,6 +1956,82 @@ mod private_result_oram_rest_tests {
             );
             drop(snapshot_guard);
 
+            let lifecycle_guard =
+                crate::common::snapshots::begin_private_oram_collection_lifecycle_guard(
+                    &dispatcher,
+                    &auth,
+                    COLLECTION_NAME,
+                )
+                .await
+                .unwrap();
+            let active_lifecycle_client_id = "tenant-a/sdk-instance-active-lifecycle";
+            let active_lifecycle_session_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/session",
+                OpenPrivateResultOramSessionRequest {
+                    client_id: active_lifecycle_client_id.to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection lifecycle operation"
+            );
+            assert!(
+                !active_lifecycle_session_error.contains(&fixture.manifest.root_hash),
+                "{active_lifecycle_session_error}"
+            );
+            assert!(
+                !active_lifecycle_session_error.contains("private_result_oram"),
+                "{active_lifecycle_session_error}"
+            );
+            assert!(
+                !active_lifecycle_session_error.contains(active_lifecycle_client_id),
+                "{active_lifecycle_session_error}"
+            );
+            let active_lifecycle_manifest_upload_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/manifest",
+                UploadPrivateResultOramManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: fixture.signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection lifecycle operation"
+            );
+            assert!(
+                !active_lifecycle_manifest_upload_error.contains(&fixture.manifest.root_hash),
+                "{active_lifecycle_manifest_upload_error}"
+            );
+            assert!(
+                !active_lifecycle_manifest_upload_error.contains("private_result_oram"),
+                "{active_lifecycle_manifest_upload_error}"
+            );
+            let mut active_lifecycle_bucket_upload = fixture.buckets.clone();
+            active_lifecycle_bucket_upload[0].ciphertext =
+                "active-result-lifecycle-bucket-ciphertext-sentinel".to_string();
+            let active_lifecycle_bucket_upload_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/buckets",
+                UploadPrivateResultOramBucketsRequest {
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: active_lifecycle_bucket_upload,
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection lifecycle operation"
+            );
+            assert!(
+                !active_lifecycle_bucket_upload_error
+                    .contains("active-result-lifecycle-bucket-ciphertext-sentinel"),
+                "{active_lifecycle_bucket_upload_error}"
+            );
+            assert!(
+                !active_lifecycle_bucket_upload_error.contains(&fixture.manifest.root_hash),
+                "{active_lifecycle_bucket_upload_error}"
+            );
+            assert!(
+                !active_lifecycle_bucket_upload_error.contains("private_result_oram"),
+                "{active_lifecycle_bucket_upload_error}"
+            );
+            drop(lifecycle_guard);
+
             let client_id_sentinel = "result-session-client-id-sentinel";
             let oversized_client_id_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/session",
