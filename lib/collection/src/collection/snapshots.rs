@@ -3054,6 +3054,22 @@ mod tests {
         assert!(!rendered.contains("sentinel"));
         fs::remove_file(&hnsw_camel_hashes).unwrap();
 
+        let hnsw_sha256_state = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("encrypted_client_state_ciphertexts_sha256.bin");
+        fs::write(&hnsw_sha256_state, b"encrypted state sha256 sentinel").unwrap();
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_HNSW_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("private HNSW ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains("encrypted_client_state_ciphertexts_sha256"));
+        assert!(!rendered.contains("sentinel"));
+        fs::remove_file(&hnsw_sha256_state).unwrap();
+
         let result_position_map = temp_dir
             .path()
             .join(PRIVATE_RESULT_ORAM_DIR)
@@ -3096,6 +3112,31 @@ mod tests {
                 .path()
                 .join(PRIVATE_RESULT_ORAM_DIR)
                 .join("state_ciphertext_hashes.bin"),
+        )
+        .unwrap();
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("stateCiphertextsSha256.json"),
+            b"result state sha256 sentinel",
+        )
+        .unwrap();
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered
+                .contains("private result ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains("stateCiphertextsSha256"));
+        assert!(!rendered.contains("sentinel"));
+
+        fs::remove_file(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("stateCiphertextsSha256.json"),
         )
         .unwrap();
         fs::write(
@@ -3221,6 +3262,30 @@ mod tests {
         assert!(!rendered.contains("sentinel"));
         fs::remove_file(&hnsw_camel_hashes).unwrap();
 
+        let hnsw_sha256_state = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("client_state_ciphertexts_sha256.bin");
+        fs::write(&hnsw_sha256_state, b"append HNSW sha256 state sentinel").unwrap();
+
+        let archive = tempfile::NamedTempFile::new().unwrap();
+        let tar = BuilderExt::new_seekable_owned(File::create(archive.path()).unwrap());
+        let err = blocking_append_private_oram_snapshot_dir(
+            &tar,
+            &temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR),
+            Path::new(PRIVATE_HNSW_ORAM_DIR),
+            PRIVATE_HNSW_ORAM_DIR,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("private HNSW ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains("client_state_ciphertexts_sha256"));
+        assert!(!rendered.contains("sentinel"));
+        fs::remove_file(&hnsw_sha256_state).unwrap();
+
         let result_position_map = temp_dir
             .path()
             .join(PRIVATE_RESULT_ORAM_DIR)
@@ -3271,6 +3336,39 @@ mod tests {
                 .contains("private result ORAM snapshot source contains client-owned ORAM state")
         );
         assert!(!rendered.contains("stateCiphertextHashes"));
+        assert!(!rendered.contains("sentinel"));
+
+        fs::remove_file(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("stateCiphertextHashes.json"),
+        )
+        .unwrap();
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("state_ciphertexts_sha256.bin"),
+            b"append result sha256 state sentinel",
+        )
+        .unwrap();
+
+        let archive = tempfile::NamedTempFile::new().unwrap();
+        let tar = BuilderExt::new_seekable_owned(File::create(archive.path()).unwrap());
+        let err = blocking_append_private_oram_snapshot_dir(
+            &tar,
+            &temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR),
+            Path::new(PRIVATE_RESULT_ORAM_DIR),
+            PRIVATE_RESULT_ORAM_DIR,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered
+                .contains("private result ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains("state_ciphertexts_sha256"));
         assert!(!rendered.contains("sentinel"));
     }
 
