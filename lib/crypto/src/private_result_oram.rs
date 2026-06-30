@@ -6780,6 +6780,112 @@ mod tests {
     }
 
     #[test]
+    fn ordered_fetch_token_read_plan_schedules_all_small_feasible_leaf_distributions() {
+        fn enumerate_counts(
+            leaf_index: usize,
+            leaf_count: usize,
+            remaining: usize,
+            max_per_leaf: usize,
+            counts: &mut Vec<usize>,
+            cases: &mut Vec<Vec<usize>>,
+        ) {
+            if leaf_index == leaf_count {
+                if remaining == 0 {
+                    cases.push(counts.clone());
+                }
+                return;
+            }
+
+            for count in 0..=remaining.min(max_per_leaf) {
+                counts.push(count);
+                enumerate_counts(
+                    leaf_index + 1,
+                    leaf_count,
+                    remaining - count,
+                    max_per_leaf,
+                    counts,
+                    cases,
+                );
+                counts.pop();
+            }
+        }
+
+        let mut manifest = small_fetch_manifest();
+        manifest.oram.path_batch_size = 3;
+        let path_batch_size = usize::try_from(manifest.oram.path_batch_size).unwrap();
+        let batch_count = 3;
+        let token_count = path_batch_size * batch_count;
+        let leaf_count =
+            usize::try_from(private_result_oram_leaf_count(manifest.oram.tree_height).unwrap())
+                .unwrap();
+        let mut cases = Vec::new();
+        enumerate_counts(
+            0,
+            leaf_count,
+            token_count,
+            batch_count,
+            &mut Vec::new(),
+            &mut cases,
+        );
+        assert_eq!(cases.len(), 5328);
+
+        for counts in cases {
+            let mut payload_fetch_tokens = Vec::with_capacity(token_count);
+            let mut token_positions = Vec::with_capacity(token_count);
+            let mut token_to_leaf = BTreeMap::new();
+            let mut token_byte = 1u8;
+            for (leaf, count) in counts.iter().copied().enumerate() {
+                for _ in 0..count {
+                    let token = [token_byte; 32];
+                    token_byte = token_byte
+                        .checked_add(1)
+                        .expect("test fixture should use fewer than 255 tokens");
+                    payload_fetch_tokens.push(token);
+                    token_positions.push(PrivateResultOramFetchTokenPosition {
+                        payload_fetch_token: token,
+                        leaf: u64::try_from(leaf).unwrap(),
+                    });
+                    token_to_leaf.insert(token, leaf);
+                }
+            }
+
+            let ordered = plan_private_result_oram_ordered_read_bucket_batches_for_fetch_tokens(
+                &manifest,
+                &payload_fetch_tokens,
+                &token_positions,
+            )
+            .unwrap_or_else(|err| panic!("failed to schedule counts {counts:?}: {err:?}"));
+            assert_eq!(ordered.payload_fetch_tokens.len(), token_count);
+            assert_eq!(ordered.read_plan.batches.len(), batch_count);
+            assert_eq!(ordered.read_plan.path_batch_size, path_batch_size);
+
+            for (token_batch, read_batch) in ordered
+                .payload_fetch_tokens
+                .chunks(path_batch_size)
+                .zip(&ordered.read_plan.batches)
+            {
+                let mut batch_leaves = BTreeSet::new();
+                for token in token_batch {
+                    let leaf = token_to_leaf
+                        .get(token)
+                        .copied()
+                        .expect("ordered token must come from input plan");
+                    assert!(
+                        batch_leaves.insert(leaf),
+                        "batch repeated leaf {leaf} for counts {counts:?}"
+                    );
+                }
+                assert_eq!(batch_leaves.len(), path_batch_size);
+                assert_eq!(read_batch.token_count, path_batch_size);
+                assert_eq!(
+                    read_batch.bucket_ids.len(),
+                    path_batch_size * (usize::try_from(manifest.oram.tree_height).unwrap() + 1)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn fetch_token_read_plan_rejects_missing_duplicate_and_bad_leaf() {
         let manifest = small_fetch_manifest();
         let position = PrivateResultOramFetchTokenPosition {
