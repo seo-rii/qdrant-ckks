@@ -303,6 +303,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "path_counts"
                         | "requested_paths"
                         | "requested_path_count"
+                        | "requested_path_counts"
                         | "dummy_paths_included"
                         | "access_path"
                         | "access_paths"
@@ -623,6 +624,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "pathcounts"
                         | "requestedpaths"
                         | "requestedpathcount"
+                        | "requestedpathcounts"
                         | "dummypathsincluded"
                         | "accesspath"
                         | "accesspaths"
@@ -1895,6 +1897,10 @@ mod tests {
             (
                 "requested_paths",
                 json!("qdrant-sec-private-oram-count-log-sentinel-requested-paths"),
+            ),
+            (
+                "requestedPathCounts",
+                json!(["qdrant-sec-private-oram-count-log-sentinel-requested-path-counts"]),
             ),
             (
                 "dummyPathsIncluded",
