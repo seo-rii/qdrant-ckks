@@ -440,6 +440,33 @@ mod private_result_oram_grpc_tests {
     const BASE_EPOCH: u64 = 42;
     const NEXT_EPOCH: u64 = 43;
     const SESSION_ID: &str = "session-1";
+    const PRIVATE_RESULT_ORAM_CLIENT_STATE_REDACTION_ALIASES: &[&str] = &[
+        "clientStateBackups",
+        "clientStateCiphertext",
+        "clientStateCiphertextHash",
+        "clientStateCiphertextHashes",
+        "client_state_ciphertext",
+        "client_state_ciphertext_hash",
+        "encryptedClientStateBackups",
+        "encryptedClientStateCiphertext",
+        "encryptedClientStateCiphertextHash",
+        "encrypted_client_state",
+        "encrypted_client_state_backup",
+        "encrypted_client_state_snapshot",
+        "encrypted_client_state_ciphertext",
+        "encrypted_client_state_ciphertext_hash",
+        "oramPositionMapBackups",
+        "oram_position_map_backups",
+        "positionMapBackups",
+        "position_map_backups",
+        "stashBackups",
+        "stateCiphertext",
+        "stateCiphertextHash",
+        "state_ciphertext",
+        "state_ciphertext_hash",
+        "tokenPositionMapBackups",
+        "token_position_map_backups",
+    ];
 
     struct PrivateResultRouteFixture {
         manifest: PrivateResultOramManifest,
@@ -758,6 +785,12 @@ mod private_result_oram_grpc_tests {
                 "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
             );
         }
+        for &forbidden in PRIVATE_RESULT_ORAM_CLIENT_STATE_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
+            );
+        }
     }
 
     fn assert_private_result_guard_message_redacts(rendered: &str, extra_forbidden: &[&str]) {
@@ -773,17 +806,13 @@ mod private_result_oram_grpc_tests {
             qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
             "private_result_oram",
             "private_hnsw_oram",
-            "clientStateBackups",
-            "clientStateCiphertext",
-            "encryptedClientStateBackups",
-            "encryptedClientStateCiphertextHash",
-            "oramPositionMapBackups",
-            "positionMapBackups",
-            "stashBackups",
-            "stateCiphertext",
-            "stateCiphertextHash",
-            "tokenPositionMapBackups",
         ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "private result ORAM guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_RESULT_ORAM_CLIENT_STATE_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "private result ORAM guard leaked `{forbidden}`: {rendered}",
