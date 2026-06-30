@@ -365,7 +365,7 @@ fn reject_context_pair_inference(using: &str, pair: &ContextInputPair) -> Result
     Ok(())
 }
 
-fn reject_vector_input_inference(using: &str, vector: &VectorInput) -> Result<(), Status> {
+fn reject_vector_input_inference(_using: &str, vector: &VectorInput) -> Result<(), Status> {
     let kind = match vector.variant.as_ref() {
         Some(Variant::Document(_)) => "document",
         Some(Variant::Image(_)) => "image",
@@ -381,7 +381,7 @@ fn reject_vector_input_inference(using: &str, vector: &VectorInput) -> Result<()
     };
 
     Err(Status::invalid_argument(format!(
-        "encrypted vector '{using}' does not allow {kind} inference query inputs; use a client-encrypted CKKS query envelope, a stored point-id query, or an explicit raw dense vector only when plaintext query opt-in is enabled",
+        "encrypted vector search does not allow {kind} inference query inputs; use a client-encrypted CKKS query envelope, a stored point-id query, or an explicit raw dense vector only when plaintext query opt-in is enabled",
     )))
 }
 
@@ -494,6 +494,7 @@ mod tests {
             err.message()
                 .contains("does not allow document inference query inputs")
         );
+        assert!(!err.message().contains("embedding"));
     }
 
     #[test]
@@ -522,6 +523,7 @@ mod tests {
             err.message()
                 .contains("does not allow image inference query inputs")
         );
+        assert!(!err.message().contains("embedding"));
     }
 
     #[test]
