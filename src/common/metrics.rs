@@ -1567,6 +1567,10 @@ mod tests {
                 "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
             ),
             (
+                "/collections/docs/private-hnsw/text/session/hnsw-session-id-sentinel/close?session_id=hnsw-query-session-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+            ),
+            (
                 "/collections/docs/private-result-oram/session",
                 "/collections/{collection_name}/private-result-oram/session",
             ),
@@ -1594,6 +1598,10 @@ mod tests {
                 "/collections/docs/private-result-oram/session/result-session-id-sentinel/close",
                 "/collections/{collection_name}/private-result-oram/session/{session_id}/close",
             ),
+            (
+                "/collections/docs/private-result-oram/session/result-session-id-sentinel/close?session_id=result-query-session-sentinel",
+                "/collections/{collection_name}/private-result-oram/session/{session_id}/close",
+            ),
         ];
         for (raw, canonical) in rest_cases {
             let label =
@@ -1612,6 +1620,7 @@ mod tests {
                 "encryptedClientStateBackups-sentinel",
                 "session-id-sentinel",
                 "hnsw-session-id-sentinel",
+                "hnsw-query-session-sentinel",
                 "token-position-map-sentinel",
                 "token-position-map-backup-sentinel",
                 "tokenPositionMapBackups-sentinel",
@@ -1620,6 +1629,7 @@ mod tests {
                 "result-query-bucket-sentinel",
                 "result-updated-bucket-sentinel",
                 "result-session-id-sentinel",
+                "result-query-session-sentinel",
             ] {
                 assert!(!label.contains(leaked), "{raw} canonicalized to {label}");
             }
