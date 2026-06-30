@@ -1686,6 +1686,7 @@ fn open_private_file_for_read(path: &Path, max_bytes: u64) -> CollectionResult<F
             .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW)
             .open(path)
             .map_err(|_| CollectionError::service_error("failed to open private HNSW ORAM file"))?;
+        validate_opened_private_file_for_read(&file, max_bytes)?;
         return Ok(file);
     }
     #[cfg(not(unix))]
@@ -1693,6 +1694,37 @@ fn open_private_file_for_read(path: &Path, max_bytes: u64) -> CollectionResult<F
         File::open(path)
             .map_err(|_| CollectionError::service_error("failed to open private HNSW ORAM file"))
     }
+}
+
+#[cfg(unix)]
+fn validate_opened_private_file_for_read(file: &File, max_bytes: u64) -> CollectionResult<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let metadata = file.metadata().map_err(|_| {
+        CollectionError::service_error("failed to inspect opened private HNSW ORAM file")
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(CollectionError::service_error(
+            "private HNSW ORAM file must be a non-symlink regular file",
+        ));
+    }
+    if metadata.len() > max_bytes {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM file exceeds maximum size",
+        ));
+    }
+    let effective_uid = nix::unistd::Uid::effective().as_raw();
+    if metadata.uid() != effective_uid {
+        return Err(CollectionError::service_error(
+            "private HNSW ORAM file must be owned by the current user",
+        ));
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(CollectionError::service_error(
+            "private HNSW ORAM file must not be group/world accessible",
+        ));
+    }
+    Ok(())
 }
 
 fn open_private_file_for_write(path: &Path) -> CollectionResult<File> {
