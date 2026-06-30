@@ -1208,9 +1208,7 @@ impl TryFrom<PointId> for segment::types::PointIdType {
             Some(PointIdOptions::Num(num_id)) => Ok(segment::types::PointIdType::NumId(num_id)),
             Some(PointIdOptions::Uuid(uui_str)) => Uuid::parse_str(&uui_str)
                 .map(segment::types::PointIdType::Uuid)
-                .map_err(|_err| {
-                    Status::invalid_argument(format!("Unable to parse UUID: {uui_str}"))
-                }),
+                .map_err(|_err| Status::invalid_argument("Unable to parse UUID")),
             _ => Err(Status::invalid_argument(
                 "No ID options provided".to_string(),
             )),
@@ -2630,7 +2628,7 @@ pub fn try_date_time_from_proto(
 ) -> Result<DateTimePayloadType, Status> {
     chrono::DateTime::from_timestamp(date_time.seconds, date_time.nanos.try_into().unwrap_or(0))
         .map(|date_time| date_time.into())
-        .ok_or_else(|| Status::invalid_argument(format!("Unable to parse timestamp: {date_time}")))
+        .ok_or_else(|| Status::invalid_argument("Unable to parse timestamp"))
 }
 
 impl TryFrom<Distance> for segment::types::Distance {
@@ -3762,6 +3760,26 @@ mod tests {
                 .contains("Malformed distance parameter, unexpected value")
         );
         assert!(!err.message().contains(&unsupported.to_string()));
+    }
+
+    #[test]
+    fn grpc_point_id_and_timestamp_parse_errors_do_not_reflect_inputs() {
+        let uuid_sentinel = "uuid-secret-sentinel";
+        let err = segment::types::PointIdType::try_from(PointId {
+            point_id_options: Some(PointIdOptions::Uuid(uuid_sentinel.to_string())),
+        })
+        .unwrap_err();
+        assert_eq!(err.message(), "Unable to parse UUID");
+        assert!(!err.message().contains(uuid_sentinel));
+
+        let timestamp = prost_wkt_types::Timestamp {
+            seconds: i64::MAX,
+            nanos: 999_999_999,
+        };
+        let err = try_date_time_from_proto(timestamp).unwrap_err();
+        assert_eq!(err.message(), "Unable to parse timestamp");
+        assert!(!err.message().contains(&i64::MAX.to_string()));
+        assert!(!err.message().contains("999999999"));
     }
 
     #[test]
