@@ -1694,7 +1694,7 @@ impl From<tonic::Status> for CollectionError {
     fn from(err: tonic::Status) -> Self {
         match err.code() {
             tonic::Code::InvalidArgument => CollectionError::BadInput {
-                description: format!("InvalidArgument: {err}"),
+                description: "InvalidArgument".to_string(),
             },
             tonic::Code::AlreadyExists => CollectionError::BadInput {
                 description: format!("AlreadyExists: {err}"),
@@ -2432,6 +2432,22 @@ mod tests {
                 assert!(!error.contains("uri-password"));
                 assert!(!error.contains("uri-secret-token"));
                 assert!(!error.contains("invalid"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_argument_status_conversion_does_not_reflect_status_message() {
+        let err = CollectionError::from(tonic::Status::invalid_argument(
+            "status-secret-sentinel invalid input detail",
+        ));
+
+        match err {
+            CollectionError::BadInput { description } => {
+                assert_eq!(description, "InvalidArgument");
+                assert!(!description.contains("status-secret-sentinel"));
+                assert!(!description.contains("invalid input detail"));
             }
             other => panic!("unexpected error: {other:?}"),
         }
