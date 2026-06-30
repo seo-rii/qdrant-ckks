@@ -466,6 +466,8 @@ mod tests {
              clientStateSnapshots=client-state-snapshots-camel-sentinel, \
              client_state_snapshot=client-state-snapshot-snake-sentinel, \
              client_state_snapshots=client-state-snapshots-snake-sentinel, \
+             clientStates=client-states-camel-sentinel, \
+             client_states=client-states-snake-sentinel, \
              clientStateBackup=client-state-backup-camel-sentinel, \
              client_state_backup=client-state-backup-snake-sentinel, \
              clientStateBackups=client-state-backups-camel-sentinel, \
