@@ -692,6 +692,10 @@ active private ORAM sessions or manifest/bucket upload write windows, and it
 also keeps collection/full snapshots from overlapping lifecycle operations.
 While the lifecycle operation is in flight, new private ORAM sessions/uploads
 and new collection/full snapshots fail closed.
+REST and gRPC route fixtures cover both directions of this exclusion for private
+HNSW ORAM and private result ORAM session/upload APIs, collection/full snapshot
+creation, collection recovery, shard snapshot list/create/stream/download/delete,
+shard recovery, and partial snapshot manifest/recover-from routes.
 Snapshot creation also fails closed while a private HNSW ORAM manifest or bucket
 upload write-window guard is active for the collection, because upload writes
 canonical manifest, bucket, Merkle, and epoch files.
