@@ -38,6 +38,11 @@ fn decode_raft_message(bytes: &[u8]) -> Result<RaftMessage, Status> {
         .map_err(|_| Status::invalid_argument("Failed to parse raft message"))
 }
 
+fn parse_peer_uri(uri: &str) -> Result<Uri, Status> {
+    uri.parse()
+        .map_err(|_| Status::internal("Failed to parse uri"))
+}
+
 #[async_trait]
 impl Raft for RaftService {
     async fn send(&self, mut request: Request<RaftMessageBytes>) -> Result<Response<()>, Status> {
@@ -86,9 +91,7 @@ impl Raft for RaftService {
                 format!("http://{ip}:{port}")
             }
         };
-        let uri: Uri = uri_string
-            .parse()
-            .map_err(|err| Status::internal(format!("Failed to parse uri: {err}")))?;
+        let uri = parse_peer_uri(&uri_string)?;
         let peer = request.into_inner();
 
         // If this URI is already registered by a different peer that has no
@@ -200,5 +203,17 @@ mod tests {
         assert!(!err.message().contains("raft-message-secret-sentinel"));
         assert!(!err.message().contains("invalid wire type"));
         assert!(!err.message().contains("buffer"));
+    }
+
+    #[test]
+    fn raft_peer_uri_parse_error_does_not_reflect_uri_or_parser_detail() {
+        let uri = "http://raft-user:raft-password@exa mple.com/raft-secret-token";
+        let err = parse_peer_uri(uri).unwrap_err();
+
+        assert_eq!(err.message(), "Failed to parse uri");
+        assert!(!err.message().contains("raft-user"));
+        assert!(!err.message().contains("raft-password"));
+        assert!(!err.message().contains("raft-secret-token"));
+        assert!(!err.message().contains("invalid"));
     }
 }
