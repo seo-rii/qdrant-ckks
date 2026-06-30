@@ -2935,7 +2935,7 @@ mod tests {
             .path()
             .join(PRIVATE_HNSW_ORAM_DIR)
             .join("text")
-            .join("client_state.json");
+            .join("clientStateCiphertext.json");
         fs::create_dir_all(hnsw_client_state.parent().unwrap()).unwrap();
         fs::write(&hnsw_client_state, b"client state sentinel").unwrap();
         let err =
@@ -2947,13 +2947,13 @@ mod tests {
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!rendered.contains("text"));
-        assert!(!rendered.contains("client_state"));
+        assert!(!rendered.contains("clientStateCiphertext"));
         assert!(!rendered.contains("sentinel"));
 
         let result_position_map = temp_dir
             .path()
             .join(PRIVATE_RESULT_ORAM_DIR)
-            .join("position_map.bin");
+            .join("stateCiphertextHash.json");
         fs::create_dir_all(result_position_map.parent().unwrap()).unwrap();
         fs::write(&result_position_map, b"position map sentinel").unwrap();
         let err =
@@ -2965,7 +2965,7 @@ mod tests {
         );
         assert!(!rendered.contains(temp_dir.path().to_string_lossy().as_ref()));
         assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
-        assert!(!rendered.contains("position_map"));
+        assert!(!rendered.contains("stateCiphertextHash"));
         assert!(!rendered.contains("sentinel"));
 
         fs::remove_file(&result_position_map).unwrap();
@@ -2996,7 +2996,7 @@ mod tests {
             .path()
             .join(PRIVATE_HNSW_ORAM_DIR)
             .join("text")
-            .join("client.state");
+            .join("encryptedClientStateCiphertextHash.json");
         fs::create_dir_all(hnsw_client_state.parent().unwrap()).unwrap();
         fs::write(&hnsw_client_state, b"append HNSW client state sentinel").unwrap();
 
@@ -3015,13 +3015,13 @@ mod tests {
         );
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!rendered.contains("text"));
-        assert!(!rendered.contains("client.state"));
+        assert!(!rendered.contains("encryptedClientStateCiphertextHash"));
         assert!(!rendered.contains("sentinel"));
 
         let result_position_map = temp_dir
             .path()
             .join(PRIVATE_RESULT_ORAM_DIR)
-            .join("position.map");
+            .join("stateCiphertext.json");
         fs::create_dir_all(result_position_map.parent().unwrap()).unwrap();
         fs::write(&result_position_map, b"append result position map sentinel").unwrap();
 
@@ -3040,7 +3040,7 @@ mod tests {
                 .contains("private result ORAM snapshot source contains client-owned ORAM state")
         );
         assert!(!rendered.contains(PRIVATE_RESULT_ORAM_DIR));
-        assert!(!rendered.contains("position.map"));
+        assert!(!rendered.contains("stateCiphertext"));
         assert!(!rendered.contains("sentinel"));
     }
 
@@ -3232,13 +3232,13 @@ mod tests {
     }
 
     #[test]
-    fn private_result_oram_shard_snapshot_guard_redacts_backup_aliases() {
+    fn private_result_oram_shard_snapshot_guard_redacts_client_state_aliases() {
         let mut config = private_result_config(Uuid::from_u128(80));
         let encryption = config.params.encryption.as_mut().unwrap();
-        encryption.key_id = Some("clientStateBackups.json".to_string());
+        encryption.key_id = Some("clientStateCiphertext.json".to_string());
         let rule = encryption.rules.first_mut().unwrap();
-        rule.id = "encryptedClientStateBackups.json".to_string();
-        rule.instance = "positionMapBackups.json".to_string();
+        rule.id = "encryptedClientStateCiphertextHash.json".to_string();
+        rule.instance = "stateCiphertextHash.json".to_string();
         if let EncryptionSelector::PayloadPaths { paths } = &mut rule.selector {
             *paths = vec!["tokenPositionMapBackups.json".to_string()];
         }
@@ -3254,9 +3254,9 @@ mod tests {
         assert!(rendered.contains("shard snapshot operations for private ORAM collections"));
         assert!(rendered.contains("collection snapshot/restore preflight"));
         for sentinel in [
-            "clientStateBackups",
-            "encryptedClientStateBackups",
-            "positionMapBackups",
+            "clientStateCiphertext",
+            "encryptedClientStateCiphertextHash",
+            "stateCiphertextHash",
             "tokenPositionMapBackups",
             "stashBackups",
             "private-shard-snapshot-operation-sentinel",
@@ -3265,7 +3265,7 @@ mod tests {
         ] {
             assert!(
                 !rendered.contains(sentinel),
-                "private ORAM shard snapshot guard leaked backup alias `{sentinel}`: {rendered}",
+                "private ORAM shard snapshot guard leaked client-state alias `{sentinel}`: {rendered}",
             );
         }
     }
