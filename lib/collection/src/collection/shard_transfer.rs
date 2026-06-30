@@ -622,7 +622,16 @@ mod tests {
     #[test]
     fn private_oram_transfer_task_start_fails_closed_until_bucket_transfer_supported() {
         for collection_name in [
+            "clientStateCiphertext.json",
+            "clientStateCiphertextHash.json",
+            "clientStateCiphertextHashes.json",
+            "encryptedClientStateCiphertext.json",
             "encryptedClientStateCiphertextHash.json",
+            "encryptedClientStateCiphertextHashes.json",
+            "encrypted_client_state_ciphertext_hash.json",
+            "stateCiphertext.json",
+            "stateCiphertextHash.json",
+            "stateCiphertextHashes.json",
             "tokenPositionMapBackups.json",
             "oramPositionMapBackups.json",
             "positionMapBackups.json",
@@ -639,7 +648,16 @@ mod tests {
             assert!(rendered.contains("encrypted ORAM bucket transfer"));
             assert!(rendered.contains("consensus-backed epoch/root"));
             assert!(!rendered.contains(collection_name));
+            assert!(!rendered.contains("clientStateCiphertext"));
+            assert!(!rendered.contains("clientStateCiphertextHash"));
+            assert!(!rendered.contains("clientStateCiphertextHashes"));
+            assert!(!rendered.contains("encryptedClientStateCiphertext"));
             assert!(!rendered.contains("encryptedClientStateCiphertextHash"));
+            assert!(!rendered.contains("encryptedClientStateCiphertextHashes"));
+            assert!(!rendered.contains("encrypted_client_state_ciphertext_hash"));
+            assert!(!rendered.contains("stateCiphertext"));
+            assert!(!rendered.contains("stateCiphertextHash"));
+            assert!(!rendered.contains("stateCiphertextHashes"));
             assert!(!rendered.contains("tokenPositionMapBackups"));
             assert!(!rendered.contains("oramPositionMapBackups"));
             assert!(!rendered.contains("positionMapBackups"));
