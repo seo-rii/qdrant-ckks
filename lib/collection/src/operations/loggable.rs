@@ -1343,6 +1343,7 @@ mod tests {
                 "level_mask": "qdrant-sec-private-hnsw-level-mask-log-sentinel",
                 "levelMask": "qdrant-sec-private-hnsw-camel-level-mask-log-sentinel",
                 "visited_nodes": ["qdrant-sec-private-hnsw-visited-node-log-sentinel"],
+                "visitedNodeId": "qdrant-sec-private-hnsw-camel-single-visited-node-id-log-sentinel",
                 "visitedNodeIds": ["qdrant-sec-private-hnsw-camel-visited-node-id-log-sentinel"],
                 "neighbors": ["qdrant-sec-private-hnsw-neighbor-log-sentinel"],
                 "neighbor_id": "qdrant-sec-private-hnsw-neighbor-id-log-sentinel",

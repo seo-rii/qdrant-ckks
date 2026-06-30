@@ -571,6 +571,7 @@ mod tests {
             "private HNSW read failed requestedPathCounts=private-requested-path-counts-sentinel",
             "private result ORAM read failed payload_fetch_token=private-fetch-token-sentinel",
             "private result ORAM read failed payload_fetch_tokens=private-fetch-tokens-sentinel",
+            "private result ORAM read failed point_token=private-point-token-sentinel",
             "private result ORAM read failed point_tokens=private-point-tokens-sentinel",
             "private result ORAM read failed payload_plaintext=private-payload-sentinel",
             "private result ORAM read failed tokenPositionMap=private-token-position-sentinel",
@@ -662,6 +663,7 @@ mod tests {
             "bucket_plaintexts",
             "candidate_nodes",
             "candidate_distances",
+            "entry_node_id",
             "entry_node_ids",
             "leaf_commitments",
             "leaf_counts",
@@ -675,6 +677,7 @@ mod tests {
             "sibling_hashes",
             "updated_bucket_commitments",
             "updated_buckets",
+            "visited_node_id",
             "visited_node_ids",
         ] {
             let redacted = redact_audit_error(&format!("{marker}=private-{marker}-sentinel"));

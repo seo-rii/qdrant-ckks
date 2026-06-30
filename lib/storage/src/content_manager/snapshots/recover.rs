@@ -627,6 +627,7 @@ fn private_oram_layout_error_contains_sensitive_marker(rendered: &str) -> bool {
         "sibling hash",
         "sibling_hash",
         "signature",
+        "visited_node_id",
         "visited_node_ids",
     ];
 

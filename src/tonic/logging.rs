@@ -340,6 +340,7 @@ mod tests {
              node_block=node-block-sentinel \
              nodePlaintext=node-plaintext-camel-sentinel \
              levelMask=level-mask-camel-sentinel \
+             visitedNodeId=visited-node-camel-singular-sentinel \
              visitedNodeIds=visited-node-camel-sentinel \
              neighbors=neighbors-sentinel \
              neighborId=neighbor-id-camel-sentinel \
@@ -357,12 +358,14 @@ mod tests {
              fetch_token=short-fetch-token-sentinel \
              fetchTokens=short-fetch-token-camel-sentinel \
              payload_fetch_token=fetch-token-sentinel \
+             payloadFetchToken=fetch-token-camel-singular-sentinel \
              payloadFetchTokens=fetch-token-camel-sentinel \
              payload_bytes=payload-bytes-sentinel \
              payloadPlaintext=payload-plaintext-camel-sentinel \
              vector_bytes=vector-bytes-sentinel \
              vectorPlaintext=vector-plaintext-camel-sentinel \
              resultIds=result-id-camel-sentinel \
+             point_token=point-token-snake-singular-sentinel \
              point_tokens=point-token-snake-sentinel \
              clientState=client-state-camel-sentinel \
              client_state=client-state-snake-sentinel \

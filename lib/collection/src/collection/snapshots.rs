@@ -1690,6 +1690,7 @@ fn private_oram_snapshot_layout_error_contains_sensitive_marker(rendered: &str) 
         "sibling hash",
         "sibling_hash",
         "signature",
+        "visited_node_id",
         "visited_node_ids",
     ];
 
