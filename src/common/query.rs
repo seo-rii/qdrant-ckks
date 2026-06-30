@@ -12589,11 +12589,19 @@ mod tests {
         for payload_path in [
             "clientStateBackups",
             "clientStateCiphertext",
+            "clientStateCiphertextHash",
+            "clientStateCiphertextHashes",
+            "encryptedClientStateBackups",
+            "encryptedClientStateCiphertext",
             "encryptedClientStateCiphertextHash",
+            "encryptedClientStateCiphertextHashes",
+            "encrypted_client_state_ciphertext_hash",
             "oramPositionMapBackups",
             "positionMapBackups",
             "stashBackups",
+            "stateCiphertext",
             "stateCiphertextHash",
+            "stateCiphertextHashes",
             "tokenPositionMapBackups",
         ] {
             let encryption = CollectionEncryptionConfig {
@@ -12627,11 +12635,19 @@ mod tests {
             for sentinel in [
                 "clientStateBackups",
                 "clientStateCiphertext",
+                "clientStateCiphertextHash",
+                "clientStateCiphertextHashes",
+                "encryptedClientStateBackups",
+                "encryptedClientStateCiphertext",
                 "encryptedClientStateCiphertextHash",
+                "encryptedClientStateCiphertextHashes",
+                "encrypted_client_state_ciphertext_hash",
                 "oramPositionMapBackups",
                 "positionMapBackups",
                 "stashBackups",
+                "stateCiphertext",
                 "stateCiphertextHash",
+                "stateCiphertextHashes",
                 "tokenPositionMapBackups",
             ] {
                 assert!(!message.contains(sentinel), "{message}");
@@ -12970,11 +12986,19 @@ mod tests {
         for payload_path in [
             "clientStateBackups",
             "clientStateCiphertext",
+            "clientStateCiphertextHash",
+            "clientStateCiphertextHashes",
+            "encryptedClientStateBackups",
+            "encryptedClientStateCiphertext",
             "encryptedClientStateCiphertextHash",
+            "encryptedClientStateCiphertextHashes",
+            "encrypted_client_state_ciphertext_hash",
             "oramPositionMapBackups",
             "positionMapBackups",
             "stashBackups",
+            "stateCiphertext",
             "stateCiphertextHash",
+            "stateCiphertextHashes",
             "tokenPositionMapBackups",
         ] {
             let message = private_result_oram_raw_payload_read_error(payload_path).to_string();
@@ -12989,11 +13013,19 @@ mod tests {
             for sentinel in [
                 "clientStateBackups",
                 "clientStateCiphertext",
+                "clientStateCiphertextHash",
+                "clientStateCiphertextHashes",
+                "encryptedClientStateBackups",
+                "encryptedClientStateCiphertext",
                 "encryptedClientStateCiphertextHash",
+                "encryptedClientStateCiphertextHashes",
+                "encrypted_client_state_ciphertext_hash",
                 "oramPositionMapBackups",
                 "positionMapBackups",
                 "stashBackups",
+                "stateCiphertext",
                 "stateCiphertextHash",
+                "stateCiphertextHashes",
                 "tokenPositionMapBackups",
             ] {
                 assert!(!message.contains(sentinel), "{message}");
