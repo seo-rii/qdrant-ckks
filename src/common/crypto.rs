@@ -279,6 +279,8 @@ const WRAPPED_SYMMETRIC_KEY_32_KIND: &str = "wrapped_symmetric_key_32";
 const AWS_KMS_SOURCE: &str = "aws_kms";
 const AWS_KMS_WRAP_ALGORITHM: &str = "aws-kms";
 const AWS_KMS_NONCE_SENTINEL_B64: &str = "YXdzLWttcw";
+const AWS_KMS_KEY_ID_REDACTED: &str = "aws-kms-key-id:[redacted]";
+const AWS_KMS_ENV_PREFIX_REDACTED: &str = "aws-kms-env-prefix:[redacted]";
 const VAULT_TRANSIT_SOURCE: &str = "vault_transit";
 const VAULT_TRANSIT_WRAP_ALGORITHM: &str = "vault-transit";
 const VAULT_TRANSIT_NONCE_SENTINEL_B64: &str = "dmF1bHQtdHJhbnNpdA";
@@ -5663,7 +5665,7 @@ fn validate_material_timeout_policy(
     match material.source.as_deref() {
         Some(AWS_KMS_SOURCE) => validate_external_material_timeout_value(
             material_name,
-            material.path.as_deref().unwrap_or(AWS_KMS_SOURCE),
+            AWS_KMS_KEY_ID_REDACTED,
             "AWS KMS",
             Some(timeout_ms),
         ),
@@ -5838,7 +5840,7 @@ fn validate_material_aws_kms_source(
     {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: key_id.to_string(),
+            path: AWS_KMS_KEY_ID_REDACTED.to_string(),
             reason: "AWS KMS key id must be a non-empty key id, alias, or ARN without whitespace"
                 .to_string(),
         });
@@ -5846,18 +5848,18 @@ fn validate_material_aws_kms_source(
     if trimmed_key_id.starts_with("arn:") && !trimmed_key_id.contains(":kms:") {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: key_id.to_string(),
+            path: AWS_KMS_KEY_ID_REDACTED.to_string(),
             reason: "AWS KMS ARN must be a kms key ARN".to_string(),
         });
     }
     if !is_material_env_name(env_prefix) {
         return Err(CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
-            path: format!("aws-kms-env-prefix:{env_prefix}"),
+            path: AWS_KMS_ENV_PREFIX_REDACTED.to_string(),
             reason: "AWS KMS env prefix is invalid".to_string(),
         });
     }
-    let env_prefix_path = format!("aws-kms-env-prefix:{env_prefix}");
+    let env_prefix_path = AWS_KMS_ENV_PREFIX_REDACTED;
     validate_external_expected_host_value(
         material_name,
         &env_prefix_path,
@@ -8519,13 +8521,14 @@ impl AwsKmsMasterKeyProvider {
                     path,
                     reason,
                 },
-                err => PayloadWriteSetupError::UnreadableMaterialFile {
+                _err => PayloadWriteSetupError::UnreadableMaterialFile {
                     material: mk_id.to_string(),
-                    path: format!("{key_id}: {err}"),
+                    path: "AWS KMS source is invalid".to_string(),
                 },
             },
         )?;
-        let timeout = external_material_timeout(mk_id, key_id, "AWS KMS", timeout_ms)?;
+        let timeout =
+            external_material_timeout(mk_id, AWS_KMS_KEY_ID_REDACTED, "AWS KMS", timeout_ms)?;
         Ok(Self {
             mk_id: mk_id.to_string(),
             key_id: key_id.to_string(),
@@ -16194,6 +16197,59 @@ mod tests {
                 assert!(!path.contains("qdrant-sec-kms-fragment"), "{path}");
             }
             other => panic!("unexpected endpoint validation result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_material_aws_kms_source_redacts_key_id_and_env_prefix() {
+        let key_id_sentinel = "aws-kms-key-id-redaction-sentinel";
+        match validate_material_aws_kms_source(
+            "tenant-a/mk-aws",
+            &format!("alias/{key_id_sentinel} with whitespace"),
+            "QDRANT_TEST_AWS_KMS_WRAP",
+            None,
+        ) {
+            Err(CryptoSetupError::InvalidMaterialFileSource { path, reason, .. }) => {
+                assert_eq!(path, AWS_KMS_KEY_ID_REDACTED);
+                assert!(reason.contains("AWS KMS key id"), "{reason}");
+                assert!(!path.contains(key_id_sentinel), "{path}");
+            }
+            other => panic!("unexpected AWS KMS source validation result: {other:?}"),
+        }
+
+        let env_prefix_sentinel = "AWS-KMS-ENV-PREFIX-REDACTION-SENTINEL";
+        match validate_material_aws_kms_source(
+            "tenant-a/mk-aws",
+            "alias/qdrant-sec-docs",
+            env_prefix_sentinel,
+            None,
+        ) {
+            Err(CryptoSetupError::InvalidMaterialFileSource { path, reason, .. }) => {
+                assert_eq!(path, AWS_KMS_ENV_PREFIX_REDACTED);
+                assert!(reason.contains("env prefix"), "{reason}");
+                assert!(!path.contains(env_prefix_sentinel), "{path}");
+            }
+            other => panic!("unexpected AWS KMS source validation result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn aws_kms_timeout_error_redacts_key_id() {
+        let key_id_sentinel = "aws-kms-timeout-key-id-redaction-sentinel";
+        match AwsKmsMasterKeyProvider::new(
+            "tenant-a/mk-aws",
+            &format!("alias/{key_id_sentinel}"),
+            "QDRANT_TEST_AWS_KMS_WRAP",
+            None,
+            Some(0),
+        ) {
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { path, reason, .. }) => {
+                assert_eq!(path, AWS_KMS_KEY_ID_REDACTED);
+                assert!(reason.contains("timeout_ms"), "{reason}");
+                assert!(!path.contains(key_id_sentinel), "{path}");
+            }
+            Ok(_) => panic!("AWS KMS timeout validation unexpectedly succeeded"),
+            Err(err) => panic!("unexpected AWS KMS timeout validation error: {err}"),
         }
     }
 
