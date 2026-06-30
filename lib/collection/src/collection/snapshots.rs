@@ -4531,6 +4531,7 @@ mod tests {
         assert!(!err.contains("buckets"));
         assert!(!err.contains("00000000.bucket"));
         assert!(!err.contains(&manifest.root_hash));
+        assert_private_result_restore_error_redacts_common(&err);
     }
 
     #[test]
@@ -4579,6 +4580,7 @@ mod tests {
         assert!(!err.contains("latest.json"));
         assert!(!err.contains("sentinel"));
         assert!(!err.contains(&manifest.root_hash));
+        assert_private_result_restore_error_redacts_common(&err);
     }
 
     #[test]
@@ -6002,6 +6004,7 @@ mod tests {
         assert!(!err.contains("buckets"));
         assert!(!err.contains("00000000.bucket"));
         assert!(!err.contains(&manifest.root_hash));
+        assert_private_hnsw_restore_error_redacts_common(&err);
     }
 
     #[test]
@@ -6051,6 +6054,7 @@ mod tests {
         assert!(!err.contains("latest.json"));
         assert!(!err.contains("sentinel"));
         assert!(!err.contains(&manifest.root_hash));
+        assert_private_hnsw_restore_error_redacts_common(&err);
     }
 
     #[test]
