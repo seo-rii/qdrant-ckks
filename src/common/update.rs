@@ -1468,9 +1468,9 @@ async fn ensure_payload_index_allowed_by_encryption(
                 .parse::<JsonPath>()
                 .map_err(|_| StorageError::bad_input("encrypted metadata field path is invalid"))?;
             if field_name.compatible(&metadata_path) {
-                return Err(StorageError::bad_input(format!(
-                    "cannot create payload index on encrypted metadata value field '{field_name}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
-                )));
+                return Err(StorageError::bad_input(
+                    "cannot create payload index on encrypted metadata value field because it overlaps an encrypted metadata selector; configure a blind index provider instead",
+                ));
             }
         }
     }
@@ -1497,9 +1497,9 @@ async fn ensure_payload_index_allowed_by_encryption(
                     StorageError::bad_input("metadata blind-index field path is invalid")
                 })?;
                 if field_name.compatible(&metadata_path) {
-                    return Err(StorageError::bad_input(format!(
-                        "cannot create payload index schema on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must use keyword schema",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "cannot create payload index schema on metadata blind-index field; blind-index token indexes must use keyword schema",
+                    ));
                 }
             }
         }

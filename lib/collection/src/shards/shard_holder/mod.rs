@@ -1658,7 +1658,7 @@ mod tests {
             err,
             CollectionError::BadInput { description }
                 if description.contains("recover payload index schema")
-                    && description.contains("document.body")
+                    && !description.contains("document.body")
                     && description.contains("blind index")
         ));
     }
@@ -1679,7 +1679,7 @@ mod tests {
             err,
             CollectionError::BadInput { description }
                 if description.contains("transfer payload index schema")
-                    && description.contains("document.body")
+                    && !description.contains("document.body")
                     && description.contains("blind index")
         ));
     }

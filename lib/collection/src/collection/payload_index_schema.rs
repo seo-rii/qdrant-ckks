@@ -75,7 +75,7 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
                         ));
                     }
                     return Err(CollectionError::bad_input(format!(
-                        "cannot {action_label} on encrypted payload field '{field_name}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                        "cannot {action_label} on encrypted payload field because it overlaps an encrypted payload selector; configure a blind index provider instead",
                     )));
                 }
             }
@@ -98,7 +98,7 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
             for field_name in &field_names {
                 if field_name.compatible(&metadata_path) {
                     return Err(CollectionError::bad_input(format!(
-                        "cannot {action_label} on encrypted metadata value field '{field_name}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                        "cannot {action_label} on encrypted metadata value field because it overlaps an encrypted metadata selector; configure a blind index provider instead",
                     )));
                 }
             }
@@ -141,12 +141,12 @@ pub fn validate_payload_index_entry_for_encryption(
             if field_name.compatible(&metadata_path) {
                 if field_name != &metadata_path {
                     return Err(CollectionError::bad_input(format!(
-                        "cannot {action_label} on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must target the exact token field",
+                        "cannot {action_label} on metadata blind-index field because it does not target the exact token field",
                     )));
                 }
                 if field_schema.kind() != PayloadSchemaType::Keyword {
                     return Err(CollectionError::bad_input(format!(
-                        "cannot {action_label} on metadata blind-index field '{field_name}' because it overlaps token field '{metadata_key}'; blind-index token indexes must use keyword schema",
+                        "cannot {action_label} on metadata blind-index field; blind-index token indexes must use keyword schema",
                     )));
                 }
             }
@@ -487,6 +487,7 @@ mod tests {
                 if description.contains("recover payload index schema")
                     && description.contains("metadata blind-index field")
                     && description.contains("keyword schema")
+                    && !description.contains("document_body__blind_eq")
         ));
 
         schema.insert(
@@ -513,6 +514,7 @@ mod tests {
                 if description.contains("recover payload index schema")
                     && description.contains("metadata blind-index field")
                     && description.contains("exact token field")
+                    && !description.contains("document_body__blind_eq")
         ));
     }
 
@@ -537,6 +539,7 @@ mod tests {
             CollectionError::BadInput { description }
                 if description.contains("recover payload index schema")
                     && description.contains("encrypted metadata value field")
+                    && !description.contains("tenant_id")
         ));
 
         schema.clear();
@@ -554,7 +557,7 @@ mod tests {
             err,
             CollectionError::BadInput { description }
                 if description.contains("encrypted metadata value field")
-                    && description.contains("tenant_id.keyword")
+                    && !description.contains("tenant_id")
         ));
     }
 
@@ -582,7 +585,7 @@ mod tests {
                 CollectionError::BadInput { description }
                     if description.contains("create shard key payload index schema")
                         && description.contains("encrypted payload field")
-                        && description.contains("document.body")
+                        && !description.contains("document.body")
             ));
         }
     }
@@ -726,7 +729,7 @@ mod tests {
                 CollectionError::BadInput { description }
                     if description.contains("create payload index")
                         && description.contains("encrypted metadata value field")
-                        && description.contains("metadata.tenant_id")
+                        && !description.contains("metadata.tenant_id")
                         && description.contains("blind index")
             ));
         }

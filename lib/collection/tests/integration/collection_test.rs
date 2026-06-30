@@ -1261,9 +1261,9 @@ async fn encrypted_payload_field_rejects_payload_index() {
 
         assert!(matches!(
             err,
-            CollectionError::BadInput { description }
+                CollectionError::BadInput { description }
                 if description.contains("encrypted payload field")
-                    && description.contains("document.body")
+                    && !description.contains("document.body")
                     && description.contains("blind index")
         ));
     }
@@ -1329,9 +1329,9 @@ async fn encrypted_payload_field_rejects_recovered_payload_index_schema() {
 
     assert!(matches!(
         err,
-        CollectionError::BadInput { ref description }
+            CollectionError::BadInput { ref description }
             if description.contains("payload index schema")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 }
