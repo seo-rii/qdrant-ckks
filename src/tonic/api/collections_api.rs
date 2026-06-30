@@ -504,10 +504,19 @@ mod tests {
                     .contains("lifecycle operation requires no active collection snapshot"),
                 "{update_err}",
             );
-            assert!(
-                !update_err.message().contains(COLLECTION_NAME),
-                "{update_err}"
-            );
+            for forbidden in [
+                COLLECTION_NAME,
+                "private_oram_tonic_collection_route_test",
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-hnsw-signing-v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_hnsw_oram",
+            ] {
+                assert!(!update_err.message().contains(forbidden), "{update_err}");
+            }
 
             let delete_err = Collections::delete(
                 &service,
@@ -525,10 +534,19 @@ mod tests {
                     .contains("lifecycle operation requires no active collection snapshot"),
                 "{delete_err}",
             );
-            assert!(
-                !delete_err.message().contains(COLLECTION_NAME),
-                "{delete_err}"
-            );
+            for forbidden in [
+                COLLECTION_NAME,
+                "private_oram_tonic_collection_route_test",
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-hnsw-signing-v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_hnsw_oram",
+            ] {
+                assert!(!delete_err.message().contains(forbidden), "{delete_err}");
+            }
         });
     }
 
@@ -587,18 +605,23 @@ mod tests {
                     .contains("lifecycle operation requires no active collection snapshot"),
                 "{update_err}",
             );
-            assert!(
-                !update_err.message().contains(COLLECTION_NAME),
-                "{update_err}"
-            );
-            assert!(
-                !update_err.message().contains("private_result_oram"),
-                "{update_err}"
-            );
-            assert!(
-                !update_err.message().contains("payload_private_result_oram"),
-                "{update_err}"
-            );
+            for forbidden in [
+                COLLECTION_NAME,
+                "private_result_oram_tonic_collection_route_test",
+                "payload_private_result_oram",
+                "docs_private_result_oram_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-result-signing-v1",
+                qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_result_oram",
+            ] {
+                assert!(!update_err.message().contains(forbidden), "{update_err}");
+            }
 
             let delete_err = Collections::delete(
                 &service,
@@ -616,18 +639,23 @@ mod tests {
                     .contains("lifecycle operation requires no active collection snapshot"),
                 "{delete_err}",
             );
-            assert!(
-                !delete_err.message().contains(COLLECTION_NAME),
-                "{delete_err}"
-            );
-            assert!(
-                !delete_err.message().contains("private_result_oram"),
-                "{delete_err}"
-            );
-            assert!(
-                !delete_err.message().contains("payload_private_result_oram"),
-                "{delete_err}"
-            );
+            for forbidden in [
+                COLLECTION_NAME,
+                "private_result_oram_tonic_collection_route_test",
+                "payload_private_result_oram",
+                "docs_private_result_oram_v1",
+                "tenant-a/vector-private-rk",
+                "tenant-a/private-result-signing-v1",
+                qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+                "text_private_hnsw",
+                "docs_private_hnsw_v1",
+                qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                "private_result_oram",
+            ] {
+                assert!(!delete_err.message().contains(forbidden), "{delete_err}");
+            }
         });
     }
 
