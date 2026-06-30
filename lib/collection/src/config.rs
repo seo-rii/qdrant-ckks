@@ -556,6 +556,7 @@ mod ckks_tests {
             "clientStateCiphertextHashes",
             "client_state_ciphertext",
             "client_state_ciphertext_hash",
+            "client_state_ciphertext_hashes",
             "encryptedClientStateBackups",
             "encrypted_client_state",
             "encrypted_client_state_backup",
@@ -576,6 +577,7 @@ mod ckks_tests {
             "stateCiphertextHashes",
             "state_ciphertext",
             "state_ciphertext_hash",
+            "state_ciphertext_hashes",
             "tokenPositionMapBackups",
             "token_position_map_backups",
         ] {
@@ -641,6 +643,7 @@ mod ckks_tests {
             "clientStateCiphertextHashes",
             "client_state_ciphertext",
             "client_state_ciphertext_hash",
+            "client_state_ciphertext_hashes",
             "encryptedClientStateBackups",
             "encrypted_client_state",
             "encrypted_client_state_backup",
@@ -661,6 +664,7 @@ mod ckks_tests {
             "stateCiphertextHashes",
             "state_ciphertext",
             "state_ciphertext_hash",
+            "state_ciphertext_hashes",
             "tokenPositionMapBackups",
             "token_position_map_backups",
         ] {
