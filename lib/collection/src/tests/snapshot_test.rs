@@ -1092,6 +1092,7 @@ async fn test_snapshot_private_oram_store_files_are_archived() {
         "stateCiphertext",
         "stateCiphertextHash",
         "stateCiphertextHashes",
+        "state_ciphertext_hash",
         "state_ciphertext_hashes",
         "stateCiphertextSha256",
         "stateCiphertextsSha256",
