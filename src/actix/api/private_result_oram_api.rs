@@ -755,6 +755,33 @@ mod private_result_oram_rest_tests {
         }
     }
 
+    fn assert_private_result_guard_error_redacts(rendered: &str, extra_forbidden: &[&str]) {
+        for forbidden in [
+            COLLECTION_NAME,
+            "body_private_result",
+            "payload_result_oram_v1",
+            KEY_ID,
+            SIGNING_KEY_ID,
+            qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+            qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+            "private_result_oram",
+            "private_hnsw_oram",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "private result ORAM guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for forbidden in extra_forbidden {
+            assert!(
+                !rendered.contains(forbidden),
+                "private result ORAM guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+    }
+
     #[test]
     fn private_result_oram_rest_dto_debug_redacts_sensitive_values() {
         let fixture = PrivateResultRouteFixture::build();
@@ -1911,6 +1938,14 @@ mod private_result_oram_rest_tests {
                 !active_snapshot_session_error.contains(active_snapshot_client_id),
                 "{active_snapshot_session_error}"
             );
+            assert_private_result_guard_error_redacts(
+                &active_snapshot_session_error,
+                &[
+                    active_snapshot_client_id,
+                    &fixture.manifest.root_hash,
+                    &fixture.signature.sig,
+                ],
+            );
             let active_snapshot_manifest_upload_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/manifest",
                 UploadPrivateResultOramManifestRequest {
@@ -1927,6 +1962,10 @@ mod private_result_oram_rest_tests {
             assert!(
                 !active_snapshot_manifest_upload_error.contains("private_result_oram"),
                 "{active_snapshot_manifest_upload_error}"
+            );
+            assert_private_result_guard_error_redacts(
+                &active_snapshot_manifest_upload_error,
+                &[&fixture.manifest.root_hash, &fixture.signature.sig],
             );
             let mut active_snapshot_bucket_upload = fixture.buckets.clone();
             active_snapshot_bucket_upload[0].ciphertext =
@@ -1953,6 +1992,13 @@ mod private_result_oram_rest_tests {
             assert!(
                 !active_snapshot_bucket_upload_error.contains("private_result_oram"),
                 "{active_snapshot_bucket_upload_error}"
+            );
+            assert_private_result_guard_error_redacts(
+                &active_snapshot_bucket_upload_error,
+                &[
+                    "active-result-snapshot-bucket-ciphertext-sentinel",
+                    &fixture.manifest.root_hash,
+                ],
             );
             drop(snapshot_guard);
 
@@ -1987,6 +2033,14 @@ mod private_result_oram_rest_tests {
                 !active_lifecycle_session_error.contains(active_lifecycle_client_id),
                 "{active_lifecycle_session_error}"
             );
+            assert_private_result_guard_error_redacts(
+                &active_lifecycle_session_error,
+                &[
+                    active_lifecycle_client_id,
+                    &fixture.manifest.root_hash,
+                    &fixture.signature.sig,
+                ],
+            );
             let active_lifecycle_manifest_upload_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/manifest",
                 UploadPrivateResultOramManifestRequest {
@@ -2003,6 +2057,10 @@ mod private_result_oram_rest_tests {
             assert!(
                 !active_lifecycle_manifest_upload_error.contains("private_result_oram"),
                 "{active_lifecycle_manifest_upload_error}"
+            );
+            assert_private_result_guard_error_redacts(
+                &active_lifecycle_manifest_upload_error,
+                &[&fixture.manifest.root_hash, &fixture.signature.sig],
             );
             let mut active_lifecycle_bucket_upload = fixture.buckets.clone();
             active_lifecycle_bucket_upload[0].ciphertext =
@@ -2029,6 +2087,13 @@ mod private_result_oram_rest_tests {
             assert!(
                 !active_lifecycle_bucket_upload_error.contains("private_result_oram"),
                 "{active_lifecycle_bucket_upload_error}"
+            );
+            assert_private_result_guard_error_redacts(
+                &active_lifecycle_bucket_upload_error,
+                &[
+                    "active-result-lifecycle-bucket-ciphertext-sentinel",
+                    &fixture.manifest.root_hash,
+                ],
             );
             drop(lifecycle_guard);
 
@@ -2281,6 +2346,10 @@ mod private_result_oram_rest_tests {
                 !duplicate_session_error.contains(duplicate_session_client_id),
                 "{duplicate_session_error}"
             );
+            assert_private_result_guard_error_redacts(
+                &duplicate_session_error,
+                &[duplicate_session_client_id, &session_id],
+            );
 
             let active_manifest_upload_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/manifest",
@@ -2293,6 +2362,14 @@ mod private_result_oram_rest_tests {
             );
             assert!(!active_manifest_upload_error.contains(&fixture.manifest.root_hash));
             assert!(!active_manifest_upload_error.contains(&session_id));
+            assert_private_result_guard_error_redacts(
+                &active_manifest_upload_error,
+                &[
+                    &fixture.manifest.root_hash,
+                    &fixture.signature.sig,
+                    &session_id,
+                ],
+            );
 
             let active_bucket_upload_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/buckets",
@@ -2307,6 +2384,14 @@ mod private_result_oram_rest_tests {
             assert!(!active_bucket_upload_error.contains(&fixture.buckets[0].ciphertext));
             assert!(!active_bucket_upload_error.contains(&fixture.manifest.root_hash));
             assert!(!active_bucket_upload_error.contains(&session_id));
+            assert_private_result_guard_error_redacts(
+                &active_bucket_upload_error,
+                &[
+                    &fixture.buckets[0].ciphertext,
+                    &fixture.manifest.root_hash,
+                    &session_id,
+                ],
+            );
 
             let active_snapshot_error = crate::common::collections::do_create_snapshot(
                 dispatcher.toc(&auth, &pass).clone(),
@@ -2336,6 +2421,15 @@ mod private_result_oram_rest_tests {
                 !active_snapshot_error.contains("private_result_oram"),
                 "{active_snapshot_error}"
             );
+            assert_private_result_guard_error_redacts(
+                &active_snapshot_error,
+                &[
+                    &session_id,
+                    &fixture.manifest.root_hash,
+                    &fixture.buckets[0].ciphertext,
+                    &fixture.signature.sig,
+                ],
+            );
             let active_full_snapshot_error =
                 crate::common::snapshots::do_create_full_snapshot(&dispatcher, auth.clone())
                     .await
@@ -2360,6 +2454,15 @@ mod private_result_oram_rest_tests {
             assert!(
                 !active_full_snapshot_error.contains("private_result_oram"),
                 "{active_full_snapshot_error}"
+            );
+            assert_private_result_guard_error_redacts(
+                &active_full_snapshot_error,
+                &[
+                    &session_id,
+                    &fixture.manifest.root_hash,
+                    &fixture.buckets[0].ciphertext,
+                    &fixture.signature.sig,
+                ],
             );
 
             let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];

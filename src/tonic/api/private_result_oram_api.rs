@@ -760,6 +760,33 @@ mod private_result_oram_grpc_tests {
         }
     }
 
+    fn assert_private_result_guard_message_redacts(rendered: &str, extra_forbidden: &[&str]) {
+        for forbidden in [
+            COLLECTION_NAME,
+            "body_private_result",
+            "payload_result_oram_v1",
+            KEY_ID,
+            SIGNING_KEY_ID,
+            qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+            qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+            "private_result_oram",
+            "private_hnsw_oram",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "private result ORAM guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for forbidden in extra_forbidden {
+            assert!(
+                !rendered.contains(forbidden),
+                "private result ORAM guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+    }
+
     async fn create_private_result_collection(dispatcher: &Dispatcher) {
         dispatcher
             .submit_collection_meta_op(
@@ -2054,6 +2081,14 @@ mod private_result_oram_grpc_tests {
             assert!(!err.message().contains(&fixture.manifest.root_hash));
             assert!(!err.message().contains("private_result_oram"));
             assert!(!err.message().contains(active_snapshot_client_id));
+            assert_private_result_guard_message_redacts(
+                err.message(),
+                &[
+                    active_snapshot_client_id,
+                    &fixture.manifest.root_hash,
+                    &fixture.signature.sig,
+                ],
+            );
             let err = PrivateResultOram::upload_private_result_oram_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateResultOramManifestRequest {
@@ -2068,6 +2103,10 @@ mod private_result_oram_grpc_tests {
             assert!(err.message().contains("active collection snapshot"));
             assert!(!err.message().contains(&fixture.manifest.root_hash));
             assert!(!err.message().contains("private_result_oram"));
+            assert_private_result_guard_message_redacts(
+                err.message(),
+                &[&fixture.manifest.root_hash, &fixture.signature.sig],
+            );
             let mut active_snapshot_bucket_upload = fixture.buckets.clone();
             active_snapshot_bucket_upload[0].ciphertext =
                 "active-result-snapshot-bucket-ciphertext-sentinel".to_string();
@@ -2097,6 +2136,13 @@ mod private_result_oram_grpc_tests {
                 err.message()
             );
             assert!(!err.message().contains("private_result_oram"));
+            assert_private_result_guard_message_redacts(
+                err.message(),
+                &[
+                    "active-result-snapshot-bucket-ciphertext-sentinel",
+                    &fixture.manifest.root_hash,
+                ],
+            );
             drop(snapshot_guard);
 
             let lifecycle_guard =
@@ -2127,6 +2173,14 @@ mod private_result_oram_grpc_tests {
             assert!(!err.message().contains(&fixture.manifest.root_hash));
             assert!(!err.message().contains("private_result_oram"));
             assert!(!err.message().contains(active_lifecycle_client_id));
+            assert_private_result_guard_message_redacts(
+                err.message(),
+                &[
+                    active_lifecycle_client_id,
+                    &fixture.manifest.root_hash,
+                    &fixture.signature.sig,
+                ],
+            );
             let err = PrivateResultOram::upload_private_result_oram_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateResultOramManifestRequest {
@@ -2144,6 +2198,10 @@ mod private_result_oram_grpc_tests {
             );
             assert!(!err.message().contains(&fixture.manifest.root_hash));
             assert!(!err.message().contains("private_result_oram"));
+            assert_private_result_guard_message_redacts(
+                err.message(),
+                &[&fixture.manifest.root_hash, &fixture.signature.sig],
+            );
             let mut active_lifecycle_bucket_upload = fixture.buckets.clone();
             active_lifecycle_bucket_upload[0].ciphertext =
                 "active-result-lifecycle-bucket-ciphertext-sentinel".to_string();
@@ -2176,6 +2234,13 @@ mod private_result_oram_grpc_tests {
                 err.message()
             );
             assert!(!err.message().contains("private_result_oram"));
+            assert_private_result_guard_message_redacts(
+                err.message(),
+                &[
+                    "active-result-lifecycle-bucket-ciphertext-sentinel",
+                    &fixture.manifest.root_hash,
+                ],
+            );
             drop(lifecycle_guard);
 
             let client_id_sentinel = "result-session-client-id-sentinel";
@@ -2458,6 +2523,10 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(duplicate_session_client_id)
             );
+            assert_private_result_guard_message_redacts(
+                duplicate_session.message(),
+                &[duplicate_session_client_id, &session.session_id],
+            );
 
             let active_manifest_upload = PrivateResultOram::upload_private_result_oram_manifest(
                 &service,
@@ -2484,6 +2553,14 @@ mod private_result_oram_grpc_tests {
                 !active_manifest_upload
                     .message()
                     .contains(&session.session_id)
+            );
+            assert_private_result_guard_message_redacts(
+                active_manifest_upload.message(),
+                &[
+                    &fixture.manifest.root_hash,
+                    &fixture.signature.sig,
+                    &session.session_id,
+                ],
             );
 
             let active_bucket_upload = PrivateResultOram::upload_private_result_oram_buckets(
@@ -2519,6 +2596,14 @@ mod private_result_oram_grpc_tests {
                     .contains(&fixture.manifest.root_hash)
             );
             assert!(!active_bucket_upload.message().contains(&session.session_id));
+            assert_private_result_guard_message_redacts(
+                active_bucket_upload.message(),
+                &[
+                    &fixture.buckets[0].ciphertext,
+                    &fixture.manifest.root_hash,
+                    &session.session_id,
+                ],
+            );
 
             let active_snapshot_error = crate::common::collections::do_create_snapshot(
                 dispatcher.toc(&auth, &pass).clone(),
@@ -2548,6 +2633,15 @@ mod private_result_oram_grpc_tests {
                 !active_snapshot_error.contains("private_result_oram"),
                 "{active_snapshot_error}"
             );
+            assert_private_result_guard_message_redacts(
+                &active_snapshot_error,
+                &[
+                    &session.session_id,
+                    &fixture.manifest.root_hash,
+                    &fixture.buckets[0].ciphertext,
+                    &fixture.signature.sig,
+                ],
+            );
             let active_full_snapshot_error =
                 crate::common::snapshots::do_create_full_snapshot(&dispatcher, auth.clone())
                     .await
@@ -2572,6 +2666,15 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !active_full_snapshot_error.contains("private_result_oram"),
                 "{active_full_snapshot_error}"
+            );
+            assert_private_result_guard_message_redacts(
+                &active_full_snapshot_error,
+                &[
+                    &session.session_id,
+                    &fixture.manifest.root_hash,
+                    &fixture.buckets[0].ciphertext,
+                    &fixture.signature.sig,
+                ],
             );
 
             let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
