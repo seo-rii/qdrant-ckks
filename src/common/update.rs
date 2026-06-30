@@ -19755,7 +19755,7 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cannot filter on encrypted payload field")
-                        && description.contains("body")
+                        && !description.contains("body")
             ));
 
             let err = do_delete_payload(
@@ -19832,7 +19832,7 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cannot filter on encrypted payload field")
-                        && description.contains("body")
+                        && !description.contains("body")
             ));
 
             for indexed_field in ["body", "body.keyword"] {
@@ -19860,7 +19860,7 @@ esac
                     err,
                     StorageError::BadInput { description }
                         if (description.contains("encrypted payload field")
-                            && description.contains("body")
+                            && !description.contains("body")
                             && description.contains("blind index"))
                 ));
             }

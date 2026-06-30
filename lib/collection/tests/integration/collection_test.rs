@@ -2897,7 +2897,7 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot filter on encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 
@@ -2922,7 +2922,7 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot filter on encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 
@@ -2943,7 +2943,7 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot filter on encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 
@@ -2971,7 +2971,7 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot filter on encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 
@@ -2999,7 +2999,7 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot filter on encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 
@@ -3026,7 +3026,7 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot filter on encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 
@@ -3049,7 +3049,7 @@ async fn encrypted_payload_field_rejects_plaintext_filters() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot filter on encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 }
@@ -4112,7 +4112,7 @@ async fn metadata_blind_index_token_field_rejects_non_filter_read_modes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot order by metadata blind-index field")
-                && description.contains(token_field)
+                && !description.contains(token_field)
                 && description.contains("exact-match filters only")
     ));
 
@@ -4145,7 +4145,7 @@ async fn metadata_blind_index_token_field_rejects_non_filter_read_modes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot order by metadata blind-index field")
-                && description.contains(token_field)
+                && !description.contains(token_field)
                 && description.contains("exact-match filters only")
     ));
 
@@ -4201,7 +4201,7 @@ async fn metadata_blind_index_token_field_rejects_non_filter_read_modes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot group by metadata blind-index field")
-                && description.contains(token_field)
+                && !description.contains(token_field)
                 && description.contains("exact-match filters only")
     ));
 
@@ -4238,7 +4238,7 @@ async fn metadata_blind_index_token_field_rejects_non_filter_read_modes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot use metadata blind-index field")
-                && description.contains(token_field)
+                && !description.contains(token_field)
                 && description.contains("formula")
                 && description.contains("exact-match filters only")
     ));
@@ -4281,7 +4281,7 @@ async fn metadata_blind_index_token_field_rejects_non_filter_read_modes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot use formula condition on metadata blind-index field")
-                && description.contains(token_field)
+                && !description.contains(token_field)
                 && description.contains("exact-match filters only")
     ));
 }
@@ -4561,7 +4561,7 @@ async fn encrypted_payload_field_rejects_update_filters() {
             err,
             CollectionError::BadInput { description }
                 if description.contains("cannot filter on encrypted payload field")
-                    && description.contains("document.body")
+                && !description.contains("document.body")
                     && description.contains("blind index")
         ));
     }
@@ -4849,7 +4849,7 @@ async fn encrypted_payload_field_rejects_plaintext_order_by() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot order by encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 
@@ -4882,7 +4882,7 @@ async fn encrypted_payload_field_rejects_plaintext_order_by() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot order by encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 }
@@ -4926,7 +4926,7 @@ async fn encrypted_payload_field_rejects_plaintext_formula() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot use encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("formula")
                 && description.contains("blind index")
     ));
@@ -4966,7 +4966,7 @@ async fn encrypted_payload_field_rejects_plaintext_formula() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot use formula condition")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 }
@@ -5036,7 +5036,7 @@ async fn encrypted_payload_field_rejects_plaintext_group_by() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot group by encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 }

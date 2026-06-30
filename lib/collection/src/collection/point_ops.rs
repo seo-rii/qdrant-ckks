@@ -3285,9 +3285,9 @@ impl Collection {
                                     ),
                                 ));
                             }
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot filter on encrypted payload field '{filter_path}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "cannot filter on encrypted payload field because it overlaps an encrypted payload selector; configure a blind index provider instead",
+                            ));
                         }
                     }
                 }
@@ -3306,12 +3306,10 @@ impl Collection {
                             CollectionError::bad_input("metadata blind-index field path is invalid")
                         })?;
                         if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
-                            if let Some(filter_path) =
-                                filter_touches_encrypted_payload(filter, &metadata_path)
-                            {
-                                return Err(CollectionError::bad_input(format!(
-                                    "cannot filter on encrypted metadata value field '{filter_path}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
-                                )));
+                            if filter_touches_encrypted_payload(filter, &metadata_path).is_some() {
+                                return Err(CollectionError::bad_input(
+                                    "cannot filter on encrypted metadata value field because it overlaps an encrypted metadata selector; configure a blind index provider instead",
+                                ));
                             }
                             continue;
                         }
@@ -3368,10 +3366,9 @@ impl Collection {
                                     ),
                                 ));
                             }
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot order by encrypted payload field '{}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                                order_by.key,
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "cannot order by encrypted payload field because it overlaps an encrypted payload selector; configure a blind index provider instead",
+                            ));
                         }
                     }
                 }
@@ -3380,18 +3377,16 @@ impl Collection {
                         let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
                         if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
                             if order_by.key.compatible(&metadata_path) {
-                                return Err(CollectionError::bad_input(format!(
-                                    "cannot order by encrypted metadata value field '{}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
-                                    order_by.key,
-                                )));
+                                return Err(CollectionError::bad_input(
+                                    "cannot order by encrypted metadata value field because it overlaps an encrypted metadata selector; configure a blind index provider instead",
+                                ));
                             }
                             continue;
                         }
                         if order_by.key.compatible(&metadata_path) {
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot order by metadata blind-index field '{}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
-                                order_by.key,
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "cannot order by metadata blind-index field; blind-index token fields support exact-match filters only",
+                            ));
                         }
                     }
                 }
@@ -3439,9 +3434,9 @@ impl Collection {
                                     ),
                                 ));
                             }
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot group by encrypted payload field '{group_by}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "cannot group by encrypted payload field because it overlaps an encrypted payload selector; configure a blind index provider instead",
+                            ));
                         }
                     }
                 }
@@ -3450,16 +3445,16 @@ impl Collection {
                         let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
                         if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
                             if group_by.compatible(&metadata_path) {
-                                return Err(CollectionError::bad_input(format!(
-                                    "cannot group by encrypted metadata value field '{group_by}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
-                                )));
+                                return Err(CollectionError::bad_input(
+                                    "cannot group by encrypted metadata value field because it overlaps an encrypted metadata selector; configure a blind index provider instead",
+                                ));
                             }
                             continue;
                         }
                         if group_by.compatible(&metadata_path) {
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot group by metadata blind-index field '{group_by}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "cannot group by metadata blind-index field; blind-index token fields support exact-match filters only",
+                            ));
                         }
                     }
                 }
@@ -3531,9 +3526,9 @@ impl Collection {
                                     ),
                                 ));
                             }
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot use encrypted payload field '{formula_path}' in formula because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "cannot use encrypted payload field in formula because it overlaps an encrypted payload selector; configure a blind index provider instead",
+                            ));
                         }
 
                         if let Some(condition_path) =
@@ -3549,9 +3544,9 @@ impl Collection {
                                     ),
                                 ));
                             }
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot use formula condition on encrypted payload field '{condition_path}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "cannot use formula condition on encrypted payload field because it overlaps an encrypted payload selector; configure a blind index provider instead",
+                            ));
                         }
                     }
                 }
@@ -3560,46 +3555,54 @@ impl Collection {
                         let metadata_path = parse_metadata_blind_index_path(metadata_key)?;
 
                         if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
-                            if let Some(formula_path) = formula
+                            if formula
                                 .payload_vars
                                 .iter()
                                 .find(|payload_var| payload_var.compatible(&metadata_path))
+                                .is_some()
                             {
-                                return Err(CollectionError::bad_input(format!(
-                                    "cannot use encrypted metadata value field '{formula_path}' in formula because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
-                                )));
+                                return Err(CollectionError::bad_input(
+                                    "cannot use encrypted metadata value field in formula because it overlaps an encrypted metadata selector; configure a blind index provider instead",
+                                ));
                             }
 
-                            if let Some(condition_path) =
-                                formula.conditions.iter().find_map(|condition| {
+                            if formula
+                                .conditions
+                                .iter()
+                                .find_map(|condition| {
                                     condition_touches_encrypted_payload(condition, &metadata_path)
                                 })
+                                .is_some()
                             {
-                                return Err(CollectionError::bad_input(format!(
-                                    "cannot use formula condition on encrypted metadata value field '{condition_path}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
-                                )));
+                                return Err(CollectionError::bad_input(
+                                    "cannot use formula condition on encrypted metadata value field because it overlaps an encrypted metadata selector; configure a blind index provider instead",
+                                ));
                             }
                             continue;
                         }
 
-                        if let Some(formula_path) = formula
+                        if formula
                             .payload_vars
                             .iter()
                             .find(|payload_var| payload_var.compatible(&metadata_path))
+                            .is_some()
                         {
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot use metadata blind-index field '{formula_path}' in formula because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "cannot use metadata blind-index field in formula; blind-index token fields support exact-match filters only",
+                            ));
                         }
 
-                        if let Some(condition_path) =
-                            formula.conditions.iter().find_map(|condition| {
+                        if formula
+                            .conditions
+                            .iter()
+                            .find_map(|condition| {
                                 condition_touches_encrypted_payload(condition, &metadata_path)
                             })
+                            .is_some()
                         {
-                            return Err(CollectionError::bad_input(format!(
-                                "cannot use formula condition on metadata blind-index field '{condition_path}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "cannot use formula condition on metadata blind-index field; blind-index token fields support exact-match filters only",
+                            ));
                         }
                     }
                 }
