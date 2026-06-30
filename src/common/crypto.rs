@@ -23354,9 +23354,12 @@ mod tests {
             "position.map",
             "stashBackups.json",
             "client_state_ciphertext_hashes.json",
+            "client_state_ciphertexts_sha256.json",
             "encrypted_client_state.json",
             "encrypted_client_state_ciphertext_hashes.json",
+            "encrypted_client_state_ciphertexts_sha256.json",
             "state_ciphertext_hashes.json",
+            "state_ciphertexts_sha256.json",
             "token_position_map_backups.json",
         ];
         let settings = Settings {
