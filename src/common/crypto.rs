@@ -3071,7 +3071,7 @@ fn openfhe_checked_spawn_hardening_level() -> &'static str {
     if cfg!(target_os = "linux") {
         "linux_proc_fd_no_follow"
     } else {
-        "path_revalidation_only"
+        "unavailable_non_linux_fail_closed"
     }
 }
 
