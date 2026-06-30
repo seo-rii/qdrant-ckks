@@ -4862,6 +4862,31 @@ mod private_hnsw_tests {
     }
 
     #[test]
+    fn upload_write_window_rejects_collection_lifecycle() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .begin_upload("collection-uuid-1", "text", now)
+            .unwrap();
+
+        let err = registry
+            .begin_collection_lifecycle_operation("collection-uuid-1", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("lifecycle operation requires no active private ORAM upload"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
+        registry
+            .begin_collection_lifecycle_operation("other-collection", now)
+            .unwrap();
+        registry.release_collection_lifecycle_operation("other-collection");
+
+        registry.release_upload("collection-uuid-1", "text");
+        registry
+            .begin_collection_lifecycle_operation("collection-uuid-1", now)
+            .unwrap();
+    }
+
+    #[test]
     fn collection_snapshot_guard_uses_exact_private_hnsw_upload_collection_marker() {
         let now = 10;
         let mut registry = PrivateHnswSessionRegistry::default();
@@ -4891,6 +4916,40 @@ mod private_hnsw_tests {
             .unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("snapshot requires no active private ORAM upload"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
+        assert!(!rendered.contains("image"), "{rendered}");
+    }
+
+    #[test]
+    fn collection_lifecycle_guard_uses_exact_private_hnsw_upload_collection_marker() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .begin_upload("collection-uuid-10", "text", now)
+            .unwrap();
+
+        registry
+            .begin_collection_lifecycle_operation("collection-uuid-1", now)
+            .unwrap();
+        registry.release_collection_lifecycle_operation("collection-uuid-1");
+
+        let err = registry
+            .begin_collection_lifecycle_operation("collection-uuid-10", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("lifecycle operation requires no active private ORAM upload"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
+        assert!(!rendered.contains("collection-uuid-10"), "{rendered}");
+        registry.release_upload("collection-uuid-10", "text");
+
+        registry
+            .begin_upload("collection-uuid-1", "image", now)
+            .unwrap();
+        let err = registry
+            .begin_collection_lifecycle_operation("collection-uuid-1", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("lifecycle operation requires no active private ORAM upload"));
         assert_private_hnsw_registry_error_redacts_ids(&rendered);
         assert!(!rendered.contains("image"), "{rendered}");
     }

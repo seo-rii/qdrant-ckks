@@ -3186,6 +3186,56 @@ mod private_result_oram_tests {
     }
 
     #[test]
+    fn upload_write_window_rejects_collection_lifecycle() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .begin_upload("collection-private-result-test", now)
+            .unwrap();
+
+        let err = registry
+            .begin_collection_lifecycle_operation("collection-private-result-test", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("lifecycle operation requires no active private ORAM upload"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
+        registry
+            .begin_collection_lifecycle_operation("other-private-result-collection", now)
+            .unwrap();
+        registry.release_collection_lifecycle_operation("other-private-result-collection");
+
+        registry.release_upload("collection-private-result-test");
+        registry
+            .begin_collection_lifecycle_operation("collection-private-result-test", now)
+            .unwrap();
+    }
+
+    #[test]
+    fn collection_lifecycle_guard_uses_exact_private_result_upload_collection() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .begin_upload("collection-private-result-test-suffix", now)
+            .unwrap();
+
+        registry
+            .begin_collection_lifecycle_operation("collection-private-result-test", now)
+            .unwrap();
+        registry.release_collection_lifecycle_operation("collection-private-result-test");
+
+        let err = registry
+            .begin_collection_lifecycle_operation("collection-private-result-test-suffix", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("lifecycle operation requires no active private ORAM upload"));
+        assert_private_result_registry_error_redacts_ids(&rendered);
+        assert!(
+            !rendered.contains("collection-private-result-test-suffix"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn upload_write_window_uses_exact_private_result_collection() {
         let now = 10;
         let mut registry = PrivateResultOramSessionRegistry::default();
