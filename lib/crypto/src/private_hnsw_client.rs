@@ -939,6 +939,15 @@ pub fn plan_private_hnsw_private_result_fetch_tokens(
                     "dummy_payload_fetch_tokens",
                 ));
             }
+            let mut dummy_seen = BTreeSet::new();
+            if !dummy_payload_fetch_tokens
+                .iter()
+                .all(|token| dummy_seen.insert(*token))
+            {
+                return Err(PrivateHnswClientError::InvalidSearchConfig(
+                    "payload_fetch_tokens",
+                ));
+            }
             validate_private_hnsw_search_result_privacy(result_privacy, result)?;
             let mut payload_fetch_tokens = result
                 .hits
@@ -948,13 +957,17 @@ pub fn plan_private_hnsw_private_result_fetch_tokens(
                         .ok_or(PrivateHnswClientError::MissingPayloadFetchToken)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            payload_fetch_tokens.extend_from_slice(&dummy_payload_fetch_tokens[..padding_count]);
             let mut seen = BTreeSet::new();
-            if !payload_fetch_tokens.iter().all(|token| seen.insert(*token)) {
+            if !payload_fetch_tokens.iter().all(|token| seen.insert(*token))
+                || dummy_payload_fetch_tokens
+                    .iter()
+                    .any(|token| seen.contains(token))
+            {
                 return Err(PrivateHnswClientError::InvalidSearchConfig(
                     "payload_fetch_tokens",
                 ));
             }
+            payload_fetch_tokens.extend_from_slice(&dummy_payload_fetch_tokens[..padding_count]);
             Ok(Some(PrivateHnswPrivateResultFetchPlan {
                 payload_fetch_tokens,
                 real_result_count: result.hits.len(),
@@ -7590,6 +7603,28 @@ mod tests {
                 &one_hit,
                 3,
                 &[[99; 32], [99; 32]],
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "payload_fetch_tokens"
+            ))
+        );
+        assert_eq!(
+            plan_private_hnsw_private_result_fetch_tokens(
+                ResultPrivacyMode::PrivatePayloadOramRequired,
+                &one_hit,
+                1,
+                &[[99; 32], [99; 32]],
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig(
+                "payload_fetch_tokens"
+            ))
+        );
+        assert_eq!(
+            plan_private_hnsw_private_result_fetch_tokens(
+                ResultPrivacyMode::PrivatePayloadOramRequired,
+                &one_hit,
+                1,
+                &[[11; 32], [99; 32]],
             ),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "payload_fetch_tokens"
