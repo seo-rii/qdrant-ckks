@@ -438,6 +438,7 @@ mod tests {
              tokenPositionMapBackups=token-position-map-backups-camel-sentinel \
              token_position_map_backups=token-position-map-backups-snake-sentinel \
              updated_bucket=updated-bucket-singular-sentinel \
+             updatedBucket=updated-bucket-camel-singular-sentinel \
              updated_bucket_id=updated-bucket-id-snake-sentinel \
              updatedBucketId=updated-bucket-id-camel-sentinel \
              updated_bucket_commitment=updated-bucket-commitment-snake-sentinel \
@@ -446,6 +447,7 @@ mod tests {
              updatedBuckets=updated-bucket-camel-sentinel \
              bucket_commitment=bucket-commitment-sentinel \
              bucket_commitments=bucket-commitment-snake-plural-sentinel \
+             bucketCommitment=bucket-commitment-camel-singular-sentinel \
              bucketCommitments=bucket-commitment-camel-plural-sentinel \
              leaf_commitment=single-leaf-commitment-sentinel \
              leaf_commitments=leaf-commitment-snake-sentinel \
@@ -461,7 +463,9 @@ mod tests {
              siblings=siblings-sentinel \
              sibling_hash=sibling-hash-sentinel \
              siblingHash=sibling-hash-camel-sentinel \
+             bucket_id=bucket-id-snake-singular-sentinel \
              bucket_ids=bucket-id-snake-sentinel \
+             bucketId=bucket-id-camel-singular-sentinel \
              bucketIds=bucket-id-camel-sentinel \
              unknown_field=unknown-field-snake-sentinel \
              unknownField=unknown-field-camel-sentinel",

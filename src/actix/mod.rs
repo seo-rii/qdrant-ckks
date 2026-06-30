@@ -1080,6 +1080,12 @@ mod tests {
         );
         assert_eq!(
             redact_private_oram_access_path(
+                "/collections/docs/private-result-oram/oram/read_buckets?bucket_id=bucket-sentinel"
+            ),
+            "/collections/docs/private-result-oram/oram/read_buckets?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
                 "/collections/docs/private-result-oram/buckets/result-bucket-id-sentinel"
             ),
             "/collections/docs/private-result-oram/buckets/[redacted]"
@@ -1099,6 +1105,12 @@ mod tests {
         assert_eq!(
             redact_private_oram_access_path(
                 "/collections/docs/private-result-oram/oram/commit?updated_buckets=bucket-sentinel"
+            ),
+            "/collections/docs/private-result-oram/oram/commit?[redacted]"
+        );
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-result-oram/oram/commit?updated_bucket=bucket-sentinel"
             ),
             "/collections/docs/private-result-oram/oram/commit?[redacted]"
         );

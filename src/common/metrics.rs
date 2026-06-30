@@ -1591,6 +1591,10 @@ mod tests {
                 "/collections/{collection_name}/private-result-oram/oram/read_buckets",
             ),
             (
+                "/collections/docs/private-result-oram/oram/read_buckets?bucket_id=result-query-bucket-sentinel",
+                "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+            ),
+            (
                 "/collections/docs/private-result-oram/oram/commit",
                 "/collections/{collection_name}/private-result-oram/oram/commit",
             ),
@@ -2375,6 +2379,7 @@ mod tests {
             "GET /collections/docs/private-result-oram/manifest/result-root-hash-sentinel",
             "POST /collections/docs/private-result-oram/oram/commit/result-updated-bucket-sentinel",
             "POST /collections/docs/private-result-oram/oram/read_buckets/result-bucket-id-sentinel",
+            "POST /collections/docs/private-result-oram/oram/read_buckets?bucket_id=result-query-bucket-sentinel",
             "POST /collections/docs/private-result-oram/oram/read_buckets?bucket_ids=result-query-bucket-sentinel",
             "POST /collections/docs/private-result-oram/session/token-position-map-sentinel",
             "POST /collections/docs/private-result-oram/session/token-position-map-backup-sentinel",

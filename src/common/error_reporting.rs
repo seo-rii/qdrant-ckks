@@ -774,6 +774,7 @@ mod tests {
             "stashSnapshot=private-stash-snapshot-sentinel",
             "stash_snapshots=[private-stash-snapshots-snake-sentinel]",
             "updated_bucket=private-updated-bucket-singular-sentinel",
+            "updatedBucket=private-updated-bucket-camel-singular-sentinel",
             "updated_bucket_id=private-updated-bucket-id-sentinel",
             "updatedBucketId=private-updated-bucket-id-camel-sentinel",
             "updated_bucket_commitment=private-updated-bucket-commitment-sentinel",

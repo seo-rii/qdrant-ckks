@@ -312,6 +312,7 @@ mod tests {
              requestedPathCounts=requested-path-counts-camel-sentinel \
              requestedBucketCount=requested-bucket-count-camel-sentinel \
              requestedBucketCounts=requested-bucket-counts-camel-sentinel \
+             readBucketId=read-bucket-id-camel-singular-sentinel \
              readBucketIdCounts=read-bucket-id-counts-camel-sentinel \
              readBucketIds=read-bucket-ids-camel-sentinel \
              returnedBucketCount=returned-bucket-count-camel-sentinel \
