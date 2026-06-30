@@ -11913,6 +11913,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("strict zero-trust profile")
+                        && !description.contains("docs")
+                        && !description.contains("body")
             ));
 
             let decrypted_records = crate::common::query::do_get_points(
@@ -12184,6 +12186,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("requires runtime crypto settings")
+                        && !description.contains("docs")
+                        && !description.contains("body")
             ));
 
             let err = crate::common::query::do_scroll_points(
@@ -12214,6 +12218,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("requires runtime crypto settings")
+                        && !description.contains("docs")
+                        && !description.contains("body")
             ));
 
             let decrypted_scroll = crate::common::query::do_scroll_points(

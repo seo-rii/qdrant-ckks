@@ -5877,18 +5877,16 @@ async fn payload_decrypt_plan_for_read(
         return Ok(None);
     }
     let Some(settings) = runtime_settings else {
-        return Err(StorageError::bad_input(format!(
-            "encrypted payload read mode 'decrypted' for collection {collection_name} requires \
-             runtime crypto settings; use 'raw' for SDK/client decryption or 'redacted'",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted payload read mode 'decrypted' requires runtime crypto settings; use 'raw' for SDK/client decryption or 'redacted'",
+        ));
     };
     if settings.crypto.zero_trust_profile.as_deref()
         == Some(crate::settings::ZERO_TRUST_PROFILE_STRICT)
     {
-        return Err(StorageError::bad_input(format!(
-            "encrypted payload read mode 'decrypted' for collection {collection_name} is disabled \
-             by strict zero-trust profile; use raw client envelopes and decrypt in the SDK",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted payload read mode 'decrypted' is disabled by strict zero-trust profile; use raw client envelopes and decrypt in the SDK",
+        ));
     }
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
@@ -5899,20 +5897,16 @@ async fn payload_decrypt_plan_for_read(
         &collection_crypto_id,
         &collection_config.params,
     )
-    .map_err(|err| {
-        StorageError::service_error(format!(
-            "payload/metadata decrypt runtime for collection {collection_name} is invalid: {err}",
-        ))
+    .map_err(|_| {
+        StorageError::service_error("payload/metadata decrypt runtime is invalid for read")
     })?;
 
     if let Some(plan) = &plan
         && !plan.has_server_encrypt_rules()
     {
-        return Err(StorageError::bad_input(format!(
-            "encrypted payload read mode 'decrypted' for collection {collection_name} requires \
-             server-side payload text or metadata value AEAD rules; client-side envelopes are \
-             opaque and must be decrypted by the client SDK",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted payload read mode 'decrypted' requires server-side payload text or metadata value AEAD rules; client-side envelopes are opaque and must be decrypted by the client SDK",
+        ));
     }
 
     Ok(plan)
@@ -6036,18 +6030,13 @@ async fn preflight_payload_decrypt_modes_for_read(
 }
 
 fn decrypt_payloads_for_read<'a>(
-    collection_name: &str,
+    _collection_name: &str,
     plan: &PayloadWritePlan,
     payloads: impl IntoIterator<Item = (PointIdType, &'a mut Payload)>,
 ) -> Result<(), StorageError> {
     for (point_id, payload) in payloads {
         plan.decrypt_server_payload_for_read(&point_id.to_string(), payload)
-            .map_err(|err| {
-                StorageError::bad_input(format!(
-                    "payload decrypt read failed for point {} in collection {collection_name}: {err}",
-                    point_id,
-                ))
-            })?;
+            .map_err(|_| StorageError::bad_input("payload decrypt read failed"))?;
     }
 
     Ok(())
