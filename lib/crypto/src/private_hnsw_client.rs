@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
@@ -1960,13 +1960,12 @@ pub fn plan_private_hnsw_oram_neighbor_clustered_leaves(
         return Err(PrivateHnswClientError::InvalidBuildConfig("entry_node_id"));
     }
     let seed_node_id = entry_node_id;
-    let mut queue = vec![seed_node_id];
+    let mut queue = VecDeque::from([seed_node_id]);
     let mut queued = BTreeSet::from([seed_node_id]);
     let mut visited = BTreeSet::new();
     let mut clustered_indexes = Vec::with_capacity(blocks.len());
 
-    while let Some(node_id) = queue.first().copied() {
-        queue.remove(0);
+    while let Some(node_id) = queue.pop_front() {
         queued.remove(&node_id);
         if !visited.insert(node_id) {
             continue;
@@ -1980,7 +1979,7 @@ pub fn plan_private_hnsw_oram_neighbor_clustered_leaves(
                 && !visited.contains(neighbor_id)
                 && queued.insert(*neighbor_id)
             {
-                queue.push(*neighbor_id);
+                queue.push_back(*neighbor_id);
             }
         }
     }
