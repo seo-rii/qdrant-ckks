@@ -773,6 +773,16 @@ mod private_result_oram_grpc_tests {
             qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
             "private_result_oram",
             "private_hnsw_oram",
+            "clientStateBackups",
+            "clientStateCiphertext",
+            "encryptedClientStateBackups",
+            "encryptedClientStateCiphertextHash",
+            "oramPositionMapBackups",
+            "positionMapBackups",
+            "stashBackups",
+            "stateCiphertext",
+            "stateCiphertextHash",
+            "tokenPositionMapBackups",
         ] {
             assert!(
                 !rendered.contains(forbidden),
