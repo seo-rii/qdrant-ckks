@@ -2792,9 +2792,8 @@ impl TryFrom<i32> for rest::RecommendStrategy {
     type Error = Status;
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
-        let strategy = RecommendStrategy::try_from(value).map_err(|_| {
-            Status::invalid_argument(format!("Unknown recommend strategy: {value}"))
-        })?;
+        let strategy = RecommendStrategy::try_from(value)
+            .map_err(|_| Status::invalid_argument("Unknown recommend strategy"))?;
         Ok(strategy.into())
     }
 }
@@ -3714,6 +3713,14 @@ mod tests {
             err.message()
                 .contains("invalid encrypted payload read mode")
         );
+        assert!(!err.message().contains(&unsupported.to_string()));
+    }
+
+    #[test]
+    fn grpc_recommend_strategy_rejects_unknown_value_without_reflecting_it() {
+        let unsupported = 987_654;
+        let err = rest::RecommendStrategy::try_from(unsupported).unwrap_err();
+        assert!(err.message().contains("Unknown recommend strategy"));
         assert!(!err.message().contains(&unsupported.to_string()));
     }
 
