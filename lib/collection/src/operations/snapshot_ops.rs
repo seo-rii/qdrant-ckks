@@ -277,9 +277,8 @@ impl TryFrom<api::grpc::qdrant::ShardSnapshotLocation> for ShardSnapshotLocation
 
         let location = match location {
             shard_snapshot_location::Location::Url(url) => {
-                let url = Url::parse(&url).map_err(|err| {
-                    tonic::Status::invalid_argument(format!("Invalid shard snapshot URL: {err}",))
-                })?;
+                let url = Url::parse(&url)
+                    .map_err(|_| tonic::Status::invalid_argument("Invalid shard snapshot URL"))?;
 
                 Self::Url(url)
             }
@@ -408,10 +407,7 @@ mod tests {
             .expect_err("invalid URL must fail without echoing the raw URL");
         let rendered = status.message();
 
-        assert!(
-            rendered.contains("Invalid shard snapshot URL"),
-            "{rendered}"
-        );
+        assert_eq!(rendered, "Invalid shard snapshot URL");
         assert!(!rendered.contains("grpc-user"), "{rendered}");
         assert!(!rendered.contains("grpc-password"), "{rendered}");
         assert!(
@@ -419,5 +415,6 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("qdrant-sec-grpc-fragment"), "{rendered}");
+        assert!(!rendered.contains("invalid port"), "{rendered}");
     }
 }
