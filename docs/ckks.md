@@ -978,7 +978,8 @@ stored bucket bodies are not reflected; CLI layout failures are fixed messages
 that also avoid bucket ids and bucket commitment mismatch details.
 Private HNSW vector store names must also be safe store path components and
 are rejected if they compact to reserved client-owned state aliases such as
-`client.state`, `position.map`, `client_state_ciphertext_sha256`, or `stash`;
+`client.state`, `position.map`, `client_state_ciphertext_sha256`,
+`client_state_ciphertexts_sha256`, `clientStateCiphertextsSha256`, or `stash`;
 snapshot source/archive and restore preflight apply the same checks before
 archiving or accepting ORAM store contents.
 CLI and REST snapshot recovery also validate stored private HNSW ORAM manifest
