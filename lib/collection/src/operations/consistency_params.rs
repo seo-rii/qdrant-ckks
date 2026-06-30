@@ -84,10 +84,11 @@ impl TryFrom<ReadConsistencyGrpc> for ReadConsistency {
         })?;
 
         let consistency = match value {
-            read_consistency::Value::Factor(factor) => Self::Factor(
-                usize::try_from(factor)
-                    .map_err(|err| tonic::Status::invalid_argument(err.to_string()))?,
-            ),
+            read_consistency::Value::Factor(factor) => {
+                Self::Factor(usize::try_from(factor).map_err(|_| {
+                    tonic::Status::invalid_argument("invalid read consistency factor")
+                })?)
+            }
             read_consistency::Value::Type(consistency) => Self::Type(consistency.try_into()?),
         };
 
