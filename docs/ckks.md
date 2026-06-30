@@ -689,8 +689,9 @@ Public REST and gRPC collection update/delete paths acquire the same private
 ORAM lifecycle guard before submitting the collection meta operation. That keeps
 vector/HNSW/quantization config changes and collection deletion from overlapping
 active private ORAM sessions or manifest/bucket upload write windows, and it
-blocks new private ORAM sessions/uploads while the lifecycle operation is in
-flight.
+also keeps collection/full snapshots from overlapping lifecycle operations.
+While the lifecycle operation is in flight, new private ORAM sessions/uploads
+and new collection/full snapshots fail closed.
 Snapshot creation also fails closed while a private HNSW ORAM manifest or bucket
 upload write-window guard is active for the collection, because upload writes
 canonical manifest, bucket, Merkle, and epoch files.
