@@ -4728,7 +4728,11 @@ fn recommend_request_as_ckks_search_request(
                 positive.iter().map(VectorRef::from),
                 negative.iter().map(VectorRef::from).peekable(),
             )
-            .map_err(|err| StorageError::bad_input(err.to_string()))?;
+            .map_err(|_| {
+                StorageError::bad_input(
+                    "encrypted vector recommend average-vector conversion failed",
+                )
+            })?;
             QueryEnum::Nearest(NamedQuery::new(search_vector, vector_name.to_string()))
         }
         RecommendStrategy::BestScore => QueryEnum::RecommendBestScore(NamedQuery::new(
@@ -8340,7 +8344,9 @@ fn ckks_recommend_query_as_dense_search_vector(
         positive.iter().map(VectorRef::from),
         negative.iter().map(VectorRef::from).peekable(),
     )
-    .map_err(|err| StorageError::bad_input(err.to_string()))?;
+    .map_err(|_| {
+        StorageError::bad_input("encrypted vector query recommend average-vector conversion failed")
+    })?;
     let VectorInternal::Dense(query_values) = search_vector else {
         return Err(StorageError::service_error(
             "CKKS sidecar recommend query conversion produced non-dense query",
@@ -10635,6 +10641,52 @@ mod tests {
             StorageError::BadInput { ref description }
                 if description.contains("inference-derived negative examples")
                     && !description.contains("embedding")
+        ));
+    }
+
+    #[test]
+    fn ckks_recommend_average_errors_do_not_reflect_vector_shape_detail() {
+        let err = recommend_request_as_ckks_search_request(
+            &RecommendRequestInternal {
+                positive: Vec::new(),
+                negative: Vec::new(),
+                strategy: Some(RecommendStrategy::AverageVector),
+                filter: None,
+                params: None,
+                limit: 1,
+                offset: None,
+                with_payload: Some(WithPayloadInterface::Bool(false)),
+                with_vector: Some(WithVector::Bool(false)),
+                score_threshold: None,
+                using: Some(UsingVector::Name("embedding".to_string())),
+                lookup_from: None,
+            },
+            "embedding",
+        )
+        .expect_err("empty examples must fail average-vector conversion");
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { ref description }
+                if description == "encrypted vector recommend average-vector conversion failed"
+                    && !description.contains("embedding")
+                    && !description.contains("dimension")
+                    && !description.contains("positive")
+        ));
+
+        let err = ckks_recommend_query_as_dense_search_vector(
+            &segment::vector_storage::query::RecoQuery::new(Vec::new(), Vec::new()),
+            "embedding",
+        )
+        .expect_err("empty examples must fail query average-vector conversion");
+
+        assert!(matches!(
+            err,
+            StorageError::BadInput { ref description }
+                if description == "encrypted vector query recommend average-vector conversion failed"
+                    && !description.contains("embedding")
+                    && !description.contains("dimension")
+                    && !description.contains("positive")
         ));
     }
 
