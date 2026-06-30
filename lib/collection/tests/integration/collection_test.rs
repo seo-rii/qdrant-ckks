@@ -4168,7 +4168,7 @@ async fn metadata_blind_index_token_field_rejects_non_filter_read_modes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot facet on metadata blind-index field")
-                && description.contains(token_field)
+                && !description.contains(token_field)
                 && description.contains("exact-match filters only")
     ));
 
@@ -4996,7 +4996,7 @@ async fn encrypted_payload_field_rejects_plaintext_facet_key() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot facet on encrypted payload field")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("blind index")
     ));
 }

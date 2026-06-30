@@ -121,7 +121,7 @@ fn ensure_facet_key_does_not_touch_encrypted_payload(
                             ));
                         }
                         return Err(CollectionError::bad_input(format!(
-                            "cannot facet on encrypted payload field '{key}' because it overlaps encrypted path '{encrypted_path}'; configure a blind index provider instead",
+                            "cannot facet on encrypted payload field because it overlaps an encrypted payload selector; configure a blind index provider instead",
                         )));
                     }
                 }
@@ -134,11 +134,11 @@ fn ensure_facet_key_does_not_touch_encrypted_payload(
                     if key.compatible(&metadata_path) {
                         if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
                             return Err(CollectionError::bad_input(format!(
-                                "cannot facet on encrypted metadata value field '{key}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
+                                "cannot facet on encrypted metadata value field because it overlaps an encrypted metadata selector; configure a blind index provider instead",
                             )));
                         }
                         return Err(CollectionError::bad_input(format!(
-                            "cannot facet on metadata blind-index field '{key}' because it overlaps token field '{metadata_key}'; blind-index token fields support exact-match filters only",
+                            "cannot facet on metadata blind-index field; blind-index token fields support exact-match filters only",
                         )));
                     }
                 }
