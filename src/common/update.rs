@@ -1493,10 +1493,8 @@ async fn ensure_payload_index_allowed_by_encryption(
                 continue;
             }
             for metadata_key in keys {
-                let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
-                    StorageError::bad_input(format!(
-                        "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
-                    ))
+                let metadata_path = metadata_key.parse::<JsonPath>().map_err(|_| {
+                    StorageError::bad_input("metadata blind-index field path is invalid")
                 })?;
                 if field_name.compatible(&metadata_path) {
                     return Err(StorageError::bad_input(format!(

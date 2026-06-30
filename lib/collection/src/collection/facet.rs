@@ -128,10 +128,8 @@ fn ensure_facet_key_does_not_touch_encrypted_payload(
             }
             EncryptionSelector::MetadataKeys { keys } => {
                 for metadata_key in keys {
-                    let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
-                        CollectionError::bad_input(format!(
-                            "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
-                        ))
+                    let metadata_path = metadata_key.parse::<JsonPath>().map_err(|_| {
+                        CollectionError::bad_input("metadata blind-index field path is invalid")
                     })?;
                     if key.compatible(&metadata_path) {
                         if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {

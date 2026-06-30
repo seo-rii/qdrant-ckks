@@ -647,10 +647,10 @@ impl Collection {
                     ) => {
                         for path in keys {
                             let path_string = path.clone();
-                            let json_path = path.parse::<JsonPath>().map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "metadata blind-index field path '{path}' is invalid: {err:?}",
-                                ))
+                            let json_path = path.parse::<JsonPath>().map_err(|_| {
+                                CollectionError::bad_input(
+                                    "metadata blind-index field path is invalid",
+                                )
                             })?;
                             blind_index_paths.push((path_string, json_path));
                         }
@@ -2477,10 +2477,10 @@ impl Collection {
                     }
                     EncryptionSelector::MetadataKeys { keys } => {
                         for metadata_key in keys {
-                            let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
-                                ))
+                            let metadata_path = metadata_key.parse::<JsonPath>().map_err(|_| {
+                                CollectionError::bad_input(
+                                    "metadata blind-index field path is invalid",
+                                )
                             })?;
 
                             if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
@@ -3302,10 +3302,8 @@ impl Collection {
                 }
                 EncryptionSelector::MetadataKeys { keys } => {
                     for metadata_key in keys {
-                        let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
-                            CollectionError::bad_input(format!(
-                                "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
-                            ))
+                        let metadata_path = metadata_key.parse::<JsonPath>().map_err(|_| {
+                            CollectionError::bad_input("metadata blind-index field path is invalid")
                         })?;
                         if rule.binding.as_deref() == Some(METADATA_VALUE_BINDING) {
                             if let Some(filter_path) =
@@ -3782,10 +3780,8 @@ fn payload_redaction_plan_for_encryption(
                 Some(METADATA_EXACT_MATCH_TOKEN_BINDING),
             ) => {
                 for key in keys {
-                    let json_path = key.parse::<JsonPath>().map_err(|err| {
-                        CollectionError::bad_input(format!(
-                            "metadata blind-index field path '{key}' is invalid: {err:?}",
-                        ))
+                    let json_path = key.parse::<JsonPath>().map_err(|_| {
+                        CollectionError::bad_input("metadata blind-index field path is invalid")
                     })?;
                     plan.encrypted_payload_paths
                         .push((json_path, PayloadRedactionKind::AnyValue));
@@ -3961,11 +3957,9 @@ fn validate_metadata_blind_index_token(token: &str, metadata_key: &str) -> Colle
 }
 
 fn parse_metadata_blind_index_path(metadata_key: &str) -> CollectionResult<JsonPath> {
-    metadata_key.parse::<JsonPath>().map_err(|err| {
-        CollectionError::bad_input(format!(
-            "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
-        ))
-    })
+    metadata_key
+        .parse::<JsonPath>()
+        .map_err(|_| CollectionError::bad_input("metadata blind-index field path is invalid"))
 }
 
 fn validate_filter_metadata_blind_index_tokens(

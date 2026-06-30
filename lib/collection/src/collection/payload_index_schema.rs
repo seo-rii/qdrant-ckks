@@ -135,10 +135,8 @@ pub fn validate_payload_index_entry_for_encryption(
         }
 
         for metadata_key in keys {
-            let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
-                CollectionError::bad_input(format!(
-                    "metadata blind-index field path '{metadata_key}' is invalid: {err:?}",
-                ))
+            let metadata_path = metadata_key.parse::<JsonPath>().map_err(|_| {
+                CollectionError::bad_input("metadata blind-index field path is invalid")
             })?;
             if field_name.compatible(&metadata_path) {
                 if field_name != &metadata_path {
