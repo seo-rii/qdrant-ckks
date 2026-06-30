@@ -479,6 +479,26 @@ mod private_hnsw_rest_tests {
                 || rendered.contains("Write access to collection"),
             "expected write-access denial, got: {rendered}",
         );
+        for forbidden in [
+            qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+            qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+            "/private-hnsw/{vector}/session",
+            "/private-result-oram/session",
+            "private_hnsw_oram",
+            "private_result_oram",
+            "client-led private ORAM sessions",
+            "session_id",
+            "root_hash",
+            "bucket",
+            "ciphertext",
+            "signature",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
+            );
+        }
     }
 
     #[test]
