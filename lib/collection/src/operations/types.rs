@@ -1682,9 +1682,9 @@ impl From<tonic::transport::Error> for CollectionError {
 }
 
 impl From<InvalidUri> for CollectionError {
-    fn from(err: InvalidUri) -> Self {
+    fn from(_err: InvalidUri) -> Self {
         CollectionError::ServiceError {
-            error: format!("Invalid URI error: {err}"),
+            error: "Invalid URI error".to_string(),
             backtrace: Some(Backtrace::force_capture().to_string()),
         }
     }
@@ -2393,7 +2393,10 @@ mod tests {
     use segment::json_path::{JsonPath, JsonPathItem};
     use segment::types::PointIdType;
 
-    use super::{CollectionUpdateProvenance, PeerMetadata, ckks_vector_sidecar_delete_target};
+    use super::{
+        CollectionError, CollectionUpdateProvenance, PeerMetadata,
+        ckks_vector_sidecar_delete_target,
+    };
 
     #[test]
     fn peer_metadata_treats_empty_crypto_runtime_fingerprint_as_missing() {
@@ -2413,6 +2416,25 @@ mod tests {
 
         assert!(rendered.contains("crypto_runtime_capability_fingerprint_present"));
         assert!(!rendered.contains("qdrant-sec-peer-fingerprint-sentinel"));
+    }
+
+    #[test]
+    fn invalid_uri_conversion_does_not_reflect_uri_or_parser_detail() {
+        let invalid_uri = "http://uri-user:uri-password@exa mple.com/uri-secret-token"
+            .parse::<tonic::transport::Uri>()
+            .unwrap_err();
+        let err = CollectionError::from(invalid_uri);
+
+        match err {
+            CollectionError::ServiceError { error, .. } => {
+                assert_eq!(error, "Invalid URI error");
+                assert!(!error.contains("uri-user"));
+                assert!(!error.contains("uri-password"));
+                assert!(!error.contains("uri-secret-token"));
+                assert!(!error.contains("invalid"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
