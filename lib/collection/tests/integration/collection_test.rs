@@ -3898,8 +3898,9 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("metadata blind-index field 'document_body__blind_eq'")
+            if description.contains("metadata blind-index field")
                 && description.contains("keyword schema")
+                && !description.contains("document_body__blind_eq")
     ));
 
     let err = collection
@@ -3914,8 +3915,9 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("metadata blind-index field 'document_body__blind_eq.child'")
+            if description.contains("metadata blind-index field")
                 && description.contains("exact token field")
+                && !description.contains("document_body__blind_eq")
     ));
 
     collection
@@ -4070,8 +4072,9 @@ async fn encrypted_payload_blind_index_token_filter_is_searchable() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("metadata blind-index field 'document_body__blind_eq'")
+            if description.contains("metadata blind-index field")
                 && description.contains("32 bytes")
+                && !description.contains("document_body__blind_eq")
     ));
 }
 
@@ -4344,8 +4347,9 @@ async fn metadata_blind_index_writes_require_hmac_token_shape() {
         matches!(
             err,
             CollectionError::BadInput { ref description }
-                if description.contains("metadata blind-index field 'document_body__blind_eq'")
+                if description.contains("metadata blind-index field")
                     && description.contains("token must decode to 32 bytes")
+                    && !description.contains("document_body__blind_eq")
         ),
         "unexpected error: {err:?}"
     );
@@ -4409,8 +4413,9 @@ async fn client_encrypted_payload_rejects_unbound_blind_index_token_writes() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("metadata blind-index field 'document_body__blind_eq'")
+            if description.contains("metadata blind-index field")
                 && description.contains("client envelope signature binds the token manifest")
+                && !description.contains("document_body__blind_eq")
     ));
 }
 
