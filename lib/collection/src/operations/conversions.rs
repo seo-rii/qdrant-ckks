@@ -762,9 +762,7 @@ fn convert_datatype_from_proto(datatype: Option<i32>) -> Result<Option<Datatype>
                 api::grpc::qdrant::Datatype::Default => Ok(None),
             }
         } else {
-            Err(Status::invalid_argument(format!(
-                "Cannot convert datatype: {datatype_int}"
-            )))
+            Err(Status::invalid_argument("Cannot convert datatype"))
         }
     } else {
         Ok(None)
@@ -2031,6 +2029,10 @@ mod tests {
 
         let err = ShardTransferMethod::try_from(UNKNOWN_ENUM_VALUE).unwrap_err();
         assert_eq!(err.message(), "Unknown shard transfer method");
+        assert!(!err.message().contains("99"));
+
+        let err = convert_datatype_from_proto(Some(UNKNOWN_ENUM_VALUE)).unwrap_err();
+        assert_eq!(err.message(), "Cannot convert datatype");
         assert!(!err.message().contains("99"));
     }
 }
