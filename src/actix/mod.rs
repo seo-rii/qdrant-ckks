@@ -477,8 +477,20 @@ mod tests {
         _known: String,
     }
 
+    #[derive(Deserialize, Validate)]
+    #[serde(deny_unknown_fields)]
+    struct PrivateOramEnumValidationTestBody {
+        _result_privacy: qdrant_sec::ResultPrivacyMode,
+    }
+
     async fn private_oram_validation_test_endpoint(
         _: Json<PrivateOramValidationTestBody>,
+    ) -> HttpResponse {
+        HttpResponse::Ok().finish()
+    }
+
+    async fn private_oram_enum_validation_test_endpoint(
+        _: Json<PrivateOramEnumValidationTestBody>,
     ) -> HttpResponse {
         HttpResponse::Ok().finish()
     }
@@ -691,6 +703,57 @@ mod tests {
             let ordinary_body = String::from_utf8_lossy(&ordinary_body);
             assert!(ordinary_body.contains(sentinel), "{ordinary_body}");
         }
+    }
+
+    #[actix_web::test]
+    async fn private_oram_json_validation_errors_do_not_reflect_unknown_enum_values() {
+        let validate_json_config = actix_web_validator::JsonConfig::default()
+            .error_handler(|err, req| validation_error_handler("JSON body", err, req));
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(validate_json_config)
+                .route(
+                    "/collections/{collection_name}/private-hnsw/{vector_name}/session",
+                    web::post().to(private_oram_enum_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/ordinary/session",
+                    web::post().to(private_oram_enum_validation_test_endpoint),
+                ),
+        )
+        .await;
+
+        let sentinel = "qdrant-sec-private-oram-result-privacy-sentinel";
+        let private_request = actix_test::TestRequest::post()
+            .uri("/collections/docs/private-hnsw/text/session")
+            .set_json(serde_json::json!({ "_result_privacy": sentinel }))
+            .to_request();
+        let private_response = actix_test::call_service(&app, private_request).await;
+        assert_eq!(
+            private_response.status(),
+            actix_web::http::StatusCode::BAD_REQUEST
+        );
+        let private_body = actix_test::read_body(private_response).await;
+        let private_body = String::from_utf8_lossy(&private_body);
+        assert!(
+            private_body.contains("Invalid JSON body for private ORAM request"),
+            "{private_body}"
+        );
+        assert!(!private_body.contains(sentinel), "{private_body}");
+        assert!(!private_body.contains("unknown variant"), "{private_body}");
+
+        let ordinary_request = actix_test::TestRequest::post()
+            .uri("/collections/docs/ordinary/session")
+            .set_json(serde_json::json!({ "_result_privacy": sentinel }))
+            .to_request();
+        let ordinary_response = actix_test::call_service(&app, ordinary_request).await;
+        assert_eq!(
+            ordinary_response.status(),
+            actix_web::http::StatusCode::BAD_REQUEST
+        );
+        let ordinary_body = actix_test::read_body(ordinary_response).await;
+        let ordinary_body = String::from_utf8_lossy(&ordinary_body);
+        assert!(ordinary_body.contains(sentinel), "{ordinary_body}");
     }
 
     #[test]
