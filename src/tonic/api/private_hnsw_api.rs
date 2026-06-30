@@ -639,6 +639,34 @@ mod private_hnsw_grpc_tests {
         }
     }
 
+    fn assert_private_hnsw_route_message_redacts(rendered: &str, extra_forbidden: &[&str]) {
+        for forbidden in [
+            COLLECTION_NAME,
+            "text_private_hnsw",
+            "docs_private_hnsw_v1",
+            KEY_ID,
+            SIGNING_KEY_ID,
+            qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+            qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+            "payload_private_result_oram",
+            "docs_private_result_oram_v1",
+            "private_hnsw_oram",
+            "private_result_oram",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW route error leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for forbidden in extra_forbidden {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW route error leaked `{forbidden}`: {rendered}",
+            );
+        }
+    }
+
     #[test]
     fn manifest_proto_roundtrip_preserves_private_hnsw_fields() {
         let manifest = sample_manifest();
@@ -1054,6 +1082,26 @@ mod private_hnsw_grpc_tests {
                 assert!(!err.message().contains("stashBackups"));
                 assert!(!err.message().contains("private_hnsw_oram"));
                 assert!(!err.message().contains("/tmp"));
+                assert_private_hnsw_route_message_redacts(
+                    err.message(),
+                    &[
+                        unsafe_vector_name,
+                        "secret",
+                        "client.state",
+                        "position.map",
+                        "stash.backup",
+                        "clientStateBackups",
+                        "clientStateCiphertext",
+                        "encryptedClientStateBackups",
+                        "encryptedClientStateCiphertextHash",
+                        "positionMapBackups",
+                        "oramPositionMapBackups",
+                        "stateCiphertextHash",
+                        "tokenPositionMapBackups",
+                        "stashBackups",
+                        "/tmp",
+                    ],
+                );
             }
 
             let unsafe_vector_name = "stashBackups.json";
@@ -1090,6 +1138,17 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains(&read_signature.key_id));
             assert!(!err.message().contains(&read_signature.sig));
             assert!(!err.message().contains("private_hnsw_oram"));
+            assert_private_hnsw_route_message_redacts(
+                err.message(),
+                &[
+                    unsafe_vector_name,
+                    fixture.encrypted_build.root_hash.as_str(),
+                    SESSION_ID,
+                    paths[0].as_str(),
+                    read_signature.key_id.as_str(),
+                    read_signature.sig.as_str(),
+                ],
+            );
 
             let run = fixture.run_single_search_collect_writeback();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
@@ -1127,6 +1186,18 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains(&run.commit_signature.sig));
             assert!(!err.message().contains(&run.updated_buckets[0].ciphertext));
             assert!(!err.message().contains("private_hnsw_oram"));
+            assert_private_hnsw_route_message_redacts(
+                err.message(),
+                &[
+                    unsafe_vector_name,
+                    run.commit_plan.old_root_hash.as_str(),
+                    run.commit_plan.new_root_hash.as_str(),
+                    SESSION_ID,
+                    run.commit_signature.key_id.as_str(),
+                    run.commit_signature.sig.as_str(),
+                    run.updated_buckets[0].ciphertext.as_str(),
+                ],
+            );
         });
     }
 

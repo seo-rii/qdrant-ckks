@@ -530,6 +530,34 @@ mod private_hnsw_rest_tests {
         }
     }
 
+    fn assert_private_hnsw_route_error_redacts(rendered: &str, extra_forbidden: &[&str]) {
+        for forbidden in [
+            COLLECTION_NAME,
+            "text_private_hnsw",
+            "docs_private_hnsw_v1",
+            KEY_ID,
+            SIGNING_KEY_ID,
+            qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+            qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+            "payload_private_result_oram",
+            "docs_private_result_oram_v1",
+            "private_hnsw_oram",
+            "private_result_oram",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW route error leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for forbidden in extra_forbidden {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW route error leaked `{forbidden}`: {rendered}",
+            );
+        }
+    }
+
     #[test]
     fn private_hnsw_rest_request_dtos_reject_unknown_fields() {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
@@ -1087,6 +1115,27 @@ mod private_hnsw_rest_tests {
                 assert!(!body.contains("stashBackups"), "{body}");
                 assert!(!body.contains("private_hnsw_oram"), "{body}");
                 assert!(!body.contains("/tmp"), "{body}");
+                assert_private_hnsw_route_error_redacts(
+                    &body,
+                    &[
+                        unsafe_vector_name,
+                        route_vector_name,
+                        "secret",
+                        "client.state",
+                        "position.map",
+                        "stash.backup",
+                        "clientStateBackups",
+                        "clientStateCiphertext",
+                        "encryptedClientStateBackups",
+                        "encryptedClientStateCiphertextHash",
+                        "positionMapBackups",
+                        "oramPositionMapBackups",
+                        "stateCiphertextHash",
+                        "tokenPositionMapBackups",
+                        "stashBackups",
+                        "/tmp",
+                    ],
+                );
             }
 
             let unsafe_vector_name = "stashBackups.json";
@@ -1134,6 +1183,17 @@ mod private_hnsw_rest_tests {
             assert!(!read_body.contains(&read_signature.key_id), "{read_body}");
             assert!(!read_body.contains(&read_signature.sig), "{read_body}");
             assert!(!read_body.contains("private_hnsw_oram"), "{read_body}");
+            assert_private_hnsw_route_error_redacts(
+                &read_body,
+                &[
+                    unsafe_vector_name,
+                    fixture.encrypted_build.root_hash.as_str(),
+                    SESSION_ID,
+                    paths[0].as_str(),
+                    read_signature.key_id.as_str(),
+                    read_signature.sig.as_str(),
+                ],
+            );
 
             let run = fixture.run_single_search_collect_writeback();
             let commit_response = actix_test::call_service(
@@ -1189,6 +1249,18 @@ mod private_hnsw_rest_tests {
                 "{commit_body}"
             );
             assert!(!commit_body.contains("private_hnsw_oram"), "{commit_body}");
+            assert_private_hnsw_route_error_redacts(
+                &commit_body,
+                &[
+                    unsafe_vector_name,
+                    run.commit_plan.old_root_hash.as_str(),
+                    run.commit_plan.new_root_hash.as_str(),
+                    SESSION_ID,
+                    run.commit_signature.key_id.as_str(),
+                    run.commit_signature.sig.as_str(),
+                    run.updated_buckets[0].ciphertext.as_str(),
+                ],
+            );
         });
     }
 
