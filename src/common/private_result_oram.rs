@@ -1550,11 +1550,7 @@ fn required_option_string<'a>(
         .options
         .get(option)
         .and_then(Value::as_str)
-        .ok_or_else(|| {
-            StorageError::bad_request(format!(
-                "private result ORAM runtime instance must set {option}"
-            ))
-        })
+        .ok_or_else(|| StorageError::bad_request("private result ORAM runtime option is missing"))
 }
 
 fn required_option_u64(instance: &CryptoInstanceConfig, option: &str) -> StorageResult<u64> {
@@ -1562,16 +1558,12 @@ fn required_option_u64(instance: &CryptoInstanceConfig, option: &str) -> Storage
         .options
         .get(option)
         .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            StorageError::bad_request(format!(
-                "private result ORAM runtime instance must set {option}"
-            ))
-        })
+        .ok_or_else(|| StorageError::bad_request("private result ORAM runtime option is missing"))
 }
 
 fn required_oram_params(instance: &CryptoInstanceConfig) -> StorageResult<OramParams> {
     let value = instance.options.get(ORAM_OPTION).cloned().ok_or_else(|| {
-        StorageError::bad_request("private result ORAM runtime instance must set oram")
+        StorageError::bad_request("private result ORAM runtime ORAM policy is missing")
     })?;
     serde_json::from_value(value).map_err(|_| {
         StorageError::bad_request("private result ORAM runtime instance oram policy is invalid")
