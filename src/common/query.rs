@@ -437,37 +437,31 @@ pub(crate) fn invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path(
         return Ok(());
     }
 
-    let entries = fs::read_dir(&directory).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to read CKKS sidecar HNSW graph cache directory: {err}",
-        ))
+    let entries = fs::read_dir(&directory).map_err(|_| {
+        StorageError::service_error("failed to read CKKS sidecar HNSW graph cache directory")
     })?;
     for entry in entries {
-        let entry = entry.map_err(|err| {
-            StorageError::service_error(format!(
-                "failed to read CKKS sidecar HNSW graph cache directory entry: {err}",
-            ))
+        let entry = entry.map_err(|_| {
+            StorageError::service_error(
+                "failed to read CKKS sidecar HNSW graph cache directory entry",
+            )
         })?;
         let path = entry.path();
         if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
             continue;
         }
 
-        let metadata = fs::symlink_metadata(&path).map_err(|err| {
-            StorageError::service_error(format!(
-                "failed to inspect CKKS sidecar HNSW graph cache file: {err}",
-            ))
+        let metadata = fs::symlink_metadata(&path).map_err(|_| {
+            StorageError::service_error("failed to inspect CKKS sidecar HNSW graph cache file")
         })?;
         if metadata.file_type().is_symlink() {
-            fs::remove_file(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to prune CKKS sidecar HNSW graph cache symlink: {err}",
-                ))
+            fs::remove_file(&path).map_err(|_| {
+                StorageError::service_error("failed to prune CKKS sidecar HNSW graph cache symlink")
             })?;
-            ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning symlink: {err}",
-                ))
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|_| {
+                StorageError::service_error(
+                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning symlink",
+                )
             })?;
             continue;
         }
@@ -475,15 +469,13 @@ pub(crate) fn invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path(
             continue;
         }
         if metadata.len() > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES {
-            fs::remove_file(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to prune oversized CKKS sidecar HNSW graph cache: {err}",
-                ))
+            fs::remove_file(&path).map_err(|_| {
+                StorageError::service_error(
+                    "failed to prune oversized CKKS sidecar HNSW graph cache",
+                )
             })?;
-            ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning oversized cache: {err}",
-                ))
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|_| {
+                StorageError::service_error("failed to sync CKKS sidecar HNSW graph cache directory after pruning oversized cache")
             })?;
             continue;
         }
@@ -508,28 +500,24 @@ pub(crate) fn invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path(
         if limited_file.read_to_string(&mut content).is_err()
             || content.len() as u64 > CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES
         {
-            fs::remove_file(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to prune unreadable CKKS sidecar HNSW graph cache: {err}",
-                ))
+            fs::remove_file(&path).map_err(|_| {
+                StorageError::service_error(
+                    "failed to prune unreadable CKKS sidecar HNSW graph cache",
+                )
             })?;
-            ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning unreadable cache: {err}",
-                ))
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|_| {
+                StorageError::service_error("failed to sync CKKS sidecar HNSW graph cache directory after pruning unreadable cache")
             })?;
             continue;
         }
         let Ok(disk) = serde_json::from_str::<CkksSidecarHnswGraphDisk>(&content) else {
-            fs::remove_file(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to prune malformed CKKS sidecar HNSW graph cache: {err}",
-                ))
+            fs::remove_file(&path).map_err(|_| {
+                StorageError::service_error(
+                    "failed to prune malformed CKKS sidecar HNSW graph cache",
+                )
             })?;
-            ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning malformed cache: {err}",
-                ))
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|_| {
+                StorageError::service_error("failed to sync CKKS sidecar HNSW graph cache directory after pruning malformed cache")
             })?;
             continue;
         };
@@ -538,15 +526,11 @@ pub(crate) fn invalidate_ckks_sidecar_hnsw_graph_cache_for_collection_path(
                 .iter()
                 .any(|vector_name| vector_name == &disk.vector_name)
         {
-            fs::remove_file(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to invalidate CKKS sidecar HNSW graph cache: {err}",
-                ))
+            fs::remove_file(&path).map_err(|_| {
+                StorageError::service_error("failed to invalidate CKKS sidecar HNSW graph cache")
             })?;
-            ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to sync CKKS sidecar HNSW graph cache directory after invalidating cache file: {err}",
-                ))
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|_| {
+                StorageError::service_error("failed to sync CKKS sidecar HNSW graph cache directory after invalidating cache file")
             })?;
         }
     }
@@ -2656,10 +2640,10 @@ fn ckks_sidecar_hnsw_existing_cache_directory_is_safe(
     let metadata = match fs::symlink_metadata(directory) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-        Err(err) => {
-            return Err(StorageError::service_error(format!(
-                "failed to inspect CKKS sidecar HNSW graph cache directory: {err}",
-            )));
+        Err(_) => {
+            return Err(StorageError::service_error(
+                "failed to inspect CKKS sidecar HNSW graph cache directory",
+            ));
         }
     };
     if metadata.file_type().is_symlink() {
@@ -2751,10 +2735,10 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(err) => {
-            return Err(StorageError::service_error(format!(
-                "failed to inspect CKKS sidecar HNSW graph cache file: {err}",
-            )));
+        Err(_) => {
+            return Err(StorageError::service_error(
+                "failed to inspect CKKS sidecar HNSW graph cache file",
+            ));
         }
     };
     if metadata.file_type().is_symlink() {
@@ -2779,15 +2763,11 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
 
         options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
     }
-    let file = options.open(&path).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to open CKKS sidecar HNSW graph cache file: {err}",
-        ))
+    let file = options.open(&path).map_err(|_| {
+        StorageError::service_error("failed to open CKKS sidecar HNSW graph cache file")
     })?;
-    let opened_metadata = file.metadata().map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to inspect opened CKKS sidecar HNSW graph cache file: {err}",
-        ))
+    let opened_metadata = file.metadata().map_err(|_| {
+        StorageError::service_error("failed to inspect opened CKKS sidecar HNSW graph cache file")
     })?;
     if !opened_metadata.is_file() {
         return Err(StorageError::service_error(
@@ -2800,16 +2780,12 @@ fn ckks_sidecar_hnsw_load_persisted_graph(
 
     let mut content = String::with_capacity(opened_metadata.len() as usize);
     let mut limited_file = file.take(CKKS_SIDECAR_HNSW_GRAPH_CACHE_MAX_BYTES + 1);
-    limited_file.read_to_string(&mut content).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to read CKKS sidecar HNSW graph cache file: {err}",
-        ))
+    limited_file.read_to_string(&mut content).map_err(|_| {
+        StorageError::service_error("failed to read CKKS sidecar HNSW graph cache file")
     })?;
     ensure_ckks_sidecar_hnsw_graph_cache_content_size(&path, content.len() as u64)?;
-    let disk: CkksSidecarHnswGraphDisk = serde_json::from_str(&content).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to parse CKKS sidecar HNSW graph cache file: {err}",
-        ))
+    let disk: CkksSidecarHnswGraphDisk = serde_json::from_str(&content).map_err(|_| {
+        StorageError::service_error("failed to parse CKKS sidecar HNSW graph cache file")
     })?;
     if disk.version != CKKS_SIDECAR_HNSW_GRAPH_CACHE_VERSION
         || disk.collection_identity != key.collection_identity
@@ -2847,20 +2823,18 @@ fn ckks_sidecar_hnsw_persist_graph(
 
             builder.mode(0o700);
         }
-        builder.create(&directory).map_err(|err| {
-            StorageError::service_error(format!(
-                "failed to create CKKS sidecar HNSW graph cache directory: {err}",
-            ))
+        builder.create(&directory).map_err(|_| {
+            StorageError::service_error("failed to create CKKS sidecar HNSW graph cache directory")
         })?;
     }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).map_err(|err| {
-            StorageError::service_error(format!(
-                "failed to set CKKS sidecar HNSW graph cache directory permissions: {err}",
-            ))
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).map_err(|_| {
+            StorageError::service_error(
+                "failed to set CKKS sidecar HNSW graph cache directory permissions",
+            )
         })?;
     }
     ckks_sidecar_hnsw_existing_cache_directory_is_safe(&directory)?;
@@ -2877,10 +2851,8 @@ fn ckks_sidecar_hnsw_persist_graph(
         records_fingerprint: key.records_fingerprint.clone(),
         links: graph.links().to_vec(),
     };
-    let content = serde_json::to_vec(&disk).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to serialize CKKS sidecar HNSW graph cache: {err}",
-        ))
+    let content = serde_json::to_vec(&disk).map_err(|_| {
+        StorageError::service_error("failed to serialize CKKS sidecar HNSW graph cache")
     })?;
     ensure_ckks_sidecar_hnsw_graph_cache_content_size(&path, content.len() as u64)?;
 
@@ -2902,17 +2874,17 @@ fn ckks_sidecar_hnsw_persist_graph(
                 &metadata,
                 "temp file",
             )?;
-            fs::remove_file(&temp_path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to remove stale CKKS sidecar HNSW graph cache temp file: {err}",
-                ))
+            fs::remove_file(&temp_path).map_err(|_| {
+                StorageError::service_error(
+                    "failed to remove stale CKKS sidecar HNSW graph cache temp file",
+                )
             })?;
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(StorageError::service_error(format!(
-                "failed to inspect CKKS sidecar HNSW graph cache temp file: {err}",
-            )));
+        Err(_) => {
+            return Err(StorageError::service_error(
+                "failed to inspect CKKS sidecar HNSW graph cache temp file",
+            ));
         }
     }
 
@@ -2925,36 +2897,24 @@ fn ckks_sidecar_hnsw_persist_graph(
         options.mode(0o600);
         options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
     }
-    let mut file = options.open(&temp_path).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to create CKKS sidecar HNSW graph cache temp file: {err}",
-        ))
+    let mut file = options.open(&temp_path).map_err(|_| {
+        StorageError::service_error("failed to create CKKS sidecar HNSW graph cache temp file")
     })?;
-    file.write_all(&content).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to write CKKS sidecar HNSW graph cache temp file: {err}",
-        ))
+    file.write_all(&content).map_err(|_| {
+        StorageError::service_error("failed to write CKKS sidecar HNSW graph cache temp file")
     })?;
-    file.flush().map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to flush CKKS sidecar HNSW graph cache temp file: {err}",
-        ))
+    file.flush().map_err(|_| {
+        StorageError::service_error("failed to flush CKKS sidecar HNSW graph cache temp file")
     })?;
-    file.sync_all().map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to sync CKKS sidecar HNSW graph cache temp file: {err}",
-        ))
+    file.sync_all().map_err(|_| {
+        StorageError::service_error("failed to sync CKKS sidecar HNSW graph cache temp file")
     })?;
-    fs::rename(&temp_path, &path).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to replace CKKS sidecar HNSW graph cache file: {err}",
-        ))
+    fs::rename(&temp_path, &path).map_err(|_| {
+        StorageError::service_error("failed to replace CKKS sidecar HNSW graph cache file")
     })?;
     ckks_sidecar_hnsw_prune_persisted_graphs(&directory, &path)?;
-    ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to sync CKKS sidecar HNSW graph cache directory: {err}",
-        ))
+    ckks_sidecar_hnsw_sync_parent(&path).map_err(|_| {
+        StorageError::service_error("failed to sync CKKS sidecar HNSW graph cache directory")
     })
 }
 
@@ -2986,23 +2946,21 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
             ));
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => 0,
-        Err(err) => {
-            return Err(StorageError::service_error(format!(
-                "failed to inspect CKKS sidecar HNSW graph cache keep file: {err}",
-            )));
+        Err(_) => {
+            return Err(StorageError::service_error(
+                "failed to inspect CKKS sidecar HNSW graph cache keep file",
+            ));
         }
     };
     let mut files = Vec::new();
-    let entries = fs::read_dir(directory).map_err(|err| {
-        StorageError::service_error(format!(
-            "failed to read CKKS sidecar HNSW graph cache directory: {err}",
-        ))
+    let entries = fs::read_dir(directory).map_err(|_| {
+        StorageError::service_error("failed to read CKKS sidecar HNSW graph cache directory")
     })?;
     for entry in entries {
-        let entry = entry.map_err(|err| {
-            StorageError::service_error(format!(
-                "failed to read CKKS sidecar HNSW graph cache directory entry: {err}",
-            ))
+        let entry = entry.map_err(|_| {
+            StorageError::service_error(
+                "failed to read CKKS sidecar HNSW graph cache directory entry",
+            )
         })?;
         let path = entry.path();
         if path == keep_path
@@ -3010,21 +2968,17 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
         {
             continue;
         }
-        let metadata = fs::symlink_metadata(&path).map_err(|err| {
-            StorageError::service_error(format!(
-                "failed to inspect CKKS sidecar HNSW graph cache file: {err}",
-            ))
+        let metadata = fs::symlink_metadata(&path).map_err(|_| {
+            StorageError::service_error("failed to inspect CKKS sidecar HNSW graph cache file")
         })?;
         if metadata.file_type().is_symlink() {
-            fs::remove_file(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to prune CKKS sidecar HNSW graph cache symlink: {err}",
-                ))
+            fs::remove_file(&path).map_err(|_| {
+                StorageError::service_error("failed to prune CKKS sidecar HNSW graph cache symlink")
             })?;
-            ckks_sidecar_hnsw_sync_parent(&path).map_err(|err| {
-                StorageError::service_error(format!(
-                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning symlink: {err}",
-                ))
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|_| {
+                StorageError::service_error(
+                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning symlink",
+                )
             })?;
             continue;
         }
@@ -3032,19 +2986,17 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
             continue;
         }
         #[cfg(unix)]
-        if let Err(err) =
-            ckks_sidecar_hnsw_validate_cache_file_unix_metadata(&path, &metadata, "cache file")
+        if ckks_sidecar_hnsw_validate_cache_file_unix_metadata(&path, &metadata, "cache file")
+            .is_err()
         {
-            log::warn!("pruning insecure CKKS sidecar HNSW graph cache file: {err}");
-            fs::remove_file(&path).map_err(|remove_err| {
-                StorageError::service_error(format!(
-                    "failed to prune insecure CKKS sidecar HNSW graph cache file: {remove_err}",
-                ))
+            log::warn!("pruning insecure CKKS sidecar HNSW graph cache file");
+            fs::remove_file(&path).map_err(|_| {
+                StorageError::service_error(
+                    "failed to prune insecure CKKS sidecar HNSW graph cache file",
+                )
             })?;
-            ckks_sidecar_hnsw_sync_parent(&path).map_err(|sync_err| {
-                StorageError::service_error(format!(
-                    "failed to sync CKKS sidecar HNSW graph cache directory after pruning insecure file: {sync_err}",
-                ))
+            ckks_sidecar_hnsw_sync_parent(&path).map_err(|_| {
+                StorageError::service_error("failed to sync CKKS sidecar HNSW graph cache directory after pruning insecure file")
             })?;
             continue;
         }
@@ -3072,15 +3024,13 @@ fn ckks_sidecar_hnsw_prune_persisted_graphs(
             kept_bytes = kept_bytes.saturating_add(file.len);
             continue;
         }
-        fs::remove_file(&file.path).map_err(|err| {
-            StorageError::service_error(format!(
-                "failed to prune CKKS sidecar HNSW graph cache file: {err}",
-            ))
+        fs::remove_file(&file.path).map_err(|_| {
+            StorageError::service_error("failed to prune CKKS sidecar HNSW graph cache file")
         })?;
-        ckks_sidecar_hnsw_sync_parent(&file.path).map_err(|err| {
-            StorageError::service_error(format!(
-                "failed to sync CKKS sidecar HNSW graph cache directory after pruning file: {err}",
-            ))
+        ckks_sidecar_hnsw_sync_parent(&file.path).map_err(|_| {
+            StorageError::service_error(
+                "failed to sync CKKS sidecar HNSW graph cache directory after pruning file",
+            )
         })?;
     }
 
@@ -3475,8 +3425,8 @@ fn ckks_sidecar_hnsw_search_points(
                 ckks_sidecar_hnsw_load_persisted_graph(collection_path, &cache_key, records.len());
             let persisted_graph = match persisted_graph {
                 Ok(graph) => graph,
-                Err(err) => {
-                    log::warn!("Ignoring unreadable CKKS sidecar HNSW graph cache: {err}",);
+                Err(_) => {
+                    log::warn!("Ignoring unreadable CKKS sidecar HNSW graph cache");
                     None
                 }
             };
