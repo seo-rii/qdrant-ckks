@@ -326,6 +326,28 @@ impl PrivateHnswSessionRegistry {
         Ok(())
     }
 
+    fn begin_collection_lifecycle_operation(
+        &mut self,
+        collection_id: &str,
+        now_unix: u64,
+    ) -> StorageResult<()> {
+        ensure_no_active_private_hnsw_collection_lifecycle_in_registry(
+            self,
+            collection_id,
+            now_unix,
+        )?;
+        let count = self
+            .active_snapshot_by_collection
+            .entry(collection_id.to_string())
+            .or_insert(0);
+        *count = count.checked_add(1).ok_or_else(|| {
+            StorageError::service_error(
+                "private HNSW ORAM collection lifecycle reference count overflowed",
+            )
+        })?;
+        Ok(())
+    }
+
     fn release_collection_snapshot(&mut self, collection_id: &str) {
         let Some(count) = self.active_snapshot_by_collection.get_mut(collection_id) else {
             return;
@@ -647,6 +669,25 @@ pub(crate) fn begin_private_hnsw_collection_snapshot(
         .lock()
         .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
     registry.begin_collection_snapshot(&collection_crypto_id, now_unix)?;
+    Ok(Some(PrivateHnswCollectionSnapshotGuard {
+        collection_id: collection_crypto_id,
+    }))
+}
+
+pub(crate) fn begin_private_hnsw_collection_lifecycle(
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+) -> StorageResult<Option<PrivateHnswCollectionSnapshotGuard>> {
+    if !collection_uses_private_hnsw_oram(config) {
+        return Ok(None);
+    }
+
+    let collection_crypto_id = config.stable_crypto_id(collection_name)?;
+    let now_unix = current_unix_secs()?;
+    let mut registry = session_registry()
+        .lock()
+        .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
+    registry.begin_collection_lifecycle_operation(&collection_crypto_id, now_unix)?;
     Ok(Some(PrivateHnswCollectionSnapshotGuard {
         collection_id: collection_crypto_id,
     }))
@@ -1962,6 +2003,24 @@ fn ensure_no_active_private_hnsw_collection_session_in_registry(
     if registry.has_active_upload_collection(collection_id) {
         return Err(StorageError::bad_request(
             "private HNSW ORAM collection snapshot requires no active private ORAM upload",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_no_active_private_hnsw_collection_lifecycle_in_registry(
+    registry: &mut PrivateHnswSessionRegistry,
+    collection_id: &str,
+    now_unix: u64,
+) -> StorageResult<()> {
+    if registry.has_active_collection(collection_id, now_unix) {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM collection lifecycle operation requires no active private ORAM session",
+        ));
+    }
+    if registry.has_active_upload_collection(collection_id) {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM collection lifecycle operation requires no active private ORAM upload",
         ));
     }
     Ok(())
@@ -4531,6 +4590,30 @@ mod private_hnsw_tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn collection_lifecycle_guard_rejects_active_collection_session() {
+        let now = 10;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", 20), now)
+            .unwrap();
+
+        let err = registry
+            .begin_collection_lifecycle_operation("collection-uuid-1", now)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("lifecycle operation requires no active private ORAM session"));
+        assert!(!rendered.contains("collection snapshot requires"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
+
+        assert!(
+            registry
+                .begin_collection_lifecycle_operation("other-collection", now)
+                .is_ok()
+        );
+        registry.release_collection_snapshot("other-collection");
     }
 
     #[test]

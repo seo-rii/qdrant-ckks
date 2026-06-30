@@ -27,10 +27,12 @@ use super::auth::Auth;
 use super::crypto::validate_recovered_collection_crypto_config;
 use super::http_client::HttpClient;
 use super::private_hnsw::{
-    PrivateHnswCollectionSnapshotGuard, begin_private_hnsw_collection_snapshot,
+    PrivateHnswCollectionSnapshotGuard, begin_private_hnsw_collection_lifecycle,
+    begin_private_hnsw_collection_snapshot,
 };
 use super::private_result_oram::{
-    PrivateResultOramCollectionSnapshotGuard, begin_private_result_oram_collection_snapshot,
+    PrivateResultOramCollectionSnapshotGuard, begin_private_result_oram_collection_lifecycle,
+    begin_private_result_oram_collection_snapshot,
 };
 use crate::settings::Settings;
 
@@ -142,11 +144,11 @@ pub(crate) async fn begin_private_oram_collection_lifecycle_guard(
     };
     let config = collection.config_snapshot().await;
     Ok(PrivateOramCollectionLifecycleGuard {
-        _private_hnsw_snapshot_guard: begin_private_hnsw_collection_snapshot(
+        _private_hnsw_snapshot_guard: begin_private_hnsw_collection_lifecycle(
             collection.name(),
             &config,
         )?,
-        _private_result_snapshot_guard: begin_private_result_oram_collection_snapshot(
+        _private_result_snapshot_guard: begin_private_result_oram_collection_lifecycle(
             collection.name(),
             &config,
         )?,
