@@ -670,9 +670,15 @@ mod tests {
         VECTOR_OPENFHE_CKKS_PROVIDER,
     };
     use segment::types::{Distance, HnswConfig};
+    use storage::rbac::{Access, Auth};
     use uuid::Uuid;
 
     use super::*;
+    use crate::common::private_hnsw::do_upload_private_hnsw_manifest;
+    use crate::common::private_hnsw_wire_fixture::{
+        COLLECTION_NAME, PrivateHnswRouteWireFixture, VECTOR_NAME, create_private_hnsw_collection,
+        route_e2e_guard, test_dispatcher,
+    };
 
     fn config_with_params(params: CollectionParams) -> CollectionConfigInternal {
         CollectionConfigInternal {
@@ -782,6 +788,55 @@ mod tests {
         assert!(message.contains("https://example.test/snapshots/docs.snapshot?[redacted]"));
         assert!(!message.contains("secret"));
         assert!(!message.contains("api-key"));
+    }
+
+    #[test]
+    fn private_oram_collection_recovery_guard_blocks_private_hnsw_upload() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let auth = Auth::new_internal(Access::full("private ORAM recovery guard test"));
+            let recovery_guard =
+                begin_private_oram_collection_recovery(&dispatcher, &auth, COLLECTION_NAME)
+                    .await
+                    .expect("private ORAM recovery guard should open");
+            let pass = new_unchecked_verification_pass();
+
+            let err = do_upload_private_hnsw_manifest(
+                dispatcher.toc(&auth, &pass),
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                fixture.manifest.clone(),
+                fixture.manifest_signature.clone(),
+            )
+            .await
+            .expect_err("active collection recovery must block private HNSW upload");
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains("upload requires no active collection snapshot"),
+                "{rendered}",
+            );
+            assert!(
+                !rendered.contains(&fixture.manifest.root_hash),
+                "{rendered}"
+            );
+            assert!(
+                !rendered.contains(&fixture.manifest_signature.sig),
+                "{rendered}"
+            );
+            assert!(
+                !rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING),
+                "{rendered}"
+            );
+
+            drop(recovery_guard);
+        });
     }
 
     #[test]
