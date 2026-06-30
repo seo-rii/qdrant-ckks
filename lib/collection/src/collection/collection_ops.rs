@@ -640,6 +640,40 @@ fn invalid_crypto_migration_plan_error(_err: impl std::fmt::Debug) -> Collection
 mod tests {
     use super::*;
 
+    const PRIVATE_ORAM_REPLICA_REMOVE_REDACTION_STEMS: &[&str] = &[
+        "clientStateCiphertext",
+        "clientStateCiphertextHash",
+        "clientStateCiphertextHashes",
+        "client_state_ciphertext",
+        "client_state_ciphertext_hash",
+        "client_state_ciphertext_hashes",
+        "encryptedClientStateCiphertext",
+        "encryptedClientStateCiphertextHash",
+        "encryptedClientStateCiphertextHashes",
+        "encrypted_client_state",
+        "encrypted_client_state_backup",
+        "encrypted_client_state_backups",
+        "encrypted_client_state_snapshot",
+        "encrypted_client_state_snapshots",
+        "encrypted_client_state_ciphertext",
+        "encrypted_client_state_ciphertext_hash",
+        "encrypted_client_state_ciphertext_hashes",
+        "oramPositionMapBackups",
+        "oram_position_map_backups",
+        "positionMapBackups",
+        "position_map_backups",
+        "stateCiphertext",
+        "stateCiphertextHash",
+        "stateCiphertextHashes",
+        "state_ciphertext",
+        "state_ciphertext_hash",
+        "state_ciphertext_hashes",
+        "tokenPositionMapBackups",
+        "token_position_map_backups",
+        "stashBackups",
+        "stash_backups",
+    ];
+
     #[test]
     fn crypto_migration_plan_apply_error_does_not_reflect_inner_detail() {
         let err =
@@ -666,17 +700,7 @@ mod tests {
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
-        for sentinel in [
-            "client_state_ciphertext",
-            "client_state_ciphertext_hashes",
-            "encrypted_client_state_ciphertext_hash",
-            "encrypted_client_state_ciphertext_hashes",
-            "positionMapBackups",
-            "tokenPositionMapBackups",
-            "stashBackups",
-            "stateCiphertextHashes",
-            "state_ciphertext_hashes",
-        ] {
+        for sentinel in PRIVATE_ORAM_REPLICA_REMOVE_REDACTION_STEMS {
             assert!(!rendered.contains(sentinel), "{rendered}");
         }
     }

@@ -619,27 +619,63 @@ impl Collection {
 mod tests {
     use super::*;
 
+    const PRIVATE_ORAM_TRANSFER_COLLECTION_NAMES: &[&str] = &[
+        "clientStateCiphertext.json",
+        "clientStateCiphertextHash.json",
+        "clientStateCiphertextHashes.json",
+        "client_state_ciphertext_hashes.json",
+        "encryptedClientStateCiphertext.json",
+        "encryptedClientStateCiphertextHash.json",
+        "encryptedClientStateCiphertextHashes.json",
+        "encrypted_client_state_ciphertext_hash.json",
+        "encrypted_client_state_ciphertext_hashes.json",
+        "encrypted_client_state.bin",
+        "encrypted_client_state_backup.bin",
+        "encrypted_client_state_backups.bin",
+        "encrypted_client_state_snapshot.bin",
+        "encrypted_client_state_snapshots.bin",
+        "stateCiphertext.json",
+        "stateCiphertextHash.json",
+        "stateCiphertextHashes.json",
+        "state_ciphertext_hashes.json",
+        "state_ciphertext.bin",
+        "state_ciphertext_hash.bin",
+        "tokenPositionMapBackups.json",
+        "oramPositionMapBackups.json",
+        "positionMapBackups.json",
+        "stashBackups.json",
+    ];
+
+    const PRIVATE_ORAM_TRANSFER_REDACTION_STEMS: &[&str] = &[
+        "clientStateCiphertext",
+        "clientStateCiphertextHash",
+        "clientStateCiphertextHashes",
+        "client_state_ciphertext_hashes",
+        "encryptedClientStateCiphertext",
+        "encryptedClientStateCiphertextHash",
+        "encryptedClientStateCiphertextHashes",
+        "encrypted_client_state",
+        "encrypted_client_state_backup",
+        "encrypted_client_state_backups",
+        "encrypted_client_state_snapshot",
+        "encrypted_client_state_snapshots",
+        "encrypted_client_state_ciphertext_hash",
+        "encrypted_client_state_ciphertext_hashes",
+        "stateCiphertext",
+        "stateCiphertextHash",
+        "stateCiphertextHashes",
+        "state_ciphertext",
+        "state_ciphertext_hash",
+        "state_ciphertext_hashes",
+        "tokenPositionMapBackups",
+        "oramPositionMapBackups",
+        "positionMapBackups",
+        "stashBackups",
+    ];
+
     #[test]
     fn private_oram_transfer_task_start_fails_closed_until_bucket_transfer_supported() {
-        for collection_name in [
-            "clientStateCiphertext.json",
-            "clientStateCiphertextHash.json",
-            "clientStateCiphertextHashes.json",
-            "client_state_ciphertext_hashes.json",
-            "encryptedClientStateCiphertext.json",
-            "encryptedClientStateCiphertextHash.json",
-            "encryptedClientStateCiphertextHashes.json",
-            "encrypted_client_state_ciphertext_hash.json",
-            "encrypted_client_state_ciphertext_hashes.json",
-            "stateCiphertext.json",
-            "stateCiphertextHash.json",
-            "stateCiphertextHashes.json",
-            "state_ciphertext_hashes.json",
-            "tokenPositionMapBackups.json",
-            "oramPositionMapBackups.json",
-            "positionMapBackups.json",
-            "stashBackups.json",
-        ] {
+        for collection_name in PRIVATE_ORAM_TRANSFER_COLLECTION_NAMES {
             validate_private_oram_transfer_task_start_until_supported(collection_name, false)
                 .unwrap();
 
@@ -651,23 +687,9 @@ mod tests {
             assert!(rendered.contains("encrypted ORAM bucket transfer"));
             assert!(rendered.contains("consensus-backed epoch/root"));
             assert!(!rendered.contains(collection_name));
-            assert!(!rendered.contains("clientStateCiphertext"));
-            assert!(!rendered.contains("clientStateCiphertextHash"));
-            assert!(!rendered.contains("clientStateCiphertextHashes"));
-            assert!(!rendered.contains("client_state_ciphertext_hashes"));
-            assert!(!rendered.contains("encryptedClientStateCiphertext"));
-            assert!(!rendered.contains("encryptedClientStateCiphertextHash"));
-            assert!(!rendered.contains("encryptedClientStateCiphertextHashes"));
-            assert!(!rendered.contains("encrypted_client_state_ciphertext_hash"));
-            assert!(!rendered.contains("encrypted_client_state_ciphertext_hashes"));
-            assert!(!rendered.contains("stateCiphertext"));
-            assert!(!rendered.contains("stateCiphertextHash"));
-            assert!(!rendered.contains("stateCiphertextHashes"));
-            assert!(!rendered.contains("state_ciphertext_hashes"));
-            assert!(!rendered.contains("tokenPositionMapBackups"));
-            assert!(!rendered.contains("oramPositionMapBackups"));
-            assert!(!rendered.contains("positionMapBackups"));
-            assert!(!rendered.contains("stashBackups"));
+            for &leaked_alias in PRIVATE_ORAM_TRANSFER_REDACTION_STEMS {
+                assert!(!rendered.contains(leaked_alias), "{rendered}");
+            }
             assert!(!rendered.contains("private_hnsw_oram"));
             assert!(!rendered.contains("private_result_oram"));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
