@@ -301,8 +301,13 @@ mod tests {
             "private HNSW read failed readPath=read-path-camel-sentinel \
              readPathLabel=read-path-label-camel-sentinel \
              requestedPathCount=requested-path-count-camel-sentinel \
+             requestedPathCounts=requested-path-counts-camel-sentinel \
+             requestedBucketCounts=requested-bucket-counts-camel-sentinel \
+             readBucketIdCounts=read-bucket-id-counts-camel-sentinel \
              readBucketIds=read-bucket-ids-camel-sentinel \
              updatedBucketCount=updated-bucket-count-camel-sentinel \
+             updatedBucketCounts=updated-bucket-counts-camel-sentinel \
+             writebackBucketCounts=writeback-bucket-counts-camel-sentinel \
              clientStateBackups=client-state-backups-camel-sentinel \
              tokenPositionMapBackups=token-position-map-backups-camel-sentinel"
                 .to_string(),
@@ -317,8 +322,13 @@ mod tests {
         assert!(!redacted.contains("read-path-camel-sentinel"));
         assert!(!redacted.contains("read-path-label-camel-sentinel"));
         assert!(!redacted.contains("requested-path-count-camel-sentinel"));
+        assert!(!redacted.contains("requested-path-counts-camel-sentinel"));
+        assert!(!redacted.contains("requested-bucket-counts-camel-sentinel"));
+        assert!(!redacted.contains("read-bucket-id-counts-camel-sentinel"));
         assert!(!redacted.contains("read-bucket-ids-camel-sentinel"));
         assert!(!redacted.contains("updated-bucket-count-camel-sentinel"));
+        assert!(!redacted.contains("updated-bucket-counts-camel-sentinel"));
+        assert!(!redacted.contains("writeback-bucket-counts-camel-sentinel"));
         assert!(!redacted.contains("client-state-backups-camel-sentinel"));
         assert!(!redacted.contains("token-position-map-backups-camel-sentinel"));
     }

@@ -297,6 +297,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "read_bucket_sequences"
                         | "read_buckets"
                         | "read_bucket_count"
+                        | "read_bucket_id_count"
+                        | "read_bucket_id_counts"
                         | "read_bucket_counts"
                         | "paths"
                         | "path_count"
@@ -619,6 +621,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "readbucketsequences"
                         | "readbuckets"
                         | "readbucketcount"
+                        | "readbucketidcount"
+                        | "readbucketidcounts"
                         | "readbucketcounts"
                         | "pathcount"
                         | "pathcounts"
@@ -1895,12 +1899,28 @@ mod tests {
                 json!("qdrant-sec-private-oram-count-log-sentinel-camel-path-count"),
             ),
             (
+                "pathCounts",
+                json!(["qdrant-sec-private-oram-count-log-sentinel-camel-path-counts"]),
+            ),
+            (
                 "requested_paths",
                 json!("qdrant-sec-private-oram-count-log-sentinel-requested-paths"),
             ),
             (
+                "bucketIdCounts",
+                json!(["qdrant-sec-private-oram-count-log-sentinel-bucket-id-counts"]),
+            ),
+            (
+                "readBucketIdCounts",
+                json!(["qdrant-sec-private-oram-count-log-sentinel-read-bucket-id-counts"]),
+            ),
+            (
                 "requestedPathCounts",
                 json!(["qdrant-sec-private-oram-count-log-sentinel-requested-path-counts"]),
+            ),
+            (
+                "requestedBucketCounts",
+                json!(["qdrant-sec-private-oram-count-log-sentinel-requested-bucket-counts"]),
             ),
             (
                 "dummyPathsIncluded",
@@ -1911,12 +1931,24 @@ mod tests {
                 json!("qdrant-sec-private-oram-count-log-sentinel-returned-bucket-count"),
             ),
             (
+                "returnedBucketCounts",
+                json!(["qdrant-sec-private-oram-count-log-sentinel-returned-bucket-counts"]),
+            ),
+            (
                 "updatedBucketCount",
                 json!("qdrant-sec-private-oram-count-log-sentinel-updated-bucket-count"),
             ),
             (
+                "updatedBucketCounts",
+                json!(["qdrant-sec-private-oram-count-log-sentinel-updated-bucket-counts"]),
+            ),
+            (
                 "writeback_bucket_count",
                 json!("qdrant-sec-private-oram-count-log-sentinel-writeback-bucket-count"),
+            ),
+            (
+                "writebackBucketCounts",
+                json!(["qdrant-sec-private-oram-count-log-sentinel-writeback-bucket-counts"]),
             ),
             (
                 "leafCount",
