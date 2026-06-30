@@ -2586,8 +2586,12 @@ fn validate_private_result_oram_read_bucket_sequence_shape(
     {
         return Err(PrivateResultOramError::InvalidReadBucketsSignature);
     }
+    let mut seen_paths = BTreeSet::new();
     for path in bucket_ids.chunks(path_len) {
         validate_private_result_oram_read_bucket_path_shape(path)?;
+        if !seen_paths.insert(path) {
+            return Err(PrivateResultOramError::InvalidReadBucketsSignature);
+        }
     }
     Ok(())
 }
@@ -8276,6 +8280,28 @@ mod tests {
             Err(PrivateResultOramError::InvalidReadBucketsSignature)
         );
 
+        let duplicate_path_bucket_ids = [0, 1, 3, 0, 1, 3];
+        let duplicate_path_input = PrivateResultOramReadBucketsSignatureInput {
+            bucket_ids: &duplicate_path_bucket_ids,
+            ..input
+        };
+        assert_eq!(
+            try_private_result_oram_read_buckets_signature_message(duplicate_path_input),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+        let duplicate_path_signature = sign_b64(
+            &key_pair,
+            &unchecked_read_buckets_signature_message(duplicate_path_input),
+        );
+        assert_eq!(
+            validate_private_result_oram_read_buckets_signature(
+                duplicate_path_input,
+                &duplicate_path_signature,
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+
         let malformed_path_bucket_ids = [0, 2, 3];
         let malformed_path_input = PrivateResultOramReadBucketsSignatureInput {
             bucket_ids: &malformed_path_bucket_ids,
@@ -8380,6 +8406,16 @@ mod tests {
                 &key_pair,
                 &manifest,
                 &bucket_ids[..3],
+            ),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+
+        let duplicate_path_bucket_ids = [0, 1, 3, 0, 1, 3];
+        assert_eq!(
+            sign_private_result_oram_read_buckets_for_manifest(
+                &key_pair,
+                &manifest,
+                &duplicate_path_bucket_ids,
             ),
             Err(PrivateResultOramError::InvalidReadBucketsSignature)
         );

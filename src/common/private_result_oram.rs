@@ -1850,6 +1850,14 @@ fn validate_bucket_read_request_budget(
             "private result ORAM read_buckets request must match fixed path budget",
         ));
     }
+    let mut seen_paths = HashSet::new();
+    for path in bucket_ids.chunks(path_len) {
+        if !seen_paths.insert(path) {
+            return Err(StorageError::bad_request(
+                "private result ORAM read_buckets request contains duplicate ORAM path",
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -2581,6 +2589,14 @@ mod private_result_oram_tests {
         let under_budget = validate_bucket_read_request(&manifest, &[0, 1, 3]).unwrap_err();
         let rendered = under_budget.to_string();
         assert!(rendered.contains("fixed path budget"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_result_oram"));
+        assert!(!rendered.contains("3"), "{rendered}");
+
+        let duplicate_path =
+            validate_bucket_read_request(&manifest, &[0, 1, 3, 0, 1, 3]).unwrap_err();
+        let rendered = duplicate_path.to_string();
+        assert!(rendered.contains("duplicate ORAM path"));
         assert!(!rendered.contains("session is missing or expired"));
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains("3"), "{rendered}");

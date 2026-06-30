@@ -2894,6 +2894,27 @@ mod private_result_oram_rest_tests {
             assert!(!under_budget_error.contains(&under_budget_signature.key_id));
             assert!(!under_budget_error.contains(&under_budget_signature.sig));
 
+            let duplicate_path_bucket_ids = vec![0, 1, 3, 0, 1, 3];
+            let duplicate_path_signature = fixture.read_signature(&read_bucket_ids);
+            let duplicate_path_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: duplicate_path_bucket_ids.clone(),
+                    read_signature: duplicate_path_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "duplicate ORAM path"
+            );
+            assert!(!duplicate_path_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!duplicate_path_error.contains(&fixture.manifest.root_hash));
+            assert!(!duplicate_path_error.contains(&session_id));
+            assert!(!duplicate_path_error.contains(&duplicate_path_signature.key_id));
+            assert!(!duplicate_path_error.contains(&duplicate_path_signature.sig));
+            assert!(!duplicate_path_error.contains("read_buckets signature verification failed"));
+
             let malformed_path_bucket_ids = vec![0, 2, 3, 0, 1, 4];
             let malformed_path_signature = fixture.read_signature(&read_bucket_ids);
             let malformed_path_error = post_json_error_contains!(
