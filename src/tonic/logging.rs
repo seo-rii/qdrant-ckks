@@ -369,6 +369,8 @@ mod tests {
              point_tokens=point-token-snake-sentinel \
              clientState=client-state-camel-sentinel \
              client_state=client-state-snake-sentinel \
+             clientStates=client-states-camel-sentinel \
+             client_states=client-states-snake-sentinel \
              clientStateSnapshot=client-state-snapshot-camel-sentinel \
              clientStateSnapshots=client-state-snapshots-camel-sentinel \
              client_state_snapshot=client-state-snapshot-snake-sentinel \
@@ -606,6 +608,8 @@ mod tests {
         assert!(!rendered.contains("point-token-snake-sentinel"));
         assert!(!rendered.contains("client-state-camel-sentinel"));
         assert!(!rendered.contains("client-state-snake-sentinel"));
+        assert!(!rendered.contains("client-states-camel-sentinel"));
+        assert!(!rendered.contains("client-states-snake-sentinel"));
         assert!(!rendered.contains("client-state-snapshot-camel-sentinel"));
         assert!(!rendered.contains("client-state-snapshots-camel-sentinel"));
         assert!(!rendered.contains("client-state-snapshot-snake-sentinel"));

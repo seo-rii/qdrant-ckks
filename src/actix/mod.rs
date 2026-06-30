@@ -883,6 +883,8 @@ mod tests {
         for session_alias in [
             "clientStateBackup-sentinel",
             "clientStateBackups-sentinel",
+            "clientStates-sentinel",
+            "client_states-sentinel",
             "client_state_backup-sentinel",
             "clientStateSnapshot-sentinel",
             "clientStateSnapshots-sentinel",
@@ -965,6 +967,8 @@ mod tests {
         for session_alias in [
             "clientStateBackup-sentinel",
             "clientStateBackups-sentinel",
+            "clientStates-sentinel",
+            "client_states-sentinel",
             "client_state_backup-sentinel",
             "clientStateSnapshot-sentinel",
             "clientStateSnapshots-sentinel",
@@ -1323,6 +1327,8 @@ mod tests {
         for sentinel in [
             "clientStateBackup-sentinel",
             "clientStateBackups-sentinel",
+            "clientStates-sentinel",
+            "client_states-sentinel",
             "client_state_backup-sentinel",
             "clientStateSnapshot-sentinel",
             "clientStateSnapshots-sentinel",
@@ -1387,6 +1393,8 @@ mod tests {
         for sentinel in [
             "clientStateBackup-sentinel",
             "clientStateBackups-sentinel",
+            "clientStates-sentinel",
+            "client_states-sentinel",
             "client_state_backup-sentinel",
             "clientStateSnapshot-sentinel",
             "clientStateSnapshots-sentinel",
