@@ -321,6 +321,10 @@ mod tests {
              writebackBucketCount=writeback-bucket-count-camel-sentinel \
              writebackBucketCounts=writeback-bucket-counts-camel-sentinel \
              clientStateBackups=client-state-backups-camel-sentinel \
+             clientStateCiphertext=client-state-ciphertext-camel-sentinel \
+             encryptedClientStateCiphertextHash=encrypted-client-state-ciphertext-hash-camel-sentinel \
+             stateCiphertext=state-ciphertext-camel-sentinel \
+             stateCiphertextHash=state-ciphertext-hash-camel-sentinel \
              tokenPositionMapBackups=token-position-map-backups-camel-sentinel"
                 .to_string(),
         );
@@ -354,6 +358,10 @@ mod tests {
         assert!(!redacted.contains("writeback-bucket-count-camel-sentinel"));
         assert!(!redacted.contains("writeback-bucket-counts-camel-sentinel"));
         assert!(!redacted.contains("client-state-backups-camel-sentinel"));
+        assert!(!redacted.contains("client-state-ciphertext-camel-sentinel"));
+        assert!(!redacted.contains("encrypted-client-state-ciphertext-hash-camel-sentinel"));
+        assert!(!redacted.contains("state-ciphertext-camel-sentinel"));
+        assert!(!redacted.contains("state-ciphertext-hash-camel-sentinel"));
         assert!(!redacted.contains("token-position-map-backups-camel-sentinel"));
     }
 

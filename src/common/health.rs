@@ -463,6 +463,10 @@ mod tests {
              owner_signing_key_id=owner-signing-key-sentinel, readPath=read-path-camel-sentinel, \
              readPathLabel=read-path-label-camel-sentinel, \
              clientStateBackups=client-state-backups-camel-sentinel, \
+             clientStateCiphertext=client-state-ciphertext-camel-sentinel, \
+             encryptedClientStateCiphertextHash=encrypted-client-state-ciphertext-hash-camel-sentinel, \
+             stateCiphertext=state-ciphertext-camel-sentinel, \
+             stateCiphertextHash=state-ciphertext-hash-camel-sentinel, \
              tokenPositionMapBackups=token-position-map-backups-camel-sentinel",
         );
 
@@ -473,6 +477,10 @@ mod tests {
         assert!(!message.contains("read-path-camel-sentinel"));
         assert!(!message.contains("read-path-label-camel-sentinel"));
         assert!(!message.contains("client-state-backups-camel-sentinel"));
+        assert!(!message.contains("client-state-ciphertext-camel-sentinel"));
+        assert!(!message.contains("encrypted-client-state-ciphertext-hash-camel-sentinel"));
+        assert!(!message.contains("state-ciphertext-camel-sentinel"));
+        assert!(!message.contains("state-ciphertext-hash-camel-sentinel"));
         assert!(!message.contains("token-position-map-backups-camel-sentinel"));
     }
 

@@ -1042,20 +1042,20 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_replica_priority_recovery_redacts_backup_aliases() {
+    fn private_oram_replica_priority_recovery_redacts_client_state_aliases() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
-                key_id: Some("clientStateBackups.json".to_string()),
+                key_id: Some("clientStateCiphertext.json".to_string()),
                 crypto_schema_version: 1,
                 encryption_epoch: 7,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![EncryptionRuleRef {
-                    id: "encryptedClientStateBackups.json".to_string(),
+                    id: "encryptedClientStateCiphertextHash.json".to_string(),
                     selector: EncryptionSelector::PayloadPaths {
                         paths: vec!["tokenPositionMapBackups.json".to_string()],
                     },
-                    instance: "positionMapBackups.json".to_string(),
+                    instance: "stateCiphertextHash.json".to_string(),
                     binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
                 }],
             }),
@@ -1066,23 +1066,25 @@ mod tests {
             "stashBackups.json",
             &params,
         )
-        .expect_err("private ORAM replica-priority recovery must fail closed without alias leaks")
+            .expect_err(
+                "private ORAM replica-priority recovery must fail closed without client-state alias leaks",
+            )
         .to_string();
 
         assert!(err.contains("private ORAM collections"));
         assert!(err.contains("encrypted ORAM bucket transfer"));
         for sentinel in [
-            "clientStateBackups",
-            "encryptedClientStateBackups",
-            "positionMapBackups",
+            "clientStateCiphertext",
+            "encryptedClientStateCiphertextHash",
             "tokenPositionMapBackups",
+            "stateCiphertextHash",
             "stashBackups",
             PRIVATE_RESULT_ORAM_BINDING,
             PRIVATE_RESULT_ORAM_DIR,
         ] {
             assert!(
                 !err.contains(sentinel),
-                "private ORAM replica-priority recovery leaked backup alias `{sentinel}`: {err}",
+                "private ORAM replica-priority recovery leaked client-state alias `{sentinel}`: {err}",
             );
         }
     }

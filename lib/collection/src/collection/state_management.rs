@@ -522,17 +522,17 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_apply_config_layout_guard_redacts_backup_aliases() {
+    fn private_oram_apply_config_layout_guard_redacts_client_state_aliases() {
         let private_params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
-                key_id: Some("clientStateBackups.json".to_string()),
+                key_id: Some("clientStateCiphertext.json".to_string()),
                 crypto_schema_version: 1,
                 encryption_epoch: 7,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![
                     EncryptionRuleRef {
-                        id: "encryptedClientStateBackups.json".to_string(),
+                        id: "encryptedClientStateCiphertextHash.json".to_string(),
                         selector: EncryptionSelector::VectorNames {
                             names: vec!["positionMapBackups.json".to_string()],
                         },
@@ -544,7 +544,7 @@ mod tests {
                         selector: EncryptionSelector::PayloadPaths {
                             paths: vec!["stashBackups.json".to_string()],
                         },
-                        instance: "clientStateBackups.json".to_string(),
+                        instance: "stateCiphertextHash.json".to_string(),
                         binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
                     },
                 ],
@@ -564,11 +564,12 @@ mod tests {
         assert!(rendered.contains("cannot apply shard layout config change"));
         assert!(rendered.contains("consensus-backed epoch/root"));
         for sentinel in [
-            "clientStateBackups",
-            "encryptedClientStateBackups",
+            "clientStateCiphertext",
+            "encryptedClientStateCiphertextHash",
             "positionMapBackups",
             "oramPositionMapBackups",
             "tokenPositionMapBackups",
+            "stateCiphertextHash",
             "stashBackups",
             qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
             qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
@@ -577,7 +578,7 @@ mod tests {
         ] {
             assert!(
                 !rendered.contains(sentinel),
-                "private ORAM consensus apply leaked backup alias `{sentinel}`: {rendered}",
+                "private ORAM consensus apply leaked client-state alias `{sentinel}`: {rendered}",
             );
         }
     }

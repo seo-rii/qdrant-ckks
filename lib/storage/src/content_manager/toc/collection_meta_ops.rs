@@ -1134,17 +1134,17 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_consensus_guard_redacts_client_state_backup_aliases() {
+    fn private_oram_consensus_guard_redacts_client_state_aliases() {
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
-                key_id: Some("clientStateBackups.json".to_string()),
+                key_id: Some("clientStateCiphertext.json".to_string()),
                 crypto_schema_version: 1,
                 encryption_epoch: 7,
                 migration_state: CryptoMigrationState::Active,
                 rules: vec![
                     EncryptionRuleRef {
-                        id: "encryptedClientStateBackups.json".to_string(),
+                        id: "encryptedClientStateCiphertextHash.json".to_string(),
                         selector: EncryptionSelector::VectorNames {
                             names: vec!["positionMapBackups.json".to_string()],
                         },
@@ -1156,7 +1156,7 @@ mod tests {
                         selector: EncryptionSelector::PayloadPaths {
                             paths: vec!["stashBackups.json".to_string()],
                         },
-                        instance: "clientStateBackups.json".to_string(),
+                        instance: "stateCiphertextHash.json".to_string(),
                         binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
                     },
                 ],
@@ -1178,17 +1178,18 @@ mod tests {
             &params,
             &operation,
         )
-        .expect_err("private ORAM transfer must fail closed without leaking backup aliases");
+        .expect_err("private ORAM transfer must fail closed without leaking client-state aliases");
         let rendered = err.to_string();
 
         assert!(rendered.contains("private ORAM shard transfer"));
         assert!(rendered.contains("consensus-backed epoch/root ownership"));
         for sentinel in [
-            "clientStateBackups",
-            "encryptedClientStateBackups",
+            "clientStateCiphertext",
+            "encryptedClientStateCiphertextHash",
             "positionMapBackups",
             "oramPositionMapBackups",
             "tokenPositionMapBackups",
+            "stateCiphertextHash",
             "stashBackups",
             PRIVATE_HNSW_ORAM_BINDING,
             PRIVATE_RESULT_ORAM_BINDING,
@@ -1197,7 +1198,7 @@ mod tests {
         ] {
             assert!(
                 !rendered.contains(sentinel),
-                "private ORAM consensus guard leaked backup alias `{sentinel}`: {rendered}",
+                "private ORAM consensus guard leaked client-state alias `{sentinel}`: {rendered}",
             );
         }
     }

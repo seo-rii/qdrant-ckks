@@ -337,7 +337,7 @@ mod tests {
             "start resharding",
             "commit read hash ring",
             "private-resharding-operation-sentinel",
-            "encryptedClientStateBackups.json",
+            "encryptedClientStateCiphertextHash.json",
         ] {
             let err =
                 validate_private_oram_resharding_until_supported(operation_name, true).unwrap_err();

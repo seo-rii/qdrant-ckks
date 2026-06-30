@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn private_oram_transfer_task_start_fails_closed_until_bucket_transfer_supported() {
-        let collection_name = "encryptedClientStateBackups.json";
+        let collection_name = "encryptedClientStateCiphertextHash.json";
         validate_private_oram_transfer_task_start_until_supported(collection_name, false).unwrap();
 
         let err = validate_private_oram_transfer_task_start_until_supported(collection_name, true)
@@ -631,7 +631,7 @@ mod tests {
         assert!(rendered.contains("encrypted ORAM bucket transfer"));
         assert!(rendered.contains("consensus-backed epoch/root"));
         assert!(!rendered.contains(collection_name));
-        assert!(!rendered.contains("encryptedClientStateBackups"));
+        assert!(!rendered.contains("encryptedClientStateCiphertextHash"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
