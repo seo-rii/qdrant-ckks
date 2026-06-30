@@ -1479,6 +1479,8 @@ fn compact_path_component_is_client_owned_oram_state_alias(value: &str) -> bool 
             | "clientstateciphertexts"
             | "clientstateciphertexthash"
             | "clientstateciphertexthashes"
+            | "clientstateciphertextsha256"
+            | "clientstateciphertextssha256"
             | "encryptedclientstate"
             | "encryptedclientstates"
             | "encryptedclientstatebackup"
@@ -1489,10 +1491,14 @@ fn compact_path_component_is_client_owned_oram_state_alias(value: &str) -> bool 
             | "encryptedclientstateciphertexts"
             | "encryptedclientstateciphertexthash"
             | "encryptedclientstateciphertexthashes"
+            | "encryptedclientstateciphertextsha256"
+            | "encryptedclientstateciphertextssha256"
             | "stateciphertext"
             | "stateciphertexts"
             | "stateciphertexthash"
             | "stateciphertexthashes"
+            | "stateciphertextsha256"
+            | "stateciphertextssha256"
             | "positionmap"
             | "positionmapbackup"
             | "positionmapbackups"
@@ -1899,6 +1905,10 @@ mod tests {
             "client_state_ciphertext_hash.bin",
             "client_state_ciphertext_hashes",
             "clientStateCiphertextHashes.json",
+            "client_state_ciphertext_sha256",
+            "clientStateCiphertextSha256.json",
+            "client_state_ciphertexts_sha256",
+            "clientStateCiphertextsSha256.json",
             "encrypted_client_state",
             "encrypted.client.state",
             "encryptedClientStates.json",
@@ -1912,10 +1922,18 @@ mod tests {
             "encrypted_client_state_ciphertext_hash.bin",
             "encrypted_client_state_ciphertext_hashes",
             "encryptedClientStateCiphertextHashes.json",
+            "encrypted_client_state_ciphertext_sha256",
+            "encryptedClientStateCiphertextSha256.json",
+            "encrypted_client_state_ciphertexts_sha256",
+            "encryptedClientStateCiphertextsSha256.json",
             "state_ciphertext",
             "stateCiphertext.json",
             "state_ciphertext_hash",
             "state_ciphertext_hash.bin",
+            "state_ciphertext_sha256",
+            "stateCiphertextSha256.json",
+            "state_ciphertexts_sha256",
+            "stateCiphertextsSha256.json",
             "position_map",
             "position_map_backup",
             "position_map_backups",

@@ -665,7 +665,8 @@ are written to the archive, and validate current epoch plus canonical epoch
 commit file contents again at archive time. Client-owned state detection covers
 snake_case, camelCase, kebab-case, and dot-separated aliases for client state,
 encrypted client state snapshots, position maps, ORAM/token position maps, and
-stashes. Empty private ORAM temp directories are omitted from the archive;
+stashes, including `ciphertext_sha256` backup variants. Empty private ORAM temp
+directories are omitted from the archive;
 snapshot tests seal a plaintext sentinel into a client bucket and assert that
 the raw snapshot archive and restored bucket file do not contain the sentinel
 bytes.
@@ -977,9 +978,9 @@ stored bucket bodies are not reflected; CLI layout failures are fixed messages
 that also avoid bucket ids and bucket commitment mismatch details.
 Private HNSW vector store names must also be safe store path components and
 are rejected if they compact to reserved client-owned state aliases such as
-`client.state`, `position.map`, or `stash`; snapshot source/archive and restore
-preflight apply the same checks before archiving or accepting ORAM store
-contents.
+`client.state`, `position.map`, `client_state_ciphertext_sha256`, or `stash`;
+snapshot source/archive and restore preflight apply the same checks before
+archiving or accepting ORAM store contents.
 CLI and REST snapshot recovery also validate stored private HNSW ORAM manifest
 and private result ORAM manifest signatures against the runtime
 `signature_public_keys` registry after the restore-layout preflight passes, so
