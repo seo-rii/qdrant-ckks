@@ -1426,7 +1426,7 @@ mod tests {
     }
 
     #[test]
-    fn update_collection_rejects_private_oram_snapshot_window() {
+    fn update_and_delete_collection_reject_private_oram_snapshot_window() {
         let _guard = route_e2e_guard();
         let (_temp, dispatcher) = test_dispatcher();
         let dispatcher = web::Data::new(dispatcher);
@@ -1467,6 +1467,21 @@ mod tests {
                         "label": "updated"
                     }
                 }))
+                .to_request();
+            let response = actix_web::test::call_service(&app, request).await;
+            assert_eq!(response.status(), actix_web::http::StatusCode::BAD_REQUEST);
+            let body = actix_web::body::to_bytes(response.into_body())
+                .await
+                .unwrap();
+            let body = std::str::from_utf8(&body).unwrap();
+            assert!(
+                body.contains("lifecycle operation requires no active collection snapshot"),
+                "{body}",
+            );
+            assert!(!body.contains(COLLECTION_NAME), "{body}");
+
+            let request = actix_web::test::TestRequest::delete()
+                .uri("/collections/docs")
                 .to_request();
             let response = actix_web::test::call_service(&app, request).await;
             assert_eq!(response.status(), actix_web::http::StatusCode::BAD_REQUEST);
