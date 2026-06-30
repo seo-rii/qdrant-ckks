@@ -1055,6 +1055,10 @@ mod tests {
                     selector: EncryptionSelector::PayloadPaths {
                         paths: vec![
                             "tokenPositionMapBackups.json".to_string(),
+                            "clientStateSnapshot.json".to_string(),
+                            "clientStateSnapshots.json".to_string(),
+                            "client_state_snapshot.json".to_string(),
+                            "client_state_snapshots.json".to_string(),
                             "clientStateCiphertext.json".to_string(),
                             "clientStateCiphertextHashes.json".to_string(),
                             "clientStateCiphertextSha256.json".to_string(),
@@ -1071,6 +1075,8 @@ mod tests {
                             "encrypted_client_state.json".to_string(),
                             "encrypted_client_state_backup.json".to_string(),
                             "encrypted_client_state_backups.json".to_string(),
+                            "encryptedClientStateSnapshot.json".to_string(),
+                            "encryptedClientStateSnapshots.json".to_string(),
                             "encrypted_client_state_snapshot.json".to_string(),
                             "encrypted_client_state_snapshots.json".to_string(),
                             "encrypted_client_state_ciphertext.json".to_string(),
@@ -1110,6 +1116,10 @@ mod tests {
         assert!(err.contains("encrypted ORAM bucket transfer"));
         for sentinel in [
             "clientStateCiphertext",
+            "clientStateSnapshot",
+            "clientStateSnapshots",
+            "client_state_snapshot",
+            "client_state_snapshots",
             "clientStateCiphertextHash",
             "clientStateCiphertextHashes",
             "clientStateCiphertextSha256",
@@ -1127,6 +1137,8 @@ mod tests {
             "encrypted_client_state",
             "encrypted_client_state_backup",
             "encrypted_client_state_backups",
+            "encryptedClientStateSnapshot",
+            "encryptedClientStateSnapshots",
             "encrypted_client_state_snapshot",
             "encrypted_client_state_snapshots",
             "encrypted_client_state_ciphertext",
