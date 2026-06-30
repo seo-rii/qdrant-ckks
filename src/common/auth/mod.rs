@@ -300,13 +300,25 @@ mod tests {
         let error = AuthError::Forbidden(
             "private HNSW read failed readPath=read-path-camel-sentinel \
              readPathLabel=read-path-label-camel-sentinel \
+             accessCount=access-count-camel-sentinel \
+             accessCounts=access-counts-camel-sentinel \
+             pathCount=path-count-camel-sentinel \
+             pathCounts=path-counts-camel-sentinel \
+             bucketIdCounts=bucket-id-counts-camel-sentinel \
+             readBucketCount=read-bucket-count-camel-sentinel \
+             readBucketCounts=read-bucket-counts-camel-sentinel \
+             readBucketIdCount=read-bucket-id-count-camel-sentinel \
              requestedPathCount=requested-path-count-camel-sentinel \
              requestedPathCounts=requested-path-counts-camel-sentinel \
+             requestedBucketCount=requested-bucket-count-camel-sentinel \
              requestedBucketCounts=requested-bucket-counts-camel-sentinel \
              readBucketIdCounts=read-bucket-id-counts-camel-sentinel \
              readBucketIds=read-bucket-ids-camel-sentinel \
+             returnedBucketCount=returned-bucket-count-camel-sentinel \
+             returnedBucketCounts=returned-bucket-counts-camel-sentinel \
              updatedBucketCount=updated-bucket-count-camel-sentinel \
              updatedBucketCounts=updated-bucket-counts-camel-sentinel \
+             writebackBucketCount=writeback-bucket-count-camel-sentinel \
              writebackBucketCounts=writeback-bucket-counts-camel-sentinel \
              clientStateBackups=client-state-backups-camel-sentinel \
              tokenPositionMapBackups=token-position-map-backups-camel-sentinel"
@@ -321,13 +333,25 @@ mod tests {
         );
         assert!(!redacted.contains("read-path-camel-sentinel"));
         assert!(!redacted.contains("read-path-label-camel-sentinel"));
+        assert!(!redacted.contains("access-count-camel-sentinel"));
+        assert!(!redacted.contains("access-counts-camel-sentinel"));
+        assert!(!redacted.contains("path-count-camel-sentinel"));
+        assert!(!redacted.contains("path-counts-camel-sentinel"));
+        assert!(!redacted.contains("bucket-id-counts-camel-sentinel"));
+        assert!(!redacted.contains("read-bucket-count-camel-sentinel"));
+        assert!(!redacted.contains("read-bucket-counts-camel-sentinel"));
+        assert!(!redacted.contains("read-bucket-id-count-camel-sentinel"));
         assert!(!redacted.contains("requested-path-count-camel-sentinel"));
         assert!(!redacted.contains("requested-path-counts-camel-sentinel"));
+        assert!(!redacted.contains("requested-bucket-count-camel-sentinel"));
         assert!(!redacted.contains("requested-bucket-counts-camel-sentinel"));
         assert!(!redacted.contains("read-bucket-id-counts-camel-sentinel"));
         assert!(!redacted.contains("read-bucket-ids-camel-sentinel"));
+        assert!(!redacted.contains("returned-bucket-count-camel-sentinel"));
+        assert!(!redacted.contains("returned-bucket-counts-camel-sentinel"));
         assert!(!redacted.contains("updated-bucket-count-camel-sentinel"));
         assert!(!redacted.contains("updated-bucket-counts-camel-sentinel"));
+        assert!(!redacted.contains("writeback-bucket-count-camel-sentinel"));
         assert!(!redacted.contains("writeback-bucket-counts-camel-sentinel"));
         assert!(!redacted.contains("client-state-backups-camel-sentinel"));
         assert!(!redacted.contains("token-position-map-backups-camel-sentinel"));
