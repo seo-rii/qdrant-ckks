@@ -56,13 +56,11 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
         };
 
         for encrypted_path in paths {
-            let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+            let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|_| {
                 if encryption_rule_uses_private_result_oram(rule) {
                     CollectionError::bad_input("private result ORAM payload field path is invalid")
                 } else {
-                    CollectionError::bad_input(format!(
-                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                    ))
+                    CollectionError::bad_input("encrypted payload field path is invalid")
                 }
             })?;
 
@@ -93,10 +91,8 @@ pub fn validate_payload_index_paths_for_encrypted_paths<'a>(
         }
 
         for metadata_key in keys {
-            let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
-                CollectionError::bad_input(format!(
-                    "encrypted metadata field path '{metadata_key}' is invalid: {err:?}",
-                ))
+            let metadata_path = metadata_key.parse::<JsonPath>().map_err(|_| {
+                CollectionError::bad_input("encrypted metadata field path is invalid")
             })?;
 
             for field_name in &field_names {

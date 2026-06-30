@@ -102,15 +102,13 @@ fn ensure_facet_key_does_not_touch_encrypted_payload(
         match &rule.selector {
             EncryptionSelector::PayloadPaths { paths } => {
                 for encrypted_path in paths {
-                    let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
+                    let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|_| {
                         if encryption_rule_uses_private_result_oram(rule) {
                             CollectionError::bad_input(
                                 "private result ORAM payload field path is invalid",
                             )
                         } else {
-                            CollectionError::bad_input(format!(
-                                "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                            ))
+                            CollectionError::bad_input("encrypted payload field path is invalid")
                         }
                     })?;
                     if key.compatible(&encrypted_json_path) {

@@ -1464,11 +1464,9 @@ async fn ensure_payload_index_allowed_by_encryption(
             continue;
         }
         for metadata_key in keys {
-            let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
-                StorageError::bad_input(format!(
-                    "encrypted metadata field path '{metadata_key}' is invalid: {err:?}",
-                ))
-            })?;
+            let metadata_path = metadata_key
+                .parse::<JsonPath>()
+                .map_err(|_| StorageError::bad_input("encrypted metadata field path is invalid"))?;
             if field_name.compatible(&metadata_path) {
                 return Err(StorageError::bad_input(format!(
                     "cannot create payload index on encrypted metadata value field '{field_name}' because it overlaps encrypted metadata path '{metadata_key}'; configure a blind index provider instead",
@@ -3341,11 +3339,9 @@ fn payload_touches_encrypted_config(
             _ => continue,
         };
         for encrypted_path in paths {
-            let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|err| {
-                StorageError::bad_input(format!(
-                    "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                ))
-            })?;
+            let encrypted_json_path = encrypted_path
+                .parse::<JsonPath>()
+                .map_err(|_| StorageError::bad_input("encrypted payload field path is invalid"))?;
             if payload_touches_path(payload, key, &encrypted_json_path) {
                 return Ok(true);
             }

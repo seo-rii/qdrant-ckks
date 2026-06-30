@@ -393,13 +393,11 @@ fn parse_payload_selector_guard_path(
     rule: &EncryptionRuleRef,
     encrypted_path: &str,
 ) -> CollectionResult<JsonPath> {
-    encrypted_path.parse::<JsonPath>().map_err(|err| {
+    encrypted_path.parse::<JsonPath>().map_err(|_| {
         if encryption_rule_uses_private_result_oram(rule) {
             CollectionError::bad_input("private result ORAM payload field path is invalid")
         } else {
-            CollectionError::bad_input(format!(
-                "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-            ))
+            CollectionError::bad_input("encrypted payload field path is invalid")
         }
     })
 }
@@ -616,10 +614,10 @@ impl Collection {
                     ) => {
                         for path in paths {
                             let path_string = path.clone();
-                            let json_path = path.parse::<JsonPath>().map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "payload encrypted field path '{path}' is invalid: {err:?}",
-                                ))
+                            let json_path = path.parse::<JsonPath>().map_err(|_| {
+                                CollectionError::bad_input(
+                                    "payload encrypted field path is invalid",
+                                )
                             })?;
                             server_rewrite_paths.push((
                                 path_string,
@@ -631,10 +629,10 @@ impl Collection {
                     (EncryptionSelector::MetadataKeys { keys }, Some(METADATA_VALUE_BINDING)) => {
                         for path in keys {
                             let path_string = path.clone();
-                            let json_path = path.parse::<JsonPath>().map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "metadata encrypted field path '{path}' is invalid: {err:?}",
-                                ))
+                            let json_path = path.parse::<JsonPath>().map_err(|_| {
+                                CollectionError::bad_input(
+                                    "metadata encrypted field path is invalid",
+                                )
                             })?;
                             server_rewrite_paths.push((
                                 path_string,
@@ -1526,10 +1524,8 @@ impl Collection {
                 }
                 EncryptionSelector::MetadataKeys { keys } => {
                     for metadata_key in keys {
-                        let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
-                            CollectionError::bad_input(format!(
-                                "encrypted metadata field path '{metadata_key}' is invalid: {err:?}",
-                            ))
+                        let metadata_path = metadata_key.parse::<JsonPath>().map_err(|_| {
+                            CollectionError::bad_input("encrypted metadata field path is invalid")
                         })?;
                         match operation {
                             CollectionUpdateOperations::PayloadOperation(
@@ -3770,10 +3766,10 @@ fn payload_redaction_plan_for_encryption(
                                 )
                             })?
                         } else {
-                            path.parse::<JsonPath>().map_err(|err| {
-                                CollectionError::bad_input(format!(
-                                    "encrypted payload field path '{path}' is invalid: {err:?}",
-                                ))
+                            path.parse::<JsonPath>().map_err(|_| {
+                                CollectionError::bad_input(
+                                    "encrypted payload field path is invalid",
+                                )
                             })?
                         };
                         plan.encrypted_payload_paths

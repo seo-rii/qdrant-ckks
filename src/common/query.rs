@@ -3882,20 +3882,15 @@ fn ensure_group_path_does_not_touch_encrypted_crypto_selectors(
         match &rule.selector {
             EncryptionSelector::PayloadPaths { paths } => {
                 for encrypted_path in paths {
-                    let encrypted_json_path =
-                        encrypted_path
-                            .parse::<JsonPath>()
-                            .map_err(|err| {
-                                if encryption_rule_uses_private_result_oram(rule) {
-                                    StorageError::bad_input(
-                                        "private result ORAM payload field path is invalid",
-                                    )
-                                } else {
-                                    StorageError::bad_input(format!(
-                                        "encrypted payload field path '{encrypted_path}' is invalid: {err:?}",
-                                    ))
-                                }
-                            })?;
+                    let encrypted_json_path = encrypted_path.parse::<JsonPath>().map_err(|_| {
+                        if encryption_rule_uses_private_result_oram(rule) {
+                            StorageError::bad_input(
+                                "private result ORAM payload field path is invalid",
+                            )
+                        } else {
+                            StorageError::bad_input("encrypted payload field path is invalid")
+                        }
+                    })?;
                     if group_by.compatible(&encrypted_json_path) {
                         if encryption_rule_uses_private_result_oram(rule) {
                             return Err(StorageError::bad_input(
@@ -3913,10 +3908,8 @@ fn ensure_group_path_does_not_touch_encrypted_crypto_selectors(
             }
             EncryptionSelector::MetadataKeys { keys } => {
                 for metadata_key in keys {
-                    let metadata_path = metadata_key.parse::<JsonPath>().map_err(|err| {
-                        StorageError::bad_input(format!(
-                            "encrypted metadata field path '{metadata_key}' is invalid: {err:?}",
-                        ))
+                    let metadata_path = metadata_key.parse::<JsonPath>().map_err(|_| {
+                        StorageError::bad_input("encrypted metadata field path is invalid")
                     })?;
                     if group_by.compatible(&metadata_path) {
                         return Err(StorageError::bad_input(format!(
