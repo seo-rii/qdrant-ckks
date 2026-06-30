@@ -1140,6 +1140,71 @@ mod tests {
     }
 
     #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_result_client_state_alias() {
+        let fixture = PrivateResultSnapshotFixture::build();
+        let settings = fixture.settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_result_snapshot_fixture(collection_dir.path(), &fixture, false);
+        fs::write(
+            collection_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("clientStateSnapshot.json"),
+            b"result client state snapshot sentinel",
+        )
+        .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("client-owned private result ORAM state must fail CLI preflight");
+
+        assert!(
+            err.contains("private result ORAM snapshot layout validation failed"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR), "{err}");
+        assert!(!err.contains("clientStateSnapshot"), "{err}");
+        assert!(!err.contains("sentinel"), "{err}");
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_result_non_empty_temp() {
+        let fixture = PrivateResultSnapshotFixture::build();
+        let settings = fixture.settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_result_snapshot_fixture(collection_dir.path(), &fixture, false);
+        fs::write(
+            collection_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("temp")
+                .join("stale-result-write.tmp"),
+            b"stale result temp sentinel",
+        )
+        .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("non-empty private result ORAM temp must fail CLI preflight");
+
+        assert!(
+            err.contains("private result ORAM snapshot layout validation failed"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR), "{err}");
+        assert!(!err.contains("stale-result-write"), "{err}");
+        assert!(!err.contains("sentinel"), "{err}");
+    }
+
+    #[test]
     fn cli_snapshot_crypto_preflight_rejects_private_result_bucket_commitment_mismatch() {
         let fixture = PrivateResultSnapshotFixture::build();
         let settings = fixture.settings();
