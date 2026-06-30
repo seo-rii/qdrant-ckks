@@ -12591,6 +12591,7 @@ mod tests {
         "clientStateCiphertextHashes",
         "client_state_ciphertext",
         "client_state_ciphertext_hash",
+        "client_state_ciphertext_hashes",
         "encryptedClientStateBackups",
         "encryptedClientStateCiphertext",
         "encryptedClientStateCiphertextHash",
@@ -12610,6 +12611,7 @@ mod tests {
         "stateCiphertextHashes",
         "state_ciphertext",
         "state_ciphertext_hash",
+        "state_ciphertext_hashes",
         "tokenPositionMapBackups",
         "token_position_map_backups",
     ];
