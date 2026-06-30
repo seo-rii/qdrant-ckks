@@ -418,9 +418,11 @@ mod tests {
              positionMap=position-map-camel-sentinel \
              positionMapBackup=position-map-backup-camel-sentinel \
              positionMapBackups=position-map-backups-camel-sentinel \
+             position_map_backup=position-map-backup-snake-sentinel \
              position_map_backups=position-map-backups-snake-sentinel \
              oramPositionMapBackup=oram-position-map-backup-camel-sentinel \
              oramPositionMapBackups=oram-position-map-backups-camel-sentinel \
+             oram_position_map_backup=oram-position-map-backup-snake-sentinel \
              oram_position_map_backups=oram-position-map-backups-snake-sentinel \
              positionMaps=position-maps-camel-sentinel \
              stash=stash-sentinel \
