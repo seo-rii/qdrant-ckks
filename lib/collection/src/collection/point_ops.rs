@@ -4387,6 +4387,10 @@ mod tests {
     }
 
     const PRIVATE_ORAM_POINT_ALIAS_SENTINELS: &[&str] = &[
+        "clientState",
+        "clientStates",
+        "client_state",
+        "client_states",
         "clientStateBackup",
         "clientStateBackups",
         "client_state_backup",
@@ -4396,6 +4400,9 @@ mod tests {
         "client_state_snapshots",
         "encryptedClientStateBackup",
         "encryptedClientStateBackups",
+        "encryptedClientState",
+        "encryptedClientStates",
+        "encrypted_client_states",
         "encryptedClientStateSnapshot",
         "encryptedClientStateSnapshots",
         "encrypted_client_state_backups",

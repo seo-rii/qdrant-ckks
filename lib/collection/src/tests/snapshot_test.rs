@@ -1060,7 +1060,9 @@ async fn test_snapshot_private_oram_store_files_are_archived() {
     }
     for forbidden in [
         "client_state",
+        "client_states",
         "clientState",
+        "clientStates",
         "clientStateBackup",
         "clientStateBackups",
         "client_state_backup",

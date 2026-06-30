@@ -2874,7 +2874,9 @@ mod tests {
     fn private_oram_snapshot_client_owned_state_detection_covers_aliases() {
         for protected_name in [
             "client_state.json",
+            "client_states.json",
             "clientState.json",
+            "clientStates.json",
             "client-state.json",
             "client.state",
             "client.state.json",
@@ -3585,6 +3587,10 @@ mod tests {
                 "tokenPositionMapBackup.json".to_string(),
                 "tokenPositionMapBackups.json".to_string(),
                 "token_position_map_backup.json".to_string(),
+                "clientState.json".to_string(),
+                "clientStates.json".to_string(),
+                "client_state.json".to_string(),
+                "client_states.json".to_string(),
                 "clientStateBackup.json".to_string(),
                 "clientStateSnapshot.json".to_string(),
                 "clientStateSnapshots.json".to_string(),
@@ -3599,7 +3605,10 @@ mod tests {
                 "client_state_ciphertext_hash.json".to_string(),
                 "client_state_ciphertext_sha256.json".to_string(),
                 "client_state_ciphertexts_sha256.json".to_string(),
+                "encryptedClientState.json".to_string(),
+                "encryptedClientStates.json".to_string(),
                 "encrypted_client_state.json".to_string(),
+                "encrypted_client_states.json".to_string(),
                 "encrypted_client_state_backup.json".to_string(),
                 "encrypted_client_state_backups.json".to_string(),
                 "encryptedClientStateBackup.json".to_string(),
@@ -3639,6 +3648,10 @@ mod tests {
         assert!(rendered.contains("shard snapshot operations for private ORAM collections"));
         assert!(rendered.contains("collection snapshot/restore preflight"));
         for sentinel in [
+            "clientState",
+            "clientStates",
+            "client_state",
+            "client_states",
             "clientStateCiphertext",
             "clientStateBackup",
             "clientStateSnapshot",
@@ -3654,7 +3667,10 @@ mod tests {
             "client_state_ciphertext_hash",
             "client_state_ciphertext_sha256",
             "client_state_ciphertexts_sha256",
+            "encryptedClientState",
+            "encryptedClientStates",
             "encrypted_client_state",
+            "encrypted_client_states",
             "encrypted_client_state_backup",
             "encrypted_client_state_backups",
             "encryptedClientStateBackup",
