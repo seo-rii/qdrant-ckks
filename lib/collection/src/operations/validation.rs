@@ -417,6 +417,10 @@ mod tests {
                         "names": [
                             "stash",
                             "clientStateBackups.json",
+                            "clientStateSnapshot.json",
+                            "clientStateSnapshots.json",
+                            "client_state_snapshot.json",
+                            "client_state_snapshots.json",
                             "clientStateCiphertext.json",
                             "clientStateCiphertextHash.json",
                             "clientStateCiphertextHashes.json",
@@ -428,6 +432,8 @@ mod tests {
                             "client_state_ciphertext_sha256.json",
                             "client_state_ciphertexts_sha256.json",
                             "encryptedClientStateBackups.json",
+                            "encryptedClientStateSnapshot.json",
+                            "encryptedClientStateSnapshots.json",
                             "encrypted_client_state.json",
                             "encrypted_client_state_backup.json",
                             "encrypted_client_state_backups.json",
@@ -471,6 +477,10 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("stash_private_hnsw"));
         assert!(!unsafe_store_name_message.contains("stash"));
         assert!(!unsafe_store_name_message.contains("clientStateBackups"));
+        assert!(!unsafe_store_name_message.contains("clientStateSnapshot"));
+        assert!(!unsafe_store_name_message.contains("clientStateSnapshots"));
+        assert!(!unsafe_store_name_message.contains("client_state_snapshot"));
+        assert!(!unsafe_store_name_message.contains("client_state_snapshots"));
         assert!(!unsafe_store_name_message.contains("clientStateCiphertext"));
         assert!(!unsafe_store_name_message.contains("clientStateCiphertextHash"));
         assert!(!unsafe_store_name_message.contains("clientStateCiphertextHashes"));
@@ -482,6 +492,8 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("client_state_ciphertext_sha256"));
         assert!(!unsafe_store_name_message.contains("client_state_ciphertexts_sha256"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStateBackups"));
+        assert!(!unsafe_store_name_message.contains("encryptedClientStateSnapshot"));
+        assert!(!unsafe_store_name_message.contains("encryptedClientStateSnapshots"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_backup"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_backups"));

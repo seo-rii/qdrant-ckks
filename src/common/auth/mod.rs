@@ -320,8 +320,14 @@ mod tests {
              updatedBucketCounts=updated-bucket-counts-camel-sentinel \
              writebackBucketCount=writeback-bucket-count-camel-sentinel \
              writebackBucketCounts=writeback-bucket-counts-camel-sentinel \
+             clientStateSnapshot=client-state-snapshot-camel-sentinel \
+             clientStateSnapshots=client-state-snapshots-camel-sentinel \
+             client_state_snapshot=client-state-snapshot-snake-sentinel \
+             client_state_snapshots=client-state-snapshots-snake-sentinel \
              clientStateBackups=client-state-backups-camel-sentinel \
              client_state_backups=client-state-backups-snake-sentinel \
+             encryptedClientStateSnapshot=encrypted-client-state-snapshot-camel-sentinel \
+             encryptedClientStateSnapshots=encrypted-client-state-snapshots-camel-sentinel \
              encryptedClientStateBackups=encrypted-client-state-backups-camel-sentinel \
              encrypted_client_state_backups=encrypted-client-state-backups-snake-sentinel \
              clientStateCiphertext=client-state-ciphertext-camel-sentinel \
@@ -338,6 +344,7 @@ mod tests {
              encrypted_client_state=encrypted-client-state-snake-sentinel \
              encrypted_client_state_backup=encrypted-client-state-backup-snake-sentinel \
              encrypted_client_state_snapshot=encrypted-client-state-snapshot-snake-sentinel \
+             encrypted_client_state_snapshots=encrypted-client-state-snapshots-snake-sentinel \
              encrypted_client_state_ciphertext=encrypted-client-state-ciphertext-snake-sentinel \
              encrypted_client_state_ciphertexts=encrypted-client-state-ciphertexts-snake-sentinel \
              encrypted_client_state_ciphertext_sha256=encrypted-client-state-ciphertext-sha256-snake-sentinel \
@@ -404,8 +411,14 @@ mod tests {
         assert!(!redacted.contains("updated-bucket-counts-camel-sentinel"));
         assert!(!redacted.contains("writeback-bucket-count-camel-sentinel"));
         assert!(!redacted.contains("writeback-bucket-counts-camel-sentinel"));
+        assert!(!redacted.contains("client-state-snapshot-camel-sentinel"));
+        assert!(!redacted.contains("client-state-snapshots-camel-sentinel"));
+        assert!(!redacted.contains("client-state-snapshot-snake-sentinel"));
+        assert!(!redacted.contains("client-state-snapshots-snake-sentinel"));
         assert!(!redacted.contains("client-state-backups-camel-sentinel"));
         assert!(!redacted.contains("client-state-backups-snake-sentinel"));
+        assert!(!redacted.contains("encrypted-client-state-snapshot-camel-sentinel"));
+        assert!(!redacted.contains("encrypted-client-state-snapshots-camel-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-backups-camel-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-backups-snake-sentinel"));
         assert!(!redacted.contains("client-state-ciphertext-camel-sentinel"));
@@ -422,6 +435,7 @@ mod tests {
         assert!(!redacted.contains("encrypted-client-state-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-backup-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-snapshot-snake-sentinel"));
+        assert!(!redacted.contains("encrypted-client-state-snapshots-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertexts-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-sha256-snake-sentinel"));

@@ -533,6 +533,10 @@ mod private_hnsw_grpc_tests {
     const PRIVATE_HNSW_CLIENT_STATE_REDACTION_ALIASES: &[&str] = &[
         "clientStateBackups",
         "client_state_backups",
+        "clientStateSnapshot",
+        "clientStateSnapshots",
+        "client_state_snapshot",
+        "client_state_snapshots",
         "clientStateCiphertext",
         "clientStateCiphertextHash",
         "clientStateCiphertextHashes",
@@ -545,6 +549,10 @@ mod private_hnsw_grpc_tests {
         "client_state_ciphertexts_sha256",
         "encryptedClientStateBackups",
         "encrypted_client_state_backups",
+        "encryptedClientStateSnapshot",
+        "encryptedClientStateSnapshots",
+        "encrypted_client_state_snapshot",
+        "encrypted_client_state_snapshots",
         "encryptedClientStateCiphertext",
         "encryptedClientStateCiphertextHash",
         "encryptedClientStateCiphertextHashes",
@@ -552,8 +560,6 @@ mod private_hnsw_grpc_tests {
         "encryptedClientStateCiphertextsSha256",
         "encrypted_client_state",
         "encrypted_client_state_backup",
-        "encrypted_client_state_snapshot",
-        "encrypted_client_state_snapshots",
         "encrypted_client_state_ciphertext",
         "encrypted_client_state_ciphertext_hash",
         "encrypted_client_state_ciphertext_hashes",
@@ -1107,6 +1113,10 @@ mod private_hnsw_grpc_tests {
                 "position.map",
                 "stash.backup",
                 "clientStateBackups.json",
+                "clientStateSnapshot.json",
+                "clientStateSnapshots.json",
+                "client_state_snapshot.json",
+                "client_state_snapshots.json",
                 "clientStateCiphertext.json",
                 "clientStateCiphertextHashes.json",
                 "client_state_ciphertext_hashes.json",
@@ -1115,6 +1125,10 @@ mod private_hnsw_grpc_tests {
                 "client_state_ciphertext_sha256.json",
                 "client_state_ciphertexts_sha256.json",
                 "encryptedClientStateBackups.json",
+                "encryptedClientStateSnapshot.json",
+                "encryptedClientStateSnapshots.json",
+                "encrypted_client_state_snapshot.json",
+                "encrypted_client_state_snapshots.json",
                 "encryptedClientStateCiphertextHash.json",
                 "encryptedClientStateCiphertextHashes.json",
                 "encrypted_client_state_ciphertext_hashes.json",
@@ -1156,8 +1170,16 @@ mod private_hnsw_grpc_tests {
                 assert!(!err.message().contains("position.map"));
                 assert!(!err.message().contains("stash.backup"));
                 assert!(!err.message().contains("clientStateBackups"));
+                assert!(!err.message().contains("clientStateSnapshot"));
+                assert!(!err.message().contains("clientStateSnapshots"));
+                assert!(!err.message().contains("client_state_snapshot"));
+                assert!(!err.message().contains("client_state_snapshots"));
                 assert!(!err.message().contains("clientStateCiphertext"));
                 assert!(!err.message().contains("encryptedClientStateBackups"));
+                assert!(!err.message().contains("encryptedClientStateSnapshot"));
+                assert!(!err.message().contains("encryptedClientStateSnapshots"));
+                assert!(!err.message().contains("encrypted_client_state_snapshot"));
+                assert!(!err.message().contains("encrypted_client_state_snapshots"));
                 assert!(!err.message().contains("encryptedClientStateCiphertextHash"));
                 assert!(!err.message().contains("positionMapBackups"));
                 assert!(!err.message().contains("oramPositionMapBackups"));
@@ -1175,8 +1197,16 @@ mod private_hnsw_grpc_tests {
                         "position.map",
                         "stash.backup",
                         "clientStateBackups",
+                        "clientStateSnapshot",
+                        "clientStateSnapshots",
+                        "client_state_snapshot",
+                        "client_state_snapshots",
                         "clientStateCiphertext",
                         "encryptedClientStateBackups",
+                        "encryptedClientStateSnapshot",
+                        "encryptedClientStateSnapshots",
+                        "encrypted_client_state_snapshot",
+                        "encrypted_client_state_snapshots",
                         "encryptedClientStateCiphertextHash",
                         "positionMapBackups",
                         "oramPositionMapBackups",
