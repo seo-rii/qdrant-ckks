@@ -534,7 +534,11 @@ mod tests {
                     EncryptionRuleRef {
                         id: "encryptedClientStateCiphertextHash.json".to_string(),
                         selector: EncryptionSelector::VectorNames {
-                            names: vec!["positionMapBackups.json".to_string()],
+                            names: vec![
+                                "positionMapBackups.json".to_string(),
+                                "clientStateBackups.json".to_string(),
+                                "encryptedClientStateBackups.json".to_string(),
+                            ],
                         },
                         instance: "oramPositionMapBackups.json".to_string(),
                         binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
@@ -542,7 +546,10 @@ mod tests {
                     EncryptionRuleRef {
                         id: "tokenPositionMapBackups.json".to_string(),
                         selector: EncryptionSelector::PayloadPaths {
-                            paths: vec!["stashBackups.json".to_string()],
+                            paths: vec![
+                                "stashBackups.json".to_string(),
+                                "stateCiphertext.json".to_string(),
+                            ],
                         },
                         instance: "stateCiphertextHash.json".to_string(),
                         binding: Some(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING.to_string()),
@@ -564,11 +571,14 @@ mod tests {
         assert!(rendered.contains("cannot apply shard layout config change"));
         assert!(rendered.contains("consensus-backed epoch/root"));
         for sentinel in [
+            "clientStateBackups",
             "clientStateCiphertext",
+            "encryptedClientStateBackups",
             "encryptedClientStateCiphertextHash",
             "positionMapBackups",
             "oramPositionMapBackups",
             "tokenPositionMapBackups",
+            "stateCiphertext",
             "stateCiphertextHash",
             "stashBackups",
             qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,

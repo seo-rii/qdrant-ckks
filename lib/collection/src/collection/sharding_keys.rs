@@ -380,6 +380,9 @@ mod tests {
             "drop shard key",
             "private-shard-key-operation-sentinel",
             "positionMapBackups.json",
+            "tokenPositionMapBackups.json",
+            "oramPositionMapBackups.json",
+            "stashBackups.json",
         ] {
             let err = validate_private_oram_shard_key_change_until_supported(operation_name, true)
                 .unwrap_err();
@@ -391,6 +394,10 @@ mod tests {
             assert!(rendered.contains("collection-local encrypted ORAM buckets"));
             assert!(rendered.contains("consensus-backed epoch/root"));
             assert!(!rendered.contains(operation_name));
+            assert!(!rendered.contains("positionMapBackups"));
+            assert!(!rendered.contains("tokenPositionMapBackups"));
+            assert!(!rendered.contains("oramPositionMapBackups"));
+            assert!(!rendered.contains("stashBackups"));
             assert!(!rendered.contains("private_hnsw_oram"));
             assert!(!rendered.contains("private_result_oram"));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
