@@ -7075,10 +7075,9 @@ pub async fn do_query_batch_points(
 
                 has_encrypted_query = true;
                 if request.lookup_from.is_some() {
-                    return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{}' query does not support lookup_from; provide a raw dense query vector or a point id with an encrypted sidecar",
-                        request.using,
-                    )));
+                    return Err(StorageError::bad_input(
+                        "encrypted vector query does not support lookup_from; provide a raw dense query vector or a point id with an encrypted sidecar",
+                    ));
                 }
                 let resolved_request = match &request.query {
                     Some(Query::Vector(VectorQuery::Nearest(
@@ -7847,10 +7846,9 @@ async fn try_ckks_vector_query_groups(
         return Ok(None);
     }
     if request.lookup_from.is_some() {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{}' query groups do not support lookup_from; provide a plaintext dense query vector",
-            request.using,
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector query groups do not support lookup_from; provide a plaintext dense query vector",
+        ));
     }
     ensure_group_path_does_not_touch_encrypted_crypto_selectors(
         config.params.encryption.as_ref(),
