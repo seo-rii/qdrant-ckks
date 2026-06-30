@@ -1873,7 +1873,11 @@ mod tests {
         rule.id = "encryptedClientStateCiphertextHash.json".to_string();
         rule.instance = "stateCiphertextHash.json".to_string();
         if let collection::config::EncryptionSelector::PayloadPaths { paths } = &mut rule.selector {
-            *paths = vec!["tokenPositionMapBackups.json".to_string()];
+            *paths = vec![
+                "tokenPositionMapBackups.json".to_string(),
+                "oramPositionMapBackups.json".to_string(),
+                "positionMapBackups.json".to_string(),
+            ];
         }
 
         let collection_name = "stashBackups.json";
@@ -1950,11 +1954,16 @@ mod tests {
             assert_no_private_oram_config_leak(
                 &rendered,
                 &[
+                    "clientStateBackups",
                     "clientStateCiphertext",
+                    "encryptedClientStateBackups",
                     "encryptedClientStateCiphertextHash",
+                    "oramPositionMapBackups",
+                    "positionMapBackups",
+                    "stashBackups",
+                    "stateCiphertext",
                     "stateCiphertextHash",
                     "tokenPositionMapBackups",
-                    "stashBackups",
                     PRIVATE_RESULT_ORAM_BINDING,
                     "private_result_oram",
                 ],

@@ -1752,31 +1752,40 @@ mod tests {
 
     #[test]
     fn private_oram_automatic_transfer_recovery_fails_closed_until_bucket_transfer_supported() {
-        let collection_name = "stashBackups.json";
-        validate_private_oram_automatic_transfer_recovery_until_supported(
-            collection_name,
-            3,
-            false,
-        )
-        .unwrap();
+        for collection_name in [
+            "stashBackups.json",
+            "tokenPositionMapBackups.json",
+            "oramPositionMapBackups.json",
+            "positionMapBackups.json",
+        ] {
+            validate_private_oram_automatic_transfer_recovery_until_supported(
+                collection_name,
+                3,
+                false,
+            )
+            .unwrap();
 
-        let err = validate_private_oram_automatic_transfer_recovery_until_supported(
-            collection_name,
-            3,
-            true,
-        )
-        .unwrap_err();
-        let rendered = format!("{err:?}");
-        assert!(rendered.contains("private ORAM collections"));
-        assert!(rendered.contains("encrypted ORAM bucket transfer"));
-        assert!(rendered.contains("consensus-backed epoch/root"));
-        assert!(!rendered.contains(collection_name));
-        assert!(!rendered.contains("stashBackups"));
-        assert!(!rendered.contains("shard 3"));
-        assert!(!rendered.contains("private_hnsw_oram"));
-        assert!(!rendered.contains("private_result_oram"));
-        assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
-        assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+            let err = validate_private_oram_automatic_transfer_recovery_until_supported(
+                collection_name,
+                3,
+                true,
+            )
+            .unwrap_err();
+            let rendered = format!("{err:?}");
+            assert!(rendered.contains("private ORAM collections"));
+            assert!(rendered.contains("encrypted ORAM bucket transfer"));
+            assert!(rendered.contains("consensus-backed epoch/root"));
+            assert!(!rendered.contains(collection_name));
+            assert!(!rendered.contains("stashBackups"));
+            assert!(!rendered.contains("tokenPositionMapBackups"));
+            assert!(!rendered.contains("oramPositionMapBackups"));
+            assert!(!rendered.contains("positionMapBackups"));
+            assert!(!rendered.contains("shard 3"));
+            assert!(!rendered.contains("private_hnsw_oram"));
+            assert!(!rendered.contains("private_result_oram"));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+            assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+        }
     }
 
     #[test]
