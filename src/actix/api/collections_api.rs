@@ -1393,8 +1393,10 @@ mod tests {
     use super::*;
     use crate::common::private_hnsw::begin_private_hnsw_collection_snapshot;
     use crate::common::private_hnsw_wire_fixture::{
-        COLLECTION_NAME, create_private_hnsw_collection, route_e2e_guard, test_dispatcher,
+        COLLECTION_NAME, create_private_hnsw_collection,
+        create_private_hnsw_collection_with_private_result_oram, route_e2e_guard, test_dispatcher,
     };
+    use crate::common::private_result_oram::begin_private_result_oram_collection_snapshot;
     use crate::settings::{CryptoInstanceConfig, CryptoMaterialConfig, CryptoSettings};
 
     #[test]
@@ -1494,6 +1496,83 @@ mod tests {
                 "{body}",
             );
             assert!(!body.contains(COLLECTION_NAME), "{body}");
+        });
+    }
+
+    #[test]
+    fn update_and_delete_collection_reject_private_result_oram_snapshot_window() {
+        let _guard = route_e2e_guard();
+        let (_temp, dispatcher) = test_dispatcher();
+        let dispatcher = web::Data::new(dispatcher);
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection_with_private_result_oram(dispatcher.get_ref()).await;
+
+            let auth = Auth::new_internal(Access::full(
+                "private result ORAM collection update route test",
+            ));
+            let pass = new_unchecked_verification_pass();
+            let collection_pass = auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new().manage(),
+                    "private_result_oram_update_route_test",
+                )
+                .unwrap();
+            let collection = dispatcher
+                .get_ref()
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let config = collection.config_snapshot().await;
+            let _snapshot_guard =
+                begin_private_result_oram_collection_snapshot(collection.name(), &config)
+                    .expect("private result ORAM snapshot guard should open");
+
+            let app = actix_web::test::init_service(
+                actix_web::App::new()
+                    .app_data(dispatcher.clone())
+                    .configure(config_collections_api),
+            )
+            .await;
+            let request = actix_web::test::TestRequest::patch()
+                .uri("/collections/docs")
+                .set_json(json!({
+                    "metadata": {
+                        "label": "updated"
+                    }
+                }))
+                .to_request();
+            let response = actix_web::test::call_service(&app, request).await;
+            assert_eq!(response.status(), actix_web::http::StatusCode::BAD_REQUEST);
+            let body = actix_web::body::to_bytes(response.into_body())
+                .await
+                .unwrap();
+            let body = std::str::from_utf8(&body).unwrap();
+            assert!(
+                body.contains("lifecycle operation requires no active collection snapshot"),
+                "{body}",
+            );
+            assert!(!body.contains(COLLECTION_NAME), "{body}");
+            assert!(!body.contains("private_result_oram"), "{body}");
+            assert!(!body.contains("payload_private_result_oram"), "{body}");
+
+            let request = actix_web::test::TestRequest::delete()
+                .uri("/collections/docs")
+                .to_request();
+            let response = actix_web::test::call_service(&app, request).await;
+            assert_eq!(response.status(), actix_web::http::StatusCode::BAD_REQUEST);
+            let body = actix_web::body::to_bytes(response.into_body())
+                .await
+                .unwrap();
+            let body = std::str::from_utf8(&body).unwrap();
+            assert!(
+                body.contains("lifecycle operation requires no active collection snapshot"),
+                "{body}",
+            );
+            assert!(!body.contains(COLLECTION_NAME), "{body}");
+            assert!(!body.contains("private_result_oram"), "{body}");
+            assert!(!body.contains("payload_private_result_oram"), "{body}");
         });
     }
 
