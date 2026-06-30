@@ -1665,9 +1665,9 @@ fn result_privacy_from_runtime(
     match required_option_string(instance, RESULT_PRIVACY_OPTION)?.as_str() {
         "ids_visible" => Ok(ResultPrivacyMode::IdsVisible),
         "private_payload_oram_required" => Ok(ResultPrivacyMode::PrivatePayloadOramRequired),
-        _ => Err(StorageError::bad_request(format!(
-            "private HNSW ORAM option {RESULT_PRIVACY_OPTION} has unsupported value",
-        ))),
+        _ => Err(StorageError::bad_request(
+            "private HNSW ORAM result privacy option has unsupported value",
+        )),
     }
 }
 
@@ -1846,7 +1846,7 @@ fn required_option_string(instance: &CryptoInstanceConfig, key: &str) -> Storage
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-        .ok_or_else(|| StorageError::bad_request(format!("private HNSW ORAM option {key} missing")))
+        .ok_or_else(|| StorageError::bad_request("private HNSW ORAM runtime option is missing"))
 }
 
 fn required_option_u64(instance: &CryptoInstanceConfig, key: &str) -> StorageResult<u64> {
@@ -1854,19 +1854,19 @@ fn required_option_u64(instance: &CryptoInstanceConfig, key: &str) -> StorageRes
         .options
         .get(key)
         .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| StorageError::bad_request(format!("private HNSW ORAM option {key} missing")))
+        .ok_or_else(|| StorageError::bad_request("private HNSW ORAM runtime option is missing"))
 }
 
 fn required_option_struct<T>(instance: &CryptoInstanceConfig, key: &str) -> StorageResult<T>
 where
     T: DeserializeOwned,
 {
-    let value = instance.options.get(key).ok_or_else(|| {
-        StorageError::bad_request(format!("private HNSW ORAM option {key} missing"))
-    })?;
-    serde_json::from_value(value.clone()).map_err(|_| {
-        StorageError::bad_request(format!("private HNSW ORAM option {key} is invalid"))
-    })
+    let value = instance
+        .options
+        .get(key)
+        .ok_or_else(|| StorageError::bad_request("private HNSW ORAM runtime option is missing"))?;
+    serde_json::from_value(value.clone())
+        .map_err(|_| StorageError::bad_request("private HNSW ORAM runtime option is invalid"))
 }
 
 fn distance_kind(distance: Distance) -> DistanceKind {
@@ -2738,7 +2738,8 @@ mod private_hnsw_tests {
             .unwrap_err()
             .to_string();
 
-        assert!(rendered.contains("option result_privacy has unsupported value"));
+        assert!(rendered.contains("result privacy option has unsupported value"));
+        assert!(!rendered.contains(RESULT_PRIVACY_OPTION), "{rendered}");
         assert!(!rendered.contains(unsupported), "{rendered}");
     }
 
