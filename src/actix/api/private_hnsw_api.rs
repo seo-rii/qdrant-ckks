@@ -120,7 +120,7 @@ impl Debug for PrivateHnswSessionResponse {
             .field("vector_name", &"[redacted]")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("manifest", &self.manifest)
+            .field("manifest", &"[redacted]")
             .field("lease_expires_unix", &self.lease_expires_unix)
             .finish()
     }
@@ -674,6 +674,28 @@ mod private_hnsw_rest_tests {
             "{rendered}"
         );
         for (debug_rendered, redacted_count) in [
+            (
+                format!("{session_response:?}"),
+                "PrivateHnswOramManifest".to_string(),
+            ),
+            (
+                format!("{session_response:?}"),
+                format!("bucket_count: {}", session_response.manifest.bucket_count),
+            ),
+            (
+                format!("{session_response:?}"),
+                format!(
+                    "tree_height: {}",
+                    session_response.manifest.oram.tree_height
+                ),
+            ),
+            (
+                format!("{session_response:?}"),
+                format!(
+                    "path_batch_size: {}",
+                    session_response.manifest.oram.path_batch_size
+                ),
+            ),
             (format!("{read_request:?}"), "path_count: 1".to_string()),
             (
                 format!("{commit_request:?}"),

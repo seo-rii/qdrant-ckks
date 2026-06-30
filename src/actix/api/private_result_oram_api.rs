@@ -96,7 +96,7 @@ impl Debug for PrivateResultOramSessionResponse {
             .field("collection_id", &"[redacted]")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("manifest", &self.manifest)
+            .field("manifest", &"[redacted]")
             .field("lease_expires_unix", &self.lease_expires_unix)
             .finish()
     }
@@ -835,6 +835,28 @@ mod private_result_oram_rest_tests {
             assert!(!rendered.contains(&leaked), "{rendered}");
         }
         for (debug_rendered, redacted_count) in [
+            (
+                format!("{session_response:?}"),
+                "PrivateResultOramManifest".to_string(),
+            ),
+            (
+                format!("{session_response:?}"),
+                format!("bucket_count: {}", session_response.manifest.bucket_count),
+            ),
+            (
+                format!("{session_response:?}"),
+                format!(
+                    "tree_height: {}",
+                    session_response.manifest.oram.tree_height
+                ),
+            ),
+            (
+                format!("{session_response:?}"),
+                format!(
+                    "path_batch_size: {}",
+                    session_response.manifest.oram.path_batch_size
+                ),
+            ),
             (
                 format!("{read_request:?}"),
                 format!("bucket_id_count: {}", bucket_ids.len()),
