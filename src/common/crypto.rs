@@ -7128,11 +7128,7 @@ fn validate_generic_collection_crypto_runtime(
             collection_crypto_id,
             &payload_only_encryption,
         )
-        .map_err(|err| {
-            StorageError::bad_input(format!(
-                "collection {collection_name} payload crypto runtime validation failed: {err}"
-            ))
-        })?;
+        .map_err(|_| StorageError::bad_input("payload crypto runtime validation failed"))?;
     }
 
     for rule in &encryption.rules {
@@ -21175,8 +21171,9 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("payload crypto runtime validation failed")
-                    && description.contains("scope")
-                    && description.contains("collection:docs")),
+                    && !description.contains("scope")
+                    && !description.contains("collection:docs")
+                    && !description.contains("collection:other")),
             "unexpected error: {err:?}",
         );
 
@@ -21196,8 +21193,9 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("payload crypto runtime validation failed")
-                    && description.contains("payload path")
-                    && description.contains("body")),
+                    && !description.contains("payload path")
+                    && !description.contains("body")
+                    && !description.contains("other")),
             "unexpected error: {err:?}",
         );
 
@@ -22022,7 +22020,9 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("payload crypto runtime validation failed")
-                    && description.contains("key id does not match")),
+                    && !description.contains("key id does not match")
+                    && !description.contains("tenant-a:docs")
+                    && !description.contains("tenant-a:other")),
             "unexpected error: {err:?}",
         );
     }
@@ -22088,7 +22088,8 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("payload crypto runtime validation failed")
-                    && description.contains("must bind role sym_key to a symmetric key material")),
+                    && !description.contains("sym_key")
+                    && !description.contains("tenant-a/missing-payload-v1")),
             "unexpected error: {err:?}",
         );
     }
