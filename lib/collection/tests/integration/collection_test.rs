@@ -4594,7 +4594,7 @@ async fn encrypted_payload_field_rejects_payload_delete_and_clear() {
             err,
             CollectionError::BadInput { description }
                 if description.contains("cannot delete encrypted payload field")
-                    && description.contains("document.body")
+                    && !description.contains("document.body")
         ));
     }
 
@@ -4614,7 +4614,7 @@ async fn encrypted_payload_field_rejects_payload_delete_and_clear() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot clear payloads")
-                && description.contains("document.body")
+                && !description.contains("document.body")
     ));
 
     let err = collection
@@ -4633,7 +4633,7 @@ async fn encrypted_payload_field_rejects_payload_delete_and_clear() {
         err,
         CollectionError::BadInput { description }
             if description.contains("cannot clear payloads")
-                && description.contains("document.body")
+                && !description.contains("document.body")
     ));
 }
 
@@ -4682,7 +4682,7 @@ async fn encrypted_metadata_fields_reject_payload_delete_and_clear() {
             err,
             CollectionError::BadInput { description }
                 if description.contains("cannot delete metadata blind-index field")
-                    && description.contains("document_body__blind_eq")
+                    && !description.contains("document_body__blind_eq")
         ));
     }
 
@@ -4704,7 +4704,7 @@ async fn encrypted_metadata_fields_reject_payload_delete_and_clear() {
             CollectionError::BadInput { ref description }
                 if description.contains("cannot clear payloads")
                     && description.contains("metadata blind-index field")
-                    && description.contains("document_body__blind_eq")
+                    && !description.contains("document_body__blind_eq")
         ),
         "unexpected error: {err:?}",
     );
@@ -4726,7 +4726,7 @@ async fn encrypted_metadata_fields_reject_payload_delete_and_clear() {
         CollectionError::BadInput { description }
             if description.contains("cannot clear payloads")
                 && description.contains("metadata blind-index field")
-                && description.contains("document_body__blind_eq")
+                && !description.contains("document_body__blind_eq")
     ));
 
     let metadata_value_collection_dir = Builder::new().prefix("collection").tempdir().unwrap();
@@ -4769,10 +4769,10 @@ async fn encrypted_metadata_fields_reject_payload_delete_and_clear() {
             .await
             .unwrap_err();
         assert!(matches!(
-            err,
-            CollectionError::BadInput { description }
-                if description.contains("cannot delete encrypted metadata value field")
-                    && description.contains("tenant.private")
+        err,
+        CollectionError::BadInput { description }
+            if description.contains("cannot delete encrypted metadata value field")
+                    && !description.contains("tenant.private")
         ));
     }
 
@@ -4793,7 +4793,7 @@ async fn encrypted_metadata_fields_reject_payload_delete_and_clear() {
         CollectionError::BadInput { description }
             if description.contains("cannot clear payloads")
                 && description.contains("encrypted metadata value field")
-                && description.contains("tenant.private")
+                && !description.contains("tenant.private")
     ));
 
     let err = metadata_value_collection
@@ -4813,7 +4813,7 @@ async fn encrypted_metadata_fields_reject_payload_delete_and_clear() {
         CollectionError::BadInput { description }
             if description.contains("cannot clear payloads")
                 && description.contains("encrypted metadata value field")
-                && description.contains("tenant.private")
+                && !description.contains("tenant.private")
     ));
 }
 
@@ -5073,7 +5073,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("plaintext payload")
-                && description.contains("document.body")
+                && !description.contains("document.body")
     ));
 
     let keyed_plaintext_payload =
@@ -5098,7 +5098,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("plaintext payload")
-                && description.contains("document.body")
+                && !description.contains("document.body")
     ));
 
     let malformed_marker_upsert =
@@ -5129,7 +5129,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("plaintext payload")
-                && description.contains("document.body")
+                && !description.contains("document.body")
     ));
 
     let wrong_key_encryptor = payload_text_encryptor_from_resource_key(
@@ -5170,7 +5170,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("encrypted payload marker")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("requires runtime payload encryption")
     ));
 
@@ -5236,7 +5236,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("encrypted payload marker")
-                && description.contains("document.body")
+                && !description.contains("document.body")
                 && description.contains("requires runtime payload encryption")
     ));
 
@@ -5313,8 +5313,9 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("encrypted payload marker")
-                && description.contains("document.body")
-                && description.contains("nonce must decode to 96 bits")
+                && description.contains("invalid for this collection")
+                && !description.contains("document.body")
+                && !description.contains("nonce")
     ));
 
     let plaintext_sync = CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(
@@ -5345,7 +5346,7 @@ async fn encrypted_payload_field_rejects_plaintext_payload_writes() {
         err,
         CollectionError::BadInput { description }
             if description.contains("plaintext payload")
-                && description.contains("document.body")
+                && !description.contains("document.body")
     ));
 
     let public_payload = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
@@ -5401,7 +5402,7 @@ async fn peer_update_rechecks_encrypted_payload_invariants() {
         CollectionError::BadInput { description }
             if description.contains("peer update")
                 && description.contains("plaintext payload")
-                && description.contains("document.body")
+                && !description.contains("document.body")
     ));
 
     let valid_key_encryptor = payload_text_encryptor_from_resource_key(
@@ -5490,7 +5491,9 @@ async fn peer_update_rechecks_encrypted_payload_invariants() {
         err,
         CollectionError::BadInput { description }
             if description.contains("peer encrypted payload marker")
-                && description.contains("nonce must decode to 96 bits")
+                && description.contains("invalid for this collection")
+                && !description.contains("document.body")
+                && !description.contains("nonce")
     ));
 }
 
@@ -5636,6 +5639,7 @@ async fn peer_update_rejects_client_envelope_replay_without_verifier_manifest() 
     assert!(description.contains("peer client encrypted payload marker"));
     assert!(description.contains("runtime verifier manifest"));
     assert!(description.contains("cluster-wide nonce ledger"));
+    assert!(!description.contains("document.body"));
     assert!(!description.contains(nonce_sentinel), "{description}");
     assert!(!description.contains(ciphertext_sentinel), "{description}");
     assert!(!description.contains(&signature_sentinel), "{description}");
@@ -5726,6 +5730,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
                 && description.contains("requires runtime envelope verification")
+                && !description.contains("document.body")
     ));
 
     let empty_proof_marker =
@@ -5763,6 +5768,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
                 && description.contains("requires runtime envelope verification")
+                && !description.contains("document.body")
     ));
 
     let point_specific_set_payload =
@@ -5817,6 +5823,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
                 && description.contains("requires point-specific runtime envelope verification")
+                && !description.contains("document.body")
     ));
 
     let mismatched_point_payload =
@@ -5872,6 +5879,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
                 && description.contains("requires runtime envelope verification")
+                && !description.contains("document.body")
     ));
 
     let mut wrong_collection_marker =
@@ -5938,6 +5946,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
                 && description.contains("requires runtime envelope verification")
+                && !description.contains("document.body")
     ));
 
     let mut wrong_rk_marker =
@@ -6000,6 +6009,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
                 && description.contains("requires runtime envelope verification")
+                && !description.contains("document.body")
     ));
 
     let mut wrong_epoch_marker =
@@ -6063,6 +6073,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
                 && description.contains("requires runtime envelope verification")
+                && !description.contains("document.body")
     ));
 
     let mut unsigned_payload =
@@ -6120,6 +6131,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
                 && description.contains("requires runtime envelope verification")
+                && !description.contains("document.body")
     ));
 
     let mut signature_tamper_marker =
@@ -6234,6 +6246,7 @@ async fn client_encrypted_payload_marker_must_match_collection_guard() {
         CollectionError::BadInput { description }
             if description.contains("client encrypted payload marker")
                 && description.contains("nonce was already used")
+                && !description.contains("document.body")
     ));
 
     let valid_marker = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(

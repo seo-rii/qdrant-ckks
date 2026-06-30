@@ -1140,34 +1140,34 @@ impl Collection {
 
             for value in encrypted_path.value_get(&payload.0) {
                 let Some(point_id) = point_id else {
-                    return Err(CollectionError::bad_input(format!(
-                        "peer encrypted payload marker for field '{encrypted_path_str}' requires point-specific binding",
-                    )));
+                    return Err(CollectionError::bad_input(
+                        "peer encrypted payload marker requires point-specific binding",
+                    ));
                 };
                 if is_encrypted_payload_value(value) {
                     validate_server_payload_value_for_peer_replay(
-                            value,
-                            &collection_crypto_id,
-                            point_id,
-                            ServerPayloadValidationContext {
-                                field_path: encrypted_path_str,
-                                expected_kind: Some(expected_envelope_kind),
-                                key_id: encryption.key_id.as_deref(),
-                                crypto_schema_version: encryption.crypto_schema_version,
-                                encryption_epoch: encryption.encryption_epoch,
-                            },
+                        value,
+                        &collection_crypto_id,
+                        point_id,
+                        ServerPayloadValidationContext {
+                            field_path: encrypted_path_str,
+                            expected_kind: Some(expected_envelope_kind),
+                            key_id: encryption.key_id.as_deref(),
+                            crypto_schema_version: encryption.crypto_schema_version,
+                            encryption_epoch: encryption.encryption_epoch,
+                        },
+                    )
+                    .map_err(|_| {
+                        CollectionError::bad_input(
+                            "peer encrypted payload marker is invalid for this collection",
                         )
-                        .map_err(|err| {
-                            CollectionError::bad_input(format!(
-                                "peer encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
-                            ))
-                        })?;
+                    })?;
                     continue;
                 }
                 if allow_client_envelope && is_client_encrypted_payload_value(value) {
-                    return Err(CollectionError::bad_input(format!(
-                        "peer client encrypted payload marker for field '{encrypted_path_str}' requires a runtime verifier manifest and cluster-wide nonce ledger before peer replay is supported",
-                    )));
+                    return Err(CollectionError::bad_input(
+                        "peer client encrypted payload marker requires a runtime verifier manifest and cluster-wide nonce ledger before peer replay is supported",
+                    ));
                 }
                 return Ok(true);
             }
@@ -1176,12 +1176,12 @@ impl Collection {
         };
 
         let reject_payload_delete_for_encrypted_path =
-            |keys: &[JsonPath], protected_path: &JsonPath, protected_path_str: &str| {
+            |keys: &[JsonPath], protected_path: &JsonPath, _protected_path_str: &str| {
                 for key in keys {
                     if key.compatible(protected_path) {
-                        return Err(CollectionError::bad_input(format!(
-                            "peer update cannot delete encrypted payload field '{protected_path_str}' via delete_payload key '{key}'",
-                        )));
+                        return Err(CollectionError::bad_input(
+                            "peer update cannot delete encrypted payload field via delete_payload",
+                        ));
                     }
                 }
                 Ok(())
@@ -1445,9 +1445,9 @@ impl Collection {
                             CollectionUpdateOperations::StagingOperation(_) => false,
                         };
                         if touches_encrypted_payload {
-                            return Err(CollectionError::bad_input(format!(
-                                "peer update cannot write plaintext payload for encrypted field '{encrypted_path}'",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "peer update cannot write plaintext payload for encrypted field",
+                            ));
                         }
                     }
                 }
@@ -1541,9 +1541,9 @@ impl Collection {
                                 PayloadOps::ClearPayload { .. }
                                 | PayloadOps::ClearPayloadByFilter(_),
                             ) => {
-                                return Err(CollectionError::bad_input(format!(
-                                    "peer update cannot clear encrypted metadata field '{metadata_key}'",
-                                )));
+                                return Err(CollectionError::bad_input(
+                                    "peer update cannot clear encrypted metadata field",
+                                ));
                             }
                             _ => {}
                         }
@@ -2088,9 +2088,9 @@ impl Collection {
                 for value in encrypted_path.value_get(&payload.0) {
                     if is_encrypted_payload_value(value) {
                         let Some(point_id) = point_id else {
-                            return Err(CollectionError::bad_input(format!(
-                                "encrypted payload marker for field '{encrypted_path_str}' requires point-specific runtime payload encryption before collection write",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "encrypted payload marker requires point-specific runtime payload encryption before collection write",
+                            ));
                         };
                         let Some(envelope_key) = server_payload_envelope_key(
                             value,
@@ -2098,15 +2098,15 @@ impl Collection {
                             point_id,
                             encrypted_path_str,
                         )
-                        .map_err(|err| {
-                            CollectionError::bad_input(format!(
-                                "encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
-                            ))
+                        .map_err(|_| {
+                            CollectionError::bad_input(
+                                "encrypted payload marker is invalid for this collection",
+                            )
                         })?
                         else {
-                            return Err(CollectionError::bad_input(format!(
-                                "encrypted payload marker for field '{encrypted_path_str}' requires runtime payload encryption before collection write",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "encrypted payload marker requires runtime payload encryption before collection write",
+                            ));
                         };
                         let Some(verified_envelope_key) = update_provenance
                             .verified_server_envelope_key_for_binding(
@@ -2116,9 +2116,9 @@ impl Collection {
                                 encrypted_path_str,
                             )
                         else {
-                            return Err(CollectionError::bad_input(format!(
-                                "encrypted payload marker for field '{encrypted_path_str}' requires runtime payload encryption before collection write",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "encrypted payload marker requires runtime payload encryption before collection write",
+                            ));
                         };
                         validate_server_payload_value_after_runtime_encryption(
                             value,
@@ -2133,30 +2133,32 @@ impl Collection {
                             },
                             &verified_envelope_key,
                         )
-                        .map_err(|err| {
-                            CollectionError::bad_input(format!(
-                                "encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
-                            ))
+                        .map_err(|_| {
+                            CollectionError::bad_input(
+                                "encrypted payload marker is invalid for this collection",
+                            )
                         })?;
                         continue;
                     }
                     if allow_client_envelope && is_client_encrypted_payload_value(value) {
-                        let Some(envelope_key) =
-                            client_payload_envelope_key(value, encrypted_path_str)
-                                .map_err(|err| {
-                                    CollectionError::bad_input(format!(
-                                        "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
-                                    ))
-                                })?
+                        let Some(envelope_key) = client_payload_envelope_key(
+                            value,
+                            encrypted_path_str,
+                        )
+                        .map_err(|_| {
+                            CollectionError::bad_input(
+                                "client encrypted payload marker is invalid for this collection",
+                            )
+                        })?
                         else {
-                            return Err(CollectionError::bad_input(format!(
-                                "client encrypted payload marker for field '{encrypted_path_str}' requires runtime envelope verification before collection write",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "client encrypted payload marker requires runtime envelope verification before collection write",
+                            ));
                         };
                         let Some(point_id) = point_id else {
-                            return Err(CollectionError::bad_input(format!(
-                                "client encrypted payload marker for field '{encrypted_path_str}' requires point-specific runtime envelope verification before collection write",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "client encrypted payload marker requires point-specific runtime envelope verification before collection write",
+                            ));
                         };
                         let Some(verified_envelope_key) = update_provenance
                             .verified_client_envelope_key_for_binding(
@@ -2166,9 +2168,9 @@ impl Collection {
                                 encrypted_path_str,
                             )
                         else {
-                            return Err(CollectionError::bad_input(format!(
-                                "client encrypted payload marker for field '{encrypted_path_str}' requires runtime envelope verification before collection write",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "client encrypted payload marker requires runtime envelope verification before collection write",
+                            ));
                         };
                         validate_client_payload_value_after_runtime_verification(
                             value,
@@ -2186,26 +2188,27 @@ impl Collection {
                             },
                             &verified_envelope_key,
                         )
-                        .map_err(|err| {
-                            CollectionError::bad_input(format!(
-                                "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
-                            ))
+                        .map_err(|_| {
+                            CollectionError::bad_input(
+                                "client encrypted payload marker is invalid for this collection",
+                            )
                         })?;
-                        let Some(nonce_replay_key) =
-                            client_payload_nonce_replay_key(value, encrypted_path_str).map_err(
-                                |err| {
-                                    CollectionError::bad_input(format!(
-                                        "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: {err}",
-                                    ))
-                                },
-                            )?
+                        let Some(nonce_replay_key) = client_payload_nonce_replay_key(
+                            value,
+                            encrypted_path_str,
+                        )
+                        .map_err(|_| {
+                            CollectionError::bad_input(
+                                "client encrypted payload marker is invalid for this collection",
+                            )
+                        })?
                         else {
                             return Ok(true);
                         };
                         if !seen_client_nonces.insert(nonce_replay_key) {
-                            return Err(CollectionError::bad_input(format!(
-                                "client encrypted payload marker for field '{encrypted_path_str}' is invalid for this collection: payload field client envelope nonce was already used in this write request; regenerate the client-side envelope with a fresh nonce before retrying",
-                            )));
+                            return Err(CollectionError::bad_input(
+                                "client encrypted payload marker is invalid for this collection: payload field client envelope nonce was already used in this write request; regenerate the client-side envelope with a fresh nonce before retrying",
+                            ));
                         }
                         continue;
                     }
@@ -2216,23 +2219,23 @@ impl Collection {
             };
             let reject_payload_delete_for_encrypted_path = |keys: &[JsonPath],
                                                             protected_path: &JsonPath,
-                                                            protected_path_str: &str,
+                                                            _protected_path_str: &str,
                                                             protected_kind: &str|
              -> CollectionResult<()> {
                 for key in keys {
                     if key.compatible(protected_path) {
                         return Err(CollectionError::bad_input(format!(
-                            "cannot delete {protected_kind} '{protected_path_str}' via delete_payload key '{key}'; use a crypto-aware update or migration path",
+                            "cannot delete {protected_kind} via delete_payload; use a crypto-aware update or migration path",
                         )));
                     }
                 }
                 Ok(())
             };
-            let reject_payload_clear_for_encrypted_path = |protected_path_str: &str,
+            let reject_payload_clear_for_encrypted_path = |_protected_path_str: &str,
                                                            protected_kind: &str|
              -> CollectionResult<()> {
                 Err(CollectionError::bad_input(format!(
-                    "cannot clear payloads containing {protected_kind} '{protected_path_str}'; use a crypto-aware update or migration path",
+                    "cannot clear payloads containing {protected_kind}; use a crypto-aware update or migration path",
                 )))
             };
             let vector_write_touches_encrypted_name =
@@ -2397,9 +2400,9 @@ impl Collection {
                             };
 
                             if touches_encrypted_payload {
-                                return Err(CollectionError::bad_input(format!(
-                                    "cannot write plaintext payload for encrypted field '{encrypted_path}'; configure runtime payload encryption before writing this field",
-                                )));
+                                return Err(CollectionError::bad_input(
+                                    "cannot write plaintext payload for encrypted field; configure runtime payload encryption before writing this field",
+                                ));
                             }
                         }
                     }
@@ -2629,9 +2632,9 @@ impl Collection {
                                 };
 
                                 if touches_encrypted_metadata {
-                                    return Err(CollectionError::bad_input(format!(
-                                        "cannot write plaintext metadata value for encrypted field '{metadata_key}'; configure runtime metadata value encryption before writing this field",
-                                    )));
+                                    return Err(CollectionError::bad_input(
+                                        "cannot write plaintext metadata value for encrypted field; configure runtime metadata value encryption before writing this field",
+                                    ));
                                 }
                                 continue;
                             }
