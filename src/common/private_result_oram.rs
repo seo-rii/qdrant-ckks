@@ -2340,6 +2340,11 @@ mod private_result_oram_tests {
             root_hash.as_str(),
             ciphertext.as_str(),
             "result-common-proof-sentinel",
+            "client_state_ciphertext",
+            "state_ciphertext_hash",
+            "token_position_map_backups",
+            "payload_fetch_token",
+            "stashBackups",
         ] {
             assert!(!rendered.contains(leaked), "{rendered}");
         }
@@ -2429,6 +2434,12 @@ mod private_result_oram_tests {
             "qdrant-sec-private-result-store-detail-sentinel",
             "private_result_oram/buckets/00000000.bucket",
             "private-result-bucket-ciphertext-sentinel",
+            "private_result_oram/client_state_ciphertext_hash.bin",
+            "private_result_oram/encrypted_client_state_ciphertext_hashes.json",
+            "private_result_oram/state_ciphertext_hash.json",
+            "private_result_oram/token_position_map_backups.json",
+            "private_result_oram/payload_fetch_token.json",
+            "private_result_oram/stashBackups.json",
         ];
         for sentinel in sentinels {
             let rendered =

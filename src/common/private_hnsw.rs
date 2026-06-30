@@ -3540,6 +3540,11 @@ mod private_hnsw_tests {
             "hnsw-common-proof-sentinel",
             "hnsw-common-client-signature-key-sentinel",
             "hnsw-common-client-signature-body-sentinel",
+            "client_state_ciphertext",
+            "encrypted_client_state_ciphertext_hash",
+            "position_map_backups",
+            "payload_fetch_token",
+            "stashBackups",
             "77",
             "false",
         ] {
@@ -3614,6 +3619,11 @@ mod private_hnsw_tests {
             "qdrant-sec-private-hnsw-store-detail-sentinel",
             "private_hnsw_oram/text/buckets/00000000.bucket",
             "private-hnsw-bucket-ciphertext-sentinel",
+            "private_hnsw_oram/text/client_state_ciphertext_hash.bin",
+            "private_hnsw_oram/text/encrypted_client_state_ciphertext_hashes.json",
+            "private_hnsw_oram/text/position_map_backups.json",
+            "private_hnsw_oram/text/payload_fetch_token.json",
+            "private_hnsw_oram/text/stashBackups.json",
         ];
         for sentinel in sentinels {
             let rendered =
