@@ -761,6 +761,7 @@ mod private_hnsw_rest_tests {
         let commit_signature = search_run.commit_signature.clone();
         let commit_old_root_hash = search_run.commit_plan.old_root_hash.clone();
         let commit_new_root_hash = search_run.commit_plan.new_root_hash.clone();
+        let leaf_commitment = fixture.encrypted_build.buckets[0].bucket_commitment.clone();
         let updated_bucket = search_run.updated_buckets[0].clone();
         let commit_request = OramCommitRequest {
             session_id: SESSION_ID.to_string(),
@@ -807,7 +808,7 @@ mod private_hnsw_rest_tests {
             commit_new_root_hash,
             fixture.encrypted_build.buckets[0].ciphertext.clone(),
             fixture.encrypted_build.buckets[0].ciphertext_sha256.clone(),
-            fixture.encrypted_build.buckets[0].bucket_commitment.clone(),
+            leaf_commitment,
             fixture.manifest_signature.key_id.clone(),
             fixture.manifest_signature.sig.clone(),
             updated_bucket.ciphertext,

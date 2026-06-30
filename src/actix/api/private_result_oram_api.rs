@@ -879,7 +879,9 @@ mod private_result_oram_rest_tests {
             manifest,
             lease_expires_unix: 1_770_000_000,
         };
-        let bucket_ids = vec![987_654, 987_655];
+        let read_bucket_id = 987_654;
+        let next_read_bucket_id = 987_655;
+        let bucket_ids = vec![read_bucket_id, next_read_bucket_id];
         let read_signature = qdrant_sec::PrivateResultOramSignature {
             alg: "ed25519".to_string(),
             key_id: "RESULT-REST-READ-KEY-ID-SENTINEL".to_string(),
@@ -896,6 +898,7 @@ mod private_result_oram_rest_tests {
         let updated_bucket_ciphertext = updated_bucket.ciphertext.clone();
         let updated_bucket_ciphertext_sha256 = updated_bucket.ciphertext_sha256.clone();
         let updated_bucket_commitment = updated_bucket.bucket_commitment.clone();
+        let leaf_commitment = fixture.buckets[0].bucket_commitment.clone();
         commit_signature.key_id = "RESULT-REST-COMMIT-KEY-ID-SENTINEL".to_string();
         let commit_request = CommitPrivateResultOramBucketsRequest {
             session_id: SESSION_ID.to_string(),
@@ -937,7 +940,7 @@ mod private_result_oram_rest_tests {
             new_root_hash,
             fixture.buckets[0].ciphertext.clone(),
             fixture.buckets[0].ciphertext_sha256.clone(),
-            fixture.buckets[0].bucket_commitment.clone(),
+            leaf_commitment,
             fixture.signature.key_id.clone(),
             fixture.signature.sig.clone(),
             updated_bucket_ciphertext,
@@ -949,8 +952,8 @@ mod private_result_oram_rest_tests {
             commit_signature.sig,
             "RESULT-REST-MANIFEST-COLLECTION-ID-SENTINEL".to_string(),
             "RESULT-REST-SESSION-COLLECTION-ID-SENTINEL".to_string(),
-            "987654".to_string(),
-            "987655".to_string(),
+            read_bucket_id.to_string(),
+            next_read_bucket_id.to_string(),
             "RESULT-REST-PROOF-SENTINEL".to_string(),
             "private-result-rest-client-id-sentinel".to_string(),
         ] {

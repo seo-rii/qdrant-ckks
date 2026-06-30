@@ -714,7 +714,11 @@ fn snapshot_private_hnsw_bucket(
 
 fn snapshot_private_hnsw_leaf_commitments(manifest: &PrivateHnswOramManifest) -> Vec<String> {
     (0..manifest.bucket_count)
-        .map(|bucket_id| snapshot_private_hnsw_bucket(manifest, bucket_id).bucket_commitment)
+        .map(|bucket_id| {
+            let leaf_commitment =
+                snapshot_private_hnsw_bucket(manifest, bucket_id).bucket_commitment;
+            leaf_commitment
+        })
         .collect()
 }
 
@@ -845,7 +849,11 @@ fn snapshot_private_result_bucket(
 
 fn snapshot_private_result_leaf_commitments(manifest: &PrivateResultOramManifest) -> Vec<String> {
     (0..manifest.bucket_count)
-        .map(|bucket_id| snapshot_private_result_bucket(manifest, bucket_id).bucket_commitment)
+        .map(|bucket_id| {
+            let leaf_commitment =
+                snapshot_private_result_bucket(manifest, bucket_id).bucket_commitment;
+            leaf_commitment
+        })
         .collect()
 }
 

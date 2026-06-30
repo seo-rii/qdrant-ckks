@@ -4483,8 +4483,10 @@ mod tests {
             payload_fetch_token: block.payload_fetch_token,
             leaf: 777_888,
         };
+        let read_bucket_id = 123_456;
+        let next_read_bucket_id = 123_457;
         let read_batch = PrivateResultOramReadBucketBatchPlan {
-            bucket_ids: vec![123_456, 123_457],
+            bucket_ids: vec![read_bucket_id, next_read_bucket_id],
             token_count: 1,
         };
         let read_plan = PrivateResultOramReadBucketPlan {
@@ -4514,6 +4516,7 @@ mod tests {
             ciphertext_sha256: "RESULT-SHA-SENTINEL".to_string(),
             bucket_commitment: "RESULT-COMMITMENT-SENTINEL".to_string(),
         };
+        let leaf_commitment = encrypted_bucket.bucket_commitment.clone();
         let signature = PrivateResultOramSignature {
             alg: "ed25519".to_string(),
             key_id: "RESULT-SIGNATURE-KEY-SENTINEL".to_string(),
@@ -4573,7 +4576,7 @@ mod tests {
             new_epoch: 43,
             old_root_hash: "RESULT-OLD-ROOT-SENTINEL".to_string(),
             new_root_hash: "RESULT-NEW-ROOT-SENTINEL".to_string(),
-            leaf_commitments: vec!["RESULT-COMMITMENT-SENTINEL".to_string()],
+            leaf_commitments: vec![leaf_commitment],
             updated_buckets: vec![PrivateResultOramClientCommitBucketRef {
                 bucket_id: 123_456,
                 ciphertext_sha256: "RESULT-SHA-SENTINEL".to_string(),
@@ -4593,7 +4596,7 @@ mod tests {
             signature_alg: "ed25519",
             signature_key_id: "RESULT-COMMIT-SIGNATURE-KEY-SENTINEL",
         };
-        let read_bucket_ids = [123_456, 123_457];
+        let read_bucket_ids = [read_bucket_id, next_read_bucket_id];
         let read_signature_input = PrivateResultOramReadBucketsSignatureInput {
             collection_id: "RESULT-READ-COLLECTION-ID-SENTINEL",
             key_id: "RESULT-READ-KEY-SENTINEL",

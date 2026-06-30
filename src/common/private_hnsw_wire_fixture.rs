@@ -307,6 +307,11 @@ impl PrivateHnswRouteWireFixture {
             .iter()
             .map(|bucket| bucket.bucket_commitment.clone())
             .collect::<Vec<_>>();
+        let leaf_commitment = leaf_commitments
+            .first()
+            .expect("private HNSW fixture must include a leaf commitment")
+            .clone();
+        debug_assert!(leaf_commitments.contains(&leaf_commitment));
 
         store
             .write_manifest(&manifest, &manifest_signature)
@@ -589,6 +594,10 @@ impl PrivateHnswRouteWireFixture {
             .into_inner()
             .into_values()
             .collect::<Vec<_>>();
+        let updated_bucket = updated_buckets
+            .first()
+            .expect("private HNSW fixture search must write back at least one bucket");
+        debug_assert!(updated_bucket.bucket_id < self.encrypted_build.bucket_count);
         let commit_plan = plan_private_hnsw_oram_commit_for_manifest(
             &self.manifest,
             NEXT_EPOCH,

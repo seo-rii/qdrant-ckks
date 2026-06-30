@@ -5742,12 +5742,13 @@ mod tests {
             manifest_signature: signature.clone(),
             buckets: vec![encrypted_bucket.clone()],
         };
+        let leaf_commitment = encrypted_bucket.bucket_commitment.clone();
         let commit_plan = PrivateHnswClientCommitPlan {
             old_epoch: 42,
             new_epoch: 43,
             old_root_hash: "HNSW-OLD-ROOT-SENTINEL".to_string(),
             new_root_hash: "HNSW-NEW-ROOT-SENTINEL".to_string(),
-            leaf_commitments: vec!["HNSW-COMMITMENT-SENTINEL".to_string()],
+            leaf_commitments: vec![leaf_commitment],
             updated_buckets: vec![PrivateHnswClientCommitBucketRef {
                 bucket_id: 123_456,
                 ciphertext_sha256: "HNSW-SHA-SENTINEL".to_string(),

@@ -1153,10 +1153,11 @@ mod tests {
         manifest.rk_id = "HNSW-MANIFEST-RK-SENTINEL".to_string();
         manifest.owner_signing_key_id = "HNSW-MANIFEST-OWNER-SIGNING-KEY-SENTINEL".to_string();
         manifest.root_hash = "HNSW-MANIFEST-ROOT-SENTINEL".to_string();
-        let commit_refs = [PrivateHnswOramCommitBucketRef {
+        let updated_bucket = PrivateHnswOramCommitBucketRef {
             bucket_id: 987_654,
             ciphertext_sha256: "HNSW-SHA-SENTINEL",
-        }];
+        };
+        let commit_refs = [updated_bucket];
         let commit_signature_input = PrivateHnswOramCommitSignatureInput {
             collection_id: "HNSW-COMMIT-COLLECTION-ID-SENTINEL",
             vector_name: "HNSW-COMMIT-VECTOR-NAME-SENTINEL",

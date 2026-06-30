@@ -2660,8 +2660,8 @@ mod private_hnsw_tests {
 
     #[test]
     fn commit_request_shape_rejects_empty_writeback_before_session_lookup() {
-        let bucket = fixture_bucket(0, 43);
-        validate_private_hnsw_commit_request_shape(std::slice::from_ref(&bucket)).unwrap();
+        let updated_bucket = fixture_bucket(0, 43);
+        validate_private_hnsw_commit_request_shape(std::slice::from_ref(&updated_bucket)).unwrap();
 
         let err = validate_private_hnsw_commit_request_shape(&[]).unwrap_err();
         let rendered = err.to_string();
@@ -3879,7 +3879,8 @@ mod private_hnsw_tests {
             .map(|bucket_id| {
                 let mut bytes = [domain; 32];
                 bytes[..8].copy_from_slice(&bucket_id.to_be_bytes());
-                BASE64URL_NOPAD.encode(&bytes)
+                let leaf_commitment = BASE64URL_NOPAD.encode(&bytes);
+                leaf_commitment
             })
             .collect()
     }

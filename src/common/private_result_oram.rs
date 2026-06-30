@@ -2678,8 +2678,8 @@ mod private_result_oram_tests {
 
     #[test]
     fn commit_bucket_request_shape_rejects_empty_before_session_lookup() {
-        let bucket = fixture_readable_bucket(0, 43, 7, &BASE64URL_NOPAD.encode(&[8; 32]));
-        validate_commit_bucket_request_shape(std::slice::from_ref(&bucket)).unwrap();
+        let updated_bucket = fixture_readable_bucket(0, 43, 7, &BASE64URL_NOPAD.encode(&[8; 32]));
+        validate_commit_bucket_request_shape(std::slice::from_ref(&updated_bucket)).unwrap();
 
         let err = validate_commit_bucket_request_shape(&[]).unwrap_err();
         let rendered = err.to_string();
@@ -3539,7 +3539,8 @@ mod private_result_oram_tests {
             .map(|bucket_id| {
                 let mut bytes = [domain; 32];
                 bytes[..8].copy_from_slice(&bucket_id.to_be_bytes());
-                BASE64URL_NOPAD.encode(&bytes)
+                let leaf_commitment = BASE64URL_NOPAD.encode(&bytes);
+                leaf_commitment
             })
             .collect()
     }

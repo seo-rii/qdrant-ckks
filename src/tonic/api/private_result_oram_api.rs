@@ -987,7 +987,8 @@ mod private_result_oram_grpc_tests {
                 }),
             ));
 
-            let read_bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            let read_bucket_id = 0;
+            let read_bucket_ids = vec![read_bucket_id, 1, 3, read_bucket_id, 1, 4];
             let read_signature = fixture.read_signature(&read_bucket_ids);
             assert_missing_encryption!(PrivateResultOram::read_private_result_oram_buckets(
                 &service,
@@ -4002,6 +4003,13 @@ mod private_result_oram_grpc_tests {
             );
 
             let duplicate_commit_buckets = vec![updated_bucket.clone(), updated_bucket.clone()];
+            let leaf_commitment = fixture.buckets[0].bucket_commitment.clone();
+            assert!(
+                fixture
+                    .buckets
+                    .iter()
+                    .any(|bucket| bucket.bucket_commitment == leaf_commitment)
+            );
             let duplicate_commit_plan = PrivateResultOramCommitPlan {
                 old_epoch: BASE_EPOCH,
                 new_epoch: NEXT_EPOCH,

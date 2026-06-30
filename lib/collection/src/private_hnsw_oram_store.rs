@@ -1807,6 +1807,7 @@ mod tests {
             index_epoch: 42,
             root_hash: "HNSW-STORE-ROOT-SENTINEL".to_string(),
         };
+        let leaf_commitment = "HNSW-STORE-LEAF-COMMITMENT-SENTINEL".to_string();
         let proof = PrivateHnswOramMerkleProof {
             kind: PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND.to_string(),
             index_epoch: 42,
@@ -1814,7 +1815,7 @@ mod tests {
             bucket_count: 8,
             leaves: vec![PrivateHnswOramMerkleProofLeaf {
                 bucket_id: 123_456,
-                leaf_hash: "HNSW-STORE-LEAF-SENTINEL".to_string(),
+                leaf_hash: leaf_commitment.clone(),
                 siblings: vec![PrivateHnswOramMerkleSibling {
                     level: 0,
                     position: MerkleSiblingPosition::Left,
@@ -1827,7 +1828,7 @@ mod tests {
             index_epoch: 42,
             root_hash: "HNSW-STORE-ROOT-SENTINEL".to_string(),
             bucket_count: 8,
-            leaf_hashes: vec!["HNSW-STORE-LEAF-SENTINEL".to_string()],
+            leaf_hashes: vec![leaf_commitment.clone()],
         };
         let prepared = PrivateHnswPreparedMerkleCommit {
             store: store.clone(),
@@ -1847,7 +1848,7 @@ mod tests {
         for leaked in [
             "/tmp/hnsw-store-debug-sentinel",
             "HNSW-STORE-ROOT-SENTINEL",
-            "HNSW-STORE-LEAF-SENTINEL",
+            leaf_commitment.as_str(),
             "HNSW-STORE-SIBLING-SENTINEL",
             "123456",
         ] {

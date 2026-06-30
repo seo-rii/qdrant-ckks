@@ -1067,6 +1067,15 @@ mod private_hnsw_grpc_tests {
             .into_inner()
             .into_values()
             .collect::<Vec<_>>();
+        let updated_bucket = updated_buckets
+            .first()
+            .expect("private HNSW gRPC fixture must write back at least one bucket");
+        assert!(updated_bucket.bucket_id < fixture.encrypted_build.bucket_count);
+        let leaf_commitment = fixture
+            .leaf_commitments
+            .first()
+            .expect("private HNSW gRPC fixture must include a leaf commitment");
+        assert!(fixture.leaf_commitments.contains(leaf_commitment));
         let commit_plan = plan_private_hnsw_oram_commit(
             BASE_EPOCH,
             NEXT_EPOCH,

@@ -1552,12 +1552,13 @@ mod tests {
             index_epoch: 42,
             root_hash: "RESULT-STORE-ROOT-SENTINEL".to_string(),
         };
+        let leaf_commitment = "RESULT-STORE-LEAF-COMMITMENT-SENTINEL".to_string();
         let tree = PrivateResultOramMerkleTree {
             version: 1,
             index_epoch: 42,
             root_hash: "RESULT-STORE-ROOT-SENTINEL".to_string(),
             bucket_count: 8,
-            leaf_hashes: vec!["RESULT-STORE-LEAF-SENTINEL".to_string()],
+            leaf_hashes: vec![leaf_commitment.clone()],
         };
         let prepared = PrivateResultPreparedMerkleCommit {
             store: store.clone(),
@@ -1574,7 +1575,7 @@ mod tests {
         for leaked in [
             "/tmp/result-oram-store-debug-sentinel",
             "RESULT-STORE-ROOT-SENTINEL",
-            "RESULT-STORE-LEAF-SENTINEL",
+            leaf_commitment.as_str(),
         ] {
             assert!(!rendered.contains(leaked), "{rendered}");
         }
