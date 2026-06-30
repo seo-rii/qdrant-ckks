@@ -1874,6 +1874,10 @@ mod tests {
         rule.instance = "stateCiphertextSha256.json".to_string();
         if let collection::config::EncryptionSelector::PayloadPaths { paths } = &mut rule.selector {
             *paths = vec![
+                "clientState.json".to_string(),
+                "clientStates.json".to_string(),
+                "client_state.json".to_string(),
+                "client_states.json".to_string(),
                 "clientStateBackup.json".to_string(),
                 "clientStateBackups.json".to_string(),
                 "client_state_backup.json".to_string(),
@@ -1893,6 +1897,9 @@ mod tests {
                 "client_state_ciphertexts_sha256.json".to_string(),
                 "encryptedClientStateBackup.json".to_string(),
                 "encryptedClientStateBackups.json".to_string(),
+                "encryptedClientState.json".to_string(),
+                "encryptedClientStates.json".to_string(),
+                "encrypted_client_states.json".to_string(),
                 "encryptedClientStateSnapshot.json".to_string(),
                 "encryptedClientStateSnapshots.json".to_string(),
                 "encrypted_client_state_backups.json".to_string(),
