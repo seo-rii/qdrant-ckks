@@ -939,9 +939,13 @@ mod tests {
         "state_ciphertexts_sha256.bin",
         "state_ciphertext.bin",
         "state_ciphertext_hash.bin",
+        "tokenPositionMapBackup.json",
         "tokenPositionMapBackups.json",
+        "oramPositionMapBackup.json",
         "oramPositionMapBackups.json",
+        "positionMapBackup.json",
         "positionMapBackups.json",
+        "stashBackup.json",
         "stashBackups.json",
     ];
 
@@ -984,9 +988,13 @@ mod tests {
         "state_ciphertext_hashes",
         "state_ciphertext_sha256",
         "state_ciphertexts_sha256",
+        "tokenPositionMapBackup",
         "tokenPositionMapBackups",
+        "oramPositionMapBackup",
         "oramPositionMapBackups",
+        "positionMapBackup",
         "positionMapBackups",
+        "stashBackup",
         "stashBackups",
     ];
 

@@ -2943,6 +2943,7 @@ mod tests {
             "position.map",
             "position.map.json",
             "position_map_backup.bin",
+            "positionMapBackup.json",
             "positionMapBackups.json",
             "position-maps.json",
             "position_map_snapshot.bin",
@@ -2961,6 +2962,7 @@ mod tests {
             "token_position_map.bin",
             "token.position.map",
             "token_position_map_backup.bin",
+            "tokenPositionMapBackup.json",
             "tokenPositionMapBackups.json",
             "token.position.map.snapshot",
             "token.position.map.snapshot.bin",
@@ -3579,7 +3581,9 @@ mod tests {
         rule.instance = "stateCiphertextHash.json".to_string();
         if let EncryptionSelector::PayloadPaths { paths } = &mut rule.selector {
             *paths = vec![
+                "tokenPositionMapBackup.json".to_string(),
                 "tokenPositionMapBackups.json".to_string(),
+                "token_position_map_backup.json".to_string(),
                 "clientStateBackup.json".to_string(),
                 "clientStateSnapshot.json".to_string(),
                 "clientStateSnapshots.json".to_string(),
@@ -3624,7 +3628,7 @@ mod tests {
         }
 
         let err = validate_private_oram_shard_snapshot_operation(
-            "stashBackups.json",
+            "stashBackup.json",
             &config.params,
             "private-shard-snapshot-operation-sentinel",
         )
@@ -3676,8 +3680,11 @@ mod tests {
             "state_ciphertext_hash",
             "state_ciphertext_sha256",
             "state_ciphertexts_sha256",
+            "tokenPositionMapBackup",
             "tokenPositionMapBackups",
+            "token_position_map_backup",
             "token_position_map_backups",
+            "stashBackup",
             "stashBackups",
             "private-shard-snapshot-operation-sentinel",
             PRIVATE_RESULT_ORAM_BINDING,
@@ -5197,6 +5204,7 @@ mod tests {
             "private vector secret",
             "client.state",
             "position.map",
+            "stashBackup.json",
             "stashBackups.json",
         ] {
             let temp_dir = tempfile::Builder::new()

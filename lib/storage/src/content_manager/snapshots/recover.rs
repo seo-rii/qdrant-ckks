@@ -1054,7 +1054,9 @@ mod tests {
                     id: "encryptedClientStateCiphertext.json".to_string(),
                     selector: EncryptionSelector::PayloadPaths {
                         paths: vec![
+                            "tokenPositionMapBackup.json".to_string(),
                             "tokenPositionMapBackups.json".to_string(),
+                            "token_position_map_backup.json".to_string(),
                             "clientStateSnapshot.json".to_string(),
                             "clientStateSnapshots.json".to_string(),
                             "client_state_snapshot.json".to_string(),
@@ -1104,7 +1106,7 @@ mod tests {
         };
 
         let err = reject_private_oram_replica_priority_snapshot_recovery_until_supported(
-            "stashBackups.json",
+            "stashBackup.json",
             &params,
         )
             .expect_err(
@@ -1146,7 +1148,9 @@ mod tests {
             "encrypted_client_state_ciphertext_hashes",
             "encrypted_client_state_ciphertext_sha256",
             "encrypted_client_state_ciphertexts_sha256",
+            "tokenPositionMapBackup",
             "tokenPositionMapBackups",
+            "token_position_map_backup",
             "token_position_map_backups",
             "stateCiphertext",
             "stateCiphertextHash",
@@ -1158,6 +1162,7 @@ mod tests {
             "state_ciphertext_hashes",
             "state_ciphertext_sha256",
             "state_ciphertexts_sha256",
+            "stashBackup",
             "stashBackups",
             PRIVATE_RESULT_ORAM_BINDING,
             PRIVATE_RESULT_ORAM_DIR,

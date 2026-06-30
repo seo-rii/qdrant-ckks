@@ -1085,7 +1085,9 @@ async fn test_snapshot_private_oram_store_files_are_archived() {
         "encrypted_client_state_ciphertexts_sha256",
         "position_map",
         "positionMap",
+        "positionMapBackup",
         "positionMapBackups",
+        "oramPositionMapBackup",
         "oramPositionMapBackups",
         "stateCiphertext",
         "stateCiphertextHash",
@@ -1096,8 +1098,10 @@ async fn test_snapshot_private_oram_store_files_are_archived() {
         "state_ciphertext_sha256",
         "state_ciphertexts_sha256",
         "stash",
+        "stashBackup",
         "stashBackups",
         "tokenPositionMap",
+        "tokenPositionMapBackup",
         "tokenPositionMapBackups",
     ] {
         assert!(

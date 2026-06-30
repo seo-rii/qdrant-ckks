@@ -1147,7 +1147,9 @@ mod tests {
                         id: "encryptedClientStateCiphertext.json".to_string(),
                         selector: EncryptionSelector::VectorNames {
                             names: vec![
+                                "positionMapBackup.json".to_string(),
                                 "positionMapBackups.json".to_string(),
+                                "position_map_backup.json".to_string(),
                                 "clientStateSnapshot.json".to_string(),
                                 "clientStateSnapshots.json".to_string(),
                                 "client_state_snapshot.json".to_string(),
@@ -1180,14 +1182,16 @@ mod tests {
                                 "position_map_backups.json".to_string(),
                             ],
                         },
-                        instance: "oramPositionMapBackups.json".to_string(),
+                        instance: "oramPositionMapBackup.json".to_string(),
                         binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
                     },
                     EncryptionRuleRef {
-                        id: "tokenPositionMapBackups.json".to_string(),
+                        id: "tokenPositionMapBackup.json".to_string(),
                         selector: EncryptionSelector::PayloadPaths {
                             paths: vec![
+                                "stashBackup.json".to_string(),
                                 "stashBackups.json".to_string(),
+                                "stash_backup.json".to_string(),
                                 "stateCiphertext.json".to_string(),
                                 "stateCiphertextHashes.json".to_string(),
                                 "stateCiphertextSha256.json".to_string(),
@@ -1197,6 +1201,8 @@ mod tests {
                                 "state_ciphertext_hashes.json".to_string(),
                                 "state_ciphertext_sha256.json".to_string(),
                                 "state_ciphertexts_sha256.json".to_string(),
+                                "tokenPositionMapBackups.json".to_string(),
+                                "token_position_map_backup.json".to_string(),
                                 "token_position_map_backups.json".to_string(),
                             ],
                         },
@@ -1218,7 +1224,7 @@ mod tests {
         });
 
         let err = reject_private_oram_shard_transfer_until_supported(
-            "stashBackups.json",
+            "stashBackup.json",
             &params,
             &operation,
         )
@@ -1259,10 +1265,15 @@ mod tests {
             "encrypted_client_state_ciphertext_hashes",
             "encrypted_client_state_ciphertext_sha256",
             "encrypted_client_state_ciphertexts_sha256",
+            "positionMapBackup",
             "positionMapBackups",
+            "position_map_backup",
             "position_map_backups",
+            "oramPositionMapBackup",
             "oramPositionMapBackups",
+            "tokenPositionMapBackup",
             "tokenPositionMapBackups",
+            "token_position_map_backup",
             "token_position_map_backups",
             "stateCiphertext",
             "stateCiphertextHash",
@@ -1274,6 +1285,7 @@ mod tests {
             "state_ciphertext_hashes",
             "state_ciphertext_sha256",
             "state_ciphertexts_sha256",
+            "stashBackup",
             "stashBackups",
             PRIVATE_HNSW_ORAM_BINDING,
             PRIVATE_RESULT_ORAM_BINDING,
