@@ -1879,6 +1879,7 @@ mod tests {
                 "clientStateCiphertextHashes.json".to_string(),
                 "client_state_ciphertext.json".to_string(),
                 "client_state_ciphertext_hash.json".to_string(),
+                "client_state_ciphertext_hashes.json".to_string(),
                 "encryptedClientStateBackups.json".to_string(),
                 "encrypted_client_state.json".to_string(),
                 "encrypted_client_state_backup.json".to_string(),
@@ -1898,6 +1899,7 @@ mod tests {
                 "stateCiphertextHashes.json".to_string(),
                 "state_ciphertext.json".to_string(),
                 "state_ciphertext_hash.json".to_string(),
+                "state_ciphertext_hashes.json".to_string(),
             ];
         }
 
@@ -1981,6 +1983,7 @@ mod tests {
                     "clientStateCiphertextHashes",
                     "client_state_ciphertext",
                     "client_state_ciphertext_hash",
+                    "client_state_ciphertext_hashes",
                     "encryptedClientStateBackups",
                     "encrypted_client_state",
                     "encrypted_client_state_backup",
@@ -2002,6 +2005,7 @@ mod tests {
                     "stateCiphertextHashes",
                     "state_ciphertext",
                     "state_ciphertext_hash",
+                    "state_ciphertext_hashes",
                     "tokenPositionMapBackups",
                     PRIVATE_RESULT_ORAM_BINDING,
                     "private_result_oram",
