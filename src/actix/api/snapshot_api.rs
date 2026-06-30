@@ -1372,8 +1372,6 @@ mod tests {
                     body.contains("collection snapshot requires no active private ORAM session"),
                     "{uri}: {body}",
                 );
-                assert!(!body.contains(COLLECTION_NAME), "{uri}: {body}");
-                assert!(!body.contains(&session.session_id), "{uri}: {body}");
                 assert!(
                     !body.contains(&fixture.encrypted_build.root_hash),
                     "{uri}: {body}"
@@ -1386,7 +1384,20 @@ mod tests {
                     !body.contains(&fixture.manifest_signature.sig),
                     "{uri}: {body}"
                 );
-                assert!(!body.contains("private_hnsw_oram"), "{uri}: {body}");
+                for forbidden in [
+                    COLLECTION_NAME,
+                    &session.session_id,
+                    "tenant-a/sdk-active-snapshot-route-test",
+                    "text_private_hnsw",
+                    "docs_private_hnsw_v1",
+                    "tenant-a/vector-private-rk",
+                    "tenant-a/private-hnsw-signing-v1",
+                    qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                    qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                    "private_hnsw_oram",
+                ] {
+                    assert!(!body.contains(forbidden), "{uri}: {body}");
+                }
             }
 
             do_close_private_hnsw_session(
@@ -1471,8 +1482,6 @@ mod tests {
                     body.contains("collection snapshot requires no active private ORAM session"),
                     "{uri}: {body}",
                 );
-                assert!(!body.contains(COLLECTION_NAME), "{uri}: {body}");
-                assert!(!body.contains(&session.session_id), "{uri}: {body}");
                 assert!(
                     !body.contains(&result_fixture.manifest.root_hash),
                     "{uri}: {body}"
@@ -1485,11 +1494,24 @@ mod tests {
                     !body.contains(&result_fixture.signature.sig),
                     "{uri}: {body}"
                 );
-                assert!(!body.contains("private_result_oram"), "{uri}: {body}");
-                assert!(
-                    !body.contains("payload_private_result_oram"),
-                    "{uri}: {body}"
-                );
+                for forbidden in [
+                    COLLECTION_NAME,
+                    &session.session_id,
+                    "tenant-a/result-sdk-active-snapshot-route-test",
+                    "payload_private_result_oram",
+                    "docs_private_result_oram_v1",
+                    "tenant-a/vector-private-rk",
+                    "tenant-a/private-result-signing-v1",
+                    qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+                    qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+                    "text_private_hnsw",
+                    "docs_private_hnsw_v1",
+                    qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+                    qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+                    "private_result_oram",
+                ] {
+                    assert!(!body.contains(forbidden), "{uri}: {body}");
+                }
             }
 
             do_close_private_result_oram_session(
