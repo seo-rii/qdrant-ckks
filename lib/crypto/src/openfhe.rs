@@ -34,6 +34,7 @@ const MAX_BRIDGE_CIPHERTEXT_B64_LEN: usize = (MAX_BRIDGE_CIPHERTEXT_BYTES + 2) /
 enum BridgeSandbox {
     ProcessHardening,
     LinuxLandlockWriteDeny,
+    LinuxLandlockWriteDenyNetworkNamespace,
 }
 
 #[derive(Clone)]
@@ -264,6 +265,12 @@ impl CommandOpenFheBackend {
 
     pub fn with_linux_landlock_write_deny_sandbox(mut self) -> Self {
         self.sandbox = BridgeSandbox::LinuxLandlockWriteDeny;
+        self.reset_worker_pool_after_policy_change();
+        self
+    }
+
+    pub fn with_linux_landlock_write_deny_network_namespace_sandbox(mut self) -> Self {
+        self.sandbox = BridgeSandbox::LinuxLandlockWriteDenyNetworkNamespace;
         self.reset_worker_pool_after_policy_change();
         self
     }
@@ -1547,6 +1554,32 @@ fn apply_linux_landlock_write_deny() -> io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+fn apply_linux_network_namespace_egress_deny() -> io::Result<()> {
+    let result = unsafe { nix::libc::unshare(nix::libc::CLONE_NEWNET) };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn bridge_sandbox_uses_landlock(sandbox: BridgeSandbox) -> bool {
+    matches!(
+        sandbox,
+        BridgeSandbox::LinuxLandlockWriteDeny
+            | BridgeSandbox::LinuxLandlockWriteDenyNetworkNamespace
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn bridge_sandbox_uses_network_namespace(sandbox: BridgeSandbox) -> bool {
+    matches!(
+        sandbox,
+        BridgeSandbox::LinuxLandlockWriteDenyNetworkNamespace
+    )
+}
+
+#[cfg(target_os = "linux")]
 fn configure_bridge_command_sandbox(
     command: &mut Command,
     checked_program: bool,
@@ -1557,11 +1590,17 @@ fn configure_bridge_command_sandbox(
     // Qdrant has already validated the executable path and ownership. It also
     // disables core dumps for the plaintext-bearing bridge process, restricts
     // default permissions for any bridge-created files, and blocks regular
-    // file writes for checked production bridge binaries. The
+    // file writes for checked production bridge binaries. Network-namespace
+    // sandbox kinds additionally detach the bridge from the host network
+    // namespace before exec so a bridge with no network dependency has no
+    // route to external egress. The
     // parent-death signal prevents a bridge from staying alive as an orphan if
     // Qdrant exits while the bridge is handling plaintext embeddings.
     unsafe {
         command.pre_exec(move || {
+            if bridge_sandbox_uses_network_namespace(sandbox) {
+                apply_linux_network_namespace_egress_deny()?;
+            }
             let result = nix::libc::prctl(nix::libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
             if result != 0 {
                 return Err(io::Error::last_os_error());
@@ -1584,7 +1623,7 @@ fn configure_bridge_command_sandbox(
                     return Err(io::Error::last_os_error());
                 }
             }
-            if sandbox == BridgeSandbox::LinuxLandlockWriteDeny {
+            if bridge_sandbox_uses_landlock(sandbox) {
                 apply_linux_landlock_write_deny()?;
             }
             nix::libc::umask(0o077);

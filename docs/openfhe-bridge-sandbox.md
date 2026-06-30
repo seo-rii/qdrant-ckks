@@ -77,8 +77,12 @@ the runtime profile.
 - Checked OpenFHE bridge backends require Linux fd-backed `/proc/self/fd`
   execution; non-Linux builds fail closed instead of using a path-based
   validation/hash/exec sequence.
-- Prefer `process_landlock` or `process_pool_landlock` backend kinds on Linux
-  even when AppArmor/seccomp/container policies are present.
+- Prefer `process_landlock_netns` or `process_pool_landlock_netns` backend
+  kinds on Linux when the bridge has no legitimate host-network dependency;
+  these add Qdrant-managed network namespace isolation to the Landlock
+  write-deny policy. Use `process_landlock` or `process_pool_landlock` when the
+  host does not permit network namespace creation and provide egress denial
+  through AppArmor/seccomp/container policy instead.
 - Do not pass Qdrant secrets to the bridge environment. Checked qdrant-sec
   workers strip inherited service environment by default; container launchers
   should do the same.

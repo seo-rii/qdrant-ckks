@@ -1835,8 +1835,11 @@ crypto:
 
 Generic OpenFHE backends currently accept `process`, `process_pool`, and on
 Linux the Landlock-enforcing `process_landlock` / `process_pool_landlock`
-variants. Any other backend `kind` is rejected during runtime settings
-validation.
+variants. Linux also supports
+`process_landlock_netns` / `process_pool_landlock_netns`, which add a bridge
+child network-namespace split before `exec` for deployments that can run the
+bridge without host network access. Any other backend `kind` is rejected during
+runtime settings validation.
 On Linux, Qdrant sets `no_new_privs`, a parent-death `SIGKILL`, `RLIMIT_CORE=0`,
 and, for checked bridge binaries, `RLIMIT_FSIZE=0` immediately before spawning
 the configured bridge process. This is not a complete sandbox, but it prevents
@@ -1848,8 +1851,12 @@ settings as pre-exec process hardening. The Landlock variants additionally
 install a write-deny Landlock ruleset in the bridge child before `exec`, blocking
 regular file writes, file creation, removal, rename/link, and truncation
 operations for kernels that support the configured Landlock ABI. Production
-deployments that need broader confinement should still run the bridge under an
-external seccomp/AppArmor/container profile. See
+deployments that need Qdrant-managed network egress isolation can select the
+`*_landlock_netns` variants; bridge startup then fails closed if the host denies
+network namespace creation. These sandbox and egress policy labels are included
+in the crypto runtime capability fingerprint, so mixed cluster policies fail
+parity checks. Deployments that need broader confinement should still run the
+bridge under an external seccomp/AppArmor/container profile. See
 [`openfhe-bridge-sandbox.md`](openfhe-bridge-sandbox.md) for a hardened
 deployment checklist and starter AppArmor/seccomp examples.
 
@@ -2402,6 +2409,12 @@ so env-backed Qdrant settings, crypto material, `LD_PRELOAD`, `PYTHONPATH`, and
 other service environment values are not handed to the bridge process by
 default. Test-only unchecked bridge workers still remove `QDRANT`/`QDRANT_*`
 and explicitly configured sensitive env names.
+If the backend kind is `process_landlock_netns` or
+`process_pool_landlock_netns`, Qdrant also asks Linux to place the bridge child
+in a fresh network namespace before `exec`. This is the only Qdrant-managed
+bridge egress-deny mode; plain `process_*` and `process_*_landlock` kinds keep
+the host network namespace and rely on external firewall, AppArmor, seccomp, or
+container policy for network confinement.
 
 Request fields:
 

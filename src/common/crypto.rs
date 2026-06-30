@@ -393,6 +393,8 @@ const OPENFHE_BACKEND_KIND_PROCESS: &str = "process";
 const OPENFHE_BACKEND_KIND_PROCESS_POOL: &str = "process_pool";
 const OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK: &str = "process_landlock";
 const OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK: &str = "process_pool_landlock";
+const OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK_NETNS: &str = "process_landlock_netns";
+const OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK_NETNS: &str = "process_pool_landlock_netns";
 const OPENFHE_BACKEND_CACHE_MAX_ENTRIES: usize = 64;
 const OPENFHE_BACKEND_SIGNATURE_DOMAIN: &[u8] = b"qdrant-sec/openfhe-bridge-binary-signature/v1\0";
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
@@ -2383,9 +2385,9 @@ fn openfhe_backend_from_config(
     backend: &CryptoBackendConfig,
     settings: &CryptoSettings,
 ) -> Result<CommandOpenFheBackend, StorageError> {
-    if openfhe_backend_kind_uses_landlock(&backend.kind) && !cfg!(target_os = "linux") {
+    if openfhe_backend_kind_requires_linux_sandbox(&backend.kind) && !cfg!(target_os = "linux") {
         return Err(StorageError::bad_input(format!(
-            "crypto backend {backend_name} kind {} requires Linux Landlock support",
+            "crypto backend {backend_name} kind {} requires Linux Landlock/network namespace support",
             backend.kind,
         )));
     }
@@ -2407,10 +2409,12 @@ fn openfhe_backend_from_config(
     )
     .map_err(|err| StorageError::bad_input(format!("crypto backend {backend_name}: {err}")))?;
     let pool_size = match backend.kind.as_str() {
-        OPENFHE_BACKEND_KIND_PROCESS_POOL | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK => {
-            backend.size.unwrap_or(1)
-        }
-        OPENFHE_BACKEND_KIND_PROCESS | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK => 1,
+        OPENFHE_BACKEND_KIND_PROCESS_POOL
+        | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK
+        | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK_NETNS => backend.size.unwrap_or(1),
+        OPENFHE_BACKEND_KIND_PROCESS
+        | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK
+        | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK_NETNS => 1,
         kind => {
             return Err(StorageError::bad_input(format!(
                 "crypto backend {backend_name} has unsupported kind {kind}",
@@ -2450,7 +2454,10 @@ fn openfhe_backend_from_config(
         command_backend = command_backend.with_timeout(Duration::from_millis(timeout_ms));
     }
     command_backend = command_backend.with_sensitive_env_names(sensitive_env_names);
-    if openfhe_backend_kind_uses_landlock(&backend.kind) {
+    if openfhe_backend_kind_uses_network_namespace(&backend.kind) {
+        command_backend =
+            command_backend.with_linux_landlock_write_deny_network_namespace_sandbox();
+    } else if openfhe_backend_kind_uses_landlock(&backend.kind) {
         command_backend = command_backend.with_linux_landlock_write_deny_sandbox();
     }
     command_backend = command_backend.with_pool_size(pool_size);
@@ -2548,8 +2555,23 @@ fn clear_openfhe_backend_cache_for_tests() {
 fn openfhe_backend_kind_uses_landlock(kind: &str) -> bool {
     matches!(
         kind,
-        OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK
+        OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK
+            | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK
+            | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK_NETNS
+            | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK_NETNS
     )
+}
+
+fn openfhe_backend_kind_uses_network_namespace(kind: &str) -> bool {
+    matches!(
+        kind,
+        OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK_NETNS
+            | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK_NETNS
+    )
+}
+
+fn openfhe_backend_kind_requires_linux_sandbox(kind: &str) -> bool {
+    openfhe_backend_kind_uses_landlock(kind) || openfhe_backend_kind_uses_network_namespace(kind)
 }
 
 fn crypto_secret_env_names(settings: &CryptoSettings) -> Vec<String> {
@@ -3018,6 +3040,8 @@ fn sanitized_crypto_backend_policy(backend: &CryptoBackendConfig) -> serde_json:
         "kind": backend.kind,
         "program": backend.program,
         "checked_spawn_hardening": openfhe_checked_spawn_hardening_level(),
+        "filesystem_write_policy": openfhe_backend_filesystem_write_policy(&backend.kind),
+        "network_egress_policy": openfhe_backend_network_egress_policy(&backend.kind),
         "sha256_b64": fixed_base64url_policy_fingerprint(backend.sha256_b64.as_deref()),
         "signature_public_key_b64": fixed_base64url_policy_fingerprint(
             backend.signature_public_key_b64.as_deref(),
@@ -3033,6 +3057,22 @@ fn openfhe_checked_spawn_hardening_level() -> &'static str {
         "linux_proc_fd_no_follow"
     } else {
         "path_revalidation_only"
+    }
+}
+
+fn openfhe_backend_filesystem_write_policy(kind: &str) -> &'static str {
+    if openfhe_backend_kind_uses_landlock(kind) {
+        "linux_landlock_write_deny"
+    } else {
+        "process_hardening_no_filesystem_write_deny"
+    }
+}
+
+fn openfhe_backend_network_egress_policy(kind: &str) -> &'static str {
+    if openfhe_backend_kind_uses_network_namespace(kind) {
+        "linux_network_namespace_isolated"
+    } else {
+        "host_network_not_restricted_by_qdrant"
     }
 }
 
@@ -6067,15 +6107,18 @@ fn validate_backend(
     backend_name: &str,
     backend: &CryptoBackendConfig,
 ) -> Result<(), CryptoSetupError> {
-    if openfhe_backend_kind_uses_landlock(&backend.kind) && !cfg!(target_os = "linux") {
+    if openfhe_backend_kind_requires_linux_sandbox(&backend.kind) && !cfg!(target_os = "linux") {
         return Err(CryptoSetupError::InvalidBackendSandbox {
             backend: backend_name.to_string(),
-            reason: "Landlock bridge sandbox is only supported on Linux".to_string(),
+            reason: "Landlock/network-namespace bridge sandbox is only supported on Linux"
+                .to_string(),
         });
     }
 
     match backend.kind.as_str() {
-        OPENFHE_BACKEND_KIND_PROCESS_POOL | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK => {
+        OPENFHE_BACKEND_KIND_PROCESS_POOL
+        | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK
+        | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK_NETNS => {
             if backend.size == Some(0) {
                 return Err(CryptoSetupError::InvalidBackendSize {
                     backend: backend_name.to_string(),
@@ -6083,7 +6126,9 @@ fn validate_backend(
                 });
             }
         }
-        OPENFHE_BACKEND_KIND_PROCESS | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK => {
+        OPENFHE_BACKEND_KIND_PROCESS
+        | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK
+        | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK_NETNS => {
             if backend.size.is_some_and(|size| size > 1) {
                 return Err(CryptoSetupError::InvalidBackendSize {
                     backend: backend_name.to_string(),
@@ -6134,22 +6179,26 @@ fn validate_collection_runtime_backend_metadata(
     backend_name: &str,
     backend: &CryptoBackendConfig,
 ) -> Result<(), StorageError> {
-    if openfhe_backend_kind_uses_landlock(&backend.kind) && !cfg!(target_os = "linux") {
+    if openfhe_backend_kind_requires_linux_sandbox(&backend.kind) && !cfg!(target_os = "linux") {
         return Err(StorageError::bad_input(format!(
-            "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} kind {} requires Linux Landlock support",
+            "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} kind {} requires Linux Landlock/network namespace support",
             backend.kind,
         )));
     }
 
     match backend.kind.as_str() {
-        OPENFHE_BACKEND_KIND_PROCESS_POOL | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK => {
+        OPENFHE_BACKEND_KIND_PROCESS_POOL
+        | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK
+        | OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK_NETNS => {
             if backend.size == Some(0) {
                 return Err(StorageError::bad_input(format!(
                     "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} process_pool size must be at least 1",
                 )));
             }
         }
-        OPENFHE_BACKEND_KIND_PROCESS | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK => {
+        OPENFHE_BACKEND_KIND_PROCESS
+        | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK
+        | OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK_NETNS => {
             if backend.size.is_some_and(|size| size > 1) {
                 return Err(StorageError::bad_input(format!(
                     "collection {collection_name} vector crypto instance {instance_name} backend {backend_name} process size must be omitted or 1",
@@ -14159,6 +14208,14 @@ mod tests {
             sanitized_backend.contains(openfhe_checked_spawn_hardening_level()),
             "backend fingerprint view must bind checked spawn hardening level",
         );
+        assert!(
+            sanitized_backend.contains("host_network_not_restricted_by_qdrant"),
+            "backend fingerprint view must expose the bridge network egress policy",
+        );
+        assert!(
+            sanitized_backend.contains("process_hardening_no_filesystem_write_deny"),
+            "backend fingerprint view must expose the bridge filesystem write policy",
+        );
 
         let mut peer_with_oversized_pin = settings.clone();
         let oversized_pin_b64 = "A".repeat(10_000);
@@ -14242,6 +14299,42 @@ mod tests {
         )
         .expect_err("bridge sandbox policy drift must fail runtime parity validation");
         assert!(err.to_string().contains("peer-backend-sandbox"));
+
+        let mut peer_with_network_namespace_sandbox = settings.clone();
+        peer_with_network_namespace_sandbox
+            .crypto
+            .backends
+            .get_mut("openfhe_bridge_v1")
+            .unwrap()
+            .kind = "process_pool_landlock_netns".to_string();
+        let sanitized_netns_backend = serde_json::to_string(&sanitized_crypto_backend_policy(
+            peer_with_network_namespace_sandbox
+                .crypto
+                .backends
+                .get("openfhe_bridge_v1")
+                .unwrap(),
+        ))
+        .expect("sanitized network namespace backend policy must serialize");
+        assert!(
+            sanitized_netns_backend.contains("linux_network_namespace_isolated"),
+            "backend fingerprint view must distinguish network namespace isolation",
+        );
+        assert_ne!(
+            fingerprint,
+            crypto_runtime_capability_fingerprint(&peer_with_network_namespace_sandbox),
+            "bridge network egress sandbox drift must change the parity fingerprint",
+        );
+        let peer_network_namespace_fingerprint =
+            crypto_runtime_capability_fingerprint(&peer_with_network_namespace_sandbox);
+        let err = validate_crypto_runtime_capability_parity(
+            &settings,
+            [(
+                "peer-backend-network-sandbox",
+                peer_network_namespace_fingerprint.as_str(),
+            )],
+        )
+        .expect_err("bridge network egress sandbox drift must fail runtime parity validation");
+        assert!(err.to_string().contains("peer-backend-network-sandbox"));
 
         let mut peer_with_signature_policy = settings.clone();
         let backend = peer_with_signature_policy
@@ -17191,6 +17284,30 @@ mod tests {
             "openfhe_local",
             &CryptoBackendConfig {
                 kind: OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK.to_string(),
+                program: Some(program.clone()),
+                sha256_b64: Some(sha256_b64.clone()),
+                signature_public_key_b64: None,
+                signature_b64: None,
+                size: Some(2),
+                timeout_ms: Some(5_000),
+            },
+        );
+        let process_netns_result = validate_backend(
+            "openfhe_local",
+            &CryptoBackendConfig {
+                kind: OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK_NETNS.to_string(),
+                program: Some(program.clone()),
+                sha256_b64: Some(sha256_b64.clone()),
+                signature_public_key_b64: None,
+                signature_b64: None,
+                size: None,
+                timeout_ms: Some(5_000),
+            },
+        );
+        let pool_netns_result = validate_backend(
+            "openfhe_local",
+            &CryptoBackendConfig {
+                kind: OPENFHE_BACKEND_KIND_PROCESS_POOL_LANDLOCK_NETNS.to_string(),
                 program: Some(program),
                 sha256_b64: Some(sha256_b64),
                 signature_public_key_b64: None,
@@ -17203,6 +17320,8 @@ mod tests {
         if cfg!(target_os = "linux") {
             assert_eq!(process_result, Ok(()));
             assert_eq!(pool_result, Ok(()));
+            assert_eq!(process_netns_result, Ok(()));
+            assert_eq!(pool_netns_result, Ok(()));
         } else {
             assert!(matches!(
                 process_result,
@@ -17210,6 +17329,14 @@ mod tests {
             ));
             assert!(matches!(
                 pool_result,
+                Err(CryptoSetupError::InvalidBackendSandbox { .. })
+            ));
+            assert!(matches!(
+                process_netns_result,
+                Err(CryptoSetupError::InvalidBackendSandbox { .. })
+            ));
+            assert!(matches!(
+                pool_netns_result,
                 Err(CryptoSetupError::InvalidBackendSandbox { .. })
             ));
         }
@@ -17463,6 +17590,33 @@ mod tests {
         if cfg!(target_os = "linux") {
             let backend = backend_result.unwrap();
             assert!(format!("{backend:?}").contains("LinuxLandlockWriteDeny"));
+        } else {
+            assert!(matches!(backend_result, Err(StorageError::BadInput { .. })));
+        }
+    }
+
+    #[test]
+    fn openfhe_backend_factory_enables_landlock_netns_sandbox_kind() {
+        let _guard = openfhe_backend_factory_test_guard();
+        clear_openfhe_backend_cache_for_tests();
+        let (_dir, program, sha256_b64) = test_bridge_program();
+        let backend_result = openfhe_backend_from_config(
+            "openfhe_local",
+            &CryptoBackendConfig {
+                kind: OPENFHE_BACKEND_KIND_PROCESS_LANDLOCK_NETNS.to_string(),
+                program: Some(program),
+                sha256_b64: Some(sha256_b64),
+                signature_public_key_b64: None,
+                signature_b64: None,
+                size: None,
+                timeout_ms: Some(5_000),
+            },
+            &CryptoSettings::default(),
+        );
+
+        if cfg!(target_os = "linux") {
+            let backend = backend_result.unwrap();
+            assert!(format!("{backend:?}").contains("LinuxLandlockWriteDenyNetworkNamespace"));
         } else {
             assert!(matches!(backend_result, Err(StorageError::BadInput { .. })));
         }
