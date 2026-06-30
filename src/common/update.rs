@@ -1535,6 +1535,12 @@ fn collection_error_to_storage_error(err: CollectionError) -> StorageError {
     }
 }
 
+fn stable_crypto_id_storage_error(_err: CollectionError) -> StorageError {
+    StorageError::bad_input(
+        "encrypted collection is missing a stable UUID; encrypted payload/vector AAD requires a stable collection identity",
+    )
+}
+
 async fn ensure_sync_points_allowed_by_encryption(
     toc: &TableOfContent,
     collection_name: &str,
@@ -1698,7 +1704,7 @@ pub async fn do_reencrypt_stale_payloads_for_crypto_migration(
 
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
-        .map_err(StorageError::from)?;
+        .map_err(stable_crypto_id_storage_error)?;
     let Some(plan) = payload_write_plan_for_collection_with_crypto_id(
         runtime_settings,
         collection_name,
@@ -1772,7 +1778,7 @@ pub async fn do_decrypt_payloads_for_crypto_migration(
 
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
-        .map_err(StorageError::from)?;
+        .map_err(stable_crypto_id_storage_error)?;
     let Some(plan) = payload_write_plan_for_collection_with_crypto_id(
         runtime_settings,
         collection_name,
@@ -1833,7 +1839,7 @@ async fn maybe_encrypt_upsert_payloads(
     }
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
-        .map_err(|err| StorageError::bad_input(err.to_string()))?;
+        .map_err(stable_crypto_id_storage_error)?;
     let Some(plan) = payload_write_plan_for_collection_with_crypto_id(
         runtime_settings,
         collection_name,
@@ -1922,7 +1928,7 @@ async fn maybe_encrypt_upsert_vectors(
     let collection_config = collection.config_snapshot().await;
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
-        .map_err(|err| StorageError::bad_input(err.to_string()))?;
+        .map_err(stable_crypto_id_storage_error)?;
 
     let Some(runtime_settings) = runtime_settings else {
         if let Some(vector_name) =
@@ -2013,7 +2019,7 @@ async fn maybe_encrypt_update_vectors(
     let collection_config = collection.config_snapshot().await;
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
-        .map_err(|err| StorageError::bad_input(err.to_string()))?;
+        .map_err(stable_crypto_id_storage_error)?;
 
     let Some(runtime_settings) = runtime_settings else {
         if let Some(vector_name) =
@@ -2786,7 +2792,7 @@ async fn split_encrypted_vector_delete_names(
     let collection_config = collection.config_snapshot().await;
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
-        .map_err(|err| StorageError::bad_input(err.to_string()))?;
+        .map_err(stable_crypto_id_storage_error)?;
     let Some(encryption) = collection_config.params.effective_encryption() else {
         return Ok((
             vector_names,
@@ -2908,7 +2914,7 @@ async fn maybe_encrypt_point_payload_update(
     }
     let collection_crypto_id = collection_config
         .stable_crypto_id(collection_name)
-        .map_err(|err| StorageError::bad_input(err.to_string()))?;
+        .map_err(stable_crypto_id_storage_error)?;
     let Some(plan) = payload_write_plan_for_collection_with_crypto_id(
         runtime_settings,
         collection_name,
@@ -11522,6 +11528,19 @@ esac
                 assert!(!err.contains("clientStateBackups"), "{err}");
             }
         }
+    }
+
+    #[test]
+    fn stable_crypto_id_storage_error_redacts_source_error_details() {
+        let sentinel = "stable-crypto-id-source-error-sentinel";
+        let err = stable_crypto_id_storage_error(CollectionError::bad_input(format!(
+            "collection docs leaked {sentinel}"
+        )));
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("encrypted collection is missing a stable UUID"));
+        assert!(!rendered.contains("docs"), "{rendered}");
+        assert!(!rendered.contains(sentinel), "{rendered}");
     }
 
     #[test]
