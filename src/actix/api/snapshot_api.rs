@@ -1403,6 +1403,82 @@ mod tests {
     }
 
     #[test]
+    fn shard_snapshot_recovery_routes_reject_private_oram_collection() {
+        let _guard = route_e2e_guard();
+        let (_temp, dispatcher) = test_dispatcher();
+        let dispatcher = web::Data::new(dispatcher);
+        let settings = Settings::new(None).unwrap();
+        let http_client = web::Data::new(HttpClient::from_settings(&settings).unwrap());
+        let settings = web::Data::new(settings);
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(dispatcher.get_ref()).await;
+
+            let app = actix_web::test::init_service(
+                actix_web::App::new()
+                    .app_data(dispatcher.clone())
+                    .app_data(http_client.clone())
+                    .app_data(settings.clone())
+                    .configure(config_snapshots_api),
+            )
+            .await;
+
+            for (method, uri, body) in [
+                (
+                    actix_web::http::Method::PUT,
+                    "/collections/docs/shards/0/snapshots/recover",
+                    serde_json::json!({
+                        "location": "file:///tmp/private-oram-shard-recovery-sentinel.snapshot"
+                    }),
+                ),
+                (
+                    actix_web::http::Method::POST,
+                    "/collections/docs/shards/0/snapshot/partial/recover_from",
+                    serde_json::json!({
+                        "peer_url": "https://example.test?token=private-oram-partial-token-sentinel",
+                        "api_key": "private-oram-partial-api-key-sentinel"
+                    }),
+                ),
+            ] {
+                let request = actix_web::test::TestRequest::default()
+                    .method(method)
+                    .uri(uri)
+                    .set_json(body)
+                    .to_request();
+                let response = actix_web::test::call_service(&app, request).await;
+                assert_eq!(
+                    response.status(),
+                    actix_web::http::StatusCode::BAD_REQUEST,
+                    "{uri}",
+                );
+                let body = actix_web::body::to_bytes(response.into_body())
+                    .await
+                    .unwrap();
+                let body = std::str::from_utf8(&body).unwrap();
+                assert!(
+                    body.contains(
+                        "shard snapshot operations for private ORAM collections are disabled"
+                    ),
+                    "{uri}: {body}",
+                );
+                assert!(
+                    body.contains("collection snapshot/restore preflight"),
+                    "{uri}: {body}",
+                );
+                assert!(!body.contains(COLLECTION_NAME), "{uri}: {body}");
+                assert!(!body.contains("private-oram-shard-recovery-sentinel"), "{uri}: {body}");
+                assert!(!body.contains("private-oram-partial-token-sentinel"), "{uri}: {body}");
+                assert!(
+                    !body.contains("private-oram-partial-api-key-sentinel"),
+                    "{uri}: {body}"
+                );
+                assert!(!body.contains("private_hnsw_oram"), "{uri}: {body}");
+                assert!(!body.contains("private_result_oram"), "{uri}: {body}");
+            }
+        });
+    }
+
+    #[test]
     fn recover_snapshot_rejects_private_oram_snapshot_window() {
         let _guard = route_e2e_guard();
         let (_temp, dispatcher) = test_dispatcher();
