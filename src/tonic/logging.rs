@@ -188,6 +188,53 @@ mod tests {
     }
 
     #[test]
+    fn grpc_status_log_message_redacts_auth_token_aliases() {
+        let status = tonic::Status::permission_denied(
+            "private ORAM auth denied \
+             access_token=access-token-sentinel \
+             refreshToken=refresh-token-camel-sentinel \
+             id_token=id-token-sentinel \
+             jwt=jwt-sentinel \
+             Cookie=cookie-sentinel \
+             Set-Cookie=set-cookie-sentinel \
+             client_secret=client-secret-sentinel \
+             credential=credential-sentinel \
+             credentials=credentials-sentinel \
+             password=password-sentinel \
+             public_keys=public-keys-sentinel \
+             publicKeysB64=public-keys-b64-sentinel \
+             signature_public_key_b64=signature-public-key-b64-sentinel \
+             signaturePublicKeysB64=signature-public-keys-b64-sentinel \
+             secret_b64=secret-b64-sentinel \
+             values_b64=values-b64-sentinel",
+        );
+
+        let rendered = redacted_grpc_status_message(&status);
+
+        assert!(rendered.contains("redacted"));
+        for sentinel in [
+            "access-token-sentinel",
+            "refresh-token-camel-sentinel",
+            "id-token-sentinel",
+            "jwt-sentinel",
+            "cookie-sentinel",
+            "set-cookie-sentinel",
+            "client-secret-sentinel",
+            "credential-sentinel",
+            "credentials-sentinel",
+            "password-sentinel",
+            "public-keys-sentinel",
+            "public-keys-b64-sentinel",
+            "signature-public-key-b64-sentinel",
+            "signature-public-keys-b64-sentinel",
+            "secret-b64-sentinel",
+            "values-b64-sentinel",
+        ] {
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
+    }
+
+    #[test]
     fn grpc_status_log_message_redacts_private_oram_access_pattern_fields() {
         let status = tonic::Status::invalid_argument(
             "private ORAM read failed for session_id=session-sentinel \
