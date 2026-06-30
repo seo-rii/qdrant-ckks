@@ -220,9 +220,7 @@ mod internal_conversions {
                 method: method
                     .map(grpc::ShardTransferMethod::try_from)
                     .transpose()
-                    .map_err(|err| {
-                        Status::invalid_argument(format!("cannot decode ShardTransferMethod {err}"))
-                    })?
+                    .map_err(|_| Status::invalid_argument("cannot decode ShardTransferMethod"))?
                     .map(ShardTransferMethod::from),
                 comment: (!comment.is_empty()).then_some(comment),
             })
@@ -298,16 +296,17 @@ mod internal_conversions {
                 uuid: Uuid::parse_str(&uuid)
                     .map_err(|err| Status::invalid_argument(format!("cannot parse Uuid {err}")))?,
                 direction: ReshardingDirection::from(
-                    grpc::ReshardingDirection::try_from(direction).map_err(|err| {
-                        Status::invalid_argument(format!("cannot decode ReshardingDirection {err}"))
+                    grpc::ReshardingDirection::try_from(direction).map_err(|_| {
+                        Status::invalid_argument("cannot decode ReshardingDirection")
                     })?,
                 ),
                 shard_id,
                 peer_id,
                 shard_key: convert_shard_key_from_grpc_opt(shard_key),
-                stage: ReshardingStage::from(grpc::ReshardingStage::try_from(stage).map_err(
-                    |err| Status::invalid_argument(format!("cannot decode ReshardingStage {err}")),
-                )?),
+                stage: ReshardingStage::from(
+                    grpc::ReshardingStage::try_from(stage)
+                        .map_err(|_| Status::invalid_argument("cannot decode ReshardingStage"))?,
+                ),
             })
         }
     }
@@ -628,10 +627,8 @@ mod internal_conversions {
                 .map(|(k, v)| {
                     Ok((
                         k,
-                        ReplicaState::from(grpc::ReplicaState::try_from(v).map_err(|err| {
-                            Status::invalid_argument(format!(
-                                "Failed to decode ReplicaState: {err}"
-                            ))
+                        ReplicaState::from(grpc::ReplicaState::try_from(v).map_err(|_| {
+                            Status::invalid_argument("Failed to decode ReplicaState")
                         })?),
                     ))
                 })
@@ -675,9 +672,7 @@ mod internal_conversions {
                 status: status
                     .map(grpc::ShardStatus::try_from)
                     .transpose()
-                    .map_err(|err| {
-                        Status::invalid_argument(format!("failed to decode ShardStatus: {err}"))
-                    })?
+                    .map_err(|_| Status::invalid_argument("failed to decode ShardStatus"))?
                     .map(ShardStatus::from),
                 total_optimized_points: total_optimized_points as usize,
                 vectors_size_bytes: vectors_size_bytes.map(|v| v as usize),
@@ -759,6 +754,60 @@ mod internal_conversions {
                     Err(Status::invalid_argument("Unknown collection status"))
                 }
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const UNKNOWN_ENUM_VALUE: i32 = 99;
+
+        #[test]
+        fn telemetry_enum_decode_errors_do_not_reflect_unknown_values() {
+            let err = ShardTransferInfo::try_from(grpc::ShardTransferTelemetry {
+                method: Some(UNKNOWN_ENUM_VALUE),
+                ..Default::default()
+            })
+            .unwrap_err();
+            assert_eq!(err.message(), "cannot decode ShardTransferMethod");
+            assert!(!err.message().contains("99"));
+
+            let valid_uuid = "00000000-0000-0000-0000-000000000000".to_owned();
+            let err = ReshardingInfo::try_from(grpc::ReshardingTelemetry {
+                uuid: valid_uuid.clone(),
+                direction: UNKNOWN_ENUM_VALUE,
+                ..Default::default()
+            })
+            .unwrap_err();
+            assert_eq!(err.message(), "cannot decode ReshardingDirection");
+            assert!(!err.message().contains("99"));
+
+            let err = ReshardingInfo::try_from(grpc::ReshardingTelemetry {
+                uuid: valid_uuid,
+                direction: grpc::ReshardingDirection::Up as i32,
+                stage: UNKNOWN_ENUM_VALUE,
+                ..Default::default()
+            })
+            .unwrap_err();
+            assert_eq!(err.message(), "cannot decode ReshardingStage");
+            assert!(!err.message().contains("99"));
+
+            let err = ReplicaSetTelemetry::try_from(grpc::ReplicaSetTelemetry {
+                replica_states: [(7, UNKNOWN_ENUM_VALUE)].into(),
+                ..Default::default()
+            })
+            .unwrap_err();
+            assert_eq!(err.message(), "Failed to decode ReplicaState");
+            assert!(!err.message().contains("99"));
+
+            let err = LocalShardTelemetry::try_from(grpc::LocalShardTelemetry {
+                status: Some(UNKNOWN_ENUM_VALUE),
+                ..Default::default()
+            })
+            .unwrap_err();
+            assert_eq!(err.message(), "failed to decode ShardStatus");
+            assert!(!err.message().contains("99"));
         }
     }
 }
