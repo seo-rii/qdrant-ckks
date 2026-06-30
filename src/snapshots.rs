@@ -827,6 +827,75 @@ mod tests {
     }
 
     #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_hnsw_client_state_alias() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_hnsw_snapshot_fixture(collection_dir.path(), &fixture, false);
+        fs::write(
+            collection_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join(VECTOR_NAME)
+                .join("clientStateSnapshot.json"),
+            b"client state snapshot sentinel",
+        )
+        .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("client-owned private HNSW ORAM state must fail CLI preflight");
+
+        assert!(
+            err.contains("private HNSW ORAM snapshot layout validation failed"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR), "{err}");
+        assert!(!err.contains(VECTOR_NAME), "{err}");
+        assert!(!err.contains("clientStateSnapshot"), "{err}");
+        assert!(!err.contains("sentinel"), "{err}");
+    }
+
+    #[test]
+    fn cli_snapshot_crypto_preflight_rejects_private_hnsw_non_empty_temp() {
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let collection_dir = TempDir::new().unwrap();
+        write_recovered_private_hnsw_snapshot_fixture(collection_dir.path(), &fixture, false);
+        fs::write(
+            collection_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join(VECTOR_NAME)
+                .join("temp")
+                .join("stale-hnsw-write.tmp"),
+            b"stale HNSW temp sentinel",
+        )
+        .unwrap();
+
+        let err =
+            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
+                .expect_err("non-empty private HNSW ORAM temp must fail CLI preflight");
+
+        assert!(
+            err.contains("private HNSW ORAM snapshot layout validation failed"),
+            "{err}"
+        );
+        assert!(
+            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+            "{err}"
+        );
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR), "{err}");
+        assert!(!err.contains(VECTOR_NAME), "{err}");
+        assert!(!err.contains("stale-hnsw-write"), "{err}");
+        assert!(!err.contains("sentinel"), "{err}");
+    }
+
+    #[test]
     fn cli_snapshot_crypto_preflight_accepts_private_hnsw_restore_layout() {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
