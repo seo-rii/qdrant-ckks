@@ -2646,6 +2646,16 @@ mod private_hnsw_tests {
         assert!(!rendered.contains("session is missing or expired"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains(&alias_label), "{rendered}");
+
+        let alias_label = "encrypted_client_state_ciphertext_sha256".to_string();
+        let err =
+            validate_private_hnsw_read_path_label_request_shape(std::slice::from_ref(&alias_label))
+                .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("request validation failed"));
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains(&alias_label), "{rendered}");
     }
 
     #[test]
@@ -3444,6 +3454,12 @@ mod private_hnsw_tests {
         assert!(rendered.contains("signature key id is not configured"));
         assert!(!rendered.contains(missing_alias_key_id), "{rendered}");
 
+        let missing_alias_key_id = "encrypted_client_state_ciphertext_sha256";
+        let err = signature_public_key(&instance, missing_alias_key_id).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature key id is not configured"));
+        assert!(!rendered.contains(missing_alias_key_id), "{rendered}");
+
         let oversized = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 32]), "A".repeat(64));
         let err = decode_signature_public_key(&oversized).unwrap_err();
         let rendered = err.to_string();
@@ -3491,6 +3507,16 @@ mod private_hnsw_tests {
         assert!(rendered.contains("private HNSW ORAM request validation failed"));
         assert!(
             !rendered.contains("encrypted_client_state_ciphertext_hash"),
+            "{rendered}"
+        );
+
+        let err = private_hnsw_error(qdrant_sec::PrivateHnswOramError::InvalidManifestField(
+            "encrypted_client_state_ciphertext_sha256",
+        ));
+        let rendered = err.to_string();
+        assert!(rendered.contains("private HNSW ORAM request validation failed"));
+        assert!(
+            !rendered.contains("encrypted_client_state_ciphertext_sha256"),
             "{rendered}"
         );
     }
@@ -3580,6 +3606,7 @@ mod private_hnsw_tests {
             "hnsw-common-client-signature-body-sentinel",
             "client_state_ciphertext",
             "encrypted_client_state_ciphertext_hash",
+            "encrypted_client_state_ciphertext_sha256",
             "position_map_backups",
             "payload_fetch_token",
             "stashBackups",
