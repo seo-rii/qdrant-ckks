@@ -2806,10 +2806,10 @@ pub fn validate_recovered_collection_crypto_config(
 ) -> Result<(), StorageError> {
     if let Some(encryption) = &config.params.encryption {
         if config.uuid.is_none() {
-            return Err(StorageError::bad_input(format!(
-                "recovered encrypted collection {collection_name} is missing a stable UUID; \
-                 encrypted payload/vector AAD requires an explicit stable collection identity",
-            )));
+            return Err(StorageError::bad_input(
+                "recovered encrypted collection is missing a stable UUID; encrypted \
+                 payload/vector AAD requires an explicit stable collection identity",
+            ));
         }
         if encryption.migration_state != CryptoMigrationState::Active {
             return Err(StorageError::bad_input(format!(
@@ -21632,7 +21632,8 @@ mod tests {
         .expect_err("encrypted snapshot config without UUID must fail before runtime lookup");
         assert!(
             matches!(err, StorageError::BadInput { ref description }
-                if description.contains("recovered encrypted collection docs is missing a stable UUID")),
+                if description.contains("recovered encrypted collection is missing a stable UUID")
+                    && !description.contains("docs")),
             "unexpected error: {err:?}",
         );
 

@@ -3391,10 +3391,10 @@ impl CollectionConfigInternal {
         }
 
         self.uuid.map(|uuid| uuid.to_string()).ok_or_else(|| {
-            CollectionError::bad_input(format!(
-                "encrypted collection {collection_name} is missing a stable UUID; \
-                 encrypted payload/vector AAD cannot fall back to collection name",
-            ))
+            CollectionError::bad_input(
+                "encrypted collection is missing a stable UUID; encrypted payload/vector AAD \
+                 cannot fall back to collection name",
+            )
         })
     }
 
@@ -3540,7 +3540,9 @@ mod stable_crypto_id_tests {
         let config = config_with_params(encrypted_params(), None);
 
         let err = config.stable_crypto_id("docs").unwrap_err();
-        assert!(err.to_string().contains("missing a stable UUID"));
+        let rendered = err.to_string();
+        assert!(rendered.contains("missing a stable UUID"));
+        assert!(!rendered.contains("docs"));
     }
 
     #[test]
