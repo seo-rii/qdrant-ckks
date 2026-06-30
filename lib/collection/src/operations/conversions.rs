@@ -79,9 +79,7 @@ pub fn sharding_method_from_proto(sharding_method: i32) -> Result<ShardingMethod
     match sharding_method_grpc {
         Ok(api::grpc::qdrant::ShardingMethod::Auto) => Ok(ShardingMethod::Auto),
         Ok(api::grpc::qdrant::ShardingMethod::Custom) => Ok(ShardingMethod::Custom),
-        Err(err) => Err(Status::invalid_argument(format!(
-            "Cannot convert ShardingMethod: {sharding_method}, error: {err}"
-        ))),
+        Err(_) => Err(Status::invalid_argument("Cannot convert ShardingMethod")),
     }
 }
 
@@ -103,10 +101,7 @@ pub fn write_ordering_from_proto(
         Some(write_ordering) => {
             match api::grpc::qdrant::WriteOrderingType::try_from(write_ordering.r#type) {
                 Err(_) => {
-                    return Err(Status::invalid_argument(format!(
-                        "cannot convert ordering: {}",
-                        write_ordering.r#type
-                    )));
+                    return Err(Status::invalid_argument("cannot convert ordering"));
                 }
                 Ok(res) => res,
             }
@@ -618,12 +613,10 @@ impl TryFrom<i32> for CollectionStatus {
             Ok(api::grpc::qdrant::CollectionStatus::Yellow) => Ok(CollectionStatus::Yellow),
             Ok(api::grpc::qdrant::CollectionStatus::Red) => Ok(CollectionStatus::Red),
             Ok(api::grpc::qdrant::CollectionStatus::Grey) => Ok(CollectionStatus::Grey),
-            Ok(api::grpc::qdrant::CollectionStatus::UnknownCollectionStatus) => Err(
-                Status::invalid_argument(format!("Unknown CollectionStatus: {value}")),
-            ),
-            Err(err) => Err(Status::invalid_argument(format!(
-                "Cannot convert CollectionStatus: {value}, error: {err}"
-            ))),
+            Ok(api::grpc::qdrant::CollectionStatus::UnknownCollectionStatus) => {
+                Err(Status::invalid_argument("Unknown CollectionStatus"))
+            }
+            Err(_) => Err(Status::invalid_argument("Cannot convert CollectionStatus")),
         }
     }
 }
@@ -1150,7 +1143,7 @@ impl TryFrom<i32> for ReplicaState {
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         let replica_state = api::grpc::qdrant::ReplicaState::try_from(value)
-            .map_err(|_| Status::invalid_argument(format!("Unknown replica state: {value}")))?;
+            .map_err(|_| Status::invalid_argument("Unknown replica state"))?;
         Ok(replica_state.into())
     }
 }
@@ -1645,9 +1638,7 @@ impl TryFrom<i32> for ShardTransferMethod {
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         api::grpc::qdrant::ShardTransferMethod::try_from(value)
             .map(Into::into)
-            .map_err(|_| {
-                Status::invalid_argument(format!("Unknown shard transfer method: {value}"))
-            })
+            .map_err(|_| Status::invalid_argument("Unknown shard transfer method"))
     }
 }
 
@@ -2001,5 +1992,45 @@ impl TryFrom<grpc::FeedbackStrategy> for FeedbackStrategy {
         };
 
         Ok(strategy)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grpc_collection_enums_reject_unknown_values_without_reflecting_them() {
+        const UNKNOWN_ENUM_VALUE: i32 = 99;
+
+        let err = sharding_method_from_proto(UNKNOWN_ENUM_VALUE).unwrap_err();
+        assert_eq!(err.message(), "Cannot convert ShardingMethod");
+        assert!(!err.message().contains("99"));
+
+        let err = write_ordering_from_proto(Some(api::grpc::qdrant::WriteOrdering {
+            r#type: UNKNOWN_ENUM_VALUE,
+        }))
+        .unwrap_err();
+        assert_eq!(err.message(), "cannot convert ordering");
+        assert!(!err.message().contains("99"));
+
+        let err = CollectionStatus::try_from(UNKNOWN_ENUM_VALUE).unwrap_err();
+        assert_eq!(err.message(), "Cannot convert CollectionStatus");
+        assert!(!err.message().contains("99"));
+
+        let err = CollectionStatus::try_from(
+            api::grpc::qdrant::CollectionStatus::UnknownCollectionStatus as i32,
+        )
+        .unwrap_err();
+        assert_eq!(err.message(), "Unknown CollectionStatus");
+        assert!(!err.message().contains("0"));
+
+        let err = ReplicaState::try_from(UNKNOWN_ENUM_VALUE).unwrap_err();
+        assert_eq!(err.message(), "Unknown replica state");
+        assert!(!err.message().contains("99"));
+
+        let err = ShardTransferMethod::try_from(UNKNOWN_ENUM_VALUE).unwrap_err();
+        assert_eq!(err.message(), "Unknown shard transfer method");
+        assert!(!err.message().contains("99"));
     }
 }

@@ -161,11 +161,8 @@ impl TryFrom<i32> for ReadConsistencyType {
     type Error = tonic::Status;
 
     fn try_from(consistency: i32) -> Result<Self, Self::Error> {
-        let consistency = ReadConsistencyTypeGrpc::try_from(consistency).map_err(|_| {
-            tonic::Status::invalid_argument(format!(
-                "invalid read consistency type value {consistency}",
-            ))
-        })?;
+        let consistency = ReadConsistencyTypeGrpc::try_from(consistency)
+            .map_err(|_| tonic::Status::invalid_argument("invalid read consistency type value"))?;
 
         Ok(consistency.into())
     }
@@ -243,5 +240,13 @@ mod tests {
         let schema = schema_for!(ReadConsistency);
         let schema_str = serde_json::to_string_pretty(&schema).unwrap();
         println!("{schema_str}")
+    }
+
+    #[test]
+    fn grpc_read_consistency_rejects_unknown_value_without_reflecting_it() {
+        let err = ReadConsistencyType::try_from(99).unwrap_err();
+
+        assert_eq!(err.message(), "invalid read consistency type value");
+        assert!(!err.message().contains("99"));
     }
 }
