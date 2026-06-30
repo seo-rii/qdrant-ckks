@@ -2030,7 +2030,7 @@ score/distance aliases, candidate heaps, candidate and node score/distance
 aliases, request/commit/read/manifest signatures, private result ORAM bucket
 ids, session ids, bucket commitments, leaf commitments, read bucket ids, bucket
 id sequences, updated bucket writebacks, access-volume count aliases,
-client-state/ciphertext/hash/sha256 fields, and payload/result tokens; snake_case and camelCase
+client-state/client-states, ciphertext/hash/sha256 fields, and payload/result tokens; snake_case and camelCase
 singular/plural aliases are covered for private ORAM access-pattern, bucket,
 commitment, signature, query, candidate, score/distance, client-state, and token
 fields.
