@@ -9161,8 +9161,9 @@ esac
             .unwrap_err();
             assert!(matches!(
                 small_better_recommend_err,
-                StorageError::BadInput { description }
+                StorageError::BadInput { ref description }
                     if description.contains("large-better metric")
+                        && !description.contains("encrypted vector '")
             ));
 
             let small_better_discover_err = crate::common::query::do_query_points(
@@ -9197,8 +9198,9 @@ esac
             .unwrap_err();
             assert!(matches!(
                 small_better_discover_err,
-                StorageError::BadInput { description }
+                StorageError::BadInput { ref description }
                     if description.contains("large-better metric")
+                        && !description.contains("encrypted vector '")
             ));
 
             let small_better_context_err = crate::common::query::do_query_points(
@@ -9239,8 +9241,9 @@ esac
             .unwrap_err();
             assert!(matches!(
                 small_better_context_err,
-                StorageError::BadInput { description }
+                StorageError::BadInput { ref description }
                     if description.contains("large-better metric")
+                        && !description.contains("encrypted vector '")
             ));
 
             do_upsert_points(

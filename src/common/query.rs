@@ -1113,9 +1113,9 @@ async fn ckks_vector_search_points_with_scoring(
         | CkksSidecarScoring::StoredNearest { .. } => distance.distance_order(),
         CkksSidecarScoring::NearestMmr { .. } => {
             if distance.distance_order() != Order::LargeBetter {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' MMR requires a large-better metric such as dot or cosine",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector MMR requires a large-better metric such as dot or cosine",
+                ));
             }
             Order::LargeBetter
         }
@@ -1124,14 +1124,14 @@ async fn ckks_vector_search_points_with_scoring(
             negatives: _,
         } => {
             if positives.is_empty() {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' average-vector recommend requires at least one positive example",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector average-vector recommend requires at least one positive example",
+                ));
             }
             if distance.distance_order() != Order::LargeBetter {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' average-vector point-id recommend requires a large-better metric such as dot or cosine",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector average-vector point-id recommend requires a large-better metric such as dot or cosine",
+                ));
             }
             Order::LargeBetter
         }
@@ -1144,14 +1144,14 @@ async fn ckks_vector_search_points_with_scoring(
             negatives,
         } => {
             if positives.is_empty() && negatives.is_empty() {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' recommend requires at least one raw dense example",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector recommend requires at least one raw dense example",
+                ));
             }
             if distance.distance_order() != Order::LargeBetter {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' recommend best-score and sum-scores require a large-better metric such as dot or cosine",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector recommend best-score and sum-scores require a large-better metric such as dot or cosine",
+                ));
             }
             Order::LargeBetter
         }
@@ -1164,48 +1164,48 @@ async fn ckks_vector_search_points_with_scoring(
             negatives,
         } => {
             if positives.is_empty() && negatives.is_empty() {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' recommend requires at least one example",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector recommend requires at least one example",
+                ));
             }
             if distance.distance_order() != Order::LargeBetter {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' recommend best-score and sum-scores require a large-better metric such as dot or cosine",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector recommend best-score and sum-scores require a large-better metric such as dot or cosine",
+                ));
             }
             Order::LargeBetter
         }
         CkksSidecarScoring::Discover { .. } | CkksSidecarScoring::DiscoverResolved { .. } => {
             if distance.distance_order() != Order::LargeBetter {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' discover with sidecar scoring requires a large-better metric such as dot or cosine",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector discover with sidecar scoring requires a large-better metric such as dot or cosine",
+                ));
             }
             Order::LargeBetter
         }
         CkksSidecarScoring::Context { pairs } => {
             if pairs.is_empty() {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' context query requires at least one raw dense context pair",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector context query requires at least one raw dense context pair",
+                ));
             }
             if distance.distance_order() != Order::LargeBetter {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' context query with sidecar scoring requires a large-better metric such as dot or cosine",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector context query with sidecar scoring requires a large-better metric such as dot or cosine",
+                ));
             }
             Order::LargeBetter
         }
         CkksSidecarScoring::ContextResolved { pairs } => {
             if pairs.is_empty() {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' context query requires at least one context pair",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector context query requires at least one context pair",
+                ));
             }
             if distance.distance_order() != Order::LargeBetter {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' context query with sidecar scoring requires a large-better metric such as dot or cosine",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector context query with sidecar scoring requires a large-better metric such as dot or cosine",
+                ));
             }
             Order::LargeBetter
         }
@@ -1214,7 +1214,7 @@ async fn ckks_vector_search_points_with_scoring(
     let source_batch_max = plan.ckks_scoring_source_batch_max();
     if source_batches > source_batch_max {
         return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' CKKS query uses {source_batches} scoring source batches; maximum is {source_batch_max}",
+            "encrypted vector CKKS query uses {source_batches} scoring source batches; maximum is {source_batch_max}",
         )));
     }
     if let CkksSidecarScoring::NearestResolved {
