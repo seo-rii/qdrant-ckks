@@ -1019,9 +1019,7 @@ fn convert_field_type(
                 }
             }
             .ok_or_else(|| {
-                Status::invalid_argument(format!(
-                    "field_type ({field_type:?}) and field_index_params do not match"
-                ))
+                Status::invalid_argument("field_type and field_index_params do not match")
             })??;
 
             Some(PayloadFieldSchema::FieldParams(schema_params))
@@ -1042,4 +1040,38 @@ fn convert_field_type(
     };
 
     Ok(field_schema)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn convert_field_type_redacts_mismatched_parameterized_schema_variants() {
+        let field_schema = PayloadIndexParams {
+            index_params: Some(IndexParams::TextIndexParams(
+                api::grpc::qdrant::TextIndexParams {
+                    tokenizer: api::grpc::qdrant::TokenizerType::Word as i32,
+                    lowercase: None,
+                    min_token_len: None,
+                    max_token_len: None,
+                    on_disk: None,
+                    stopwords: None,
+                    phrase_matching: None,
+                    stemmer: None,
+                    ascii_folding: None,
+                    enable_hnsw: None,
+                },
+            )),
+        };
+
+        let err = convert_field_type(Some(FieldType::Keyword as i32), Some(field_schema))
+            .expect_err("mismatched field type and params must fail");
+        assert!(
+            err.message()
+                .contains("field_type and field_index_params do not match")
+        );
+        assert!(!err.message().contains("Keyword"));
+        assert!(!err.message().contains("Text"));
+    }
 }
