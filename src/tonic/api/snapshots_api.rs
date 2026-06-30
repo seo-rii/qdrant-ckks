@@ -303,8 +303,18 @@ mod tests {
     use storage::rbac::{Access, Auth};
 
     use super::*;
+    use crate::common::private_hnsw::{
+        do_close_private_hnsw_session, do_open_private_hnsw_session,
+        do_upload_private_hnsw_buckets, do_upload_private_hnsw_manifest,
+    };
     use crate::common::private_hnsw_wire_fixture::{
-        COLLECTION_NAME, create_private_hnsw_collection, route_e2e_guard, test_dispatcher,
+        BASE_EPOCH, COLLECTION_NAME, PrivateHnswRouteWireFixture, PrivateResultOramRouteFixture,
+        VECTOR_NAME, create_private_hnsw_collection,
+        create_private_hnsw_collection_with_private_result_oram, route_e2e_guard, test_dispatcher,
+    };
+    use crate::common::private_result_oram::{
+        do_close_private_result_oram_session, do_open_private_result_oram_session,
+        do_upload_private_result_oram_buckets, do_upload_private_result_oram_manifest,
     };
     use crate::common::snapshots::begin_private_oram_collection_lifecycle_guard;
 
@@ -364,6 +374,272 @@ mod tests {
                 !create_full_err.message().contains(COLLECTION_NAME),
                 "{create_full_err}"
             );
+        });
+    }
+
+    #[test]
+    fn collection_and_full_snapshot_reject_active_private_oram_session() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let dispatcher = Arc::new(dispatcher);
+        let service = SnapshotsService::new(dispatcher.clone());
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(dispatcher.as_ref()).await;
+
+            let auth = Auth::new_internal(Access::full("private ORAM active tonic snapshot test"));
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+            do_upload_private_hnsw_manifest(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                fixture.manifest.clone(),
+                fixture.manifest_signature.clone(),
+            )
+            .await
+            .unwrap();
+            do_upload_private_hnsw_buckets(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                fixture.encrypted_build.index_epoch,
+                fixture.encrypted_build.root_hash.clone(),
+                fixture.encrypted_build.buckets.clone(),
+            )
+            .await
+            .unwrap();
+            let session = do_open_private_hnsw_session(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                "tenant-a/sdk-active-tonic-snapshot-test".to_string(),
+                BASE_EPOCH,
+                true,
+                qdrant_sec::ResultPrivacyMode::IdsVisible,
+            )
+            .await
+            .unwrap();
+
+            let create_err = Snapshots::create(
+                &service,
+                Request::new(CreateSnapshotRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                }),
+            )
+            .await
+            .expect_err("private ORAM collection snapshot must reject active session");
+            assert_eq!(create_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                create_err
+                    .message()
+                    .contains("collection snapshot requires no active private ORAM session"),
+                "{create_err}",
+            );
+            assert!(
+                !create_err.message().contains(COLLECTION_NAME),
+                "{create_err}"
+            );
+            assert!(
+                !create_err.message().contains(&session.session_id),
+                "{create_err}"
+            );
+            assert!(
+                !create_err
+                    .message()
+                    .contains(&fixture.encrypted_build.root_hash),
+                "{create_err}"
+            );
+            assert!(
+                !create_err.message().contains("private_hnsw_oram"),
+                "{create_err}"
+            );
+
+            let create_full_err =
+                Snapshots::create_full(&service, Request::new(CreateFullSnapshotRequest {}))
+                    .await
+                    .expect_err("private ORAM full snapshot must reject active session");
+            assert_eq!(create_full_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                create_full_err
+                    .message()
+                    .contains("collection snapshot requires no active private ORAM session"),
+                "{create_full_err}",
+            );
+            assert!(
+                !create_full_err.message().contains(COLLECTION_NAME),
+                "{create_full_err}"
+            );
+            assert!(
+                !create_full_err.message().contains(&session.session_id),
+                "{create_full_err}"
+            );
+            assert!(
+                !create_full_err
+                    .message()
+                    .contains(&fixture.encrypted_build.root_hash),
+                "{create_full_err}"
+            );
+            assert!(
+                !create_full_err.message().contains("private_hnsw_oram"),
+                "{create_full_err}"
+            );
+
+            do_close_private_hnsw_session(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                &session.session_id,
+            )
+            .await
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn collection_and_full_snapshot_reject_active_private_result_oram_session() {
+        let _guard = route_e2e_guard();
+        let hnsw_fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let result_fixture = PrivateResultOramRouteFixture::build();
+        let settings = result_fixture.route_settings_with_private_hnsw(&hnsw_fixture);
+        let (_temp, dispatcher) = test_dispatcher();
+        let dispatcher = Arc::new(dispatcher);
+        let service = SnapshotsService::new(dispatcher.clone());
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection_with_private_result_oram(dispatcher.as_ref()).await;
+
+            let auth = Auth::new_internal(Access::full(
+                "private result ORAM active tonic snapshot test",
+            ));
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+            do_upload_private_result_oram_manifest(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                result_fixture.manifest.clone(),
+                result_fixture.signature.clone(),
+            )
+            .await
+            .unwrap();
+            do_upload_private_result_oram_buckets(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                result_fixture.manifest.index_epoch,
+                result_fixture.manifest.root_hash.clone(),
+                result_fixture.buckets.clone(),
+            )
+            .await
+            .unwrap();
+            let session = do_open_private_result_oram_session(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                "tenant-a/result-sdk-active-tonic-snapshot-test".to_string(),
+                BASE_EPOCH,
+                true,
+            )
+            .await
+            .unwrap();
+
+            let create_err = Snapshots::create(
+                &service,
+                Request::new(CreateSnapshotRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                }),
+            )
+            .await
+            .expect_err("private result ORAM collection snapshot must reject active session");
+            assert_eq!(create_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                create_err
+                    .message()
+                    .contains("collection snapshot requires no active private ORAM session"),
+                "{create_err}",
+            );
+            assert!(
+                !create_err.message().contains(COLLECTION_NAME),
+                "{create_err}"
+            );
+            assert!(
+                !create_err.message().contains(&session.session_id),
+                "{create_err}"
+            );
+            assert!(
+                !create_err
+                    .message()
+                    .contains(&result_fixture.manifest.root_hash),
+                "{create_err}"
+            );
+            assert!(
+                !create_err.message().contains("private_result_oram"),
+                "{create_err}"
+            );
+            assert!(
+                !create_err.message().contains("payload_private_result_oram"),
+                "{create_err}"
+            );
+
+            let create_full_err =
+                Snapshots::create_full(&service, Request::new(CreateFullSnapshotRequest {}))
+                    .await
+                    .expect_err("private result ORAM full snapshot must reject active session");
+            assert_eq!(create_full_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                create_full_err
+                    .message()
+                    .contains("collection snapshot requires no active private ORAM session"),
+                "{create_full_err}",
+            );
+            assert!(
+                !create_full_err.message().contains(COLLECTION_NAME),
+                "{create_full_err}"
+            );
+            assert!(
+                !create_full_err.message().contains(&session.session_id),
+                "{create_full_err}"
+            );
+            assert!(
+                !create_full_err
+                    .message()
+                    .contains(&result_fixture.manifest.root_hash),
+                "{create_full_err}"
+            );
+            assert!(
+                !create_full_err.message().contains("private_result_oram"),
+                "{create_full_err}"
+            );
+            assert!(
+                !create_full_err
+                    .message()
+                    .contains("payload_private_result_oram"),
+                "{create_full_err}"
+            );
+
+            do_close_private_result_oram_session(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                &session.session_id,
+            )
+            .await
+            .unwrap();
         });
     }
 
