@@ -880,6 +880,21 @@ mod tests {
             ),
             "/collections/docs/private-hnsw/text/session/{session_id}/[redacted]?[redacted]"
         );
+        for session_alias in [
+            "clientStateBackups-sentinel",
+            "oramPositionMapBackups-sentinel",
+            "positionMapBackups-sentinel",
+            "stashBackups-sentinel",
+            "stateCiphertext-sentinel",
+            "tokenPositionMapBackups-sentinel",
+        ] {
+            assert_eq!(
+                redact_private_oram_access_path(&format!(
+                    "/collections/docs/private-hnsw/text/session/{session_alias}?token=query-sentinel"
+                )),
+                "/collections/docs/private-hnsw/text/session/{session_id}/[redacted]?[redacted]"
+            );
+        }
         assert_eq!(
             redact_private_oram_access_path(
                 "/collections/docs/private-result-oram/session/session-id-sentinel/close?token=query-sentinel"
@@ -904,6 +919,20 @@ mod tests {
             ),
             "/collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted]"
         );
+        for session_alias in [
+            "clientStateBackups-sentinel",
+            "oramPositionMapBackups-sentinel",
+            "positionMapBackups-sentinel",
+            "stashBackups-sentinel",
+            "stateCiphertext-sentinel",
+        ] {
+            assert_eq!(
+                redact_private_oram_access_path(&format!(
+                    "/collections/docs/private-result-oram/session/{session_alias}?bucket_ids=query-sentinel"
+                )),
+                "/collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted]"
+            );
+        }
         assert_eq!(
             redact_private_oram_access_path(
                 "/collections/docs/private-result-oram/session/tokenPositionMapBackups-sentinel?bucket_ids=query-sentinel"
@@ -1153,6 +1182,47 @@ mod tests {
             for sentinel in sentinels {
                 assert!(!line.contains(sentinel), "{line}");
             }
+        }
+
+        for sentinel in [
+            "clientStateBackups-sentinel",
+            "oramPositionMapBackups-sentinel",
+            "positionMapBackups-sentinel",
+            "stashBackups-sentinel",
+            "stateCiphertext-sentinel",
+            "tokenPositionMapBackups-sentinel",
+        ] {
+            let uri = format!(
+                "/collections/docs/private-hnsw/text/session/{sentinel}/read_paths?token=query-sentinel"
+            );
+            let request = actix_test::TestRequest::post().uri(&uri).to_srv_request();
+            let line = access_log_request_line(&request);
+            assert_eq!(
+                line,
+                "POST /collections/docs/private-hnsw/text/session/{session_id}/[redacted]?[redacted] HTTP/1.1"
+            );
+            assert!(!line.contains(sentinel), "{line}");
+            assert!(!line.contains("query-sentinel"), "{line}");
+        }
+
+        for sentinel in [
+            "clientStateBackups-sentinel",
+            "oramPositionMapBackups-sentinel",
+            "positionMapBackups-sentinel",
+            "stashBackups-sentinel",
+            "stateCiphertext-sentinel",
+        ] {
+            let uri = format!(
+                "/collections/docs/private-result-oram/session/{sentinel}/read_buckets?bucket_ids=query-sentinel"
+            );
+            let request = actix_test::TestRequest::post().uri(&uri).to_srv_request();
+            let line = access_log_request_line(&request);
+            assert_eq!(
+                line,
+                "POST /collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted] HTTP/1.1"
+            );
+            assert!(!line.contains(sentinel), "{line}");
+            assert!(!line.contains("query-sentinel"), "{line}");
         }
     }
 }
