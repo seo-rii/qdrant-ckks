@@ -668,10 +668,14 @@ mod tests {
         assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
         for sentinel in [
             "client_state_ciphertext",
+            "client_state_ciphertext_hashes",
             "encrypted_client_state_ciphertext_hash",
+            "encrypted_client_state_ciphertext_hashes",
             "positionMapBackups",
             "tokenPositionMapBackups",
             "stashBackups",
+            "stateCiphertextHashes",
+            "state_ciphertext_hashes",
         ] {
             assert!(!rendered.contains(sentinel), "{rendered}");
         }
