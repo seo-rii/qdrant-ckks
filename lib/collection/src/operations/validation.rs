@@ -417,6 +417,9 @@ mod tests {
                         "names": [
                             "stash",
                             "clientStateBackups.json",
+                            "clientStateCiphertext.json",
+                            "encryptedClientStateCiphertextHash.json",
+                            "stateCiphertextHash.json",
                             "tokenPositionMapBackups.json"
                         ]
                     },
@@ -429,6 +432,9 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("stash_private_hnsw"));
         assert!(!unsafe_store_name_message.contains("stash"));
         assert!(!unsafe_store_name_message.contains("clientStateBackups"));
+        assert!(!unsafe_store_name_message.contains("clientStateCiphertext"));
+        assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertextHash"));
+        assert!(!unsafe_store_name_message.contains("stateCiphertextHash"));
         assert!(!unsafe_store_name_message.contains("tokenPositionMapBackups"));
 
         let mut overlap = ValidationError::new("overlapping_encryption_selector");

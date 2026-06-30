@@ -11499,6 +11499,9 @@ esac
         for payload_path in [
             "document.private-result-payload-path-sentinel",
             "clientStateBackups",
+            "clientStateCiphertext",
+            "encryptedClientStateCiphertextHash",
+            "stateCiphertextHash",
         ] {
             for operation_kind in [
                 "upsert points",
@@ -11523,7 +11526,14 @@ esac
                     !err.contains("private-result-payload-path-sentinel"),
                     "{err}"
                 );
-                assert!(!err.contains("clientStateBackups"), "{err}");
+                for sentinel in [
+                    "clientStateBackups",
+                    "clientStateCiphertext",
+                    "encryptedClientStateCiphertextHash",
+                    "stateCiphertextHash",
+                ] {
+                    assert!(!err.contains(sentinel), "{err}");
+                }
             }
         }
     }
