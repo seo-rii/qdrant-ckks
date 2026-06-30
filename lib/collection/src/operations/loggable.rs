@@ -2397,7 +2397,6 @@ mod tests {
             "stateCiphertext": "qdrant-sec-private-oram-camel-state-ciphertext-alias-log-sentinel",
             "stateCiphertextHash": "qdrant-sec-private-oram-camel-state-ciphertext-hash-alias-log-sentinel",
             "stateCiphertextHashes": ["qdrant-sec-private-oram-camel-state-ciphertext-hashes-alias-log-sentinel"],
-            "stateCiphertextSha256": "qdrant-sec-private-oram-camel-state-ciphertext-sha256-alias-log-sentinel",
             "oram_position_maps": ["qdrant-sec-private-oram-oram-position-maps-alias-log-sentinel"],
             "oram_position_map_backups": ["qdrant-sec-private-oram-oram-position-map-backups-alias-log-sentinel"],
             "oramPositionMaps": ["qdrant-sec-private-oram-camel-oram-position-maps-alias-log-sentinel"],
@@ -2435,7 +2434,6 @@ mod tests {
             "qdrant-sec-private-oram-camel-state-ciphertext-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-state-ciphertext-hash-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-state-ciphertext-hashes-alias-log-sentinel",
-            "qdrant-sec-private-oram-camel-state-ciphertext-sha256-alias-log-sentinel",
             "qdrant-sec-private-oram-oram-position-maps-alias-log-sentinel",
             "qdrant-sec-private-oram-oram-position-map-backups-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-oram-position-maps-alias-log-sentinel",
@@ -2446,6 +2444,40 @@ mod tests {
             "qdrant-sec-private-oram-stash-alias-log-sentinel",
         ] {
             assert!(!position_map_aliases_serialized.contains(leaked));
+        }
+
+        let mut client_state_sha256_aliases = json!({
+            "client_state_ciphertext_sha256": "qdrant-sec-private-oram-client-state-ciphertext-sha256-alias-log-sentinel",
+            "client_state_ciphertexts_sha256": ["qdrant-sec-private-oram-client-state-ciphertexts-sha256-alias-log-sentinel"],
+            "clientStateCiphertextSha256": "qdrant-sec-private-oram-camel-client-state-ciphertext-sha256-alias-log-sentinel",
+            "clientStateCiphertextsSha256": ["qdrant-sec-private-oram-camel-client-state-ciphertexts-sha256-alias-log-sentinel"],
+            "encrypted_client_state_ciphertext_sha256": "qdrant-sec-private-oram-encrypted-client-state-ciphertext-sha256-alias-log-sentinel",
+            "encrypted_client_state_ciphertexts_sha256": ["qdrant-sec-private-oram-encrypted-client-state-ciphertexts-sha256-alias-log-sentinel"],
+            "encryptedClientStateCiphertextSha256": "qdrant-sec-private-oram-camel-encrypted-client-state-ciphertext-sha256-alias-log-sentinel",
+            "encryptedClientStateCiphertextsSha256": ["qdrant-sec-private-oram-camel-encrypted-client-state-ciphertexts-sha256-alias-log-sentinel"],
+            "state_ciphertext_sha256": "qdrant-sec-private-oram-state-ciphertext-sha256-alias-log-sentinel",
+            "state_ciphertexts_sha256": ["qdrant-sec-private-oram-state-ciphertexts-sha256-alias-log-sentinel"],
+            "stateCiphertextSha256": "qdrant-sec-private-oram-camel-state-ciphertext-sha256-alias-log-sentinel",
+            "stateCiphertextsSha256": ["qdrant-sec-private-oram-camel-state-ciphertexts-sha256-alias-log-sentinel"],
+        });
+        redact_sensitive_log_fields(&mut client_state_sha256_aliases);
+        let client_state_sha256_aliases_serialized =
+            serde_json::to_string(&client_state_sha256_aliases).unwrap();
+        for leaked in [
+            "qdrant-sec-private-oram-client-state-ciphertext-sha256-alias-log-sentinel",
+            "qdrant-sec-private-oram-client-state-ciphertexts-sha256-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-client-state-ciphertext-sha256-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-client-state-ciphertexts-sha256-alias-log-sentinel",
+            "qdrant-sec-private-oram-encrypted-client-state-ciphertext-sha256-alias-log-sentinel",
+            "qdrant-sec-private-oram-encrypted-client-state-ciphertexts-sha256-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-encrypted-client-state-ciphertext-sha256-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-encrypted-client-state-ciphertexts-sha256-alias-log-sentinel",
+            "qdrant-sec-private-oram-state-ciphertext-sha256-alias-log-sentinel",
+            "qdrant-sec-private-oram-state-ciphertexts-sha256-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-state-ciphertext-sha256-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-state-ciphertexts-sha256-alias-log-sentinel",
+        ] {
+            assert!(!client_state_sha256_aliases_serialized.contains(leaked));
         }
 
         let mut plural_sensitive_aliases = json!({
@@ -2599,6 +2631,12 @@ mod tests {
                 },
                 "client_state_ciphertext": "client-state-ciphertext-a",
                 "state_ciphertext_hash": "client-state-ciphertext-hash-a",
+                "client_state_ciphertext_sha256": "client-state-ciphertext-sha256-a",
+                "client_state_ciphertexts_sha256": ["client-state-ciphertexts-sha256-a"],
+                "encrypted_client_state_ciphertext_sha256": "encrypted-client-state-ciphertext-sha256-a",
+                "encrypted_client_state_ciphertexts_sha256": ["encrypted-client-state-ciphertexts-sha256-a"],
+                "state_ciphertext_sha256": "state-ciphertext-sha256-a",
+                "state_ciphertexts_sha256": ["state-ciphertexts-sha256-a"],
                 "token_position_map": { "fetch-token-a": 99 },
                 "position_maps": [{ "node-a": 1 }]
             }
@@ -2630,6 +2668,12 @@ mod tests {
                 },
                 "client_state_ciphertext": "client-state-ciphertext-b",
                 "state_ciphertext_hash": "client-state-ciphertext-hash-b",
+                "client_state_ciphertext_sha256": "client-state-ciphertext-sha256-b",
+                "client_state_ciphertexts_sha256": ["client-state-ciphertexts-sha256-b"],
+                "encrypted_client_state_ciphertext_sha256": "encrypted-client-state-ciphertext-sha256-b",
+                "encrypted_client_state_ciphertexts_sha256": ["encrypted-client-state-ciphertexts-sha256-b"],
+                "state_ciphertext_sha256": "state-ciphertext-sha256-b",
+                "state_ciphertexts_sha256": ["state-ciphertexts-sha256-b"],
                 "token_position_map": { "fetch-token-b": 17 },
                 "position_maps": [{ "node-b": 2 }]
             }
@@ -2756,6 +2800,78 @@ mod tests {
                 "payloadOramLeaf": "private-oram-camel-payload-leaf-b"
             }
         });
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "clientStateCiphertextSha256",
+            json!("private-oram-camel-client-state-ciphertext-sha256-a"),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "clientStateCiphertextsSha256",
+            json!(["private-oram-camel-client-state-ciphertexts-sha256-a"]),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "encryptedClientStateCiphertextSha256",
+            json!("private-oram-camel-encrypted-client-state-ciphertext-sha256-a"),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "encryptedClientStateCiphertextsSha256",
+            json!(["private-oram-camel-encrypted-client-state-ciphertexts-sha256-a"]),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "stateCiphertextSha256",
+            json!("private-oram-camel-state-ciphertext-sha256-a"),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "stateCiphertextsSha256",
+            json!(["private-oram-camel-state-ciphertexts-sha256-a"]),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "clientStateCiphertextSha256",
+            json!("private-oram-camel-client-state-ciphertext-sha256-b"),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "clientStateCiphertextsSha256",
+            json!(["private-oram-camel-client-state-ciphertexts-sha256-b"]),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "encryptedClientStateCiphertextSha256",
+            json!("private-oram-camel-encrypted-client-state-ciphertext-sha256-b"),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "encryptedClientStateCiphertextsSha256",
+            json!(["private-oram-camel-encrypted-client-state-ciphertexts-sha256-b"]),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "stateCiphertextSha256",
+            json!("private-oram-camel-state-ciphertext-sha256-b"),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "stateCiphertextsSha256",
+            json!(["private-oram-camel-state-ciphertexts-sha256-b"]),
+        );
         insert_test_json_field(
             &mut camel_first,
             &["readBuckets"],
