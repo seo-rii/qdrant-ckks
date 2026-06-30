@@ -2279,7 +2279,7 @@ fn generic_vector_write_plan(
 
 fn ckks_vector_distance(
     params: &CollectionParams,
-    collection_name: &str,
+    _collection_name: &str,
     vector_name: &str,
 ) -> Result<Distance, StorageError> {
     let Some(vector_params) = params.vectors.get_params(vector_name) else {
@@ -2288,23 +2288,23 @@ fn ckks_vector_distance(
             .as_ref()
             .is_some_and(|sparse_vectors| sparse_vectors.contains_key(vector_name))
         {
-            return Err(StorageError::bad_input(format!(
-                "collection {collection_name} encrypted vector '{vector_name}' is sparse-only: encrypted_vector_sparse_unsupported",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted vector is sparse-only: encrypted_vector_sparse_unsupported",
+            ));
         }
-        return Err(StorageError::bad_input(format!(
-            "collection {collection_name} encrypted vector '{vector_name}' requires dense vector params: encrypted_vector_dense_vector_required",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector requires dense vector params: encrypted_vector_dense_vector_required",
+        ));
     };
     if vector_params.quantization_config.is_some() {
-        return Err(StorageError::bad_input(format!(
-            "collection {collection_name} encrypted vector '{vector_name}' uses vector quantization: encrypted_vector_quantization_unsupported",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector uses vector quantization: encrypted_vector_quantization_unsupported",
+        ));
     }
     if vector_params.multivector_config.is_some() {
-        return Err(StorageError::bad_input(format!(
-            "collection {collection_name} encrypted vector '{vector_name}' uses multivector config: encrypted_vector_multivector_unsupported",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector uses multivector config: encrypted_vector_multivector_unsupported",
+        ));
     }
 
     Ok(vector_params.distance)
@@ -20999,7 +20999,7 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains("encrypted_vector_sparse_unsupported")
-                    && description.contains("embedding")),
+                    && !description.contains("embedding")),
             "unexpected error: {err:?}",
         );
     }
