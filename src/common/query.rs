@@ -8446,28 +8446,26 @@ fn ckks_query_as_core_query(
                 .map(|query| QueryEnum::Context(NamedQuery::new(query, vector_name.to_string())))
         }
         Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Id(_)))) => {
-            Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' query cannot resolve point-id query vectors because plaintext vectors are not stored",
-            )))
+            Err(StorageError::bad_input(
+                "encrypted vector query cannot resolve point-id query vectors because plaintext vectors are not stored",
+            ))
         }
         Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::CkksEncryptedQuery(_)))) => {
-            Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' client CKKS query requires CKKS sidecar scoring",
-            )))
+            Err(StorageError::bad_input(
+                "encrypted vector client CKKS query requires CKKS sidecar scoring",
+            ))
         }
-        Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Vector(_)))) => {
-            Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' only supports dense query vectors",
-            )))
-        }
+        Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::Vector(_)))) => Err(
+            StorageError::bad_input("encrypted vector search only supports dense query vectors"),
+        ),
         Some(Query::Vector(VectorQuery::Nearest(VectorInputInternal::InferredVector(_)))) => {
             Err(StorageError::bad_input(format!(
                 "encrypted vector search does not allow inference-derived query vectors; use a client-encrypted CKKS query envelope or stored point-id query",
             )))
         }
-        _ => Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' only supports nearest-neighbor dense query, raw-dense recommend, raw-dense discover, or raw-dense context",
-        ))),
+        _ => Err(StorageError::bad_input(
+            "encrypted vector query only supports nearest-neighbor dense query, raw-dense recommend, raw-dense discover, or raw-dense context",
+        )),
     }
 }
 
@@ -8492,7 +8490,7 @@ fn ckks_recommend_query_as_dense_search_vector(
 
 fn vector_inputs_as_dense_vectors(
     inputs: &[VectorInputInternal],
-    vector_name: &str,
+    _vector_name: &str,
     role: &str,
 ) -> Result<Vec<VectorInternal>, StorageError> {
     inputs
@@ -8502,16 +8500,16 @@ fn vector_inputs_as_dense_vectors(
                 Ok(VectorInternal::Dense(vector.clone()))
             }
             VectorInputInternal::Vector(_) => Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' query only supports raw dense {role} examples",
+                "encrypted vector query only supports raw dense {role} examples",
             ))),
             VectorInputInternal::InferredVector(_) => Err(StorageError::bad_input(format!(
                 "encrypted vector query does not allow inference-derived {role} examples",
             ))),
             VectorInputInternal::Id(_) => Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' query cannot resolve point-id {role} examples because plaintext vectors are not stored",
+                "encrypted vector query cannot resolve point-id {role} examples because plaintext vectors are not stored",
             ))),
             VectorInputInternal::CkksEncryptedQuery(_) => Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' query does not support client CKKS encrypted {role} examples in recommend/discover/context inputs",
+                "encrypted vector query does not support client CKKS encrypted {role} examples in recommend/discover/context inputs",
             ))),
         })
         .collect()
@@ -8530,7 +8528,7 @@ fn ckks_recommend_query_as_core_recommend(
 
 fn ckks_discover_query_as_core_discover(
     discover: &segment::vector_storage::query::DiscoverQuery<VectorInputInternal>,
-    vector_name: &str,
+    _vector_name: &str,
 ) -> Result<segment::vector_storage::query::DiscoverQuery<VectorInternal>, StorageError> {
     let target = match &discover.target {
         VectorInputInternal::Vector(VectorInternal::Dense(target)) => target,
@@ -8540,9 +8538,9 @@ fn ckks_discover_query_as_core_discover(
             )));
         }
         _ => {
-            return Err(StorageError::bad_input(format!(
-                "encrypted vector '{vector_name}' discover cannot resolve point-id or non-dense target examples because plaintext vectors are not stored",
-            )));
+            return Err(StorageError::bad_input(
+                "encrypted vector discover cannot resolve point-id or non-dense target examples because plaintext vectors are not stored",
+            ));
         }
     };
     let pairs = discover
@@ -8557,9 +8555,9 @@ fn ckks_discover_query_as_core_discover(
                     )));
                 }
                 _ => {
-                    return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{vector_name}' discover cannot resolve point-id or non-dense positive context examples because plaintext vectors are not stored",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "encrypted vector discover cannot resolve point-id or non-dense positive context examples because plaintext vectors are not stored",
+                    ));
                 }
             };
             let negative = match &pair.negative {
@@ -8570,9 +8568,9 @@ fn ckks_discover_query_as_core_discover(
                     )));
                 }
                 _ => {
-                    return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{vector_name}' discover cannot resolve point-id or non-dense negative context examples because plaintext vectors are not stored",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "encrypted vector discover cannot resolve point-id or non-dense negative context examples because plaintext vectors are not stored",
+                    ));
                 }
             };
             Ok(ContextPair {
@@ -8590,7 +8588,7 @@ fn ckks_discover_query_as_core_discover(
 
 fn ckks_context_query_as_core_context(
     context: &segment::vector_storage::query::ContextQuery<VectorInputInternal>,
-    vector_name: &str,
+    _vector_name: &str,
 ) -> Result<segment::vector_storage::query::ContextQuery<VectorInternal>, StorageError> {
     let pairs = context
         .pairs
@@ -8604,9 +8602,9 @@ fn ckks_context_query_as_core_context(
                     )));
                 }
                 _ => {
-                    return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{vector_name}' context query cannot resolve point-id or non-dense positive examples because plaintext vectors are not stored",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "encrypted vector context query cannot resolve point-id or non-dense positive examples because plaintext vectors are not stored",
+                    ));
                 }
             };
             let negative = match &pair.negative {
@@ -8617,9 +8615,9 @@ fn ckks_context_query_as_core_context(
                     )));
                 }
                 _ => {
-                    return Err(StorageError::bad_input(format!(
-                        "encrypted vector '{vector_name}' context query cannot resolve point-id or non-dense negative examples because plaintext vectors are not stored",
-                    )));
+                    return Err(StorageError::bad_input(
+                        "encrypted vector context query cannot resolve point-id or non-dense negative examples because plaintext vectors are not stored",
+                    ));
                 }
             };
             Ok(ContextPair {
@@ -10783,6 +10781,65 @@ mod tests {
                 if description.contains("inference-derived negative examples")
                     && !description.contains("embedding")
         ));
+    }
+
+    #[test]
+    fn ckks_query_rejects_unsupported_vector_input_shapes_without_vector_name() {
+        let assert_redacted = |err: StorageError, expected: &str| {
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains(expected),
+                "unexpected validation error: {rendered}",
+            );
+            assert!(
+                !rendered.contains("embedding"),
+                "validation error leaked vector name: {rendered}",
+            );
+        };
+
+        let err = ckks_query_as_core_query(
+            &Some(Query::Vector(VectorQuery::Nearest(
+                VectorInputInternal::Id(1.into()),
+            ))),
+            "embedding",
+        )
+        .expect_err("CKKS query must reject point-id nearest inputs without plaintext vectors");
+        assert_redacted(err, "point-id query vectors");
+
+        let err = ckks_query_as_core_query(&None, "embedding")
+            .expect_err("CKKS query must reject unsupported query shapes");
+        assert_redacted(err, "only supports nearest-neighbor dense query");
+
+        let err = vector_inputs_as_dense_vectors(
+            &[VectorInputInternal::Id(1.into())],
+            "embedding",
+            "positive",
+        )
+        .expect_err("CKKS recommend must reject point-id examples without plaintext vectors");
+        assert_redacted(err, "point-id positive examples");
+
+        let err = ckks_discover_query_as_core_discover(
+            &segment::vector_storage::query::DiscoverQuery::new(
+                VectorInputInternal::Id(1.into()),
+                vec![ContextPair {
+                    positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![0.3, 0.4])),
+                    negative: VectorInputInternal::Vector(VectorInternal::Dense(vec![0.5, 0.6])),
+                }],
+            ),
+            "embedding",
+        )
+        .expect_err("CKKS discover must reject point-id target without plaintext vectors");
+        assert_redacted(err, "point-id or non-dense target examples");
+
+        let err = ckks_context_query_as_core_context(
+            &segment::vector_storage::query::ContextQuery::new(vec![ContextPair {
+                positive: VectorInputInternal::Vector(VectorInternal::Dense(vec![0.1, 0.2])),
+                negative: VectorInputInternal::Id(1.into()),
+            }]),
+            "embedding",
+        )
+        .expect_err("CKKS context must reject point-id context examples without plaintext vectors");
+        assert_redacted(err, "point-id or non-dense negative examples");
     }
 
     #[test]
