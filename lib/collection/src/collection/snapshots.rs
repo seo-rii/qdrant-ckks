@@ -4250,6 +4250,7 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("current epoch/root"));
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert_private_result_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -4311,6 +4312,7 @@ mod tests {
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
         assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
+        assert_private_result_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -4373,6 +4375,7 @@ mod tests {
         assert!(rendered.contains("fixed ciphertext size"));
         assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert_private_result_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -4440,6 +4443,7 @@ mod tests {
         assert!(rendered.contains("bucket commitment context"));
         assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert_private_result_restore_error_redacts_common(&rendered);
     }
 
     fn assert_private_result_oram_restore_preflight_rejects_missing_bucket(missing_bucket_id: u64) {
@@ -4471,6 +4475,7 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert_private_result_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -5539,6 +5544,7 @@ mod tests {
         assert!(rendered.contains("current epoch/root"));
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains("text"), "{rendered}");
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -5599,6 +5605,7 @@ mod tests {
         assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
         assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
         assert!(!rendered.contains("text"), "{rendered}");
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -5663,6 +5670,7 @@ mod tests {
         assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -5732,6 +5740,7 @@ mod tests {
         assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -5934,6 +5943,7 @@ mod tests {
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!rendered.contains("buckets"), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -6100,6 +6110,7 @@ mod tests {
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!rendered.contains("buckets"), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -6159,5 +6170,6 @@ mod tests {
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!rendered.contains("buckets"), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 }
