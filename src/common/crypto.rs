@@ -23353,6 +23353,11 @@ mod tests {
             "client.state",
             "position.map",
             "stashBackups.json",
+            "client_state_ciphertext_hashes.json",
+            "encrypted_client_state.json",
+            "encrypted_client_state_ciphertext_hashes.json",
+            "state_ciphertext_hashes.json",
+            "token_position_map_backups.json",
         ];
         let settings = Settings {
             crypto: CryptoSettings {
