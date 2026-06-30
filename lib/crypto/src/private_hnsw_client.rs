@@ -4589,7 +4589,13 @@ fn read_array_32(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], PrivateHn
 mod tests {
     use super::*;
     use crate::OramKind;
-    use crate::private_result_oram::PrivateResultOramTokenFetchAccess;
+    use crate::control_plane::{PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING};
+    use crate::private_result_oram::{
+        PrivateResultOramFetchTokenPosition, PrivateResultOramManifest,
+        PrivateResultOramTokenFetchAccess,
+        plan_private_result_oram_ordered_read_bucket_batches_for_fetch_tokens,
+        private_result_oram_bucket_count,
+    };
 
     #[test]
     fn private_hnsw_client_error_display_does_not_reflect_structured_values() {
@@ -4995,6 +5001,32 @@ mod tests {
             dummy_node_count: 24_288,
             result_privacy: ResultPrivacyMode::IdsVisible,
             owner_signing_key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+            created_at_unix: 1_770_000_000,
+        }
+    }
+
+    fn result_oram_fetch_manifest() -> PrivateResultOramManifest {
+        PrivateResultOramManifest {
+            version: 1,
+            provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+            binding: PRIVATE_RESULT_ORAM_BINDING.to_string(),
+            collection_id: "collection-uuid-1".to_string(),
+            key_id: "tenant-a/payload-private-rk".to_string(),
+            rk_id: "tenant-a/payload-private-rk".to_string(),
+            rk_epoch: 7,
+            oram: OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: 4,
+                block_size_bytes: 256,
+                tree_height: 2,
+                path_batch_size: 2,
+            },
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+            bucket_count: private_result_oram_bucket_count(2).unwrap(),
+            logical_result_count: 2,
+            dummy_result_count: 2,
+            owner_signing_key_id: "tenant-a/private-result-signing-v1".to_string(),
             created_at_unix: 1_770_000_000,
         }
     }
@@ -7543,6 +7575,112 @@ mod tests {
             plan.payload_fetch_tokens,
             vec![[11; 32], [12; 32], [99; 32], [100; 32]]
         );
+    }
+
+    #[test]
+    fn private_result_fetch_plan_feeds_ordered_result_oram_read_plan_and_finalizer() {
+        let result = PrivateHnswSearchResult {
+            hits: vec![
+                PrivateHnswSearchHit {
+                    node_id: [1; 32],
+                    point_token: [21; 32],
+                    payload_fetch_token: Some([11; 32]),
+                    distance: 0.25,
+                },
+                PrivateHnswSearchHit {
+                    node_id: [2; 32],
+                    point_token: [22; 32],
+                    payload_fetch_token: Some([12; 32]),
+                    distance: 0.5,
+                },
+            ],
+            accessed_leaf_labels: vec![],
+            completed_steps: 2,
+        };
+        let fetch_plan = plan_private_hnsw_private_result_fetch_tokens(
+            ResultPrivacyMode::PrivatePayloadOramRequired,
+            &result,
+            4,
+            &[[99; 32], [100; 32]],
+        )
+        .unwrap()
+        .unwrap();
+        let token_positions = [
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [11; 32],
+                leaf: 2,
+            },
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [12; 32],
+                leaf: 2,
+            },
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [99; 32],
+                leaf: 1,
+            },
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [100; 32],
+                leaf: 3,
+            },
+        ];
+        let ordered = plan_private_result_oram_ordered_read_bucket_batches_for_fetch_tokens(
+            &result_oram_fetch_manifest(),
+            &fetch_plan.payload_fetch_tokens,
+            &token_positions,
+        )
+        .unwrap();
+
+        assert_ne!(
+            ordered.payload_fetch_tokens,
+            fetch_plan.payload_fetch_tokens
+        );
+        assert_eq!(ordered.read_plan.token_count, fetch_plan.fixed_result_k);
+        assert_eq!(ordered.read_plan.path_batch_size, 2);
+        assert_eq!(ordered.read_plan.batches.len(), 2);
+        let token_leaves = token_positions
+            .iter()
+            .map(|position| (position.payload_fetch_token, position.leaf))
+            .collect::<BTreeMap<_, _>>();
+        for token_batch in ordered
+            .payload_fetch_tokens
+            .chunks(ordered.read_plan.path_batch_size)
+        {
+            let batch_leaves = token_batch
+                .iter()
+                .map(|token| token_leaves[token])
+                .collect::<BTreeSet<_>>();
+            assert_eq!(batch_leaves.len(), token_batch.len());
+        }
+        for batch in &ordered.read_plan.batches {
+            assert_eq!(batch.token_count, 2);
+            assert_eq!(batch.bucket_ids.len(), 6);
+        }
+
+        let token_fetch = PrivateResultOramTokenFetchResult {
+            accesses: ordered
+                .payload_fetch_tokens
+                .iter()
+                .map(|token| match token[0] {
+                    11 => result_token_access(*token, [21; 32], vec![1, 2, 3]),
+                    12 => result_token_access(*token, [22; 32], vec![4, 5, 6]),
+                    99 => result_token_access(*token, [199; 32], vec![9]),
+                    100 => result_token_access(*token, [200; 32], vec![10]),
+                    _ => unreachable!("unexpected fixture token"),
+                })
+                .collect(),
+            updated_buckets: Vec::new(),
+        };
+        let payloads =
+            finalize_private_hnsw_private_result_fetch(&result, &fetch_plan, &token_fetch).unwrap();
+
+        assert_eq!(payloads.real_result_count, 2);
+        assert_eq!(payloads.fixed_result_k, 4);
+        assert_eq!(payloads.fetched_token_count, 4);
+        assert_eq!(payloads.results.len(), 2);
+        assert_eq!(payloads.results[0].payload_fetch_token, [11; 32]);
+        assert_eq!(payloads.results[0].payload, vec![1, 2, 3]);
+        assert_eq!(payloads.results[1].payload_fetch_token, [12; 32]);
+        assert_eq!(payloads.results[1].payload, vec![4, 5, 6]);
     }
 
     #[test]
