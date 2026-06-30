@@ -12585,6 +12585,10 @@ mod tests {
     }
 
     const PRIVATE_RESULT_ORAM_PAYLOAD_ALIAS_SENTINELS: &[&str] = &[
+        "clientState",
+        "clientStates",
+        "client_state",
+        "client_states",
         "clientStateBackup",
         "clientStateBackups",
         "client_state_backup",
@@ -12605,6 +12609,9 @@ mod tests {
         "client_state_ciphertexts_sha256",
         "encryptedClientStateBackup",
         "encryptedClientStateBackups",
+        "encryptedClientState",
+        "encryptedClientStates",
+        "encrypted_client_states",
         "encrypted_client_state_backups",
         "encryptedClientStateSnapshot",
         "encryptedClientStateSnapshots",

@@ -2009,6 +2009,10 @@ mod tests {
             assert_no_private_oram_config_leak(
                 &rendered,
                 &[
+                    "clientState",
+                    "clientStates",
+                    "client_state",
+                    "client_states",
                     "clientStateBackup",
                     "clientStateBackups",
                     "client_state_backup",
@@ -2029,6 +2033,9 @@ mod tests {
                     "client_state_ciphertexts_sha256",
                     "encryptedClientStateBackup",
                     "encryptedClientStateBackups",
+                    "encryptedClientState",
+                    "encryptedClientStates",
+                    "encrypted_client_states",
                     "encryptedClientStateSnapshot",
                     "encryptedClientStateSnapshots",
                     "encrypted_client_state_backups",
