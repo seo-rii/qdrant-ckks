@@ -84,6 +84,20 @@ fn ciphertext_tampering_fails_authentication() {
 }
 
 #[test]
+fn empty_ciphertext_reports_ciphertext_length_error() {
+    let cipher = fixed_cipher();
+    let mut envelope = cipher
+        .encrypt(b"authenticated", payload_context("42"))
+        .unwrap();
+    envelope.ciphertext.clear();
+
+    assert_eq!(
+        cipher.decrypt(&envelope, payload_context("42")),
+        Err(EncryptionError::InvalidCiphertextLength),
+    );
+}
+
+#[test]
 fn envelope_metadata_is_rejected_before_decryption() {
     let cipher = fixed_cipher();
     let mut envelope = cipher.encrypt(b"metadata", payload_context("42")).unwrap();
