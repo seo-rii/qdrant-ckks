@@ -44,8 +44,7 @@ pub fn json_to_proto(json_value: serde_json::Value) -> Value {
 }
 
 pub fn json_path_from_proto(a: &str) -> Result<JsonPath, Status> {
-    JsonPath::try_from(a)
-        .map_err(|_| Status::invalid_argument(format!("Invalid json path: \'{a}\'")))
+    JsonPath::try_from(a).map_err(|_| Status::invalid_argument("Invalid json path"))
 }
 
 pub fn proto_to_payloads(proto: HashMap<String, Value>) -> Result<segment::types::Payload, Status> {
@@ -218,6 +217,15 @@ mod tests {
         let result = proto_to_json(proto);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn json_path_from_proto_rejects_invalid_path_without_reflecting_it() {
+        let sentinel = "json-path-secret-sentinel";
+        let err = json_path_from_proto(&format!("[{sentinel}]")).unwrap_err();
+
+        assert_eq!(err.message(), "Invalid json path");
+        assert!(!err.message().contains(sentinel));
     }
 
     #[test]
