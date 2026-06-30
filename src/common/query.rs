@@ -1104,11 +1104,9 @@ async fn ckks_vector_search_points_with_scoring(
     if matches!(candidate_scan_limit, Some(0)) || limit == 0 {
         return Ok(Vec::new());
     }
-    let distance = plan.distance_for_vector(vector_name).ok_or_else(|| {
-        StorageError::service_error(format!(
-            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-        ))
-    })?;
+    let distance = plan
+        .distance_for_vector(vector_name)
+        .ok_or_else(ckks_search_plan_lost_rule_error)?;
     let score_order = match &scoring {
         CkksSidecarScoring::Nearest { .. }
         | CkksSidecarScoring::NearestResolved { .. }
@@ -1253,11 +1251,7 @@ async fn ckks_vector_search_points_with_scoring(
             signature_key_id,
             signature_b64,
         )?
-        .ok_or_else(|| {
-            StorageError::service_error(format!(
-                "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-            ))
-        })?;
+        .ok_or_else(ckks_search_plan_lost_rule_error)?;
         record_ckks_client_query_nonce(
             collection_id,
             envelope_vector_name,
@@ -1510,20 +1504,14 @@ async fn ckks_vector_search_points_with_scoring(
                         &encrypted_items,
                         query_values,
                     )?
-                    .ok_or_else(|| {
-                        StorageError::service_error(format!(
-                            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                        ))
-                    })?,
-                CkksSidecarScoring::NearestResolved { query } => {
-                    ckks_score_query_source_batch(
-                        collection_name,
-                        vector_name,
-                        plan,
-                        query,
-                        &encrypted_items,
-                    )?
-                }
+                    .ok_or_else(ckks_search_plan_lost_rule_error)?,
+                CkksSidecarScoring::NearestResolved { query } => ckks_score_query_source_batch(
+                    collection_name,
+                    vector_name,
+                    plan,
+                    query,
+                    &encrypted_items,
+                )?,
                 CkksSidecarScoring::StoredNearest {
                     query_point_id,
                     query_encrypted,
@@ -1535,20 +1523,14 @@ async fn ckks_vector_search_points_with_scoring(
                         query_encrypted,
                         &encrypted_items,
                     )?
-                    .ok_or_else(|| {
-                        StorageError::service_error(format!(
-                            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                        ))
-                    })?,
-                CkksSidecarScoring::NearestMmr { query, .. } => {
-                    ckks_score_query_source_batch(
-                        collection_name,
-                        vector_name,
-                        plan,
-                        query,
-                        &encrypted_items,
-                    )?
-                }
+                    .ok_or_else(ckks_search_plan_lost_rule_error)?,
+                CkksSidecarScoring::NearestMmr { query, .. } => ckks_score_query_source_batch(
+                    collection_name,
+                    vector_name,
+                    plan,
+                    query,
+                    &encrypted_items,
+                )?,
                 CkksSidecarScoring::RecommendBestScore {
                     positives,
                     negatives,
@@ -1562,11 +1544,7 @@ async fn ckks_vector_search_points_with_scoring(
                                 &encrypted_items,
                                 query_values,
                             )?
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                                ))
-                            })?;
+                            .ok_or_else(ckks_search_plan_lost_rule_error)?;
                         for (current, score) in positive_scores.iter_mut().zip(batch_scores) {
                             *current = current.max(score);
                         }
@@ -1581,11 +1559,7 @@ async fn ckks_vector_search_points_with_scoring(
                                 &encrypted_items,
                                 query_values,
                             )?
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                                ))
-                            })?;
+                            .ok_or_else(ckks_search_plan_lost_rule_error)?;
                         for (current, score) in negative_scores.iter_mut().zip(batch_scores) {
                             *current = current.max(score);
                         }
@@ -1695,11 +1669,7 @@ async fn ckks_vector_search_points_with_scoring(
                                 &encrypted_items,
                                 query_values,
                             )?
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                                ))
-                            })?;
+                            .ok_or_else(ckks_search_plan_lost_rule_error)?;
                         for (total, score) in total_scores.iter_mut().zip(batch_scores) {
                             *total += score;
                         }
@@ -1712,11 +1682,7 @@ async fn ckks_vector_search_points_with_scoring(
                                 &encrypted_items,
                                 query_values,
                             )?
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                                ))
-                            })?;
+                            .ok_or_else(ckks_search_plan_lost_rule_error)?;
                         for (total, score) in total_scores.iter_mut().zip(batch_scores) {
                             *total -= score;
                         }
@@ -1762,11 +1728,7 @@ async fn ckks_vector_search_points_with_scoring(
                             &encrypted_items,
                             target,
                         )?
-                        .ok_or_else(|| {
-                            StorageError::service_error(format!(
-                                "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                            ))
-                        })?;
+                        .ok_or_else(ckks_search_plan_lost_rule_error)?;
                     let mut rank_scores = vec![0i32; encrypted_items.len()];
                     for (positive, negative) in pairs {
                         let positive_scores = plan
@@ -1776,11 +1738,7 @@ async fn ckks_vector_search_points_with_scoring(
                                 &encrypted_items,
                                 positive,
                             )?
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                                ))
-                            })?;
+                            .ok_or_else(ckks_search_plan_lost_rule_error)?;
                         let negative_scores = plan
                             .score_encrypted_query_batch(
                                 collection_name,
@@ -1788,11 +1746,7 @@ async fn ckks_vector_search_points_with_scoring(
                                 &encrypted_items,
                                 negative,
                             )?
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                                ))
-                            })?;
+                            .ok_or_else(ckks_search_plan_lost_rule_error)?;
                         for ((rank, positive), negative) in rank_scores
                             .iter_mut()
                             .zip(positive_scores)
@@ -1808,9 +1762,7 @@ async fn ckks_vector_search_points_with_scoring(
                     target_scores
                         .into_iter()
                         .zip(rank_scores)
-                        .map(|(target_score, rank)| {
-                            rank as f32 + scaled_fast_sigmoid(target_score)
-                        })
+                        .map(|(target_score, rank)| rank as f32 + scaled_fast_sigmoid(target_score))
                         .collect()
                 }
                 CkksSidecarScoring::DiscoverResolved { target, pairs } => {
@@ -1852,9 +1804,7 @@ async fn ckks_vector_search_points_with_scoring(
                     target_scores
                         .into_iter()
                         .zip(rank_scores)
-                        .map(|(target_score, rank)| {
-                            rank as f32 + scaled_fast_sigmoid(target_score)
-                        })
+                        .map(|(target_score, rank)| rank as f32 + scaled_fast_sigmoid(target_score))
                         .collect()
                 }
                 CkksSidecarScoring::Context { pairs } => {
@@ -1867,11 +1817,7 @@ async fn ckks_vector_search_points_with_scoring(
                                 &encrypted_items,
                                 positive,
                             )?
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                                ))
-                            })?;
+                            .ok_or_else(ckks_search_plan_lost_rule_error)?;
                         let negative_scores = plan
                             .score_encrypted_query_batch(
                                 collection_name,
@@ -1879,11 +1825,7 @@ async fn ckks_vector_search_points_with_scoring(
                                 &encrypted_items,
                                 negative,
                             )?
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                                ))
-                            })?;
+                            .ok_or_else(ckks_search_plan_lost_rule_error)?;
                         for ((rank, positive), negative) in rank_scores
                             .iter_mut()
                             .zip(positive_scores)
@@ -2084,11 +2026,7 @@ async fn ckks_vector_search_points_with_scoring(
                                 selected_encrypted,
                                 &candidate_item,
                             )?
-                            .ok_or_else(|| {
-                                StorageError::service_error(format!(
-                                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                                ))
-                            })?
+                            .ok_or_else(ckks_search_plan_lost_rule_error)?
                             .into_iter()
                             .next()
                             .ok_or_else(|| {
@@ -2373,11 +2311,7 @@ fn ckks_score_query_source_batch(
         )?,
     };
 
-    scores.ok_or_else(|| {
-        StorageError::service_error(format!(
-            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-        ))
-    })
+    scores.ok_or_else(ckks_search_plan_lost_rule_error)
 }
 
 fn ckks_client_encrypted_query_source<'a>(
@@ -3232,11 +3166,7 @@ fn ckks_sidecar_score_hnsw_query_batch(
         )?,
     };
 
-    scores.ok_or_else(|| {
-        StorageError::service_error(format!(
-            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-        ))
-    })
+    scores.ok_or_else(ckks_search_plan_lost_rule_error)
 }
 
 fn ckks_sidecar_indexed_records(
@@ -6629,6 +6559,10 @@ fn ckks_point_id_query_error(reason: &'static str) -> StorageError {
     StorageError::bad_input(format!("encrypted vector point-id query failed: {reason}"))
 }
 
+fn ckks_search_plan_lost_rule_error() -> StorageError {
+    StorageError::service_error("CKKS vector search plan lost encrypted vector rule")
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn ckks_vector_input_as_query_source<'a>(
     collection: &collection::collection::Collection,
@@ -8776,11 +8710,9 @@ async fn ckks_vector_search_points_matrix(
     ensure_ckks_matrix_budget(request.sample_size, request.limit_per_sample)?;
 
     let vector_name = request.using.as_str();
-    let distance = plan.distance_for_vector(vector_name).ok_or_else(|| {
-        StorageError::service_error(format!(
-            "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-        ))
-    })?;
+    let distance = plan
+        .distance_for_vector(vector_name)
+        .ok_or_else(ckks_search_plan_lost_rule_error)?;
     let score_order = distance.distance_order();
     let mut sampled = Vec::with_capacity(request.sample_size);
 
@@ -8840,11 +8772,7 @@ async fn ckks_vector_search_points_matrix(
                 &query.encrypted,
                 &encrypted_items,
             )?
-            .ok_or_else(|| {
-                StorageError::service_error(format!(
-                    "CKKS vector search plan lost rule for encrypted vector '{vector_name}'",
-                ))
-            })?;
+            .ok_or_else(ckks_search_plan_lost_rule_error)?;
         let mut scored = sampled
             .iter()
             .zip(scores)
@@ -12346,6 +12274,15 @@ mod tests {
             query_values: source.as_slice(),
         };
         assert_eq!(ckks_sidecar_scoring_source_batches(&scoring), 1);
+    }
+
+    #[test]
+    fn ckks_search_plan_lost_rule_error_redacts_vector_name() {
+        let err = ckks_search_plan_lost_rule_error();
+        let rendered = err.to_string();
+        assert!(rendered.contains("CKKS vector search plan lost encrypted vector rule"));
+        assert!(!rendered.contains("embedding"));
+        assert!(!rendered.contains("encrypted vector '"));
     }
 
     #[test]
