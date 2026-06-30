@@ -3003,9 +3003,9 @@ fn grpc_ckks_encrypted_query_to_rest_named_vector(
     vector_name: Option<String>,
     query: CkksEncryptedQueryVector,
 ) -> Result<rest::NamedVectorStruct, Status> {
-    query.validate().map_err(|err| {
-        Status::invalid_argument(format!("Invalid CKKS encrypted query vector: {err}"))
-    })?;
+    query
+        .validate()
+        .map_err(|_| Status::invalid_argument("Invalid CKKS encrypted query vector"))?;
     Ok(rest::NamedVectorStruct::CkksEncryptedQuery(
         rest::NamedCkksEncryptedQueryVector {
             name: Some(vector_name.unwrap_or_else(|| DEFAULT_VECTOR_NAME.to_string())),
@@ -3808,5 +3808,7 @@ mod tests {
             err.message()
                 .contains("Invalid CKKS encrypted query vector")
         );
+        assert!(!err.message().contains("not base64url!"));
+        assert!(!err.message().contains("context_digest"));
     }
 }

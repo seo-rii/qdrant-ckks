@@ -419,9 +419,9 @@ fn convert_vector_input_with_inferred(
             )))
         }
         Variant::CkksEncryptedQuery(query) => {
-            query.validate().map_err(|err| {
-                Status::invalid_argument(format!("Invalid CKKS encrypted query vector: {err}"))
-            })?;
+            query
+                .validate()
+                .map_err(|_| Status::invalid_argument("Invalid CKKS encrypted query vector"))?;
             Ok(VectorInputInternal::CkksEncryptedQuery(
                 CkksEncryptedQueryInput {
                     version: query.version.try_into().map_err(|_| {
@@ -635,6 +635,8 @@ mod tests {
             err.message()
                 .contains("Invalid CKKS encrypted query vector")
         );
+        assert!(!err.message().contains("not base64url!"));
+        assert!(!err.message().contains("context_digest"));
     }
 
     #[test]
