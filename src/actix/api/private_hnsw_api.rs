@@ -516,6 +516,16 @@ mod private_hnsw_rest_tests {
             "docs_private_result_oram_v1",
             "private_hnsw_oram",
             "private_result_oram",
+            "clientStateBackups",
+            "clientStateCiphertext",
+            "encryptedClientStateBackups",
+            "encryptedClientStateCiphertextHash",
+            "oramPositionMapBackups",
+            "positionMapBackups",
+            "stashBackups",
+            "stateCiphertext",
+            "stateCiphertextHash",
+            "tokenPositionMapBackups",
         ] {
             assert!(
                 !rendered.contains(forbidden),
@@ -544,6 +554,16 @@ mod private_hnsw_rest_tests {
             "docs_private_result_oram_v1",
             "private_hnsw_oram",
             "private_result_oram",
+            "clientStateBackups",
+            "clientStateCiphertext",
+            "encryptedClientStateBackups",
+            "encryptedClientStateCiphertextHash",
+            "oramPositionMapBackups",
+            "positionMapBackups",
+            "stashBackups",
+            "stateCiphertext",
+            "stateCiphertextHash",
+            "tokenPositionMapBackups",
         ] {
             assert!(
                 !rendered.contains(forbidden),
