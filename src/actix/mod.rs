@@ -882,11 +882,18 @@ mod tests {
         );
         for session_alias in [
             "clientStateBackups-sentinel",
+            "client_state_ciphertext-sentinel",
+            "encrypted_client_state-sentinel",
+            "encrypted_client_state_ciphertext-sentinel",
             "oramPositionMapBackups-sentinel",
+            "oram_position_map_backups-sentinel",
             "positionMapBackups-sentinel",
+            "position_map_backups-sentinel",
             "stashBackups-sentinel",
             "stateCiphertext-sentinel",
+            "state_ciphertext-sentinel",
             "tokenPositionMapBackups-sentinel",
+            "token_position_map_backups-sentinel",
         ] {
             assert_eq!(
                 redact_private_oram_access_path(&format!(
@@ -921,10 +928,16 @@ mod tests {
         );
         for session_alias in [
             "clientStateBackups-sentinel",
+            "client_state_ciphertext-sentinel",
             "oramPositionMapBackups-sentinel",
+            "oram_position_map_backups-sentinel",
             "positionMapBackups-sentinel",
+            "position_map_backups-sentinel",
             "stashBackups-sentinel",
             "stateCiphertext-sentinel",
+            "state_ciphertext-sentinel",
+            "state_ciphertext_hash-sentinel",
+            "token_position_map_backups-sentinel",
         ] {
             assert_eq!(
                 redact_private_oram_access_path(&format!(
@@ -1129,12 +1142,33 @@ mod tests {
             (
                 actix_test::TestRequest::post()
                     .uri(
+                        "/collections/docs/private-hnsw/text/session/client_state_ciphertext-sentinel/read_paths?token=query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-hnsw/text/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
+                ["client_state_ciphertext-sentinel", "query-sentinel"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
                         "/collections/docs/private-hnsw/text/session/encryptedClientStateCiphertextHash-sentinel/read_paths?token=query-sentinel",
                     )
                     .to_srv_request(),
                 "POST /collections/docs/private-hnsw/text/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
                 [
                     "encryptedClientStateCiphertextHash-sentinel",
+                    "query-sentinel",
+                ],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-hnsw/text/session/encrypted_client_state_ciphertext_hash-sentinel/read_paths?token=query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-hnsw/text/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
+                [
+                    "encrypted_client_state_ciphertext_hash-sentinel",
                     "query-sentinel",
                 ],
             ),
@@ -1159,6 +1193,15 @@ mod tests {
             (
                 actix_test::TestRequest::post()
                     .uri(
+                        "/collections/docs/private-result-oram/session/token_position_map_backups-sentinel/read_buckets?bucket_ids=query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
+                ["token_position_map_backups-sentinel", "query-sentinel"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
                         "/collections/docs/private-result-oram/session/stateCiphertext-sentinel/read_buckets?bucket_ids=query-sentinel",
                     )
                     .to_srv_request(),
@@ -1174,6 +1217,15 @@ mod tests {
                 "POST /collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
                 ["stateCiphertextHash-sentinel", "query-sentinel"],
             ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-result-oram/session/state_ciphertext_hash-sentinel/read_buckets?bucket_ids=query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
+                ["state_ciphertext_hash-sentinel", "query-sentinel"],
+            ),
         ];
 
         for (request, expected, sentinels) in cases {
@@ -1186,11 +1238,18 @@ mod tests {
 
         for sentinel in [
             "clientStateBackups-sentinel",
+            "client_state_ciphertext-sentinel",
+            "encrypted_client_state-sentinel",
+            "encrypted_client_state_ciphertext-sentinel",
             "oramPositionMapBackups-sentinel",
+            "oram_position_map_backups-sentinel",
             "positionMapBackups-sentinel",
+            "position_map_backups-sentinel",
             "stashBackups-sentinel",
             "stateCiphertext-sentinel",
+            "state_ciphertext-sentinel",
             "tokenPositionMapBackups-sentinel",
+            "token_position_map_backups-sentinel",
         ] {
             let uri = format!(
                 "/collections/docs/private-hnsw/text/session/{sentinel}/read_paths?token=query-sentinel"
@@ -1207,10 +1266,16 @@ mod tests {
 
         for sentinel in [
             "clientStateBackups-sentinel",
+            "client_state_ciphertext-sentinel",
             "oramPositionMapBackups-sentinel",
+            "oram_position_map_backups-sentinel",
             "positionMapBackups-sentinel",
+            "position_map_backups-sentinel",
             "stashBackups-sentinel",
             "stateCiphertext-sentinel",
+            "state_ciphertext-sentinel",
+            "state_ciphertext_hash-sentinel",
+            "token_position_map_backups-sentinel",
         ] {
             let uri = format!(
                 "/collections/docs/private-result-oram/session/{sentinel}/read_buckets?bucket_ids=query-sentinel"
