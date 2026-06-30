@@ -115,9 +115,9 @@ impl Collection {
                     "crypto migration requires generic collection encryption config",
                 ));
             };
-            let next_encryption = plan.apply_to_config(current_encryption).map_err(|err| {
-                CollectionError::bad_input(format!("invalid crypto migration plan: {err:?}"))
-            })?;
+            let next_encryption = plan
+                .apply_to_config(current_encryption)
+                .map_err(invalid_crypto_migration_plan_error)?;
 
             if !plan.dry_run {
                 config.params.encryption = Some(next_encryption);
@@ -632,9 +632,23 @@ fn validate_private_oram_replica_remove_until_supported(
     ))
 }
 
+fn invalid_crypto_migration_plan_error(_err: impl std::fmt::Debug) -> CollectionError {
+    CollectionError::bad_input("invalid crypto migration plan")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crypto_migration_plan_apply_error_does_not_reflect_inner_detail() {
+        let err =
+            invalid_crypto_migration_plan_error(validator::ValidationError::new("rk/docs/secret"));
+        let rendered = format!("{err:?}");
+
+        assert!(rendered.contains("invalid crypto migration plan"));
+        assert!(!rendered.contains("rk/docs/secret"));
+    }
 
     #[test]
     fn private_oram_replica_remove_guard_redacts_collection_details() {

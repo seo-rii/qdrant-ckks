@@ -1538,7 +1538,8 @@ async fn crypto_migration_plan_updates_collection_config_through_admin_path() {
     assert!(matches!(
         err,
         CollectionError::BadInput { description }
-            if description.contains("crypto_migration_current_state_mismatch")
+            if description == "invalid crypto migration plan"
+                && !description.contains("crypto_migration_current_state_mismatch")
     ));
 
     let mismatched_checkpoint = CryptoMigrationPlan {
