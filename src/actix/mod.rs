@@ -389,8 +389,10 @@ fn validation_error_handler(
     use actix_web_validator::error::DeserializeErrors;
 
     // Nicely describe deserialization and validation errors
-    let msg = if should_sanitize_private_oram_json_validation_error(name, req.path(), &err) {
-        "Invalid JSON body for private ORAM request".to_string()
+    let msg = if let Some(private_oram_validation_message) =
+        private_oram_validation_error_message(name, req.path(), &err)
+    {
+        private_oram_validation_message.to_string()
     } else {
         match &err {
             actix_web_validator::Error::Validate(errs) => {
@@ -429,23 +431,32 @@ fn validation_error_handler(
     error::InternalError::from_response(err, response).into()
 }
 
-fn should_sanitize_private_oram_json_validation_error(
+fn private_oram_validation_error_message(
     name: &str,
     path: &str,
     err: &actix_web_validator::Error,
-) -> bool {
-    if name != "JSON body" || !is_private_oram_request_path(path) {
-        return false;
+) -> Option<&'static str> {
+    if !is_private_oram_request_path(path) {
+        return None;
     }
 
-    matches!(
+    let should_sanitize = matches!(
         err,
         actix_web_validator::Error::Validate(_)
             | actix_web_validator::Error::Deserialize(_)
             | actix_web_validator::Error::JsonPayloadError(
                 actix_web::error::JsonPayloadError::Deserialize(_)
             )
-    )
+    );
+    if !should_sanitize {
+        return None;
+    }
+
+    match name {
+        "JSON body" => Some("Invalid JSON body for private ORAM request"),
+        "path parameters" => Some("Invalid path parameters for private ORAM request"),
+        _ => None,
+    }
 }
 
 fn is_private_oram_request_path(path: &str) -> bool {
@@ -465,7 +476,7 @@ fn path_has_private_oram_marker(path: &str) -> bool {
 mod tests {
     use ::api::grpc::api_crate_version;
     use actix_web::{App, test as actix_test, web};
-    use actix_web_validator::Json;
+    use actix_web_validator::{Json, Path};
     use serde::Deserialize;
     use validator::Validate;
 
@@ -483,6 +494,12 @@ mod tests {
         _result_privacy: qdrant_sec::ResultPrivacyMode,
     }
 
+    #[derive(Deserialize, Validate)]
+    struct PrivateOramPathValidationTestPath {
+        #[validate(length(max = 4))]
+        _secret_path_segment: String,
+    }
+
     async fn private_oram_validation_test_endpoint(
         _: Json<PrivateOramValidationTestBody>,
     ) -> HttpResponse {
@@ -491,6 +508,12 @@ mod tests {
 
     async fn private_oram_enum_validation_test_endpoint(
         _: Json<PrivateOramEnumValidationTestBody>,
+    ) -> HttpResponse {
+        HttpResponse::Ok().finish()
+    }
+
+    async fn private_oram_path_validation_test_endpoint(
+        _: Path<PrivateOramPathValidationTestPath>,
     ) -> HttpResponse {
         HttpResponse::Ok().finish()
     }
@@ -754,6 +777,63 @@ mod tests {
         let ordinary_body = actix_test::read_body(ordinary_response).await;
         let ordinary_body = String::from_utf8_lossy(&ordinary_body);
         assert!(ordinary_body.contains(sentinel), "{ordinary_body}");
+    }
+
+    #[actix_web::test]
+    async fn private_oram_path_validation_errors_do_not_reflect_path_values() {
+        let validate_path_config = actix_web_validator::PathConfig::default()
+            .error_handler(|err, req| validation_error_handler("path parameters", err, req));
+        let app = actix_test::init_service(
+            App::new()
+                .app_data(validate_path_config)
+                .route(
+                    "/collections/{collection_name}/private-hnsw/{_secret_path_segment}/session",
+                    web::post().to(private_oram_path_validation_test_endpoint),
+                )
+                .route(
+                    "/collections/{collection_name}/ordinary/{_secret_path_segment}/session",
+                    web::post().to(private_oram_path_validation_test_endpoint),
+                ),
+        )
+        .await;
+
+        let sentinel = "qdrant-sec-private-oram-path-parameter-sentinel";
+        let private_request = actix_test::TestRequest::post()
+            .uri(&format!(
+                "/collections/docs/private-hnsw/{sentinel}/session"
+            ))
+            .to_request();
+        let private_response = actix_test::call_service(&app, private_request).await;
+        assert_eq!(
+            private_response.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let private_body = actix_test::read_body(private_response).await;
+        let private_body = String::from_utf8_lossy(&private_body);
+        assert!(
+            private_body.contains("Invalid path parameters for private ORAM request"),
+            "{private_body}"
+        );
+        assert!(!private_body.contains(sentinel), "{private_body}");
+        assert!(
+            !private_body.contains("_secret_path_segment"),
+            "{private_body}"
+        );
+
+        let ordinary_request = actix_test::TestRequest::post()
+            .uri(&format!("/collections/docs/ordinary/{sentinel}/session"))
+            .to_request();
+        let ordinary_response = actix_test::call_service(&app, ordinary_request).await;
+        assert_eq!(
+            ordinary_response.status(),
+            actix_web::http::StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let ordinary_body = actix_test::read_body(ordinary_response).await;
+        let ordinary_body = String::from_utf8_lossy(&ordinary_body);
+        assert!(
+            ordinary_body.contains("Validation error in path parameters"),
+            "{ordinary_body}"
+        );
     }
 
     #[test]
