@@ -295,7 +295,11 @@ impl ShardSnapshots for ShardSnapshotsService {
 mod tests {
     use std::sync::Arc;
 
+    use api::grpc::qdrant::shard_snapshots_server::ShardSnapshots;
     use api::grpc::qdrant::snapshots_server::Snapshots;
+    use api::grpc::qdrant::{
+        ShardSnapshotLocation, ShardSnapshotPriority, shard_snapshot_location,
+    };
     use storage::rbac::{Access, Auth};
 
     use super::*;
@@ -360,6 +364,105 @@ mod tests {
                 !create_full_err.message().contains(COLLECTION_NAME),
                 "{create_full_err}"
             );
+        });
+    }
+
+    #[test]
+    fn shard_snapshot_methods_reject_private_oram_collection() {
+        let _guard = route_e2e_guard();
+        let (_temp, dispatcher) = test_dispatcher();
+        let auth = Auth::new_internal(Access::full("private ORAM shard snapshot tonic test"));
+        let pass = new_unchecked_verification_pass();
+        let settings = Settings::new(None).unwrap();
+        let service = ShardSnapshotsService::new(
+            dispatcher.toc(&auth, &pass).clone(),
+            HttpClient::from_settings(&settings).unwrap(),
+            settings,
+        );
+
+        fn assert_private_oram_shard_snapshot_error(err: Status, operation: &str) {
+            assert_eq!(err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                err.message().contains(
+                    "shard snapshot operations for private ORAM collections are disabled"
+                ),
+                "{operation}: {err}",
+            );
+            assert!(
+                err.message()
+                    .contains("collection snapshot/restore preflight"),
+                "{operation}: {err}",
+            );
+            assert!(!err.message().contains(operation), "{operation}: {err}");
+            assert!(
+                !err.message().contains(COLLECTION_NAME),
+                "{operation}: {err}"
+            );
+            assert!(
+                !err.message().contains("private_hnsw_oram"),
+                "{operation}: {err}"
+            );
+            assert!(
+                !err.message().contains("private_result_oram"),
+                "{operation}: {err}"
+            );
+        }
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+
+            let list_err = ShardSnapshots::list(
+                &service,
+                Request::new(ListShardSnapshotsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    shard_id: 0,
+                }),
+            )
+            .await
+            .expect_err("private ORAM shard snapshot listing must fail closed");
+            assert_private_oram_shard_snapshot_error(list_err, "shard snapshot listing");
+
+            let create_err = ShardSnapshots::create(
+                &service,
+                Request::new(CreateShardSnapshotRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    shard_id: 0,
+                }),
+            )
+            .await
+            .expect_err("private ORAM shard snapshot creation must fail closed");
+            assert_private_oram_shard_snapshot_error(create_err, "shard snapshot creation");
+
+            let delete_err = ShardSnapshots::delete(
+                &service,
+                Request::new(DeleteShardSnapshotRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    shard_id: 0,
+                    snapshot_name: "snapshot-1.snapshot".to_string(),
+                }),
+            )
+            .await
+            .expect_err("private ORAM shard snapshot deletion must fail closed");
+            assert_private_oram_shard_snapshot_error(delete_err, "shard snapshot deletion");
+
+            let recover_err = ShardSnapshots::recover(
+                &service,
+                Request::new(RecoverShardSnapshotRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    shard_id: 0,
+                    snapshot_location: Some(ShardSnapshotLocation {
+                        location: Some(shard_snapshot_location::Location::Path(
+                            "snapshot-1.snapshot".to_string(),
+                        )),
+                    }),
+                    snapshot_priority: ShardSnapshotPriority::NoSync as i32,
+                    checksum: None,
+                    api_key: None,
+                }),
+            )
+            .await
+            .expect_err("private ORAM shard snapshot recovery must fail closed");
+            assert_private_oram_shard_snapshot_error(recover_err, "shard snapshot recovery");
         });
     }
 }
