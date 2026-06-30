@@ -2347,7 +2347,7 @@ mod private_result_oram_rest_tests {
                 "encrypted bucket store validation failed"
             );
             assert!(!future_bucket_error.contains(&future_bucket.ciphertext));
-            assert!(!future_bucket_error.contains(&future_bucket.index_epoch.to_string()));
+            assert!(!future_bucket_error.contains("index_epoch"));
             assert!(!future_bucket_error.contains(&fixture.manifest.root_hash));
             assert!(!future_bucket_error.contains(&session_id));
             assert!(!future_bucket_error.contains("private_result_oram"));

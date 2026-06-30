@@ -810,7 +810,13 @@ mod tests {
         )
         .expect_err("missing runtime instance must fail encrypted recovery preflight");
 
-        assert!(err.to_string().contains("unknown payload crypto instance"));
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("payload crypto runtime validation failed"),
+            "{rendered}",
+        );
+        assert!(!rendered.contains("unknown payload crypto instance"));
+        assert!(!rendered.contains("docs_payload_v1"));
     }
 
     #[test]

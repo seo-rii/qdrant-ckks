@@ -2373,11 +2373,7 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(&future_bucket.ciphertext)
             );
-            assert!(
-                !future_bucket_read
-                    .message()
-                    .contains(&future_bucket.index_epoch.to_string())
-            );
+            assert!(!future_bucket_read.message().contains("index_epoch"));
             assert!(
                 !future_bucket_read
                     .message()

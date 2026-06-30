@@ -753,7 +753,9 @@ mod tests {
             .expect_err("missing runtime instance must fail CLI snapshot preflight");
 
         assert!(err.contains("recovered snapshot docs"));
-        assert!(err.contains("unknown payload crypto instance docs_payload_v1"));
+        assert!(err.contains("payload crypto runtime validation failed"));
+        assert!(!err.contains("unknown payload crypto instance"));
+        assert!(!err.contains("docs_payload_v1"));
     }
 
     #[test]
@@ -1339,7 +1341,9 @@ mod tests {
             .expect_err("missing runtime material must fail CLI snapshot preflight");
 
         assert!(err.contains("recovered snapshot docs"));
-        assert!(err.contains("must bind role sym_key"));
+        assert!(err.contains("payload crypto runtime validation failed"));
+        assert!(!err.contains("sym_key"));
+        assert!(!err.contains("tenant-a/missing-payload-v1"));
     }
 
     #[test]
@@ -1443,7 +1447,9 @@ mod tests {
             .expect_err("wrong wrapping key must fail CLI snapshot preflight");
 
         assert!(err.contains("recovered snapshot docs"));
-        assert!(err.contains("decryption authentication failed"));
+        assert!(err.contains("payload crypto runtime validation failed"));
+        assert!(!err.contains("decryption authentication failed"));
+        assert!(!err.contains("tenant-a/payload-rk-v1"));
     }
 
     #[test]
@@ -1548,7 +1554,10 @@ mod tests {
             .expect_err("runtime key_id mismatch must fail CLI snapshot preflight");
 
         assert!(err.contains("recovered snapshot docs"));
-        assert!(err.contains("key id does not match"));
+        assert!(err.contains("payload crypto runtime validation failed"));
+        assert!(!err.contains("key id does not match"));
+        assert!(!err.contains("tenant-a:docs"));
+        assert!(!err.contains("tenant-a:other"));
     }
 
     #[test]

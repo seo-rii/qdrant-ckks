@@ -21315,7 +21315,9 @@ mod tests {
 
         let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params).unwrap_err();
         assert!(
-            matches!(err, StorageError::BadInput { ref description } if description.contains("unknown payload crypto instance docs_payload_v1")),
+            matches!(err, StorageError::BadInput { ref description } if description.contains("payload crypto runtime validation failed")
+                && !description.contains("unknown payload crypto instance")
+                && !description.contains("docs_payload_v1")),
             "unexpected error: {err:?}",
         );
     }

@@ -1562,7 +1562,9 @@ mod tests {
                             ),
                             rk_epoch: Some(4),
                             state: Some("active".to_string()),
-                            scope: Some("collection:docs".to_string()),
+                            scope: Some(
+                                "collection:12345678-90ab-cdef-1234-567890abcdef".to_string(),
+                            ),
                             ..CryptoMaterialConfig::default()
                         },
                     ),
@@ -1576,7 +1578,9 @@ mod tests {
                             ),
                             rk_epoch: Some(3),
                             state: Some("retired".to_string()),
-                            scope: Some("collection:docs".to_string()),
+                            scope: Some(
+                                "collection:12345678-90ab-cdef-1234-567890abcdef".to_string(),
+                            ),
                             ..CryptoMaterialConfig::default()
                         },
                     ),
@@ -2126,7 +2130,10 @@ mod tests {
         );
         assert_eq!(active.epoch, 4);
         assert_eq!(active.state, "active");
-        assert_eq!(active.scope.as_deref(), Some("collection:docs"));
+        assert_eq!(
+            active.scope.as_deref(),
+            Some("collection:12345678-90ab-cdef-1234-567890abcdef")
+        );
         assert_eq!(active.wrapped_by, None);
         assert_eq!(active.used_by_rules, vec!["body_server".to_string()]);
 
@@ -2163,11 +2170,13 @@ mod tests {
         let err = build_collection_crypto_manifest_response("docs", &config, &settings)
             .expect_err("manifest must not hide runtime RK metadata mismatch");
 
+        let rendered = err.to_string();
         assert!(
-            err.to_string()
-                .contains("server-side AEAD material must set rk_epoch")
-                || err.to_string().contains("missing rk_epoch"),
-            "{err}",
+            rendered.contains("payload crypto runtime validation failed"),
+            "{rendered}",
         );
+        assert!(!rendered.contains("server-side AEAD material"));
+        assert!(!rendered.contains("missing rk_epoch"));
+        assert!(!rendered.contains("tenant-a/server-rk-v4"));
     }
 }

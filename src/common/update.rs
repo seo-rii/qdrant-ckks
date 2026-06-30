@@ -8331,8 +8331,8 @@ esac
         assert!(matches!(
             err,
             StorageError::BadInput { description }
-                if description.contains("incompatible with active CKKS parameters")
-                    && description.contains("batch size")
+                if description.contains("client CKKS query is incompatible with active CKKS parameters")
+                    && !description.contains("batch size")
         ));
     }
 
