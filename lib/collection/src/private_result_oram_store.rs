@@ -1666,9 +1666,13 @@ mod tests {
             "encryptedClientStateCiphertextSha256",
             "encrypted_client_state_ciphertexts_sha256",
             "encryptedClientStateCiphertextsSha256",
+            "oram_position_map_backup",
             "oram_position_map_backups",
+            "oramPositionMapBackup",
             "oramPositionMapBackups",
+            "position_map_backup",
             "position_map_backups",
+            "positionMapBackup",
             "positionMapBackups",
             "state_ciphertext",
             "stateCiphertext",
@@ -1682,9 +1686,13 @@ mod tests {
             "stateCiphertextsSha256",
             "payload_fetch_token",
             "payloadFetchToken",
+            "token_position_map_backup",
             "token_position_map_backups",
+            "tokenPositionMapBackup",
             "tokenPositionMapBackups",
+            "stashBackup",
             "stashBackups",
+            "stash_backup",
         ];
         let cases = [
             (
