@@ -604,6 +604,7 @@ components, so collection config, manifest, and signed request validation reject
 names such as `.`, `..`, names containing `/` or `:`, and names longer than 128
 bytes before any bucket-store path is constructed. They also reject names that
 normalize to client-owned ORAM state aliases such as `client.state`,
+`clientStateSnapshot.json`, `encryptedClientStateSnapshots.json`,
 `position.map`, or `stashBackups.json`, including dotted extension forms.
 The same private-session guidance is returned even when runtime crypto settings
 are absent, so private HNSW ORAM vectors do not fall through to CKKS/OpenFHE
