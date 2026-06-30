@@ -537,7 +537,9 @@ mod tests {
                             names: vec![
                                 "positionMapBackups.json".to_string(),
                                 "clientStateBackups.json".to_string(),
+                                "clientStateSnapshot.json".to_string(),
                                 "clientStateSnapshots.json".to_string(),
+                                "client_state_snapshot.json".to_string(),
                                 "client_state_snapshots.json".to_string(),
                                 "clientStateCiphertext.json".to_string(),
                                 "clientStateCiphertextHashes.json".to_string(),
@@ -547,6 +549,7 @@ mod tests {
                                 "client_state_ciphertext_sha256.json".to_string(),
                                 "client_state_ciphertexts_sha256.json".to_string(),
                                 "encryptedClientStateBackups.json".to_string(),
+                                "encryptedClientStateSnapshot.json".to_string(),
                                 "encryptedClientStateSnapshots.json".to_string(),
                                 "encrypted_client_state_backups.json".to_string(),
                                 "encrypted_client_state_snapshot.json".to_string(),
@@ -600,7 +603,9 @@ mod tests {
         assert!(rendered.contains("consensus-backed epoch/root"));
         for sentinel in [
             "clientStateBackups",
+            "clientStateSnapshot",
             "clientStateSnapshots",
+            "client_state_snapshot",
             "client_state_snapshots",
             "clientStateCiphertext",
             "clientStateCiphertextHash",
@@ -611,6 +616,7 @@ mod tests {
             "client_state_ciphertext_sha256",
             "client_state_ciphertexts_sha256",
             "encryptedClientStateBackups",
+            "encryptedClientStateSnapshot",
             "encryptedClientStateSnapshots",
             "encrypted_client_state_backups",
             "encrypted_client_state_snapshot",
