@@ -3282,12 +3282,21 @@ mod tests {
     fn private_result_oram_shard_snapshot_guard_redacts_client_state_aliases() {
         let mut config = private_result_config(Uuid::from_u128(80));
         let encryption = config.params.encryption.as_mut().unwrap();
-        encryption.key_id = Some("clientStateCiphertext.json".to_string());
+        encryption.key_id = Some("clientStateCiphertextHash.json".to_string());
         let rule = encryption.rules.first_mut().unwrap();
-        rule.id = "encryptedClientStateCiphertextHash.json".to_string();
+        rule.id = "encryptedClientStateCiphertext.json".to_string();
         rule.instance = "stateCiphertextHash.json".to_string();
         if let EncryptionSelector::PayloadPaths { paths } = &mut rule.selector {
-            *paths = vec!["tokenPositionMapBackups.json".to_string()];
+            *paths = vec![
+                "tokenPositionMapBackups.json".to_string(),
+                "clientStateCiphertext.json".to_string(),
+                "clientStateCiphertextHashes.json".to_string(),
+                "encryptedClientStateCiphertextHash.json".to_string(),
+                "encryptedClientStateCiphertextHashes.json".to_string(),
+                "encrypted_client_state_ciphertext_hash.json".to_string(),
+                "stateCiphertext.json".to_string(),
+                "stateCiphertextHashes.json".to_string(),
+            ];
         }
 
         let err = validate_private_oram_shard_snapshot_operation(
@@ -3302,8 +3311,15 @@ mod tests {
         assert!(rendered.contains("collection snapshot/restore preflight"));
         for sentinel in [
             "clientStateCiphertext",
+            "clientStateCiphertextHash",
+            "clientStateCiphertextHashes",
+            "encryptedClientStateCiphertext",
             "encryptedClientStateCiphertextHash",
+            "encryptedClientStateCiphertextHashes",
+            "encrypted_client_state_ciphertext_hash",
+            "stateCiphertext",
             "stateCiphertextHash",
+            "stateCiphertextHashes",
             "tokenPositionMapBackups",
             "stashBackups",
             "private-shard-snapshot-operation-sentinel",
