@@ -3440,10 +3440,7 @@ mod private_hnsw_grpc_tests {
                     .contains("encrypted bucket store validation failed")
             );
             assert!(!err.message().contains(&future_bucket.ciphertext));
-            assert!(
-                !err.message()
-                    .contains(&future_bucket.index_epoch.to_string())
-            );
+            assert!(!err.message().contains("index_epoch"));
             assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
             assert!(!err.message().contains(&session.session_id));
             assert!(!err.message().contains("private_hnsw_oram"));

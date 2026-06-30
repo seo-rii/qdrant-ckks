@@ -3338,7 +3338,7 @@ mod private_hnsw_rest_tests {
                 "encrypted bucket store validation failed"
             );
             assert!(!future_bucket_error.contains(&future_bucket.ciphertext));
-            assert!(!future_bucket_error.contains(&future_bucket.index_epoch.to_string()));
+            assert!(!future_bucket_error.contains("index_epoch"));
             assert!(!future_bucket_error.contains(&fixture.encrypted_build.root_hash));
             assert!(!future_bucket_error.contains(&session_id));
             assert!(!future_bucket_error.contains("private_hnsw_oram"));
