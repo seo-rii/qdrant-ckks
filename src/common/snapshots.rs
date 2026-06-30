@@ -686,9 +686,11 @@ mod tests {
     use super::*;
     use crate::common::private_hnsw::do_upload_private_hnsw_manifest;
     use crate::common::private_hnsw_wire_fixture::{
-        COLLECTION_NAME, PrivateHnswRouteWireFixture, VECTOR_NAME, create_private_hnsw_collection,
+        COLLECTION_NAME, PrivateHnswRouteWireFixture, PrivateResultOramRouteFixture, VECTOR_NAME,
+        create_private_hnsw_collection, create_private_hnsw_collection_with_private_result_oram,
         route_e2e_guard, test_dispatcher,
     };
+    use crate::common::private_result_oram::do_upload_private_result_oram_manifest;
 
     fn config_with_params(params: CollectionParams) -> CollectionConfigInternal {
         CollectionConfigInternal {
@@ -842,6 +844,55 @@ mod tests {
             );
             assert!(
                 !rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING),
+                "{rendered}"
+            );
+
+            drop(recovery_guard);
+        });
+    }
+
+    #[test]
+    fn private_oram_collection_lifecycle_guard_blocks_private_result_oram_upload() {
+        let _guard = route_e2e_guard();
+        let hnsw_fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let result_fixture = PrivateResultOramRouteFixture::build();
+        let settings = result_fixture.route_settings_with_private_hnsw(&hnsw_fixture);
+        let (_temp, dispatcher) = test_dispatcher();
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection_with_private_result_oram(&dispatcher).await;
+            let auth = Auth::new_internal(Access::full("private result ORAM lifecycle guard test"));
+            let recovery_guard =
+                begin_private_oram_collection_lifecycle_guard(&dispatcher, &auth, COLLECTION_NAME)
+                    .await
+                    .expect("private ORAM lifecycle guard should open");
+            let pass = new_unchecked_verification_pass();
+
+            let err = do_upload_private_result_oram_manifest(
+                dispatcher.toc(&auth, &pass),
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                result_fixture.manifest.clone(),
+                result_fixture.signature.clone(),
+            )
+            .await
+            .expect_err("active collection recovery must block private result ORAM upload");
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains("upload requires no active collection lifecycle operation"),
+                "{rendered}",
+            );
+            assert!(
+                !rendered.contains(&result_fixture.manifest.root_hash),
+                "{rendered}"
+            );
+            assert!(
+                !rendered.contains(&result_fixture.signature.sig),
+                "{rendered}"
+            );
+            assert!(
+                !rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING),
                 "{rendered}"
             );
 
