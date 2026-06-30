@@ -685,6 +685,12 @@ session may be remapping paths and writing back buckets. While a private ORAM
 collection/full snapshot guard is active, new session opens and manifest/bucket
 uploads fail closed for the same reason. The error is sanitized and does not
 include collection-local private ORAM filesystem paths or bucket roots.
+Public REST and gRPC collection update/delete paths acquire the same private
+ORAM lifecycle guard before submitting the collection meta operation. That keeps
+vector/HNSW/quantization config changes and collection deletion from overlapping
+active private ORAM sessions or manifest/bucket upload write windows, and it
+blocks new private ORAM sessions/uploads while the lifecycle operation is in
+flight.
 Snapshot creation also fails closed while a private HNSW ORAM manifest or bucket
 upload write-window guard is active for the collection, because upload writes
 canonical manifest, bucket, Merkle, and epoch files.
