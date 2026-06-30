@@ -1053,7 +1053,9 @@ async fn test_snapshot_private_oram_store_files_are_archived() {
     for forbidden in [
         "client_state",
         "clientState",
+        "clientStateBackup",
         "clientStateBackups",
+        "client_state_backup",
         "clientStateSnapshot",
         "clientStateSnapshots",
         "client_state_snapshot",
@@ -1066,6 +1068,7 @@ async fn test_snapshot_private_oram_store_files_are_archived() {
         "clientStateCiphertextsSha256",
         "client_state_ciphertext_sha256",
         "client_state_ciphertexts_sha256",
+        "encryptedClientStateBackup",
         "encryptedClientStateBackups",
         "encryptedClientStateSnapshot",
         "encryptedClientStateSnapshots",

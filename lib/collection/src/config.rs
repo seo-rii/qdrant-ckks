@@ -550,7 +550,9 @@ mod ckks_tests {
         }
 
         for private_alias in [
+            "clientStateBackup",
             "clientStateBackups",
+            "client_state_backup",
             "clientStateSnapshot",
             "clientStateSnapshots",
             "client_state_snapshot",
@@ -565,6 +567,7 @@ mod ckks_tests {
             "client_state_ciphertext_hashes",
             "client_state_ciphertext_sha256",
             "client_state_ciphertexts_sha256",
+            "encryptedClientStateBackup",
             "encryptedClientStateBackups",
             "encryptedClientStateSnapshot",
             "encryptedClientStateSnapshots",
@@ -657,7 +660,9 @@ mod ckks_tests {
         }
 
         for private_alias in [
+            "clientStateBackup",
             "clientStateBackups",
+            "client_state_backup",
             "clientStateSnapshot",
             "clientStateSnapshots",
             "client_state_snapshot",
@@ -672,6 +677,7 @@ mod ckks_tests {
             "client_state_ciphertext_hashes",
             "client_state_ciphertext_sha256",
             "client_state_ciphertexts_sha256",
+            "encryptedClientStateBackup",
             "encryptedClientStateBackups",
             "encryptedClientStateSnapshot",
             "encryptedClientStateSnapshots",
@@ -2140,7 +2146,9 @@ mod ckks_tests {
             "stash",
             "stashBackups.json",
             "client.state",
+            "clientStateBackup.json",
             "clientStateBackups.json",
+            "client_state_backup.json",
             "clientStateSnapshot.json",
             "clientStateSnapshots.json",
             "client_state_snapshot.json",
@@ -2157,6 +2165,7 @@ mod ckks_tests {
             "clientStateCiphertextsSha256.json",
             "encrypted_client_state.json",
             "encrypted_client_state_backup.json",
+            "encryptedClientStateBackup.json",
             "encrypted_client_state_snapshot.json",
             "encrypted_client_state_snapshots.json",
             "encryptedClientStateSnapshot.json",
@@ -2233,7 +2242,9 @@ mod ckks_tests {
             );
             for leaked in [
                 "stashBackups",
+                "clientStateBackup",
                 "clientStateBackups",
+                "client_state_backup",
                 "clientStateSnapshot",
                 "clientStateSnapshots",
                 "client_state_snapshot",
@@ -2250,6 +2261,7 @@ mod ckks_tests {
                 "clientStateCiphertextsSha256",
                 "encrypted_client_state",
                 "encrypted_client_state_backup",
+                "encryptedClientStateBackup",
                 "encrypted_client_state_backups",
                 "encrypted_client_state_snapshot",
                 "encrypted_client_state_snapshots",

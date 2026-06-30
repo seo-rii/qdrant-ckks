@@ -1874,7 +1874,9 @@ mod tests {
         rule.instance = "stateCiphertextSha256.json".to_string();
         if let collection::config::EncryptionSelector::PayloadPaths { paths } = &mut rule.selector {
             *paths = vec![
+                "clientStateBackup.json".to_string(),
                 "clientStateBackups.json".to_string(),
+                "client_state_backup.json".to_string(),
                 "client_state_backups.json".to_string(),
                 "clientStateSnapshot.json".to_string(),
                 "clientStateSnapshots.json".to_string(),
@@ -1889,6 +1891,7 @@ mod tests {
                 "client_state_ciphertext_hashes.json".to_string(),
                 "client_state_ciphertext_sha256.json".to_string(),
                 "client_state_ciphertexts_sha256.json".to_string(),
+                "encryptedClientStateBackup.json".to_string(),
                 "encryptedClientStateBackups.json".to_string(),
                 "encryptedClientStateSnapshot.json".to_string(),
                 "encryptedClientStateSnapshots.json".to_string(),
@@ -1998,7 +2001,9 @@ mod tests {
             assert_no_private_oram_config_leak(
                 &rendered,
                 &[
+                    "clientStateBackup",
                     "clientStateBackups",
+                    "client_state_backup",
                     "client_state_backups",
                     "clientStateSnapshot",
                     "clientStateSnapshots",
@@ -2014,6 +2019,7 @@ mod tests {
                     "client_state_ciphertext_hashes",
                     "client_state_ciphertext_sha256",
                     "client_state_ciphertexts_sha256",
+                    "encryptedClientStateBackup",
                     "encryptedClientStateBackups",
                     "encryptedClientStateSnapshot",
                     "encryptedClientStateSnapshots",

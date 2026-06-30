@@ -536,7 +536,9 @@ mod tests {
                         selector: EncryptionSelector::VectorNames {
                             names: vec![
                                 "positionMapBackups.json".to_string(),
+                                "clientStateBackup.json".to_string(),
                                 "clientStateBackups.json".to_string(),
+                                "client_state_backup.json".to_string(),
                                 "clientStateSnapshot.json".to_string(),
                                 "clientStateSnapshots.json".to_string(),
                                 "client_state_snapshot.json".to_string(),
@@ -548,7 +550,9 @@ mod tests {
                                 "client_state_ciphertext_hashes.json".to_string(),
                                 "client_state_ciphertext_sha256.json".to_string(),
                                 "client_state_ciphertexts_sha256.json".to_string(),
+                                "encryptedClientStateBackup.json".to_string(),
                                 "encryptedClientStateBackups.json".to_string(),
+                                "encrypted_client_state_backup.json".to_string(),
                                 "encryptedClientStateSnapshot.json".to_string(),
                                 "encryptedClientStateSnapshots.json".to_string(),
                                 "encrypted_client_state_backups.json".to_string(),
@@ -602,7 +606,9 @@ mod tests {
         assert!(rendered.contains("cannot apply shard layout config change"));
         assert!(rendered.contains("consensus-backed epoch/root"));
         for sentinel in [
+            "clientStateBackup",
             "clientStateBackups",
+            "client_state_backup",
             "clientStateSnapshot",
             "clientStateSnapshots",
             "client_state_snapshot",
@@ -615,7 +621,9 @@ mod tests {
             "client_state_ciphertext_hashes",
             "client_state_ciphertext_sha256",
             "client_state_ciphertexts_sha256",
+            "encryptedClientStateBackup",
             "encryptedClientStateBackups",
+            "encrypted_client_state_backup",
             "encryptedClientStateSnapshot",
             "encryptedClientStateSnapshots",
             "encrypted_client_state_backups",
