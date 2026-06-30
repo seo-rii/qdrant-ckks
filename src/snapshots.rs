@@ -830,34 +830,65 @@ mod tests {
     fn cli_snapshot_crypto_preflight_rejects_private_hnsw_client_state_alias() {
         let fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let settings = fixture.route_settings();
-        let collection_dir = TempDir::new().unwrap();
-        write_recovered_private_hnsw_snapshot_fixture(collection_dir.path(), &fixture, false);
-        fs::write(
-            collection_dir
-                .path()
-                .join(PRIVATE_HNSW_ORAM_DIR)
-                .join(VECTOR_NAME)
-                .join("clientStateSnapshot.json"),
-            b"client state snapshot sentinel",
-        )
-        .unwrap();
+        for alias in [
+            "clientState.json",
+            "clientStates.json",
+            "client_state.json",
+            "client_states.json",
+            "clientStateBackup.json",
+            "clientStateBackups.json",
+            "client_state_backup.json",
+            "client_state_backups.json",
+            "clientStateSnapshot.json",
+            "clientStateSnapshots.json",
+            "client_state_snapshot.json",
+            "client_state_snapshots.json",
+            "encryptedClientState.json",
+            "encryptedClientStates.json",
+            "encrypted_client_state.json",
+            "encrypted_client_states.json",
+            "encryptedClientStateBackup.json",
+            "encryptedClientStateBackups.json",
+            "encrypted_client_state_backup.json",
+            "encrypted_client_state_backups.json",
+            "encryptedClientStateSnapshot.json",
+            "encryptedClientStateSnapshots.json",
+            "encrypted_client_state_snapshot.json",
+            "encrypted_client_state_snapshots.json",
+        ] {
+            let collection_dir = TempDir::new().unwrap();
+            write_recovered_private_hnsw_snapshot_fixture(collection_dir.path(), &fixture, false);
+            fs::write(
+                collection_dir
+                    .path()
+                    .join(PRIVATE_HNSW_ORAM_DIR)
+                    .join(VECTOR_NAME)
+                    .join(alias),
+                b"client state snapshot sentinel",
+            )
+            .unwrap();
 
-        let err =
-            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
-                .expect_err("client-owned private HNSW ORAM state must fail CLI preflight");
+            let err = validate_restored_collection_crypto_runtime(
+                &settings,
+                "docs",
+                collection_dir.path(),
+            )
+            .expect_err("client-owned private HNSW ORAM state must fail CLI preflight");
 
-        assert!(
-            err.contains("private HNSW ORAM snapshot layout validation failed"),
-            "{err}"
-        );
-        assert!(
-            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
-            "{err}"
-        );
-        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR), "{err}");
-        assert!(!err.contains(VECTOR_NAME), "{err}");
-        assert!(!err.contains("clientStateSnapshot"), "{err}");
-        assert!(!err.contains("sentinel"), "{err}");
+            assert!(
+                err.contains("private HNSW ORAM snapshot layout validation failed"),
+                "{err}"
+            );
+            assert!(
+                !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+                "{err}"
+            );
+            assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR), "{err}");
+            assert!(!err.contains(VECTOR_NAME), "{err}");
+            assert!(!err.contains(alias), "{err}");
+            assert!(!err.contains(alias.trim_end_matches(".json")), "{err}");
+            assert!(!err.contains("sentinel"), "{err}");
+        }
     }
 
     #[test]
@@ -1143,32 +1174,63 @@ mod tests {
     fn cli_snapshot_crypto_preflight_rejects_private_result_client_state_alias() {
         let fixture = PrivateResultSnapshotFixture::build();
         let settings = fixture.settings();
-        let collection_dir = TempDir::new().unwrap();
-        write_recovered_private_result_snapshot_fixture(collection_dir.path(), &fixture, false);
-        fs::write(
-            collection_dir
-                .path()
-                .join(PRIVATE_RESULT_ORAM_DIR)
-                .join("clientStateSnapshot.json"),
-            b"result client state snapshot sentinel",
-        )
-        .unwrap();
+        for alias in [
+            "clientState.json",
+            "clientStates.json",
+            "client_state.json",
+            "client_states.json",
+            "clientStateBackup.json",
+            "clientStateBackups.json",
+            "client_state_backup.json",
+            "client_state_backups.json",
+            "clientStateSnapshot.json",
+            "clientStateSnapshots.json",
+            "client_state_snapshot.json",
+            "client_state_snapshots.json",
+            "encryptedClientState.json",
+            "encryptedClientStates.json",
+            "encrypted_client_state.json",
+            "encrypted_client_states.json",
+            "encryptedClientStateBackup.json",
+            "encryptedClientStateBackups.json",
+            "encrypted_client_state_backup.json",
+            "encrypted_client_state_backups.json",
+            "encryptedClientStateSnapshot.json",
+            "encryptedClientStateSnapshots.json",
+            "encrypted_client_state_snapshot.json",
+            "encrypted_client_state_snapshots.json",
+        ] {
+            let collection_dir = TempDir::new().unwrap();
+            write_recovered_private_result_snapshot_fixture(collection_dir.path(), &fixture, false);
+            fs::write(
+                collection_dir
+                    .path()
+                    .join(PRIVATE_RESULT_ORAM_DIR)
+                    .join(alias),
+                b"result client state snapshot sentinel",
+            )
+            .unwrap();
 
-        let err =
-            validate_restored_collection_crypto_runtime(&settings, "docs", collection_dir.path())
-                .expect_err("client-owned private result ORAM state must fail CLI preflight");
+            let err = validate_restored_collection_crypto_runtime(
+                &settings,
+                "docs",
+                collection_dir.path(),
+            )
+            .expect_err("client-owned private result ORAM state must fail CLI preflight");
 
-        assert!(
-            err.contains("private result ORAM snapshot layout validation failed"),
-            "{err}"
-        );
-        assert!(
-            !err.contains(collection_dir.path().to_string_lossy().as_ref()),
-            "{err}"
-        );
-        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR), "{err}");
-        assert!(!err.contains("clientStateSnapshot"), "{err}");
-        assert!(!err.contains("sentinel"), "{err}");
+            assert!(
+                err.contains("private result ORAM snapshot layout validation failed"),
+                "{err}"
+            );
+            assert!(
+                !err.contains(collection_dir.path().to_string_lossy().as_ref()),
+                "{err}"
+            );
+            assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR), "{err}");
+            assert!(!err.contains(alias), "{err}");
+            assert!(!err.contains(alias.trim_end_matches(".json")), "{err}");
+            assert!(!err.contains("sentinel"), "{err}");
+        }
     }
 
     #[test]
