@@ -1429,8 +1429,14 @@ fn open_private_file_for_read(path: &Path, max_bytes: u64) -> CollectionResult<F
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
+        let effective_uid = nix::unistd::Uid::effective().as_raw();
+        if metadata.uid() != effective_uid {
+            return Err(CollectionError::service_error(
+                "private result ORAM file must be owned by the current user",
+            ));
+        }
         if metadata.permissions().mode() & 0o077 != 0 {
             return Err(CollectionError::service_error(
                 "private result ORAM file must not be group/world accessible",
