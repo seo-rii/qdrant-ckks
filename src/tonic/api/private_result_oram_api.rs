@@ -723,6 +723,43 @@ mod private_result_oram_grpc_tests {
         }
     }
 
+    fn request_with_auth<T>(message: T, auth: &Auth) -> Request<T> {
+        let mut request = Request::new(message);
+        request.extensions_mut().insert(auth.clone());
+        request
+    }
+
+    fn assert_grpc_requires_write_access(error: Status) {
+        assert_eq!(error.code(), Code::PermissionDenied);
+        let rendered = error.message();
+        assert!(
+            rendered.contains("Global manage access is required")
+                || rendered.contains("Write access to collection"),
+            "expected write-access denial, got: {rendered}",
+        );
+        for forbidden in [
+            qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+            qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+            qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+            "/private-result-oram/session",
+            "/private-hnsw/{vector}/session",
+            "private_result_oram",
+            "private_hnsw_oram",
+            "client-led private ORAM sessions",
+            "session_id",
+            "root_hash",
+            "bucket",
+            "ciphertext",
+            "signature",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
+            );
+        }
+    }
+
     async fn create_private_result_collection(dispatcher: &Dispatcher) {
         dispatcher
             .submit_collection_meta_op(
@@ -884,6 +921,206 @@ mod private_result_oram_grpc_tests {
                     session_id: SESSION_ID.to_string(),
                 }),
             ));
+        });
+    }
+
+    #[test]
+    fn grpc_private_result_oram_mutations_require_write_access_without_private_oram_details() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateResultRouteFixture::build();
+        let settings = fixture.settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_result_collection(&dispatcher).await;
+            let service =
+                PrivateResultOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+            let write_auth =
+                Auth::new_internal(Access::full("private result ORAM gRPC write setup"));
+            let read_auth =
+                Auth::new_internal(Access::full_ro("private result ORAM gRPC read-only test"));
+
+            PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                request_with_auth(
+                    grpc::UploadPrivateResultOramManifestRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                        signature: Some(signature_to_proto(fixture.signature.clone())),
+                    },
+                    &write_auth,
+                ),
+            )
+            .await
+            .unwrap();
+            PrivateResultOram::upload_private_result_oram_buckets(
+                &service,
+                request_with_auth(
+                    grpc::UploadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        buckets: fixture
+                            .buckets
+                            .clone()
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    },
+                    &write_auth,
+                ),
+            )
+            .await
+            .unwrap();
+
+            PrivateResultOram::get_private_result_oram_manifest(
+                &service,
+                request_with_auth(
+                    grpc::GetPrivateResultOramManifestRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap();
+
+            let err = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                request_with_auth(
+                    grpc::UploadPrivateResultOramManifestRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                        signature: Some(signature_to_proto(fixture.signature.clone())),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_grpc_requires_write_access(err);
+
+            let err = PrivateResultOram::upload_private_result_oram_buckets(
+                &service,
+                request_with_auth(
+                    grpc::UploadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        index_epoch: fixture.manifest.index_epoch,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        buckets: fixture
+                            .buckets
+                            .clone()
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_grpc_requires_write_access(err);
+
+            let err = PrivateResultOram::open_private_result_oram_session(
+                &service,
+                request_with_auth(
+                    grpc::OpenPrivateResultOramSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        client_id: "tenant-a/read-only-sdk".to_string(),
+                        desired_epoch: BASE_EPOCH,
+                        fixed_budget: true,
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_grpc_requires_write_access(err);
+
+            let session = PrivateResultOram::open_private_result_oram_session(
+                &service,
+                request_with_auth(
+                    grpc::OpenPrivateResultOramSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        client_id: "tenant-a/write-sdk".to_string(),
+                        desired_epoch: BASE_EPOCH,
+                        fixed_budget: true,
+                    },
+                    &write_auth,
+                ),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+
+            let bucket_ids = vec![0, 1, 3, 0, 1, 4];
+            let read_response = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                request_with_auth(
+                    grpc::ReadPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: session.session_id.clone(),
+                        index_epoch: BASE_EPOCH,
+                        root_hash: fixture.manifest.root_hash.clone(),
+                        bucket_ids: bucket_ids.clone(),
+                        read_signature: Some(signature_to_proto(
+                            fixture.read_signature(&bucket_ids),
+                        )),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(read_response.buckets.len(), bucket_ids.len());
+
+            let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
+            let err = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                request_with_auth(
+                    grpc::CommitPrivateResultOramBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: session.session_id.clone(),
+                        old_epoch: BASE_EPOCH,
+                        new_epoch: NEXT_EPOCH,
+                        old_root_hash: fixture.manifest.root_hash.clone(),
+                        new_root_hash,
+                        updated_buckets: vec![bucket_to_proto(updated_bucket)],
+                        commit_signature: Some(signature_to_proto(commit_signature)),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_grpc_requires_write_access(err);
+
+            let err = PrivateResultOram::close_private_result_oram_session(
+                &service,
+                request_with_auth(
+                    grpc::ClosePrivateResultOramSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: session.session_id.clone(),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_grpc_requires_write_access(err);
+
+            PrivateResultOram::close_private_result_oram_session(
+                &service,
+                request_with_auth(
+                    grpc::ClosePrivateResultOramSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        session_id: session.session_id,
+                    },
+                    &write_auth,
+                ),
+            )
+            .await
+            .unwrap();
         });
     }
 

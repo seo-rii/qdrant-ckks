@@ -573,6 +573,43 @@ mod private_hnsw_grpc_tests {
         }
     }
 
+    fn request_with_auth<T>(message: T, auth: &Auth) -> Request<T> {
+        let mut request = Request::new(message);
+        request.extensions_mut().insert(auth.clone());
+        request
+    }
+
+    fn assert_grpc_requires_write_access(error: Status) {
+        assert_eq!(error.code(), Code::PermissionDenied);
+        let rendered = error.message();
+        assert!(
+            rendered.contains("Global manage access is required")
+                || rendered.contains("Write access to collection"),
+            "expected write-access denial, got: {rendered}",
+        );
+        for forbidden in [
+            qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+            qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+            qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+            "/private-hnsw/{vector}/session",
+            "/private-result-oram/session",
+            "private_hnsw_oram",
+            "private_result_oram",
+            "client-led private ORAM sessions",
+            "session_id",
+            "root_hash",
+            "bucket",
+            "ciphertext",
+            "signature",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
+            );
+        }
+    }
+
     #[test]
     fn manifest_proto_roundtrip_preserves_private_hnsw_fields() {
         let manifest = sample_manifest();
@@ -1061,6 +1098,229 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains(&run.commit_signature.sig));
             assert!(!err.message().contains(&run.updated_buckets[0].ciphertext));
             assert!(!err.message().contains("private_hnsw_oram"));
+        });
+    }
+
+    #[test]
+    fn grpc_private_hnsw_mutations_require_write_access_without_private_oram_details() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let service =
+                PrivateHnswOramService::new(Arc::new(dispatcher.clone()), settings.clone());
+            let write_auth = Auth::new_internal(Access::full("private HNSW gRPC write setup"));
+            let read_auth = Auth::new_internal(Access::full_ro("private HNSW gRPC read-only test"));
+
+            PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                request_with_auth(
+                    grpc::UploadPrivateHnswManifestRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                        signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+                    },
+                    &write_auth,
+                ),
+            )
+            .await
+            .unwrap();
+            PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                request_with_auth(
+                    grpc::UploadPrivateHnswBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        index_epoch: fixture.encrypted_build.index_epoch,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        buckets: fixture
+                            .encrypted_build
+                            .buckets
+                            .clone()
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    },
+                    &write_auth,
+                ),
+            )
+            .await
+            .unwrap();
+
+            PrivateHnswOram::get_private_hnsw_manifest(
+                &service,
+                request_with_auth(
+                    grpc::GetPrivateHnswManifestRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap();
+
+            let err = PrivateHnswOram::upload_private_hnsw_manifest(
+                &service,
+                request_with_auth(
+                    grpc::UploadPrivateHnswManifestRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                        signature: Some(signature_to_proto(fixture.manifest_signature.clone())),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_grpc_requires_write_access(err);
+
+            let err = PrivateHnswOram::upload_private_hnsw_buckets(
+                &service,
+                request_with_auth(
+                    grpc::UploadPrivateHnswBucketsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        index_epoch: fixture.encrypted_build.index_epoch,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        buckets: fixture
+                            .encrypted_build
+                            .buckets
+                            .clone()
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_grpc_requires_write_access(err);
+
+            let err = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                request_with_auth(
+                    grpc::OpenPrivateHnswSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        client_id: "tenant-a/read-only-sdk".to_string(),
+                        desired_epoch: BASE_EPOCH,
+                        fixed_budget: true,
+                        result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_grpc_requires_write_access(err);
+
+            let session = PrivateHnswOram::open_private_hnsw_session(
+                &service,
+                request_with_auth(
+                    grpc::OpenPrivateHnswSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        client_id: "tenant-a/write-sdk".to_string(),
+                        desired_epoch: BASE_EPOCH,
+                        fixed_budget: true,
+                        result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
+                    },
+                    &write_auth,
+                ),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+
+            let paths = vec![fixture.entry_leaf_label()];
+            let read_signature = fixture.sign_read_paths(&paths, 1, true);
+            let read_response = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                request_with_auth(
+                    grpc::OramReadPathsRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        session_id: session.session_id.clone(),
+                        index_epoch: BASE_EPOCH,
+                        root_hash: fixture.encrypted_build.root_hash.clone(),
+                        paths,
+                        padding: Some(grpc::OramReadPadding {
+                            requested_paths: 1,
+                            dummy_paths_included: true,
+                        }),
+                        client_signature: Some(signature_to_proto(read_signature)),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert!(!read_response.buckets.is_empty());
+
+            let search_run = fixture.run_single_search_collect_writeback();
+            let err = PrivateHnswOram::commit_private_hnsw_paths(
+                &service,
+                request_with_auth(
+                    grpc::OramCommitRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        session_id: session.session_id.clone(),
+                        old_epoch: search_run.commit_plan.old_epoch,
+                        new_epoch: search_run.commit_plan.new_epoch,
+                        old_root_hash: search_run.commit_plan.old_root_hash.clone(),
+                        new_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                        updated_buckets: search_run
+                            .updated_buckets
+                            .clone()
+                            .into_iter()
+                            .map(bucket_to_proto)
+                            .collect(),
+                        commit_signature: Some(signature_to_proto(
+                            search_run.commit_signature.clone(),
+                        )),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_grpc_requires_write_access(err);
+
+            let err = PrivateHnswOram::close_private_hnsw_session(
+                &service,
+                request_with_auth(
+                    grpc::ClosePrivateHnswSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        session_id: session.session_id.clone(),
+                    },
+                    &read_auth,
+                ),
+            )
+            .await
+            .unwrap_err();
+            assert_grpc_requires_write_access(err);
+
+            PrivateHnswOram::close_private_hnsw_session(
+                &service,
+                request_with_auth(
+                    grpc::ClosePrivateHnswSessionRequest {
+                        collection_name: COLLECTION_NAME.to_string(),
+                        vector_name: VECTOR_NAME.to_string(),
+                        session_id: session.session_id,
+                    },
+                    &write_auth,
+                ),
+            )
+            .await
+            .unwrap();
         });
     }
 
