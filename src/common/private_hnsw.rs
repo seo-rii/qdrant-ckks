@@ -3316,11 +3316,12 @@ mod private_hnsw_tests {
         assert!(rendered.contains("session_id is invalid"));
         assert!(!rendered.contains(malformed));
 
-        let alias_session_id = "stashBackups/session";
-        let err = validate_private_hnsw_session_id_shape(alias_session_id).unwrap_err();
-        let rendered = err.to_string();
-        assert!(rendered.contains("session_id is invalid"));
-        assert!(!rendered.contains(alias_session_id));
+        for alias_session_id in ["stashBackup/session", "stashBackups/session"] {
+            let err = validate_private_hnsw_session_id_shape(alias_session_id).unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("session_id is invalid"));
+            assert!(!rendered.contains(alias_session_id));
+        }
     }
 
     #[test]
@@ -3607,8 +3608,10 @@ mod private_hnsw_tests {
             "client_state_ciphertext",
             "encrypted_client_state_ciphertext_hash",
             "encrypted_client_state_ciphertext_sha256",
+            "position_map_backup",
             "position_map_backups",
             "payload_fetch_token",
+            "stashBackup",
             "stashBackups",
             "77",
             "false",
@@ -3699,8 +3702,10 @@ mod private_hnsw_tests {
             "private_hnsw_oram/text/encrypted_client_state_ciphertext_hashes.json",
             "private_hnsw_oram/text/encrypted_client_state_ciphertexts_sha256.json",
             "private_hnsw_oram/text/stateCiphertextSha256.json",
+            "private_hnsw_oram/text/position_map_backup.json",
             "private_hnsw_oram/text/position_map_backups.json",
             "private_hnsw_oram/text/payload_fetch_token.json",
+            "private_hnsw_oram/text/stashBackup.json",
             "private_hnsw_oram/text/stashBackups.json",
         ];
         for sentinel in sentinels {
@@ -4275,9 +4280,13 @@ mod private_hnsw_tests {
             "encryptedClientStateCiphertextSha256",
             "encrypted_client_state_ciphertexts_sha256",
             "encryptedClientStateCiphertextsSha256",
+            "oram_position_map_backup",
             "oram_position_map_backups",
+            "oramPositionMapBackup",
             "oramPositionMapBackups",
+            "position_map_backup",
             "position_map_backups",
+            "positionMapBackup",
             "positionMapBackups",
             "state_ciphertext",
             "stateCiphertext",
@@ -4291,8 +4300,11 @@ mod private_hnsw_tests {
             "stateCiphertextsSha256",
             "payload_fetch_token",
             "payloadFetchToken",
+            "token_position_map_backup",
             "token_position_map_backups",
+            "tokenPositionMapBackup",
             "tokenPositionMapBackups",
+            "stashBackup",
             "stashBackups",
         ] {
             assert!(

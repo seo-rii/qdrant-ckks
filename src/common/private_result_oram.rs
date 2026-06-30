@@ -2128,11 +2128,12 @@ mod private_result_oram_tests {
         assert!(rendered.contains("session_id is invalid"));
         assert!(!rendered.contains(malformed));
 
-        let alias_session_id = "stashBackups/session";
-        let err = validate_private_result_oram_session_id_shape(alias_session_id).unwrap_err();
-        let rendered = err.to_string();
-        assert!(rendered.contains("session_id is invalid"));
-        assert!(!rendered.contains(alias_session_id));
+        for alias_session_id in ["stashBackup/session", "stashBackups/session"] {
+            let err = validate_private_result_oram_session_id_shape(alias_session_id).unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("session_id is invalid"));
+            assert!(!rendered.contains(alias_session_id));
+        }
     }
 
     #[test]
@@ -2375,8 +2376,10 @@ mod private_result_oram_tests {
             "client_state_ciphertext",
             "state_ciphertext_hash",
             "state_ciphertext_sha256",
+            "token_position_map_backup",
             "token_position_map_backups",
             "payload_fetch_token",
+            "stashBackup",
             "stashBackups",
         ] {
             assert!(!rendered.contains(leaked), "{rendered}");
@@ -2483,8 +2486,10 @@ mod private_result_oram_tests {
             "private_result_oram/encrypted_client_state_ciphertexts_sha256.json",
             "private_result_oram/state_ciphertext_hash.json",
             "private_result_oram/stateCiphertextSha256.json",
+            "private_result_oram/token_position_map_backup.json",
             "private_result_oram/token_position_map_backups.json",
             "private_result_oram/payload_fetch_token.json",
+            "private_result_oram/stashBackup.json",
             "private_result_oram/stashBackups.json",
         ];
         for sentinel in sentinels {
@@ -4071,9 +4076,13 @@ mod private_result_oram_tests {
             "encryptedClientStateCiphertextSha256",
             "encrypted_client_state_ciphertexts_sha256",
             "encryptedClientStateCiphertextsSha256",
+            "oram_position_map_backup",
             "oram_position_map_backups",
+            "oramPositionMapBackup",
             "oramPositionMapBackups",
+            "position_map_backup",
             "position_map_backups",
+            "positionMapBackup",
             "positionMapBackups",
             "state_ciphertext",
             "stateCiphertext",
@@ -4087,8 +4096,11 @@ mod private_result_oram_tests {
             "stateCiphertextsSha256",
             "payload_fetch_token",
             "payloadFetchToken",
+            "token_position_map_backup",
             "token_position_map_backups",
+            "tokenPositionMapBackup",
             "tokenPositionMapBackups",
+            "stashBackup",
             "stashBackups",
         ] {
             assert!(

@@ -23352,6 +23352,7 @@ mod tests {
             "embedding:private-secret",
             "client.state",
             "position.map",
+            "stashBackup.json",
             "stashBackups.json",
             "client_state_ciphertext_hashes.json",
             "client_state_ciphertexts_sha256.json",
@@ -23360,6 +23361,7 @@ mod tests {
             "encrypted_client_state_ciphertexts_sha256.json",
             "state_ciphertext_hashes.json",
             "state_ciphertexts_sha256.json",
+            "token_position_map_backup.json",
             "token_position_map_backups.json",
         ];
         let settings = Settings {
