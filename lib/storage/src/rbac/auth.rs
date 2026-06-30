@@ -488,13 +488,16 @@ mod tests {
             "private ORAM client backup failed clientStateCiphertext=private-client-state-ciphertext-sentinel",
             "private ORAM client backup failed clientStateCiphertextHash=private-client-state-ciphertext-hash-sentinel",
             "private ORAM client backup failed clientStateCiphertextHashes=private-client-state-ciphertext-hashes-sentinel",
+            "private ORAM client backup failed client_state_ciphertext_hashes=private-client-state-ciphertext-hashes-snake-sentinel",
             "private ORAM client backup failed encryptedClientStateCiphertext=private-encrypted-client-state-ciphertext-sentinel",
             "private ORAM client backup failed encrypted_client_state_ciphertext_hash=private-encrypted-client-state-ciphertext-hash-snake-sentinel",
+            "private ORAM client backup failed encrypted_client_state_ciphertext_hashes=private-encrypted-client-state-ciphertext-hashes-snake-sentinel",
             "private ORAM client backup failed encryptedClientStateCiphertextHash=private-encrypted-client-state-ciphertext-hash-sentinel",
             "private ORAM client backup failed encryptedClientStateCiphertextHashes=private-encrypted-client-state-ciphertext-hashes-sentinel",
             "private ORAM client backup failed stateCiphertext=private-state-ciphertext-sentinel",
             "private ORAM client backup failed stateCiphertextHash=private-state-ciphertext-hash-sentinel",
             "private ORAM client backup failed stateCiphertextHashes=private-state-ciphertext-hashes-sentinel",
+            "private ORAM client backup failed state_ciphertext_hashes=private-state-ciphertext-hashes-snake-sentinel",
             "private ORAM client backup failed stashBackups=private-stash-backups-sentinel",
         ] {
             let redacted = redact_audit_error(error);

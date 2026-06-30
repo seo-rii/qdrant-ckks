@@ -902,6 +902,7 @@ mod tests {
             "tokenPositionMapBackups-sentinel",
             "token_position_map_backups-sentinel",
             "state_ciphertext_hash-sentinel",
+            "state_ciphertext_hashes-sentinel",
             "result-root-hash-sentinel",
             "result-new-root-hash-sentinel",
         ];
@@ -936,7 +937,7 @@ mod tests {
                 CommitPrivateResultOramBucketsRequest {
                     collection_name: "private-result-collection-label".into(),
                     session_id: "state_ciphertext_hash-sentinel".into(),
-                    old_root_hash: "client_state_ciphertext-sentinel".into(),
+                    old_root_hash: "state_ciphertext_hashes-sentinel".into(),
                     new_root_hash: "result-new-root-hash-sentinel".into(),
                     updated_buckets: vec![Default::default()],
                     ..Default::default()
