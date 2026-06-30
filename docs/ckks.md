@@ -696,9 +696,9 @@ REST and gRPC route fixtures cover both directions of this exclusion for private
 HNSW ORAM and private result ORAM session/upload APIs, collection/full snapshot
 creation, collection recovery, shard snapshot list/create/stream/download/delete,
 shard recovery, and partial snapshot manifest/recover-from routes.
-Snapshot creation also fails closed while a private HNSW ORAM manifest or bucket
-upload write-window guard is active for the collection, because upload writes
-canonical manifest, bucket, Merkle, and epoch files.
+Snapshot creation also fails closed while a private HNSW ORAM or private result
+ORAM manifest/bucket upload write-window guard is active for the collection,
+because upload writes canonical manifest, bucket, Merkle, and epoch files.
 Snapshot creation also refuses to archive orphan private HNSW ORAM vector stores
 whose on-disk store does not match a configured private HNSW ORAM encryption
 rule, or configured private HNSW ORAM vector rules whose on-disk store is
