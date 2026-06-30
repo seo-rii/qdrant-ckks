@@ -372,8 +372,11 @@ mod tests {
              encryptedClientStateBackups=encrypted-client-state-backups-camel-sentinel \
              clientStateCiphertext=client-state-ciphertext-camel-sentinel \
              clientStateCiphertextHash=client-state-ciphertext-hash-camel-sentinel \
+             encrypted_client_state_ciphertext_hash=encrypted-client-state-ciphertext-hash-snake-sentinel \
              encryptedClientStateCiphertext=encrypted-client-state-ciphertext-camel-sentinel \
+             encryptedClientStateCiphertextHash=encrypted-client-state-ciphertext-hash-camel-sentinel \
              stateCiphertext=state-ciphertext-camel-sentinel \
+             stateCiphertextHash=state-ciphertext-hash-camel-sentinel \
              position_map=position-map-snake-sentinel \
              positionMap=position-map-camel-sentinel \
              positionMapBackup=position-map-backup-camel-sentinel \
@@ -558,8 +561,11 @@ mod tests {
         assert!(!rendered.contains("encrypted-client-state-backups-camel-sentinel"));
         assert!(!rendered.contains("client-state-ciphertext-camel-sentinel"));
         assert!(!rendered.contains("client-state-ciphertext-hash-camel-sentinel"));
+        assert!(!rendered.contains("encrypted-client-state-ciphertext-hash-snake-sentinel"));
         assert!(!rendered.contains("encrypted-client-state-ciphertext-camel-sentinel"));
+        assert!(!rendered.contains("encrypted-client-state-ciphertext-hash-camel-sentinel"));
         assert!(!rendered.contains("state-ciphertext-camel-sentinel"));
+        assert!(!rendered.contains("state-ciphertext-hash-camel-sentinel"));
         assert!(!rendered.contains("position-map-snake-sentinel"));
         assert!(!rendered.contains("position-map-camel-sentinel"));
         assert!(!rendered.contains("position-map-backup-camel-sentinel"));
