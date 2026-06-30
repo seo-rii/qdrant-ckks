@@ -1127,11 +1127,15 @@ mod tests {
         do_upload_private_hnsw_manifest,
     };
     use crate::common::private_hnsw_wire_fixture::{
-        BASE_EPOCH, COLLECTION_NAME, PrivateHnswRouteWireFixture, VECTOR_NAME,
-        create_private_hnsw_collection, create_private_hnsw_collection_with_private_result_oram,
-        route_e2e_guard, test_dispatcher,
+        BASE_EPOCH, COLLECTION_NAME, PrivateHnswRouteWireFixture, PrivateResultOramRouteFixture,
+        VECTOR_NAME, create_private_hnsw_collection,
+        create_private_hnsw_collection_with_private_result_oram, route_e2e_guard, test_dispatcher,
     };
-    use crate::common::private_result_oram::begin_private_result_oram_collection_snapshot;
+    use crate::common::private_result_oram::{
+        begin_private_result_oram_collection_snapshot, do_close_private_result_oram_session,
+        do_open_private_result_oram_session, do_upload_private_result_oram_buckets,
+        do_upload_private_result_oram_manifest,
+    };
     use crate::common::snapshots::begin_private_oram_collection_lifecycle_guard;
 
     #[test]
@@ -1709,6 +1713,105 @@ mod tests {
                 &settings,
                 COLLECTION_NAME,
                 VECTOR_NAME,
+                &session.session_id,
+            )
+            .await
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn recover_snapshot_rejects_active_private_result_oram_session() {
+        let _guard = route_e2e_guard();
+        let hnsw_fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let result_fixture = PrivateResultOramRouteFixture::build();
+        let settings = result_fixture.route_settings_with_private_hnsw(&hnsw_fixture);
+        let (_temp, dispatcher) = test_dispatcher();
+        let dispatcher = web::Data::new(dispatcher);
+        let http_client = web::Data::new(HttpClient::from_settings(&settings).unwrap());
+        let route_settings = web::Data::new(settings.clone());
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection_with_private_result_oram(dispatcher.get_ref()).await;
+
+            let auth = Auth::new_internal(Access::full(
+                "private result ORAM active recovery route test",
+            ));
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.get_ref().toc(&auth, &pass).clone();
+            do_upload_private_result_oram_manifest(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                result_fixture.manifest.clone(),
+                result_fixture.signature.clone(),
+            )
+            .await
+            .unwrap();
+            do_upload_private_result_oram_buckets(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                result_fixture.manifest.index_epoch,
+                result_fixture.manifest.root_hash.clone(),
+                result_fixture.buckets.clone(),
+            )
+            .await
+            .unwrap();
+            let session = do_open_private_result_oram_session(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                "tenant-a/result-sdk-active-recovery-route-test".to_string(),
+                BASE_EPOCH,
+                true,
+            )
+            .await
+            .unwrap();
+
+            let app = actix_web::test::init_service(
+                actix_web::App::new()
+                    .app_data(dispatcher.clone())
+                    .app_data(http_client.clone())
+                    .app_data(route_settings.clone())
+                    .configure(config_snapshots_api),
+            )
+            .await;
+
+            let request = actix_web::test::TestRequest::put()
+                .uri("/collections/docs/snapshots/recover")
+                .set_json(serde_json::json!({
+                    "location": "file:///tmp/private-result-oram-active-recovery-sentinel.snapshot"
+                }))
+                .to_request();
+            let response = actix_web::test::call_service(&app, request).await;
+            assert_eq!(response.status(), actix_web::http::StatusCode::BAD_REQUEST);
+            let body = actix_web::body::to_bytes(response.into_body())
+                .await
+                .unwrap();
+            let body = std::str::from_utf8(&body).unwrap();
+            assert!(
+                body.contains("lifecycle operation requires no active private ORAM session"),
+                "{body}",
+            );
+            assert!(!body.contains(COLLECTION_NAME), "{body}");
+            assert!(!body.contains(&session.session_id), "{body}");
+            assert!(!body.contains(&result_fixture.manifest.root_hash), "{body}");
+            assert!(
+                !body.contains("private-result-oram-active-recovery-sentinel"),
+                "{body}"
+            );
+            assert!(!body.contains("private_result_oram"), "{body}");
+            assert!(!body.contains("payload_private_result_oram"), "{body}");
+
+            do_close_private_result_oram_session(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
                 &session.session_id,
             )
             .await

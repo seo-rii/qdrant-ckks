@@ -11,23 +11,29 @@ use collection::shards::channel_service::ChannelService;
 use common::budget::ResourceBudget;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
-    DistanceKind, FixedBudgetParams, OramKind, OramParams, PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND,
+    DistanceKind, FixedBudgetParams, OramKind, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+    PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND, PRIVATE_RESULT_ORAM_BINDING,
     PrivateHnswBucketAeadBaseContext, PrivateHnswBuildPoint, PrivateHnswClientCommitPlan,
     PrivateHnswClientError, PrivateHnswClientKeys, PrivateHnswCommitSignatureContext,
     PrivateHnswEncryptedIndexBuild, PrivateHnswEncryptedPathBatch, PrivateHnswManifestBuildContext,
     PrivateHnswOramBucket, PrivateHnswOramClientConfig, PrivateHnswOramManifest,
     PrivateHnswOramSignature, PrivateHnswParams, PrivateHnswPlaintextIndexBuild,
-    PrivateHnswSearchParams, PrivateHnswSearchResult, ResultPrivacyMode, SecretKey,
+    PrivateHnswSearchParams, PrivateHnswSearchResult, PrivateResultOramBucket,
+    PrivateResultOramBucketCommitmentContext, PrivateResultOramManifest,
+    PrivateResultOramSignature, ResultPrivacyMode, SecretKey,
     build_private_hnsw_oram_manifest_from_encrypted_index,
     build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points,
     encode_private_hnsw_oram_leaf_label, plan_private_hnsw_oram_commit_for_manifest,
-    private_hnsw_oram_bucket_ids_for_leaf, seal_private_hnsw_oram_plaintext_index,
-    search_private_hnsw_oram_encrypted_verified, sign_private_hnsw_oram_commit,
-    sign_private_hnsw_oram_manifest, sign_private_hnsw_oram_manifest_refresh,
-    sign_private_hnsw_oram_read_paths, sign_private_hnsw_oram_read_paths_for_manifest,
+    private_hnsw_oram_bucket_ids_for_leaf, private_result_oram_bucket_ciphertext_bytes,
+    private_result_oram_bucket_commitment, private_result_oram_merkle_root_for_commitments,
+    seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted_verified,
+    sign_private_hnsw_oram_commit, sign_private_hnsw_oram_manifest,
+    sign_private_hnsw_oram_manifest_refresh, sign_private_hnsw_oram_read_paths,
+    sign_private_hnsw_oram_read_paths_for_manifest, sign_private_result_oram_manifest,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use storage::content_manager::collection_meta_ops::{
     CollectionMetaOperations, CreateCollection, CreateCollectionOperation,
 };
@@ -73,6 +79,138 @@ pub(crate) struct PrivateHnswRouteWireSearchRun {
     pub(crate) updated_buckets: Vec<PrivateHnswOramBucket>,
     pub(crate) commit_plan: PrivateHnswClientCommitPlan,
     pub(crate) commit_signature: PrivateHnswOramSignature,
+}
+
+pub(crate) struct PrivateResultOramRouteFixture {
+    pub(crate) manifest: PrivateResultOramManifest,
+    pub(crate) signature: PrivateResultOramSignature,
+    pub(crate) buckets: Vec<PrivateResultOramBucket>,
+    signing_key: Ed25519KeyPair,
+}
+
+impl PrivateResultOramRouteFixture {
+    pub(crate) fn build() -> Self {
+        let signing_key = Ed25519KeyPair::from_seed_unchecked(&[9; 32]).unwrap();
+        let oram = OramParams {
+            kind: OramKind::PathOram,
+            bucket_size: 2,
+            block_size_bytes: 1024,
+            tree_height: 2,
+            path_batch_size: 1,
+        };
+        let bucket_count = (1_u64 << (oram.tree_height + 1)) - 1;
+        let mut manifest = PrivateResultOramManifest {
+            version: 1,
+            provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+            binding: PRIVATE_RESULT_ORAM_BINDING.to_string(),
+            collection_id: COLLECTION_ID.to_string(),
+            key_id: KEY_ID.to_string(),
+            rk_id: KEY_ID.to_string(),
+            rk_epoch: RK_EPOCH,
+            oram: oram.clone(),
+            index_epoch: BASE_EPOCH,
+            root_hash: BASE64URL_NOPAD.encode(&[0; 32]),
+            bucket_count,
+            logical_result_count: 3,
+            dummy_result_count: 1,
+            owner_signing_key_id: RESULT_SIGNING_KEY_ID.to_string(),
+            created_at_unix: 1_770_000_000,
+        };
+        let buckets = (0..bucket_count)
+            .map(|bucket_id| result_oram_bucket(bucket_id, &manifest))
+            .collect::<Vec<_>>();
+        let commitments = buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect::<Vec<_>>();
+        manifest.root_hash = private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
+        let buckets = (0..bucket_count)
+            .map(|bucket_id| result_oram_bucket(bucket_id, &manifest))
+            .collect::<Vec<_>>();
+        let signature = sign_private_result_oram_manifest(&signing_key, &manifest).unwrap();
+
+        Self {
+            manifest,
+            signature,
+            buckets,
+            signing_key,
+        }
+    }
+
+    pub(crate) fn route_settings_with_private_hnsw(
+        &self,
+        hnsw_fixture: &PrivateHnswRouteWireFixture,
+    ) -> Settings {
+        let mut settings = hnsw_fixture.route_settings();
+        settings.crypto.instances.insert(
+            "docs_private_result_oram_v1".to_string(),
+            CryptoInstanceConfig {
+                provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                materials: HashMap::new(),
+                backend_ref: None,
+                options: json!({
+                    "key_id": KEY_ID,
+                    "expected_rk_id": KEY_ID,
+                    "min_rk_epoch": RK_EPOCH,
+                    "max_rk_epoch": RK_EPOCH,
+                    "oram": {
+                        "kind": "path_oram",
+                        "bucket_size": self.manifest.oram.bucket_size,
+                        "block_size_bytes": self.manifest.oram.block_size_bytes,
+                        "tree_height": self.manifest.oram.tree_height,
+                        "path_batch_size": self.manifest.oram.path_batch_size
+                    },
+                    "integrity": {
+                        "manifest_signature_required": true,
+                        "commit_signature_required": true,
+                        "merkle_root_required": true
+                    },
+                    "signature_public_keys": {
+                        RESULT_SIGNING_KEY_ID: self.signing_public_key_b64()
+                    }
+                }),
+            },
+        );
+        settings
+    }
+
+    pub(crate) fn signing_public_key_b64(&self) -> String {
+        BASE64URL_NOPAD.encode(self.signing_key.public_key().as_ref())
+    }
+}
+
+fn result_oram_bucket(
+    bucket_id: u64,
+    manifest: &PrivateResultOramManifest,
+) -> PrivateResultOramBucket {
+    let expected_len = private_result_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap();
+    let mut fixed_ciphertext = vec![0; expected_len];
+    for (offset, byte) in fixed_ciphertext.iter_mut().enumerate() {
+        *byte = (bucket_id as u8).wrapping_add(manifest.index_epoch as u8) ^ (offset as u8);
+    }
+    let ciphertext = BASE64URL_NOPAD.encode(&fixed_ciphertext);
+    let ciphertext_sha256 = BASE64URL_NOPAD.encode(&Sha256::digest(&fixed_ciphertext));
+    let bucket_commitment = private_result_oram_bucket_commitment(
+        PrivateResultOramBucketCommitmentContext {
+            collection_id: &manifest.collection_id,
+            key_id: &manifest.key_id,
+            rk_id: &manifest.rk_id,
+            rk_epoch: manifest.rk_epoch,
+            bucket_id,
+            index_epoch: manifest.index_epoch,
+        },
+        &ciphertext_sha256,
+    )
+    .unwrap();
+
+    PrivateResultOramBucket {
+        version: 1,
+        bucket_id,
+        index_epoch: manifest.index_epoch,
+        ciphertext,
+        ciphertext_sha256,
+        bucket_commitment,
+    }
 }
 
 impl PrivateHnswRouteWireFixture {

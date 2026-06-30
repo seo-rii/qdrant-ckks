@@ -694,8 +694,9 @@ While the lifecycle operation is in flight, new private ORAM sessions/uploads
 and new collection/full snapshots fail closed.
 REST and gRPC route fixtures cover both directions of this exclusion for private
 HNSW ORAM and private result ORAM session/upload APIs, collection/full snapshot
-creation, collection recovery, shard snapshot list/create/stream/download/delete,
-shard recovery, and partial snapshot manifest/recover-from routes.
+creation, shard snapshot list/create/stream/download/delete, shard recovery, and
+partial snapshot manifest/recover-from routes. REST collection recovery fixtures
+also cover active session/snapshot/upload guards.
 Snapshot creation also fails closed while a private HNSW ORAM or private result
 ORAM manifest/bucket upload write-window guard is active for the collection,
 because upload writes canonical manifest, bucket, Merkle, and epoch files.

@@ -441,11 +441,15 @@ mod tests {
         do_upload_private_hnsw_manifest,
     };
     use crate::common::private_hnsw_wire_fixture::{
-        BASE_EPOCH, COLLECTION_NAME, PrivateHnswRouteWireFixture, VECTOR_NAME,
-        create_private_hnsw_collection, create_private_hnsw_collection_with_private_result_oram,
-        route_e2e_guard, test_dispatcher,
+        BASE_EPOCH, COLLECTION_NAME, PrivateHnswRouteWireFixture, PrivateResultOramRouteFixture,
+        VECTOR_NAME, create_private_hnsw_collection,
+        create_private_hnsw_collection_with_private_result_oram, route_e2e_guard, test_dispatcher,
     };
-    use crate::common::private_result_oram::begin_private_result_oram_collection_snapshot;
+    use crate::common::private_result_oram::{
+        begin_private_result_oram_collection_snapshot, do_close_private_result_oram_session,
+        do_open_private_result_oram_session, do_upload_private_result_oram_buckets,
+        do_upload_private_result_oram_manifest,
+    };
 
     #[test]
     fn update_and_delete_collection_reject_private_oram_snapshot_window() {
@@ -764,6 +768,154 @@ mod tests {
                 &settings,
                 COLLECTION_NAME,
                 VECTOR_NAME,
+                &session.session_id,
+            )
+            .await
+            .unwrap();
+        });
+    }
+
+    #[test]
+    fn update_and_delete_collection_reject_active_private_result_oram_session() {
+        let _guard = route_e2e_guard();
+        let hnsw_fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let result_fixture = PrivateResultOramRouteFixture::build();
+        let settings = result_fixture.route_settings_with_private_hnsw(&hnsw_fixture);
+        let (_temp, dispatcher) = test_dispatcher();
+        let dispatcher = Arc::new(dispatcher);
+        let service = CollectionsService::new(dispatcher.clone(), Settings::new(None).unwrap());
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection_with_private_result_oram(dispatcher.as_ref()).await;
+
+            let auth =
+                Auth::new_internal(Access::full("private result ORAM active tonic route test"));
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+            do_upload_private_result_oram_manifest(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                result_fixture.manifest.clone(),
+                result_fixture.signature.clone(),
+            )
+            .await
+            .unwrap();
+            do_upload_private_result_oram_buckets(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                result_fixture.manifest.index_epoch,
+                result_fixture.manifest.root_hash.clone(),
+                result_fixture.buckets.clone(),
+            )
+            .await
+            .unwrap();
+            let session = do_open_private_result_oram_session(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                "tenant-a/result-sdk-active-tonic-route-test".to_string(),
+                BASE_EPOCH,
+                true,
+            )
+            .await
+            .unwrap();
+
+            let update_err = Collections::update(
+                &service,
+                Request::new(UpdateCollection {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    optimizers_config: None,
+                    timeout: None,
+                    params: None,
+                    hnsw_config: None,
+                    vectors_config: None,
+                    quantization_config: None,
+                    sparse_vectors_config: None,
+                    strict_mode_config: None,
+                    metadata: Default::default(),
+                }),
+            )
+            .await
+            .expect_err("private result ORAM collection update must reject active session");
+            assert_eq!(update_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                update_err
+                    .message()
+                    .contains("lifecycle operation requires no active private ORAM session"),
+                "{update_err}",
+            );
+            assert!(
+                !update_err.message().contains(COLLECTION_NAME),
+                "{update_err}"
+            );
+            assert!(
+                !update_err.message().contains(&session.session_id),
+                "{update_err}"
+            );
+            assert!(
+                !update_err
+                    .message()
+                    .contains(&result_fixture.manifest.root_hash),
+                "{update_err}"
+            );
+            assert!(
+                !update_err.message().contains("private_result_oram"),
+                "{update_err}"
+            );
+            assert!(
+                !update_err.message().contains("payload_private_result_oram"),
+                "{update_err}"
+            );
+
+            let delete_err = Collections::delete(
+                &service,
+                Request::new(DeleteCollection {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    timeout: None,
+                }),
+            )
+            .await
+            .expect_err("private result ORAM collection delete must reject active session");
+            assert_eq!(delete_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                delete_err
+                    .message()
+                    .contains("lifecycle operation requires no active private ORAM session"),
+                "{delete_err}",
+            );
+            assert!(
+                !delete_err.message().contains(COLLECTION_NAME),
+                "{delete_err}"
+            );
+            assert!(
+                !delete_err.message().contains(&session.session_id),
+                "{delete_err}"
+            );
+            assert!(
+                !delete_err
+                    .message()
+                    .contains(&result_fixture.manifest.root_hash),
+                "{delete_err}"
+            );
+            assert!(
+                !delete_err.message().contains("private_result_oram"),
+                "{delete_err}"
+            );
+            assert!(
+                !delete_err.message().contains("payload_private_result_oram"),
+                "{delete_err}"
+            );
+
+            do_close_private_result_oram_session(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
                 &session.session_id,
             )
             .await
