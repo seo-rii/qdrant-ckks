@@ -12584,26 +12584,39 @@ mod tests {
         }
     }
 
+    const PRIVATE_RESULT_ORAM_PAYLOAD_ALIAS_SENTINELS: &[&str] = &[
+        "clientStateBackups",
+        "clientStateCiphertext",
+        "clientStateCiphertextHash",
+        "clientStateCiphertextHashes",
+        "client_state_ciphertext",
+        "client_state_ciphertext_hash",
+        "encryptedClientStateBackups",
+        "encryptedClientStateCiphertext",
+        "encryptedClientStateCiphertextHash",
+        "encryptedClientStateCiphertextHashes",
+        "encrypted_client_state",
+        "encrypted_client_state_backup",
+        "encrypted_client_state_snapshot",
+        "encrypted_client_state_ciphertext",
+        "encrypted_client_state_ciphertext_hash",
+        "oramPositionMapBackups",
+        "oram_position_map_backups",
+        "positionMapBackups",
+        "position_map_backups",
+        "stashBackups",
+        "stateCiphertext",
+        "stateCiphertextHash",
+        "stateCiphertextHashes",
+        "state_ciphertext",
+        "state_ciphertext_hash",
+        "tokenPositionMapBackups",
+        "token_position_map_backups",
+    ];
+
     #[test]
     fn private_result_oram_grouping_redacts_backup_alias_payload_path() {
-        for payload_path in [
-            "clientStateBackups",
-            "clientStateCiphertext",
-            "clientStateCiphertextHash",
-            "clientStateCiphertextHashes",
-            "encryptedClientStateBackups",
-            "encryptedClientStateCiphertext",
-            "encryptedClientStateCiphertextHash",
-            "encryptedClientStateCiphertextHashes",
-            "encrypted_client_state_ciphertext_hash",
-            "oramPositionMapBackups",
-            "positionMapBackups",
-            "stashBackups",
-            "stateCiphertext",
-            "stateCiphertextHash",
-            "stateCiphertextHashes",
-            "tokenPositionMapBackups",
-        ] {
+        for &payload_path in PRIVATE_RESULT_ORAM_PAYLOAD_ALIAS_SENTINELS {
             let encryption = CollectionEncryptionConfig {
                 version: 1,
                 key_id: Some("tenant-a:result-private-rk".to_string()),
@@ -12632,24 +12645,7 @@ mod tests {
             assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
             assert!(message.contains("/private-result-oram/session"));
             assert!(!message.contains(payload_path), "{message}");
-            for sentinel in [
-                "clientStateBackups",
-                "clientStateCiphertext",
-                "clientStateCiphertextHash",
-                "clientStateCiphertextHashes",
-                "encryptedClientStateBackups",
-                "encryptedClientStateCiphertext",
-                "encryptedClientStateCiphertextHash",
-                "encryptedClientStateCiphertextHashes",
-                "encrypted_client_state_ciphertext_hash",
-                "oramPositionMapBackups",
-                "positionMapBackups",
-                "stashBackups",
-                "stateCiphertext",
-                "stateCiphertextHash",
-                "stateCiphertextHashes",
-                "tokenPositionMapBackups",
-            ] {
+            for &sentinel in PRIVATE_RESULT_ORAM_PAYLOAD_ALIAS_SENTINELS {
                 assert!(!message.contains(sentinel), "{message}");
             }
             assert!(!message.contains("configure a blind index provider"));
@@ -12983,24 +12979,7 @@ mod tests {
             assert!(!message.contains("body"), "{message}");
         }
 
-        for payload_path in [
-            "clientStateBackups",
-            "clientStateCiphertext",
-            "clientStateCiphertextHash",
-            "clientStateCiphertextHashes",
-            "encryptedClientStateBackups",
-            "encryptedClientStateCiphertext",
-            "encryptedClientStateCiphertextHash",
-            "encryptedClientStateCiphertextHashes",
-            "encrypted_client_state_ciphertext_hash",
-            "oramPositionMapBackups",
-            "positionMapBackups",
-            "stashBackups",
-            "stateCiphertext",
-            "stateCiphertextHash",
-            "stateCiphertextHashes",
-            "tokenPositionMapBackups",
-        ] {
+        for &payload_path in PRIVATE_RESULT_ORAM_PAYLOAD_ALIAS_SENTINELS {
             let message = private_result_oram_raw_payload_read_error(payload_path).to_string();
             assert!(
                 message.contains("cannot read private result ORAM payload field"),
@@ -13010,24 +12989,7 @@ mod tests {
             assert!(message.contains("/private-result-oram/session"));
             assert!(message.contains("ordinary collection payload reads"));
             assert!(!message.contains(payload_path), "{message}");
-            for sentinel in [
-                "clientStateBackups",
-                "clientStateCiphertext",
-                "clientStateCiphertextHash",
-                "clientStateCiphertextHashes",
-                "encryptedClientStateBackups",
-                "encryptedClientStateCiphertext",
-                "encryptedClientStateCiphertextHash",
-                "encryptedClientStateCiphertextHashes",
-                "encrypted_client_state_ciphertext_hash",
-                "oramPositionMapBackups",
-                "positionMapBackups",
-                "stashBackups",
-                "stateCiphertext",
-                "stateCiphertextHash",
-                "stateCiphertextHashes",
-                "tokenPositionMapBackups",
-            ] {
+            for &sentinel in PRIVATE_RESULT_ORAM_PAYLOAD_ALIAS_SENTINELS {
                 assert!(!message.contains(sentinel), "{message}");
             }
         }

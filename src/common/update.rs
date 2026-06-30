@@ -11494,27 +11494,41 @@ esac
         assert!(!err.contains("JsonPath"), "{err}");
     }
 
+    const PRIVATE_RESULT_ORAM_PAYLOAD_ALIAS_SENTINELS: &[&str] = &[
+        "clientStateBackups",
+        "clientStateCiphertext",
+        "clientStateCiphertextHash",
+        "clientStateCiphertextHashes",
+        "client_state_ciphertext",
+        "client_state_ciphertext_hash",
+        "encryptedClientStateBackups",
+        "encryptedClientStateCiphertext",
+        "encryptedClientStateCiphertextHash",
+        "encryptedClientStateCiphertextHashes",
+        "encrypted_client_state",
+        "encrypted_client_state_backup",
+        "encrypted_client_state_snapshot",
+        "encrypted_client_state_ciphertext",
+        "encrypted_client_state_ciphertext_hash",
+        "oramPositionMapBackups",
+        "oram_position_map_backups",
+        "positionMapBackups",
+        "position_map_backups",
+        "stashBackups",
+        "stateCiphertext",
+        "stateCiphertextHash",
+        "stateCiphertextHashes",
+        "state_ciphertext",
+        "state_ciphertext_hash",
+        "tokenPositionMapBackups",
+        "token_position_map_backups",
+    ];
+
     #[test]
     fn private_result_oram_payload_write_error_redacts_payload_path() {
-        for payload_path in [
-            "document.private-result-payload-path-sentinel",
-            "clientStateBackups",
-            "clientStateCiphertext",
-            "clientStateCiphertextHash",
-            "clientStateCiphertextHashes",
-            "encryptedClientStateBackups",
-            "encryptedClientStateCiphertext",
-            "encryptedClientStateCiphertextHash",
-            "encryptedClientStateCiphertextHashes",
-            "encrypted_client_state_ciphertext_hash",
-            "oramPositionMapBackups",
-            "positionMapBackups",
-            "stashBackups",
-            "stateCiphertext",
-            "stateCiphertextHash",
-            "stateCiphertextHashes",
-            "tokenPositionMapBackups",
-        ] {
+        for payload_path in std::iter::once("document.private-result-payload-path-sentinel")
+            .chain(PRIVATE_RESULT_ORAM_PAYLOAD_ALIAS_SENTINELS.iter().copied())
+        {
             for operation_kind in [
                 "upsert points",
                 "set payload",
@@ -11538,24 +11552,7 @@ esac
                     !err.contains("private-result-payload-path-sentinel"),
                     "{err}"
                 );
-                for sentinel in [
-                    "clientStateBackups",
-                    "clientStateCiphertext",
-                    "clientStateCiphertextHash",
-                    "clientStateCiphertextHashes",
-                    "encryptedClientStateBackups",
-                    "encryptedClientStateCiphertext",
-                    "encryptedClientStateCiphertextHash",
-                    "encryptedClientStateCiphertextHashes",
-                    "encrypted_client_state_ciphertext_hash",
-                    "oramPositionMapBackups",
-                    "positionMapBackups",
-                    "stashBackups",
-                    "stateCiphertext",
-                    "stateCiphertextHash",
-                    "stateCiphertextHashes",
-                    "tokenPositionMapBackups",
-                ] {
+                for &sentinel in PRIVATE_RESULT_ORAM_PAYLOAD_ALIAS_SENTINELS {
                     assert!(!err.contains(sentinel), "{err}");
                 }
             }
