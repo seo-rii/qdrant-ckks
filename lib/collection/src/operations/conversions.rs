@@ -1689,15 +1689,11 @@ impl TryFrom<api::grpc::qdrant::CreateShardKey> for CreateShardingKey {
             shards_number: shards_number
                 .map(NonZeroU32::try_from)
                 .transpose()
-                .map_err(|err| {
-                    Status::invalid_argument(format!("Shard number cannot be zero: {err}"))
-                })?,
+                .map_err(|_| Status::invalid_argument("Shard number cannot be zero"))?,
             replication_factor: replication_factor
                 .map(NonZeroU32::try_from)
                 .transpose()
-                .map_err(|err| {
-                    Status::invalid_argument(format!("Replication factor cannot be zero: {err}"))
-                })?,
+                .map_err(|_| Status::invalid_argument("Replication factor cannot be zero"))?,
             placement: (!placement.is_empty()).then_some(placement),
             initial_state: initial_state.map(ReplicaState::try_from).transpose()?,
         };
@@ -2026,6 +2022,14 @@ mod tests {
         }
     }
 
+    fn keyword_shard_key() -> grpc::ShardKey {
+        grpc::ShardKey {
+            key: Some(grpc::shard_key::Key::Keyword(
+                "tenant-secret-shard".to_string(),
+            )),
+        }
+    }
+
     #[test]
     fn grpc_collection_enums_reject_unknown_values_without_reflecting_them() {
         const UNKNOWN_ENUM_VALUE: i32 = 99;
@@ -2063,6 +2067,33 @@ mod tests {
         let err = convert_datatype_from_proto(Some(UNKNOWN_ENUM_VALUE)).unwrap_err();
         assert_eq!(err.message(), "Cannot convert datatype");
         assert!(!err.message().contains("99"));
+    }
+
+    #[test]
+    fn grpc_create_shard_key_zero_counts_do_not_reflect_conversion_detail() {
+        let err = CreateShardingKey::try_from(grpc::CreateShardKey {
+            shard_key: Some(keyword_shard_key()),
+            shards_number: Some(0),
+            replication_factor: Some(1),
+            placement: Vec::new(),
+            initial_state: None,
+        })
+        .unwrap_err();
+        assert_eq!(err.message(), "Shard number cannot be zero");
+        assert!(!err.message().contains("out of range"));
+        assert!(!err.message().contains("tenant-secret-shard"));
+
+        let err = CreateShardingKey::try_from(grpc::CreateShardKey {
+            shard_key: Some(keyword_shard_key()),
+            shards_number: Some(1),
+            replication_factor: Some(0),
+            placement: Vec::new(),
+            initial_state: None,
+        })
+        .unwrap_err();
+        assert_eq!(err.message(), "Replication factor cannot be zero");
+        assert!(!err.message().contains("out of range"));
+        assert!(!err.message().contains("tenant-secret-shard"));
     }
 
     #[test]
