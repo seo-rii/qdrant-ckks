@@ -435,10 +435,15 @@ mod tests {
     use storage::rbac::{Access, Auth};
 
     use super::*;
-    use crate::common::private_hnsw::begin_private_hnsw_collection_snapshot;
+    use crate::common::private_hnsw::{
+        begin_private_hnsw_collection_snapshot, do_close_private_hnsw_session,
+        do_open_private_hnsw_session, do_upload_private_hnsw_buckets,
+        do_upload_private_hnsw_manifest,
+    };
     use crate::common::private_hnsw_wire_fixture::{
-        COLLECTION_NAME, create_private_hnsw_collection,
-        create_private_hnsw_collection_with_private_result_oram, route_e2e_guard, test_dispatcher,
+        BASE_EPOCH, COLLECTION_NAME, PrivateHnswRouteWireFixture, VECTOR_NAME,
+        create_private_hnsw_collection, create_private_hnsw_collection_with_private_result_oram,
+        route_e2e_guard, test_dispatcher,
     };
     use crate::common::private_result_oram::begin_private_result_oram_collection_snapshot;
 
@@ -619,6 +624,150 @@ mod tests {
                 !delete_err.message().contains("payload_private_result_oram"),
                 "{delete_err}"
             );
+        });
+    }
+
+    #[test]
+    fn update_and_delete_collection_reject_active_private_oram_session() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let settings = fixture.route_settings();
+        let (_temp, dispatcher) = test_dispatcher();
+        let dispatcher = Arc::new(dispatcher);
+        let service = CollectionsService::new(dispatcher.clone(), Settings::new(None).unwrap());
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_hnsw_collection(dispatcher.as_ref()).await;
+
+            let auth =
+                Auth::new_internal(Access::full("private ORAM active session tonic route test"));
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass).clone();
+            do_upload_private_hnsw_manifest(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                fixture.manifest.clone(),
+                fixture.manifest_signature.clone(),
+            )
+            .await
+            .unwrap();
+            do_upload_private_hnsw_buckets(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                fixture.encrypted_build.index_epoch,
+                fixture.encrypted_build.root_hash.clone(),
+                fixture.encrypted_build.buckets.clone(),
+            )
+            .await
+            .unwrap();
+            let session = do_open_private_hnsw_session(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                "tenant-a/sdk-active-session-tonic-route-test".to_string(),
+                BASE_EPOCH,
+                true,
+                qdrant_sec::ResultPrivacyMode::IdsVisible,
+            )
+            .await
+            .unwrap();
+
+            let update_err = Collections::update(
+                &service,
+                Request::new(UpdateCollection {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    optimizers_config: None,
+                    timeout: None,
+                    params: None,
+                    hnsw_config: None,
+                    vectors_config: None,
+                    quantization_config: None,
+                    sparse_vectors_config: None,
+                    strict_mode_config: None,
+                    metadata: Default::default(),
+                }),
+            )
+            .await
+            .expect_err("private ORAM collection update must reject active session");
+            assert_eq!(update_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                update_err
+                    .message()
+                    .contains("lifecycle operation requires no active private ORAM session"),
+                "{update_err}",
+            );
+            assert!(
+                !update_err.message().contains(COLLECTION_NAME),
+                "{update_err}"
+            );
+            assert!(
+                !update_err.message().contains(&session.session_id),
+                "{update_err}"
+            );
+            assert!(
+                !update_err
+                    .message()
+                    .contains(&fixture.encrypted_build.root_hash),
+                "{update_err}"
+            );
+            assert!(
+                !update_err.message().contains("private_hnsw_oram"),
+                "{update_err}"
+            );
+
+            let delete_err = Collections::delete(
+                &service,
+                Request::new(DeleteCollection {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    timeout: None,
+                }),
+            )
+            .await
+            .expect_err("private ORAM collection delete must reject active session");
+            assert_eq!(delete_err.code(), tonic::Code::InvalidArgument);
+            assert!(
+                delete_err
+                    .message()
+                    .contains("lifecycle operation requires no active private ORAM session"),
+                "{delete_err}",
+            );
+            assert!(
+                !delete_err.message().contains(COLLECTION_NAME),
+                "{delete_err}"
+            );
+            assert!(
+                !delete_err.message().contains(&session.session_id),
+                "{delete_err}"
+            );
+            assert!(
+                !delete_err
+                    .message()
+                    .contains(&fixture.encrypted_build.root_hash),
+                "{delete_err}"
+            );
+            assert!(
+                !delete_err.message().contains("private_hnsw_oram"),
+                "{delete_err}"
+            );
+
+            do_close_private_hnsw_session(
+                &toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                &session.session_id,
+            )
+            .await
+            .unwrap();
         });
     }
 }
