@@ -641,6 +641,14 @@ mod tests {
     use super::*;
 
     const PRIVATE_ORAM_REPLICA_REMOVE_REDACTION_STEMS: &[&str] = &[
+        "clientState",
+        "clientStates",
+        "client_state",
+        "client_states",
+        "clientStateBackup",
+        "clientStateBackups",
+        "client_state_backup",
+        "client_state_backups",
         "clientStateCiphertext",
         "clientStateSnapshot",
         "clientStateSnapshots",
@@ -661,6 +669,11 @@ mod tests {
         "encryptedClientStateCiphertextSha256",
         "encryptedClientStateCiphertextsSha256",
         "encrypted_client_state",
+        "encrypted_client_states",
+        "encryptedClientState",
+        "encryptedClientStates",
+        "encryptedClientStateBackup",
+        "encryptedClientStateBackups",
         "encrypted_client_state_backup",
         "encrypted_client_state_backups",
         "encryptedClientStateSnapshot",
