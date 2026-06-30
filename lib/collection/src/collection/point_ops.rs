@@ -114,6 +114,17 @@ fn plaintext_vector_write_error_for_encryption_rule(
     }
 }
 
+fn peer_client_encrypted_payload_replay_violation(
+    value: &serde_json::Value,
+    allow_client_envelope: bool,
+) -> Option<CollectionError> {
+    (allow_client_envelope && is_client_encrypted_payload_value(value)).then(|| {
+        CollectionError::bad_input(
+            "peer client encrypted payload marker requires a runtime verifier manifest and cluster-wide nonce ledger before peer replay is supported",
+        )
+    })
+}
+
 fn private_hnsw_oram_read_only_point_operation_violation<'a>(
     operation: &CollectionUpdateOperations,
     encryption: &'a CollectionEncryptionConfig,
@@ -1164,10 +1175,10 @@ impl Collection {
                     })?;
                     continue;
                 }
-                if allow_client_envelope && is_client_encrypted_payload_value(value) {
-                    return Err(CollectionError::bad_input(
-                        "peer client encrypted payload marker requires a runtime verifier manifest and cluster-wide nonce ledger before peer replay is supported",
-                    ));
+                if let Some(err) =
+                    peer_client_encrypted_payload_replay_violation(value, allow_client_envelope)
+                {
+                    return Err(err);
                 }
                 return Ok(true);
             }
@@ -4445,6 +4456,60 @@ mod tests {
             assert!(!message.contains(vector_name), "{message}");
             assert!(!message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
         }
+    }
+
+    #[test]
+    fn peer_client_payload_replay_requires_runtime_verifier_without_value_leaks() {
+        let mut marker = serde_json::Map::new();
+        marker.insert(
+            qdrant_sec::CLIENT_ENCRYPTED_PAYLOAD_MARKER.to_string(),
+            serde_json::json!({
+                "version": 1,
+                "kind": PAYLOAD_TEXT_ENVELOPE_KIND,
+                "algorithm": "AES-256-GCM",
+                "key_id": "tenant-a:client-rk",
+                "rk_id": "tenant-a:client-rk",
+                "rk_epoch": 3,
+                "kdf_domain": "qdrant-sec/client-payload-text/v1",
+                "aad": {
+                    "collection_id": "collection-crypto-id",
+                    "point_id": "1",
+                    "field_path": "document.body",
+                    "schema_version": 1
+                },
+                "nonce": BASE64URL_NOPAD.encode(&[1_u8; 12]),
+                "ciphertext": BASE64URL_NOPAD.encode(b"client-payload-ciphertext-sentinel"),
+                "signature": {
+                    "alg": "ed25519",
+                    "key_id": "tenant-a:client-signing-v1",
+                    "sig": BASE64URL_NOPAD.encode(&[3_u8; 64])
+                }
+            }),
+        );
+        let value = serde_json::Value::Object(marker);
+
+        assert!(peer_client_encrypted_payload_replay_violation(&value, false).is_none());
+        let err = peer_client_encrypted_payload_replay_violation(&value, true)
+            .expect("peer client payload replay must fail closed");
+        let message = err.to_string();
+        assert!(
+            message.contains("runtime verifier manifest and cluster-wide nonce ledger"),
+            "{message}",
+        );
+        for sentinel in [
+            qdrant_sec::CLIENT_ENCRYPTED_PAYLOAD_MARKER,
+            "tenant-a:client-rk",
+            "tenant-a:client-signing-v1",
+            "client-payload-ciphertext-sentinel",
+            &BASE64URL_NOPAD.encode(&[3_u8; 64]),
+        ] {
+            assert!(!message.contains(sentinel), "{message}");
+        }
+
+        assert!(
+            peer_client_encrypted_payload_replay_violation(&serde_json::json!("public"), true)
+                .is_none()
+        );
     }
 
     #[test]
