@@ -5739,10 +5739,10 @@ fn validate_material_vault_kv2_source(
 ) -> Result<(), CryptoSetupError> {
     let redacted_url = redacted_external_material_url_for_message(url);
     let parsed =
-        reqwest::Url::parse(url).map_err(|err| CryptoSetupError::InvalidMaterialFileSource {
+        reqwest::Url::parse(url).map_err(|_| CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
             path: redacted_url.clone(),
-            reason: format!("Vault KV v2 URL is invalid: {err}"),
+            reason: "Vault KV v2 URL is invalid".to_string(),
         })?;
     let is_loopback_http = is_loopback_http_url(&parsed);
     if parsed.scheme() != "https" && !is_loopback_http {
@@ -5873,10 +5873,10 @@ fn validate_material_vault_transit_source(
 ) -> Result<(), CryptoSetupError> {
     let redacted_url = redacted_external_material_url_for_message(url);
     let parsed =
-        reqwest::Url::parse(url).map_err(|err| CryptoSetupError::InvalidMaterialFileSource {
+        reqwest::Url::parse(url).map_err(|_| CryptoSetupError::InvalidMaterialFileSource {
             material: material_name.to_string(),
             path: redacted_url.clone(),
-            reason: format!("Vault Transit key URL is invalid: {err}"),
+            reason: "Vault Transit key URL is invalid".to_string(),
         })?;
     let is_loopback_http = is_loopback_http_url(&parsed);
     if parsed.scheme() != "https" && !is_loopback_http {
@@ -8759,11 +8759,11 @@ fn validate_aws_kms_endpoint_url(
     expected_host: Option<&str>,
 ) -> Result<String, PayloadWriteSetupError> {
     let redacted_url = redacted_external_material_url_for_message(url);
-    let parsed = reqwest::Url::parse(url).map_err(|err| {
+    let parsed = reqwest::Url::parse(url).map_err(|_| {
         PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<aws-kms>".to_string(),
             path: redacted_url.clone(),
-            reason: format!("AWS KMS endpoint URL is invalid: {err}"),
+            reason: "AWS KMS endpoint URL is invalid".to_string(),
         }
     })?;
     let is_loopback_http = parsed.scheme() == "http"
@@ -8817,11 +8817,11 @@ fn validate_aws_kms_endpoint_url_host(
             reason: "AWS KMS expected_host is invalid".to_string(),
         });
     }
-    let parsed = reqwest::Url::parse(url).map_err(|err| {
+    let parsed = reqwest::Url::parse(url).map_err(|_| {
         PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<aws-kms>".to_string(),
             path: redacted_url.clone(),
-            reason: format!("AWS KMS endpoint URL is invalid: {err}"),
+            reason: "AWS KMS endpoint URL is invalid".to_string(),
         }
     })?;
     let actual_host = external_url_authority(&parsed).ok_or_else(|| {
@@ -9134,11 +9134,11 @@ impl MasterKeyProvider for VaultTransitMasterKeyProvider {
 
 fn vault_transit_action_url(key_url: &str, action: &str) -> Result<String, PayloadWriteSetupError> {
     let redacted_key_url = redacted_external_material_url_for_message(key_url);
-    let mut url = reqwest::Url::parse(key_url).map_err(|err| {
+    let mut url = reqwest::Url::parse(key_url).map_err(|_| {
         PayloadWriteSetupError::InvalidMaterialFileSource {
             material: "<vault-transit>".to_string(),
             path: redacted_key_url.clone(),
-            reason: format!("Vault Transit key URL is invalid: {err}"),
+            reason: "Vault Transit key URL is invalid".to_string(),
         }
     })?;
     let path = url.path().to_string();
@@ -15580,6 +15580,31 @@ mod tests {
     }
 
     #[test]
+    fn validate_material_vault_kv2_source_rejects_invalid_url_without_parse_detail() {
+        let vault_material = CryptoMaterialConfig {
+            kind: "symmetric_key_32".to_string(),
+            source: Some("vault_kv2".to_string()),
+            env: Some("QDRANT_TEST_VAULT_TOKEN".to_string()),
+            path: Some(
+                "https://vault.example.com:bad/v1/secret/data/docs?token=qdrant-sec-vault-url"
+                    .to_string(),
+            ),
+            vault_field: Some("material".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        match validate_material("tenant-a/payload-v1", &vault_material, false) {
+            Err(CryptoSetupError::InvalidMaterialFileSource { path, reason, .. }) => {
+                assert_eq!(path, "[invalid-url]");
+                assert_eq!(reason, "Vault KV v2 URL is invalid");
+                assert!(!reason.contains("invalid port"));
+                assert!(!reason.contains("qdrant-sec-vault-url"));
+            }
+            other => panic!("unexpected validation result: {other:?}"),
+        }
+    }
+
+    #[test]
     fn validate_material_vault_kv2_source_requires_field() {
         let vault_material = CryptoMaterialConfig {
             kind: "symmetric_key_32".to_string(),
@@ -15916,6 +15941,44 @@ mod tests {
     }
 
     #[test]
+    fn validate_material_vault_transit_source_rejects_invalid_url_without_parse_detail() {
+        let vault_wrapping_material = CryptoMaterialConfig {
+            kind: "wrapping_key_32".to_string(),
+            source: Some(VAULT_TRANSIT_SOURCE.to_string()),
+            env: Some("QDRANT_TEST_VAULT_TRANSIT_TOKEN".to_string()),
+            path: Some(
+                "https://vault.example.com:bad/v1/transit/keys/docs?token=qdrant-sec-transit-url"
+                    .to_string(),
+            ),
+            expected_host: Some("vault.example.com".to_string()),
+            ..CryptoMaterialConfig::default()
+        };
+
+        match validate_material("tenant-a/mk-vault", &vault_wrapping_material, false) {
+            Err(CryptoSetupError::InvalidMaterialFileSource { path, reason, .. }) => {
+                assert_eq!(path, "[invalid-url]");
+                assert_eq!(reason, "Vault Transit key URL is invalid");
+                assert!(!reason.contains("invalid port"));
+                assert!(!reason.contains("qdrant-sec-transit-url"));
+            }
+            other => panic!("unexpected validation result: {other:?}"),
+        }
+
+        match vault_transit_action_url(
+            "https://vault.example.com:bad/v1/transit/keys/docs?token=qdrant-sec-transit-action",
+            "encrypt",
+        ) {
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { path, reason, .. }) => {
+                assert_eq!(path, "[invalid-url]");
+                assert_eq!(reason, "Vault Transit key URL is invalid");
+                assert!(!reason.contains("invalid port"));
+                assert!(!reason.contains("qdrant-sec-transit-action"));
+            }
+            other => panic!("unexpected action URL result: {other:?}"),
+        }
+    }
+
+    #[test]
     fn validate_material_vault_transit_source_redacts_url_credentials_in_errors() {
         let vault_wrapping_material = CryptoMaterialConfig {
             kind: "wrapping_key_32".to_string(),
@@ -16062,6 +16125,22 @@ mod tests {
                 if reason.contains("does not match")
         ));
         assert!(validate_aws_kms_endpoint_url("http://127.0.0.1:4566/", None).is_ok());
+    }
+
+    #[test]
+    fn aws_kms_custom_endpoint_rejects_invalid_url_without_parse_detail() {
+        match validate_aws_kms_endpoint_url(
+            "https://kms-proxy.example.com:bad/?token=qdrant-sec-kms-url",
+            Some("kms-proxy.example.com"),
+        ) {
+            Err(PayloadWriteSetupError::InvalidMaterialFileSource { path, reason, .. }) => {
+                assert_eq!(path, "[invalid-url]");
+                assert_eq!(reason, "AWS KMS endpoint URL is invalid");
+                assert!(!reason.contains("invalid port"));
+                assert!(!reason.contains("qdrant-sec-kms-url"));
+            }
+            other => panic!("unexpected endpoint validation result: {other:?}"),
+        }
     }
 
     #[test]
