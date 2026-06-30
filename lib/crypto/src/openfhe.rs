@@ -2157,6 +2157,85 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn unchecked_bridge_strips_qdrant_and_sensitive_env_names() {
+        use std::os::unix::fs::PermissionsExt;
+
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+        let _env_guard = ENV_LOCK.lock().unwrap();
+
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-openfhe-env-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let script = dir.path().join("openfhe-bridge");
+        let expected_profile = CkksParameters::default().security_profile().unwrap();
+        let script_body = format!(
+            r#"#!/bin/sh
+if [ "${{QDRANT+x}}" = x ] || \
+   [ "${{QDRANT_UNCHECKED_OPENFHE_SECRET_FOR_TEST+x}}" = x ] || \
+   [ "${{TENANT_OPENFHE_ENV_SECRET_FOR_TEST+x}}" = x ]; then
+  printf '%s\n' 'secret env leaked to unchecked bridge' >&2
+  exit 41
+fi
+if [ "${{OPENFHE_BRIDGE_PUBLIC_ENV_FOR_TEST}}" != "ambient-ok" ]; then
+  printf '%s\n' 'public env did not reach unchecked bridge' >&2
+  exit 42
+fi
+while IFS= read -r _line; do
+  printf '%s\n' '{{"version":1,"ciphertext":"AQ","security_profile":"{expected_profile}","security_level_bits":128}}'
+done
+"#
+        );
+        std::fs::write(&script, script_body).unwrap();
+        let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        dir_permissions.set_mode(0o700);
+        std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+        let mut script_permissions = std::fs::metadata(&script).unwrap().permissions();
+        script_permissions.set_mode(0o700);
+        std::fs::set_permissions(&script, script_permissions).unwrap();
+
+        unsafe {
+            std::env::set_var("QDRANT", "qdrant-root-secret");
+            std::env::set_var(
+                "QDRANT_UNCHECKED_OPENFHE_SECRET_FOR_TEST",
+                "qdrant-prefixed-secret",
+            );
+            std::env::set_var(
+                "TENANT_OPENFHE_ENV_SECRET_FOR_TEST",
+                "tenant-material-secret",
+            );
+            std::env::set_var("OPENFHE_BRIDGE_PUBLIC_ENV_FOR_TEST", "ambient-ok");
+        }
+
+        let backend = CommandOpenFheBackend::new_unchecked(&script)
+            .with_timeout(Duration::from_secs(2))
+            .with_sensitive_env_names(["TENANT_OPENFHE_ENV_SECRET_FOR_TEST"]);
+        let parameters = CkksParameters::default();
+        let public_material =
+            crate::vector::CkksPublicMaterial::new(b"env-test-context", b"env-test-public-key")
+                .unwrap();
+        let result = backend.encrypt(CkksEncryptionInput {
+            parameters: &parameters,
+            public_material: &public_material,
+            collection: "docs",
+            point_id: "point-1",
+            vector_name: "embedding",
+            values: &[1.0, 2.0],
+        });
+
+        unsafe {
+            std::env::remove_var("QDRANT");
+            std::env::remove_var("QDRANT_UNCHECKED_OPENFHE_SECRET_FOR_TEST");
+            std::env::remove_var("TENANT_OPENFHE_ENV_SECRET_FOR_TEST");
+            std::env::remove_var("OPENFHE_BRIDGE_PUBLIC_ENV_FOR_TEST");
+        }
+
+        let ciphertext = result.expect("unchecked bridge should receive only allowed env values");
+        assert_eq!(ciphertext, vec![1]);
+    }
+
     #[test]
     fn cached_context_requests_strip_public_material_for_all_openfhe_operations() {
         let parameters = CkksParameters::default();
