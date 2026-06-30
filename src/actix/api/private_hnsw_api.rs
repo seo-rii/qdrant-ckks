@@ -1118,6 +1118,14 @@ mod private_hnsw_rest_tests {
                 ("clientStateBackups.json", "clientStateBackups.json"),
                 ("clientStateCiphertext.json", "clientStateCiphertext.json"),
                 (
+                    "clientStateCiphertextHashes.json",
+                    "clientStateCiphertextHashes.json",
+                ),
+                (
+                    "client_state_ciphertext_hashes.json",
+                    "client_state_ciphertext_hashes.json",
+                ),
+                (
                     "encryptedClientStateBackups.json",
                     "encryptedClientStateBackups.json",
                 ),
@@ -1125,9 +1133,22 @@ mod private_hnsw_rest_tests {
                     "encryptedClientStateCiphertextHash.json",
                     "encryptedClientStateCiphertextHash.json",
                 ),
+                (
+                    "encryptedClientStateCiphertextHashes.json",
+                    "encryptedClientStateCiphertextHashes.json",
+                ),
+                (
+                    "encrypted_client_state_ciphertext_hashes.json",
+                    "encrypted_client_state_ciphertext_hashes.json",
+                ),
                 ("positionMapBackups.json", "positionMapBackups.json"),
                 ("oramPositionMapBackups.json", "oramPositionMapBackups.json"),
                 ("stateCiphertextHash.json", "stateCiphertextHash.json"),
+                ("stateCiphertextHashes.json", "stateCiphertextHashes.json"),
+                (
+                    "state_ciphertext_hashes.json",
+                    "state_ciphertext_hashes.json",
+                ),
                 (
                     "tokenPositionMapBackups.json",
                     "tokenPositionMapBackups.json",
@@ -1189,7 +1210,7 @@ mod private_hnsw_rest_tests {
                 );
             }
 
-            let unsafe_vector_name = "stashBackups.json";
+            let unsafe_vector_name = "encryptedClientStateCiphertextHashes.json";
             let paths = vec![fixture.entry_leaf_label()];
             let read_signature = fixture.sign_read_paths(&paths, 1, true);
             let read_response = actix_test::call_service(

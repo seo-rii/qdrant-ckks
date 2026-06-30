@@ -1093,11 +1093,17 @@ mod private_hnsw_grpc_tests {
                 "stash.backup",
                 "clientStateBackups.json",
                 "clientStateCiphertext.json",
+                "clientStateCiphertextHashes.json",
+                "client_state_ciphertext_hashes.json",
                 "encryptedClientStateBackups.json",
                 "encryptedClientStateCiphertextHash.json",
+                "encryptedClientStateCiphertextHashes.json",
+                "encrypted_client_state_ciphertext_hashes.json",
                 "positionMapBackups.json",
                 "oramPositionMapBackups.json",
                 "stateCiphertextHash.json",
+                "stateCiphertextHashes.json",
+                "state_ciphertext_hashes.json",
                 "tokenPositionMapBackups.json",
                 "stashBackups.json",
             ] {
@@ -1155,7 +1161,7 @@ mod private_hnsw_grpc_tests {
                 );
             }
 
-            let unsafe_vector_name = "stashBackups.json";
+            let unsafe_vector_name = "encryptedClientStateCiphertextHashes.json";
             let paths = vec![fixture.entry_leaf_label()];
             let read_signature = fixture.sign_read_paths(&paths, 1, true);
             let err = PrivateHnswOram::read_private_hnsw_paths(
