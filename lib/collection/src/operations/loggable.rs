@@ -1562,6 +1562,10 @@ mod tests {
                 json!("qdrant-sec-private-hnsw-position-map-backup-log-sentinel"),
             ),
             (
+                "positionMapBackup",
+                json!("qdrant-sec-private-hnsw-camel-position-map-backup-log-sentinel"),
+            ),
+            (
                 "oramPositionMapSnapshot",
                 json!("qdrant-sec-private-hnsw-camel-oram-position-map-snapshot-log-sentinel"),
             ),

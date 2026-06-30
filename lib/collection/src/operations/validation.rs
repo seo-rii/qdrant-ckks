@@ -416,6 +416,7 @@ mod tests {
                     "selector": {
                         "names": [
                             "stash",
+                            "stashBackup.json",
                             "clientStateBackup.json",
                             "clientStateBackups.json",
                             "client_state_backup.json",
@@ -452,9 +453,13 @@ mod tests {
                             "encrypted_client_state_ciphertext_hashes.json",
                             "encrypted_client_state_ciphertext_sha256.json",
                             "encrypted_client_state_ciphertexts_sha256.json",
+                            "oramPositionMapBackup.json",
                             "oramPositionMapBackups.json",
+                            "oram_position_map_backup.json",
                             "oram_position_map_backups.json",
+                            "positionMapBackup.json",
                             "positionMapBackups.json",
+                            "position_map_backup.json",
                             "position_map_backups.json",
                             "stashBackups.json",
                             "stateCiphertext.json",
@@ -467,7 +472,9 @@ mod tests {
                             "state_ciphertext_hashes.json",
                             "state_ciphertext_sha256.json",
                             "state_ciphertexts_sha256.json",
+                            "tokenPositionMapBackup.json",
                             "tokenPositionMapBackups.json",
+                            "token_position_map_backup.json",
                             "token_position_map_backups.json"
                         ]
                     },
@@ -479,6 +486,7 @@ mod tests {
         assert!(unsafe_store_name_message.contains("safe non-client-state store path"));
         assert!(!unsafe_store_name_message.contains("stash_private_hnsw"));
         assert!(!unsafe_store_name_message.contains("stash"));
+        assert!(!unsafe_store_name_message.contains("stashBackup"));
         assert!(!unsafe_store_name_message.contains("clientStateBackup"));
         assert!(!unsafe_store_name_message.contains("clientStateBackups"));
         assert!(!unsafe_store_name_message.contains("client_state_backup"));
@@ -515,9 +523,13 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext_hashes"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext_sha256"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertexts_sha256"));
+        assert!(!unsafe_store_name_message.contains("oramPositionMapBackup"));
         assert!(!unsafe_store_name_message.contains("oramPositionMapBackups"));
+        assert!(!unsafe_store_name_message.contains("oram_position_map_backup"));
         assert!(!unsafe_store_name_message.contains("oram_position_map_backups"));
+        assert!(!unsafe_store_name_message.contains("positionMapBackup"));
         assert!(!unsafe_store_name_message.contains("positionMapBackups"));
+        assert!(!unsafe_store_name_message.contains("position_map_backup"));
         assert!(!unsafe_store_name_message.contains("position_map_backups"));
         assert!(!unsafe_store_name_message.contains("stashBackups"));
         assert!(!unsafe_store_name_message.contains("stateCiphertext"));
@@ -530,7 +542,9 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("state_ciphertext_hashes"));
         assert!(!unsafe_store_name_message.contains("state_ciphertext_sha256"));
         assert!(!unsafe_store_name_message.contains("state_ciphertexts_sha256"));
+        assert!(!unsafe_store_name_message.contains("tokenPositionMapBackup"));
         assert!(!unsafe_store_name_message.contains("tokenPositionMapBackups"));
+        assert!(!unsafe_store_name_message.contains("token_position_map_backup"));
         assert!(!unsafe_store_name_message.contains("token_position_map_backups"));
 
         let mut overlap = ValidationError::new("overlapping_encryption_selector");
