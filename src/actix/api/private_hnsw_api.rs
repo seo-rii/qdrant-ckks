@@ -2664,6 +2664,83 @@ mod private_hnsw_rest_tests {
             );
             drop(snapshot_guard);
 
+            let lifecycle_guard =
+                crate::common::snapshots::begin_private_oram_collection_lifecycle_guard(
+                    &dispatcher,
+                    &auth,
+                    "docs",
+                )
+                .await
+                .unwrap();
+            let active_lifecycle_client_id = "tenant-a/sdk-instance-active-lifecycle";
+            let active_lifecycle_session_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: active_lifecycle_client_id.to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection lifecycle operation"
+            );
+            assert!(
+                !active_lifecycle_session_error.contains(&fixture.encrypted_build.root_hash),
+                "{active_lifecycle_session_error}"
+            );
+            assert!(
+                !active_lifecycle_session_error.contains("private_hnsw_oram"),
+                "{active_lifecycle_session_error}"
+            );
+            assert!(
+                !active_lifecycle_session_error.contains(active_lifecycle_client_id),
+                "{active_lifecycle_session_error}"
+            );
+            let active_lifecycle_manifest_upload_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/manifest",
+                UploadPrivateHnswManifestRequest {
+                    manifest: fixture.manifest.clone(),
+                    signature: fixture.manifest_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection lifecycle operation"
+            );
+            assert!(
+                !active_lifecycle_manifest_upload_error.contains(&fixture.manifest.root_hash),
+                "{active_lifecycle_manifest_upload_error}"
+            );
+            assert!(
+                !active_lifecycle_manifest_upload_error.contains("private_hnsw_oram"),
+                "{active_lifecycle_manifest_upload_error}"
+            );
+            let mut active_lifecycle_bucket_upload = fixture.encrypted_build.buckets.clone();
+            active_lifecycle_bucket_upload[0].ciphertext =
+                "active-lifecycle-bucket-upload-ciphertext-sentinel".to_string();
+            let active_lifecycle_bucket_upload_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/buckets",
+                UploadPrivateHnswBucketsRequest {
+                    index_epoch: fixture.encrypted_build.index_epoch,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    buckets: active_lifecycle_bucket_upload,
+                },
+                StatusCode::BAD_REQUEST,
+                "active collection lifecycle operation"
+            );
+            assert!(
+                !active_lifecycle_bucket_upload_error
+                    .contains("active-lifecycle-bucket-upload-ciphertext-sentinel"),
+                "{active_lifecycle_bucket_upload_error}"
+            );
+            assert!(
+                !active_lifecycle_bucket_upload_error.contains(&fixture.encrypted_build.root_hash),
+                "{active_lifecycle_bucket_upload_error}"
+            );
+            assert!(
+                !active_lifecycle_bucket_upload_error.contains("private_hnsw_oram"),
+                "{active_lifecycle_bucket_upload_error}"
+            );
+            drop(lifecycle_guard);
+
             let session_result = post_json_ok!(
                 "/collections/docs/private-hnsw/text/session",
                 OpenPrivateHnswSessionRequest {
