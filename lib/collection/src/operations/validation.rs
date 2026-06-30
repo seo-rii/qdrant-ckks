@@ -426,6 +426,7 @@ mod tests {
                             "encryptedClientStateBackups.json",
                             "encrypted_client_state.json",
                             "encrypted_client_state_backup.json",
+                            "encrypted_client_state_backups.json",
                             "encrypted_client_state_snapshot.json",
                             "encryptedClientStateCiphertext.json",
                             "encrypted_client_state_ciphertext.json",
@@ -466,6 +467,7 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("encryptedClientStateBackups"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_backup"));
+        assert!(!unsafe_store_name_message.contains("encrypted_client_state_backups"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_snapshot"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertext"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext"));

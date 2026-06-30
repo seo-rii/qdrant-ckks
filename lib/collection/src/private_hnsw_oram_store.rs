@@ -1891,6 +1891,7 @@ mod tests {
             "client.state",
             "client_state.json",
             "client_state_backup",
+            "client_state_backups",
             "clientStateBackups.json",
             "client_state_ciphertext",
             "clientStateCiphertext.json",
@@ -1902,6 +1903,7 @@ mod tests {
             "encrypted.client.state",
             "encryptedClientStates.json",
             "encrypted_client_state_backup",
+            "encrypted_client_state_backups",
             "encryptedClientStateBackup.json",
             "encryptedClientStateBackups.json",
             "encrypted_client_state_ciphertext",
@@ -1929,6 +1931,7 @@ mod tests {
             "tokenPositionMapBackups.json",
             "stash",
             "stash_backup",
+            "stash_backups",
             "stashBackups.json",
             "stash.snapshot",
             &"x".repeat(129),
@@ -1965,6 +1968,7 @@ mod tests {
             "clientStateCiphertextHashes",
             "encrypted_client_state",
             "encryptedClientState",
+            "encrypted_client_state_backups",
             "encrypted_client_state_ciphertext",
             "encryptedClientStateCiphertext",
             "encrypted_client_state_ciphertext_hash",
@@ -1986,6 +1990,7 @@ mod tests {
             "token_position_map_backups",
             "tokenPositionMapBackups",
             "stashBackups",
+            "stash_backups",
         ];
         let cases = [
             (

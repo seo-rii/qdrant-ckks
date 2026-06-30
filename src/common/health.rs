@@ -463,7 +463,9 @@ mod tests {
              owner_signing_key_id=owner-signing-key-sentinel, readPath=read-path-camel-sentinel, \
              readPathLabel=read-path-label-camel-sentinel, \
              clientStateBackups=client-state-backups-camel-sentinel, \
+             client_state_backups=client-state-backups-snake-sentinel, \
              encryptedClientStateBackups=encrypted-client-state-backups-camel-sentinel, \
+             encrypted_client_state_backups=encrypted-client-state-backups-snake-sentinel, \
              clientStateCiphertext=client-state-ciphertext-camel-sentinel, \
              clientStateCiphertextHash=client-state-ciphertext-hash-camel-sentinel, \
              clientStateCiphertextHashes=client-state-ciphertext-hashes-camel-sentinel, \
@@ -500,7 +502,9 @@ mod tests {
         assert!(!message.contains("read-path-camel-sentinel"));
         assert!(!message.contains("read-path-label-camel-sentinel"));
         assert!(!message.contains("client-state-backups-camel-sentinel"));
+        assert!(!message.contains("client-state-backups-snake-sentinel"));
         assert!(!message.contains("encrypted-client-state-backups-camel-sentinel"));
+        assert!(!message.contains("encrypted-client-state-backups-snake-sentinel"));
         assert!(!message.contains("client-state-ciphertext-camel-sentinel"));
         assert!(!message.contains("client-state-ciphertext-hash-camel-sentinel"));
         assert!(!message.contains("client-state-ciphertext-hashes-camel-sentinel"));
