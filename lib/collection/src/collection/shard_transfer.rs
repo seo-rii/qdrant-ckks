@@ -621,6 +621,10 @@ mod tests {
 
     const PRIVATE_ORAM_TRANSFER_COLLECTION_NAMES: &[&str] = &[
         "clientStateCiphertext.json",
+        "clientStateSnapshot.json",
+        "clientStateSnapshots.json",
+        "client_state_snapshot.bin",
+        "client_state_snapshots.bin",
         "clientStateCiphertextHash.json",
         "clientStateCiphertextHashes.json",
         "clientStateCiphertextSha256.json",
@@ -640,6 +644,8 @@ mod tests {
         "encrypted_client_state.bin",
         "encrypted_client_state_backup.bin",
         "encrypted_client_state_backups.bin",
+        "encryptedClientStateSnapshot.json",
+        "encryptedClientStateSnapshots.json",
         "encrypted_client_state_snapshot.bin",
         "encrypted_client_state_snapshots.bin",
         "stateCiphertext.json",
@@ -660,6 +666,10 @@ mod tests {
 
     const PRIVATE_ORAM_TRANSFER_REDACTION_STEMS: &[&str] = &[
         "clientStateCiphertext",
+        "clientStateSnapshot",
+        "clientStateSnapshots",
+        "client_state_snapshot",
+        "client_state_snapshots",
         "clientStateCiphertextHash",
         "clientStateCiphertextHashes",
         "clientStateCiphertextSha256",
@@ -675,6 +685,8 @@ mod tests {
         "encrypted_client_state",
         "encrypted_client_state_backup",
         "encrypted_client_state_backups",
+        "encryptedClientStateSnapshot",
+        "encryptedClientStateSnapshots",
         "encrypted_client_state_snapshot",
         "encrypted_client_state_snapshots",
         "encrypted_client_state_ciphertext_hash",
