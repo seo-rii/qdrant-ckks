@@ -1449,13 +1449,13 @@ pub fn private_hnsw_oram_vector_name_is_safe_store_component(value: &str) -> boo
         && value.len() <= 128
         && value != "."
         && value != ".."
-        && !path_component_is_client_owned_oram_state_alias(value)
+        && !private_oram_path_component_is_client_owned_state_alias(value)
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
 }
 
-fn path_component_is_client_owned_oram_state_alias(value: &str) -> bool {
+pub fn private_oram_path_component_is_client_owned_state_alias(value: &str) -> bool {
     let value = value.to_ascii_lowercase();
     let compact_value = value.replace(['_', '-', '.'], "");
     if compact_path_component_is_client_owned_oram_state_alias(&compact_value) {
@@ -1475,12 +1475,24 @@ fn compact_path_component_is_client_owned_oram_state_alias(value: &str) -> bool 
             | "clientstatebackups"
             | "clientstatesnapshot"
             | "clientstatesnapshots"
+            | "clientstateciphertext"
+            | "clientstateciphertexts"
+            | "clientstateciphertexthash"
+            | "clientstateciphertexthashes"
             | "encryptedclientstate"
             | "encryptedclientstates"
             | "encryptedclientstatebackup"
             | "encryptedclientstatebackups"
             | "encryptedclientstatesnapshot"
             | "encryptedclientstatesnapshots"
+            | "encryptedclientstateciphertext"
+            | "encryptedclientstateciphertexts"
+            | "encryptedclientstateciphertexthash"
+            | "encryptedclientstateciphertexthashes"
+            | "stateciphertext"
+            | "stateciphertexts"
+            | "stateciphertexthash"
+            | "stateciphertexthashes"
             | "positionmap"
             | "positionmapbackup"
             | "positionmapbackups"
@@ -1842,12 +1854,20 @@ mod tests {
             "client_state.json",
             "client_state_backup",
             "clientStateBackups.json",
+            "clientStateCiphertext.json",
+            "client_state_ciphertext_hash.bin",
+            "clientStateCiphertextHashes.json",
             "encrypted_client_state",
             "encrypted.client.state",
             "encryptedClientStates.json",
             "encrypted_client_state_backup",
             "encryptedClientStateBackup.json",
             "encryptedClientStateBackups.json",
+            "encryptedClientStateCiphertext.json",
+            "encrypted_client_state_ciphertext_hash.bin",
+            "encryptedClientStateCiphertextHashes.json",
+            "stateCiphertext.json",
+            "state_ciphertext_hash.bin",
             "position_map",
             "position_map_backup",
             "positionMapBackups.json",

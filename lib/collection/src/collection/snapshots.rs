@@ -41,6 +41,7 @@ use crate::operations::types::{CollectionError, CollectionResult, NodeType};
 use crate::private_hnsw_oram_store::{
     PRIVATE_HNSW_ORAM_DIR, PrivateHnswOramStore,
     private_hnsw_oram_vector_name_is_safe_store_component,
+    private_oram_path_component_is_client_owned_state_alias,
 };
 use crate::private_result_oram_store::{PRIVATE_RESULT_ORAM_DIR, PrivateResultOramStore};
 use crate::shards::local_shard::LocalShard;
@@ -916,56 +917,7 @@ fn private_oram_snapshot_source_entry_is_client_owned_state(name: &std::ffi::OsS
     let Some(name) = name.to_str() else {
         return false;
     };
-    let name = name.to_ascii_lowercase();
-    let compact_name = name.replace(['_', '-', '.'], "");
-    if private_oram_snapshot_compact_entry_is_client_owned_state(&compact_name) {
-        return true;
-    }
-    let stem = name
-        .rsplit_once('.')
-        .map_or(name.as_str(), |(stem, _)| stem);
-    let compact_stem = stem.replace(['_', '-', '.'], "");
-    private_oram_snapshot_compact_entry_is_client_owned_state(&compact_stem)
-}
-
-fn private_oram_snapshot_compact_entry_is_client_owned_state(compact_name: &str) -> bool {
-    matches!(
-        compact_name,
-        "clientstate"
-            | "clientstatebackup"
-            | "clientstatebackups"
-            | "clientstatesnapshot"
-            | "clientstatesnapshots"
-            | "encryptedclientstate"
-            | "encryptedclientstates"
-            | "encryptedclientstatebackup"
-            | "encryptedclientstatebackups"
-            | "encryptedclientstatesnapshot"
-            | "encryptedclientstatesnapshots"
-            | "positionmap"
-            | "positionmapbackup"
-            | "positionmapbackups"
-            | "positionmaps"
-            | "positionmapsnapshot"
-            | "positionmapsnapshots"
-            | "orampositionmap"
-            | "orampositionmapbackup"
-            | "orampositionmapbackups"
-            | "orampositionmaps"
-            | "orampositionmapsnapshot"
-            | "orampositionmapsnapshots"
-            | "tokenpositionmap"
-            | "tokenpositionmapbackup"
-            | "tokenpositionmapbackups"
-            | "tokenpositionmaps"
-            | "tokenpositionmapsnapshot"
-            | "tokenpositionmapsnapshots"
-            | "stash"
-            | "stashbackup"
-            | "stashbackups"
-            | "stashsnapshot"
-            | "stashsnapshots"
-    )
+    private_oram_path_component_is_client_owned_state_alias(name)
 }
 
 fn private_oram_snapshot_entry_is_temp_dir(
@@ -2886,6 +2838,11 @@ mod tests {
             "client.state.snapshot",
             "client.state.snapshot.bin",
             "clientStateSnapshots.json",
+            "client_state_ciphertext.bin",
+            "clientStateCiphertext.json",
+            "client.state.ciphertext",
+            "client_state_ciphertext_hash.bin",
+            "clientStateCiphertextHashes.json",
             "encrypted_client_state.bin",
             "encrypted.client.state",
             "encrypted.client.state.bin",
@@ -2896,6 +2853,16 @@ mod tests {
             "encrypted.client.state.snapshot",
             "encrypted.client.state.snapshot.bin",
             "encryptedClientStateSnapshots.json",
+            "encrypted_client_state_ciphertext.bin",
+            "encryptedClientStateCiphertext.json",
+            "encrypted.client.state.ciphertext",
+            "encrypted_client_state_ciphertext_hash.bin",
+            "encryptedClientStateCiphertextHashes.json",
+            "state_ciphertext.bin",
+            "stateCiphertext.json",
+            "state.ciphertext",
+            "state_ciphertext_hash.bin",
+            "stateCiphertextHashes.json",
             "position_map.bin",
             "positionMap.json",
             "position.map",
