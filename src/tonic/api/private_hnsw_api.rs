@@ -1886,6 +1886,10 @@ mod private_hnsw_grpc_tests {
                     );
                     assert!(!$message.contains($signature_sig), "{}", $message);
                     assert!(!$message.contains("private_hnsw_oram"), "{}", $message);
+                    assert_private_hnsw_guard_message_redacts(
+                        $message,
+                        &[fixture.encrypted_build.root_hash.as_str(), $signature_sig],
+                    );
                 }};
             }
 

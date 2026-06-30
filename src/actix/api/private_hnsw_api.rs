@@ -1779,6 +1779,10 @@ mod private_hnsw_rest_tests {
                     assert!(!$body.contains(&fixture.manifest.root_hash), "{}", $body);
                     assert!(!$body.contains($signature_sig), "{}", $body);
                     assert!(!$body.contains("private_hnsw_oram"), "{}", $body);
+                    assert_private_hnsw_guard_error_redacts(
+                        &$body,
+                        &[fixture.manifest.root_hash.as_str(), $signature_sig],
+                    );
                 }};
             }
 
