@@ -1437,10 +1437,8 @@ impl TryFrom<BinaryQuantizationQueryEncoding> for segment::types::BinaryQuantiza
 
         let converted = match variant {
             Variant::Setting(setting_int) => {
-                let setting = Setting::try_from(setting_int).map_err(|err| {
-                    Status::invalid_argument(format!(
-                        "Invalid `BinaryQuantizationQueryEncoding` setting: {err}"
-                    ))
+                let setting = Setting::try_from(setting_int).map_err(|_| {
+                    Status::invalid_argument("Invalid `BinaryQuantizationQueryEncoding` setting")
                 })?;
                 match setting {
                     Setting::Default => segment::types::BinaryQuantizationQueryEncoding::Default,
@@ -2241,10 +2239,8 @@ impl TryFrom<MaxOptimizationThreads> for rest::MaxOptimizationThreads {
 
         let converted = match variant {
             Variant::Setting(setting_int) => {
-                let setting = Setting::try_from(setting_int).map_err(|err| {
-                    Status::invalid_argument(format!(
-                        "Invalid MaxOptimizationThreads setting: {err}"
-                    ))
+                let setting = Setting::try_from(setting_int).map_err(|_| {
+                    Status::invalid_argument("Invalid MaxOptimizationThreads setting")
                 })?;
 
                 match setting {
@@ -2270,10 +2266,8 @@ impl TryFrom<MaxOptimizationThreads> for Option<usize> {
 
         Ok(match variant {
             Variant::Setting(setting_int) => {
-                let setting = Setting::try_from(setting_int).map_err(|err| {
-                    Status::invalid_argument(format!(
-                        "Invalid MaxOptimizationThreads setting: {err}"
-                    ))
+                let setting = Setting::try_from(setting_int).map_err(|_| {
+                    Status::invalid_argument("Invalid MaxOptimizationThreads setting")
                 })?;
 
                 match setting {
@@ -2659,9 +2653,9 @@ impl TryFrom<Distance> for segment::types::Distance {
 
 pub fn from_grpc_dist(dist: i32) -> Result<segment::types::Distance, Status> {
     match Distance::try_from(dist) {
-        Err(_) => Err(Status::invalid_argument(format!(
-            "Malformed distance parameter, unexpected value: {dist}"
-        ))),
+        Err(_) => Err(Status::invalid_argument(
+            "Malformed distance parameter, unexpected value",
+        )),
         Ok(grpc_distance) => Ok(grpc_distance.try_into()?),
     }
 }
@@ -3721,6 +3715,52 @@ mod tests {
         let unsupported = 987_654;
         let err = rest::RecommendStrategy::try_from(unsupported).unwrap_err();
         assert!(err.message().contains("Unknown recommend strategy"));
+        assert!(!err.message().contains(&unsupported.to_string()));
+    }
+
+    #[test]
+    fn grpc_quantization_and_distance_enums_reject_unknown_values_without_reflecting_them() {
+        let unsupported = 987_654;
+        let query_encoding = BinaryQuantizationQueryEncoding {
+            variant: Some(
+                crate::grpc::qdrant::binary_quantization_query_encoding::Variant::Setting(
+                    unsupported,
+                ),
+            ),
+        };
+        let err =
+            segment::types::BinaryQuantizationQueryEncoding::try_from(query_encoding).unwrap_err();
+        assert!(
+            err.message()
+                .contains("Invalid `BinaryQuantizationQueryEncoding` setting")
+        );
+        assert!(!err.message().contains(&unsupported.to_string()));
+
+        let max_optimization_threads = MaxOptimizationThreads {
+            variant: Some(
+                crate::grpc::qdrant::max_optimization_threads::Variant::Setting(unsupported),
+            ),
+        };
+        let err =
+            rest::MaxOptimizationThreads::try_from(max_optimization_threads.clone()).unwrap_err();
+        assert!(
+            err.message()
+                .contains("Invalid MaxOptimizationThreads setting")
+        );
+        assert!(!err.message().contains(&unsupported.to_string()));
+
+        let err = Option::<usize>::try_from(max_optimization_threads).unwrap_err();
+        assert!(
+            err.message()
+                .contains("Invalid MaxOptimizationThreads setting")
+        );
+        assert!(!err.message().contains(&unsupported.to_string()));
+
+        let err = from_grpc_dist(unsupported).unwrap_err();
+        assert!(
+            err.message()
+                .contains("Malformed distance parameter, unexpected value")
+        );
         assert!(!err.message().contains(&unsupported.to_string()));
     }
 
