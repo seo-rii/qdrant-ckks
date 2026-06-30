@@ -8264,9 +8264,10 @@ async fn encrypted_vector_sidecar_requires_matching_runtime_metadata() {
         .unwrap_err();
     assert!(matches!(
         err,
-        CollectionError::BadInput { description }
-            if description.contains("encrypted vector sidecar entry 'other'")
+        CollectionError::BadInput { ref description }
+            if description.contains("encrypted vector sidecar entry")
                 && description.contains("not configured")
+                && !description.contains("other")
     ));
 
     let (mut wrong_version_payload, wrong_version_verified_sidecar_key) =
