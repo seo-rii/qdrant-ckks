@@ -101,7 +101,7 @@ impl Debug for PrivateHnswSessionResponse {
             .field("vector_name", &"[redacted]")
             .field("index_epoch", &self.index_epoch)
             .field("root_hash", &"[redacted]")
-            .field("manifest", &self.manifest)
+            .field("manifest", &"[redacted]")
             .field("lease_expires_unix", &self.lease_expires_unix)
             .finish()
     }
@@ -3405,6 +3405,21 @@ mod private_hnsw_tests {
             assert!(
                 !session_debug.contains(&leaked_session_value),
                 "{session_debug}"
+            );
+        }
+        let response_debug = format!("{response:?}");
+        for leaked_response_value in [
+            "PrivateHnswOramManifest".to_string(),
+            format!("bucket_count: {}", response.manifest.bucket_count),
+            format!("tree_height: {}", response.manifest.oram.tree_height),
+            format!(
+                "path_batch_size: {}",
+                response.manifest.oram.path_batch_size
+            ),
+        ] {
+            assert!(
+                !response_debug.contains(&leaked_response_value),
+                "{response_debug}"
             );
         }
         for leaked in [
