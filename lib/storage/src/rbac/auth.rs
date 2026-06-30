@@ -489,6 +489,8 @@ mod tests {
             "private ORAM client backup failed clientStateCiphertextHash=private-client-state-ciphertext-hash-sentinel",
             "private ORAM client backup failed clientStateCiphertextHashes=private-client-state-ciphertext-hashes-sentinel",
             "private ORAM client backup failed encryptedClientStateCiphertext=private-encrypted-client-state-ciphertext-sentinel",
+            "private ORAM client backup failed encrypted_client_state_ciphertext_hash=private-encrypted-client-state-ciphertext-hash-snake-sentinel",
+            "private ORAM client backup failed encryptedClientStateCiphertextHash=private-encrypted-client-state-ciphertext-hash-sentinel",
             "private ORAM client backup failed encryptedClientStateCiphertextHashes=private-encrypted-client-state-ciphertext-hashes-sentinel",
             "private ORAM client backup failed stateCiphertext=private-state-ciphertext-sentinel",
             "private ORAM client backup failed stateCiphertextHash=private-state-ciphertext-hash-sentinel",
