@@ -304,11 +304,7 @@ impl Collection {
 fn encrypted_vector_sidecar_path() -> CollectionResult<JsonPath> {
     format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
         .parse::<JsonPath>()
-        .map_err(|err| {
-            CollectionError::bad_input(format!(
-                "encrypted vector sidecar field path is invalid: {err:?}",
-            ))
-        })
+        .map_err(|_| CollectionError::bad_input("encrypted vector sidecar field path is invalid"))
 }
 
 enum PotentiallyUnindexed<'a> {

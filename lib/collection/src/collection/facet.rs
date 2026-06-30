@@ -88,10 +88,8 @@ fn ensure_facet_key_does_not_touch_encrypted_payload(
     {
         let sidecar_path = format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
             .parse::<JsonPath>()
-            .map_err(|err| {
-                CollectionError::bad_input(format!(
-                    "encrypted vector sidecar field path is invalid: {err:?}",
-                ))
+            .map_err(|_| {
+                CollectionError::bad_input("encrypted vector sidecar field path is invalid")
             })?;
         if key.compatible(&sidecar_path) {
             return Err(CollectionError::bad_input(

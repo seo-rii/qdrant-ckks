@@ -440,10 +440,8 @@ impl Collection {
             .map(|path| {
                 path.parse::<JsonPath>()
                     .map(|json_path| (path, json_path))
-                    .map_err(|err| {
-                        CollectionError::bad_input(format!(
-                            "encrypted payload field path is invalid: {err:?}",
-                        ))
+                    .map_err(|_| {
+                        CollectionError::bad_input("encrypted payload field path is invalid")
                     })
             })
             .collect::<CollectionResult<Vec<_>>>()?;
@@ -3924,11 +3922,7 @@ fn encrypted_vector_sidecar_path(
     format!("\"{ENCRYPTED_VECTOR_SIDECAR_FIELD}\"")
         .parse::<JsonPath>()
         .map(Some)
-        .map_err(|err| {
-            CollectionError::bad_input(format!(
-                "encrypted vector sidecar field path is invalid: {err:?}",
-            ))
-        })
+        .map_err(|_| CollectionError::bad_input("encrypted vector sidecar field path is invalid"))
 }
 
 fn client_nonce_replay_cache_key(
