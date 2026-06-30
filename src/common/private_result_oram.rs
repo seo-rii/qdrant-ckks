@@ -2243,6 +2243,12 @@ mod private_result_oram_tests {
         assert!(rendered.contains("signature key id is not configured"));
         assert!(!rendered.contains(missing_key_id));
 
+        let missing_alias_key_id = "encrypted_client_state_ciphertext_hash";
+        let err = signature_public_key(&instance, missing_alias_key_id).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("signature key id is not configured"));
+        assert!(!rendered.contains(missing_alias_key_id), "{rendered}");
+
         let wrong_len = BASE64URL_NOPAD.encode(&[7; 33]);
         let err = signature_public_key(
             &instance_with_signature_public_key(&wrong_len),
