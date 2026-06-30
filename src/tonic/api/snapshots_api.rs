@@ -737,6 +737,16 @@ mod tests {
                     .contains("private-oram-shard-recovery-sentinel"),
                 "{operation}: {err}"
             );
+            assert!(
+                !err.message()
+                    .contains("private-oram-shard-checksum-sentinel"),
+                "{operation}: {err}"
+            );
+            assert!(
+                !err.message()
+                    .contains("private-oram-shard-api-key-sentinel"),
+                "{operation}: {err}"
+            );
         }
 
         actix_web::rt::System::new().block_on(async {
@@ -787,8 +797,8 @@ mod tests {
                         )),
                     }),
                     snapshot_priority: ShardSnapshotPriority::NoSync as i32,
-                    checksum: None,
-                    api_key: None,
+                    checksum: Some("private-oram-shard-checksum-sentinel".to_string()),
+                    api_key: Some("private-oram-shard-api-key-sentinel".to_string()),
                 }),
             )
             .await
