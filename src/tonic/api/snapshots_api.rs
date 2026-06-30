@@ -728,6 +728,15 @@ mod tests {
                 !err.message().contains("private_result_oram"),
                 "{operation}: {err}"
             );
+            assert!(
+                !err.message().contains("snapshot-1.snapshot"),
+                "{operation}: {err}"
+            );
+            assert!(
+                !err.message()
+                    .contains("private-oram-shard-recovery-sentinel"),
+                "{operation}: {err}"
+            );
         }
 
         actix_web::rt::System::new().block_on(async {
@@ -774,7 +783,7 @@ mod tests {
                     shard_id: 0,
                     snapshot_location: Some(ShardSnapshotLocation {
                         location: Some(shard_snapshot_location::Location::Path(
-                            "snapshot-1.snapshot".to_string(),
+                            "private-oram-shard-recovery-sentinel.snapshot".to_string(),
                         )),
                     }),
                     snapshot_priority: ShardSnapshotPriority::NoSync as i32,
