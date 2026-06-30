@@ -323,6 +323,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "merkle_proofs"
                         | "proof"
                         | "proofs"
+                        | "proof_value"
+                        | "proof_values"
                         | "leaf"
                         | "leaves"
                         | "leaf_id"
@@ -646,6 +648,8 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "merkleproofs"
                         | "proof"
                         | "proofs"
+                        | "proofvalue"
+                        | "proofvalues"
                         | "leaf"
                         | "leaves"
                         | "leafid"
@@ -1333,6 +1337,10 @@ mod tests {
                 "unknownField": "qdrant-sec-private-oram-camel-unknown-field-log-sentinel"
             }
         });
+        private_hnsw_oram_access["private_hnsw"]["proof_value"] =
+            json!("qdrant-sec-private-oram-proof-value-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["proofValue"] =
+            json!("qdrant-sec-private-oram-camel-proof-value-log-sentinel");
         let mut private_hnsw_graph = json!({
             "private_hnsw": {
                 "node_id": "qdrant-sec-private-hnsw-node-id-log-sentinel",
@@ -1428,6 +1436,10 @@ mod tests {
                 }
             }
         });
+        private_result_oram["private_result_oram"]["proof_values"] =
+            json!(["qdrant-sec-private-result-proof-values-log-sentinel"]);
+        private_result_oram["private_result_oram"]["proofValue"] =
+            json!("qdrant-sec-private-result-camel-proof-value-log-sentinel");
         for (key, field_value) in [
             (
                 "owner_signing_key_id",
@@ -2085,6 +2097,8 @@ mod tests {
             "qdrant-sec-private-oram-proof-sibling-hash-log-sentinel",
             "qdrant-sec-private-oram-camel-proof-leaf-hash-log-sentinel",
             "qdrant-sec-private-oram-camel-proof-sibling-log-sentinel",
+            "qdrant-sec-private-oram-proof-value-log-sentinel",
+            "qdrant-sec-private-oram-camel-proof-value-log-sentinel",
             "qdrant-sec-private-hnsw-path-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-single-path-label-log-sentinel",
             "qdrant-sec-private-hnsw-camel-path-label-log-sentinel",
@@ -2223,6 +2237,8 @@ mod tests {
             "qdrant-sec-private-result-proof-sibling-hash-log-sentinel",
             "qdrant-sec-private-result-camel-proof-leaf-hash-log-sentinel",
             "qdrant-sec-private-result-camel-proof-sibling-hash-log-sentinel",
+            "qdrant-sec-private-result-proof-values-log-sentinel",
+            "qdrant-sec-private-result-camel-proof-value-log-sentinel",
             "qdrant-sec-private-result-payload-token-log-sentinel",
             "qdrant-sec-private-result-camel-payload-token-log-sentinel",
             "qdrant-sec-private-result-payload-bytes-log-sentinel",
