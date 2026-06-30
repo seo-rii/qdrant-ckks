@@ -1516,6 +1516,7 @@ mod private_hnsw_rest_tests {
                 !missing_manifest_read_error.contains("/tmp"),
                 "{missing_manifest_read_error}"
             );
+            assert_private_hnsw_guard_error_redacts(&missing_manifest_read_error, &["/tmp"]);
 
             let missing_manifest_bucket_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/buckets",
@@ -1535,6 +1536,7 @@ mod private_hnsw_rest_tests {
                 !missing_manifest_bucket_error.contains("/tmp"),
                 "{missing_manifest_bucket_error}"
             );
+            assert_private_hnsw_guard_error_redacts(&missing_manifest_bucket_error, &["/tmp"]);
 
             let upload_root_before_manifest_sentinel = "AAAA";
             let malformed_root_before_manifest_error = post_json_error_contains!(
@@ -1559,6 +1561,10 @@ mod private_hnsw_rest_tests {
             assert!(
                 !malformed_root_before_manifest_error.contains("manifest"),
                 "{malformed_root_before_manifest_error}"
+            );
+            assert_private_hnsw_guard_error_redacts(
+                &malformed_root_before_manifest_error,
+                &[upload_root_before_manifest_sentinel, "manifest"],
             );
 
             let malformed_bucket_hash_before_manifest_sentinel = "hnsw-rest-upload-hash-sentinel";
@@ -1598,6 +1604,15 @@ mod private_hnsw_rest_tests {
             assert!(
                 !malformed_bucket_hash_before_manifest_error.contains("manifest"),
                 "{malformed_bucket_hash_before_manifest_error}"
+            );
+            assert_private_hnsw_guard_error_redacts(
+                &malformed_bucket_hash_before_manifest_error,
+                &[
+                    malformed_bucket_hash_before_manifest_sentinel,
+                    fixture.encrypted_build.root_hash.as_str(),
+                    fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
             );
 
             let malformed_bucket_commitment_before_manifest_sentinel =
@@ -1639,6 +1654,15 @@ mod private_hnsw_rest_tests {
                 !malformed_bucket_commitment_before_manifest_error.contains("manifest"),
                 "{malformed_bucket_commitment_before_manifest_error}"
             );
+            assert_private_hnsw_guard_error_redacts(
+                &malformed_bucket_commitment_before_manifest_error,
+                &[
+                    malformed_bucket_commitment_before_manifest_sentinel,
+                    fixture.encrypted_build.root_hash.as_str(),
+                    fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let empty_upload_before_manifest_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/buckets",
@@ -1666,6 +1690,14 @@ mod private_hnsw_rest_tests {
             assert!(
                 !empty_upload_before_manifest_error.contains("manifest"),
                 "{empty_upload_before_manifest_error}"
+            );
+            assert_private_hnsw_guard_error_redacts(
+                &empty_upload_before_manifest_error,
+                &[
+                    fixture.encrypted_build.root_hash.as_str(),
+                    fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
             );
 
             let mut duplicate_upload_before_manifest_buckets =
@@ -1704,6 +1736,14 @@ mod private_hnsw_rest_tests {
                 !duplicate_upload_before_manifest_error.contains("manifest"),
                 "{duplicate_upload_before_manifest_error}"
             );
+            assert_private_hnsw_guard_error_redacts(
+                &duplicate_upload_before_manifest_error,
+                &[
+                    fixture.encrypted_build.root_hash.as_str(),
+                    fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let before_manifest_client_id = "tenant-a/sdk-instance-before-manifest";
             let missing_manifest_session_error = post_json_error_contains!(
@@ -1728,6 +1768,10 @@ mod private_hnsw_rest_tests {
             assert!(
                 !missing_manifest_session_error.contains(before_manifest_client_id),
                 "{missing_manifest_session_error}"
+            );
+            assert_private_hnsw_guard_error_redacts(
+                &missing_manifest_session_error,
+                &["/tmp", before_manifest_client_id],
             );
 
             let auth = Auth::new_internal(Access::full("private HNSW ORAM manifest route test"));

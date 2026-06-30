@@ -1590,6 +1590,7 @@ mod private_hnsw_grpc_tests {
             assert!(err.message().contains("manifest"));
             assert!(!err.message().contains("private_hnsw_oram"));
             assert!(!err.message().contains("/tmp"));
+            assert_private_hnsw_guard_message_redacts(err.message(), &["/tmp"]);
 
             let upload_root_before_manifest_sentinel = "AAAA";
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
@@ -1623,6 +1624,10 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
             assert!(!err.message().contains("manifest"), "{}", err.message());
+            assert_private_hnsw_guard_message_redacts(
+                err.message(),
+                &[upload_root_before_manifest_sentinel, "manifest"],
+            );
 
             let malformed_bucket_hash_before_manifest_sentinel = "hnsw-grpc-upload-hash-sentinel";
             let mut malformed_bucket_hash_before_manifest_buckets =
@@ -1669,6 +1674,15 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
             assert!(!err.message().contains("manifest"), "{}", err.message());
+            assert_private_hnsw_guard_message_redacts(
+                err.message(),
+                &[
+                    malformed_bucket_hash_before_manifest_sentinel,
+                    fixture.encrypted_build.root_hash.as_str(),
+                    fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let malformed_bucket_commitment_before_manifest_sentinel =
                 "hnsw-grpc-upload-commitment-sentinel";
@@ -1716,6 +1730,15 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
             assert!(!err.message().contains("manifest"), "{}", err.message());
+            assert_private_hnsw_guard_message_redacts(
+                err.message(),
+                &[
+                    malformed_bucket_commitment_before_manifest_sentinel,
+                    fixture.encrypted_build.root_hash.as_str(),
+                    fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &service,
@@ -1739,6 +1762,7 @@ mod private_hnsw_grpc_tests {
             assert!(err.message().contains("manifest"));
             assert!(!err.message().contains("private_hnsw_oram"));
             assert!(!err.message().contains("/tmp"));
+            assert_private_hnsw_guard_message_redacts(err.message(), &["/tmp"]);
 
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &service,
@@ -1771,6 +1795,14 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
             assert!(!err.message().contains("manifest"), "{}", err.message());
+            assert_private_hnsw_guard_message_redacts(
+                err.message(),
+                &[
+                    fixture.encrypted_build.root_hash.as_str(),
+                    fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let mut duplicate_upload_before_manifest_buckets =
                 fixture.encrypted_build.buckets.clone();
@@ -1814,6 +1846,14 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
             assert!(!err.message().contains("manifest"), "{}", err.message());
+            assert_private_hnsw_guard_message_redacts(
+                err.message(),
+                &[
+                    fixture.encrypted_build.root_hash.as_str(),
+                    fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    "manifest",
+                ],
+            );
 
             let before_manifest_client_id = "tenant-a/sdk-instance-before-manifest";
             let err = PrivateHnswOram::open_private_hnsw_session(
@@ -1834,6 +1874,10 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("private_hnsw_oram"));
             assert!(!err.message().contains("/tmp"));
             assert!(!err.message().contains(before_manifest_client_id));
+            assert_private_hnsw_guard_message_redacts(
+                err.message(),
+                &["/tmp", before_manifest_client_id],
+            );
 
             let auth = Auth::new_internal(Access::full("private HNSW ORAM manifest grpc test"));
             let collection_pass = auth
