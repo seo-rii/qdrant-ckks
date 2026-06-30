@@ -324,9 +324,8 @@ impl TryFrom<api::grpc::qdrant::CollectionParamsDiff> for CollectionParamsDiff {
             read_fan_out_delay_ms,
             on_disk_payload,
         };
-        diff.validate().map_err(|err| {
-            Status::invalid_argument(format!("invalid collection params diff: {err}"))
-        })?;
+        diff.validate()
+            .map_err(|_| Status::invalid_argument("invalid collection params diff"))?;
         Ok(diff)
     }
 }
@@ -1926,7 +1925,7 @@ impl TryFrom<api::grpc::qdrant::CollectionConfig> for CollectionConfig {
         };
         params
             .validate()
-            .map_err(|err| Status::invalid_argument(format!("invalid collection params: {err}")))?;
+            .map_err(|_| Status::invalid_argument("invalid collection params"))?;
 
         Ok(Self {
             params,
@@ -2030,6 +2029,40 @@ mod tests {
         }
     }
 
+    fn collection_config_with_vector_size(size: u64) -> api::grpc::qdrant::CollectionConfig {
+        api::grpc::qdrant::CollectionConfig {
+            params: Some(api::grpc::qdrant::CollectionParams {
+                shard_number: 1,
+                on_disk_payload: true,
+                vectors_config: Some(api::grpc::qdrant::VectorsConfig {
+                    config: Some(api::grpc::qdrant::vectors_config::Config::Params(
+                        api::grpc::qdrant::VectorParams {
+                            size,
+                            distance: api::grpc::qdrant::Distance::Cosine as i32,
+                            hnsw_config: None,
+                            quantization_config: None,
+                            on_disk: None,
+                            datatype: None,
+                            multivector_config: None,
+                        },
+                    )),
+                }),
+                replication_factor: Some(1),
+                write_consistency_factor: Some(1),
+                read_fan_out_factor: None,
+                sharding_method: None,
+                sparse_vectors_config: None,
+                read_fan_out_delay_ms: None,
+            }),
+            hnsw_config: Some(Default::default()),
+            optimizer_config: Some(Default::default()),
+            wal_config: Some(Default::default()),
+            quantization_config: None,
+            strict_mode_config: None,
+            metadata: Default::default(),
+        }
+    }
+
     #[test]
     fn grpc_collection_enums_reject_unknown_values_without_reflecting_them() {
         const UNKNOWN_ENUM_VALUE: i32 = 99;
@@ -2094,6 +2127,18 @@ mod tests {
         assert_eq!(err.message(), "Replication factor cannot be zero");
         assert!(!err.message().contains("out of range"));
         assert!(!err.message().contains("tenant-secret-shard"));
+    }
+
+    #[test]
+    fn grpc_collection_params_validation_error_does_not_reflect_inner_detail() {
+        let err = CollectionConfig::try_from(collection_config_with_vector_size(65_537))
+            .expect_err("oversized vector size must fail validation");
+
+        assert_eq!(err.message(), "invalid collection params");
+        assert!(!err.message().contains("65"));
+        assert!(!err.message().contains("size"));
+        assert!(!err.message().contains("vectors"));
+        assert!(!err.message().contains("range"));
     }
 
     #[test]
