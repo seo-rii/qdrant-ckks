@@ -549,10 +549,19 @@ mod ckks_tests {
             assert!(!message.contains(reflected_label), "{message}");
         }
 
-        let message = private_hnsw_oram_api_required_message("clientStateBackups");
-        assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
-        assert!(message.contains("/private-hnsw/{vector}/session"));
-        assert!(!message.contains("clientStateBackups"), "{message}");
+        for private_alias in [
+            "clientStateBackups",
+            "clientStateCiphertext",
+            "encryptedClientStateBackups",
+            "encryptedClientStateCiphertextHash",
+            "stateCiphertext",
+            "stateCiphertextHash",
+        ] {
+            let message = private_hnsw_oram_api_required_message(private_alias);
+            assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+            assert!(message.contains("/private-hnsw/{vector}/session"));
+            assert!(!message.contains(private_alias), "{message}");
+        }
     }
 
     #[test]
@@ -603,10 +612,19 @@ mod ckks_tests {
             assert!(!message.contains(reflected_label), "{message}");
         }
 
-        let message = private_result_oram_api_required_message("clientStateBackups");
-        assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
-        assert!(message.contains("/private-result-oram/session"));
-        assert!(!message.contains("clientStateBackups"), "{message}");
+        for private_alias in [
+            "clientStateBackups",
+            "clientStateCiphertext",
+            "encryptedClientStateBackups",
+            "encryptedClientStateCiphertextHash",
+            "stateCiphertext",
+            "stateCiphertextHash",
+        ] {
+            let message = private_result_oram_api_required_message(private_alias);
+            assert!(message.contains(qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER));
+            assert!(message.contains("/private-result-oram/session"));
+            assert!(!message.contains(private_alias), "{message}");
+        }
     }
 
     #[test]
@@ -2035,10 +2053,13 @@ mod ckks_tests {
             "stashBackups.json",
             "client.state",
             "clientStateBackups.json",
+            "clientStateCiphertext.json",
             "encryptedClientStateBackups.json",
+            "encryptedClientStateCiphertextHash.json",
             "position-map",
             "positionMapBackups.json",
             "oramPositionMapBackups.json",
+            "stateCiphertextHash.json",
             "tokenPositionMapBackups.json",
             "tenant/private-vector-secret",
             "private vector secret",
@@ -2085,9 +2106,12 @@ mod ckks_tests {
             for leaked in [
                 "stashBackups",
                 "clientStateBackups",
+                "clientStateCiphertext",
                 "encryptedClientStateBackups",
+                "encryptedClientStateCiphertextHash",
                 "positionMapBackups",
                 "oramPositionMapBackups",
+                "stateCiphertextHash",
                 "tokenPositionMapBackups",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");

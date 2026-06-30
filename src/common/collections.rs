@@ -1865,13 +1865,13 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_cluster_guards_redact_backup_aliases() {
+    fn private_oram_cluster_guards_redact_client_state_aliases() {
         let mut config = private_result_oram_collection_config();
         let encryption = config.params.encryption.as_mut().unwrap();
-        encryption.key_id = Some("clientStateBackups.json".to_string());
+        encryption.key_id = Some("clientStateCiphertext.json".to_string());
         let rule = encryption.rules.first_mut().unwrap();
-        rule.id = "encryptedClientStateBackups.json".to_string();
-        rule.instance = "positionMapBackups.json".to_string();
+        rule.id = "encryptedClientStateCiphertextHash.json".to_string();
+        rule.instance = "stateCiphertextHash.json".to_string();
         if let collection::config::EncryptionSelector::PayloadPaths { paths } = &mut rule.selector {
             *paths = vec!["tokenPositionMapBackups.json".to_string()];
         }
@@ -1950,9 +1950,9 @@ mod tests {
             assert_no_private_oram_config_leak(
                 &rendered,
                 &[
-                    "clientStateBackups",
-                    "encryptedClientStateBackups",
-                    "positionMapBackups",
+                    "clientStateCiphertext",
+                    "encryptedClientStateCiphertextHash",
+                    "stateCiphertextHash",
                     "tokenPositionMapBackups",
                     "stashBackups",
                     PRIVATE_RESULT_ORAM_BINDING,

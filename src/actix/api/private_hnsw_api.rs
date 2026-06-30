@@ -988,12 +988,18 @@ mod private_hnsw_rest_tests {
                 ("position.map", "position.map"),
                 ("stash.backup", "stash.backup"),
                 ("clientStateBackups.json", "clientStateBackups.json"),
+                ("clientStateCiphertext.json", "clientStateCiphertext.json"),
                 (
                     "encryptedClientStateBackups.json",
                     "encryptedClientStateBackups.json",
                 ),
+                (
+                    "encryptedClientStateCiphertextHash.json",
+                    "encryptedClientStateCiphertextHash.json",
+                ),
                 ("positionMapBackups.json", "positionMapBackups.json"),
                 ("oramPositionMapBackups.json", "oramPositionMapBackups.json"),
+                ("stateCiphertextHash.json", "stateCiphertextHash.json"),
                 (
                     "tokenPositionMapBackups.json",
                     "tokenPositionMapBackups.json",
@@ -1019,9 +1025,15 @@ mod private_hnsw_rest_tests {
                 assert!(!body.contains("position.map"), "{body}");
                 assert!(!body.contains("stash.backup"), "{body}");
                 assert!(!body.contains("clientStateBackups"), "{body}");
+                assert!(!body.contains("clientStateCiphertext"), "{body}");
                 assert!(!body.contains("encryptedClientStateBackups"), "{body}");
+                assert!(
+                    !body.contains("encryptedClientStateCiphertextHash"),
+                    "{body}"
+                );
                 assert!(!body.contains("positionMapBackups"), "{body}");
                 assert!(!body.contains("oramPositionMapBackups"), "{body}");
+                assert!(!body.contains("stateCiphertextHash"), "{body}");
                 assert!(!body.contains("tokenPositionMapBackups"), "{body}");
                 assert!(!body.contains("stashBackups"), "{body}");
                 assert!(!body.contains("private_hnsw_oram"), "{body}");

@@ -947,9 +947,12 @@ mod private_hnsw_grpc_tests {
                 "position.map",
                 "stash.backup",
                 "clientStateBackups.json",
+                "clientStateCiphertext.json",
                 "encryptedClientStateBackups.json",
+                "encryptedClientStateCiphertextHash.json",
                 "positionMapBackups.json",
                 "oramPositionMapBackups.json",
+                "stateCiphertextHash.json",
                 "tokenPositionMapBackups.json",
                 "stashBackups.json",
             ] {
@@ -975,9 +978,12 @@ mod private_hnsw_grpc_tests {
                 assert!(!err.message().contains("position.map"));
                 assert!(!err.message().contains("stash.backup"));
                 assert!(!err.message().contains("clientStateBackups"));
+                assert!(!err.message().contains("clientStateCiphertext"));
                 assert!(!err.message().contains("encryptedClientStateBackups"));
+                assert!(!err.message().contains("encryptedClientStateCiphertextHash"));
                 assert!(!err.message().contains("positionMapBackups"));
                 assert!(!err.message().contains("oramPositionMapBackups"));
+                assert!(!err.message().contains("stateCiphertextHash"));
                 assert!(!err.message().contains("tokenPositionMapBackups"));
                 assert!(!err.message().contains("stashBackups"));
                 assert!(!err.message().contains("private_hnsw_oram"));
