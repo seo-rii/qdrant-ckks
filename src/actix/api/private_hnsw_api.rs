@@ -1145,8 +1145,16 @@ mod private_hnsw_rest_tests {
                     "clientStateCiphertextSha256.json",
                 ),
                 (
+                    "clientStateCiphertextsSha256.json",
+                    "clientStateCiphertextsSha256.json",
+                ),
+                (
                     "client_state_ciphertext_sha256.json",
                     "client_state_ciphertext_sha256.json",
+                ),
+                (
+                    "client_state_ciphertexts_sha256.json",
+                    "client_state_ciphertexts_sha256.json",
                 ),
                 (
                     "encryptedClientStateBackups.json",
@@ -1169,8 +1177,16 @@ mod private_hnsw_rest_tests {
                     "encryptedClientStateCiphertextSha256.json",
                 ),
                 (
+                    "encryptedClientStateCiphertextsSha256.json",
+                    "encryptedClientStateCiphertextsSha256.json",
+                ),
+                (
                     "encrypted_client_state_ciphertext_sha256.json",
                     "encrypted_client_state_ciphertext_sha256.json",
+                ),
+                (
+                    "encrypted_client_state_ciphertexts_sha256.json",
+                    "encrypted_client_state_ciphertexts_sha256.json",
                 ),
                 ("positionMapBackups.json", "positionMapBackups.json"),
                 ("oramPositionMapBackups.json", "oramPositionMapBackups.json"),
@@ -1184,6 +1200,11 @@ mod private_hnsw_rest_tests {
                 (
                     "state_ciphertext_sha256.json",
                     "state_ciphertext_sha256.json",
+                ),
+                ("stateCiphertextsSha256.json", "stateCiphertextsSha256.json"),
+                (
+                    "state_ciphertexts_sha256.json",
+                    "state_ciphertexts_sha256.json",
                 ),
                 (
                     "tokenPositionMapBackups.json",
