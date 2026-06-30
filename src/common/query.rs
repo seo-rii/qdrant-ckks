@@ -1278,9 +1278,9 @@ async fn ckks_vector_search_points_with_scoring(
     if let Some(params) = params.as_ref()
         && !ckks_search_params_supported(params)
     {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' uses CKKS sidecar scoring and does not support quantization, indexed_only, or ACORN search params",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector CKKS sidecar scoring does not support quantization, indexed_only, or ACORN search params",
+        ));
     }
     let hnsw_ef = params
         .as_ref()
@@ -1295,9 +1295,9 @@ async fn ckks_vector_search_points_with_scoring(
                 }
         )
     {
-        return Err(StorageError::bad_input(format!(
-            "encrypted vector '{vector_name}' HNSW sidecar search currently supports only dense, client-encrypted, or point-id nearest-neighbor queries",
-        )));
+        return Err(StorageError::bad_input(
+            "encrypted vector HNSW sidecar search currently supports only dense, client-encrypted, or point-id nearest-neighbor queries",
+        ));
     }
     if let Some(hnsw_ef) = hnsw_ef
         && filter.is_none()
@@ -3560,9 +3560,9 @@ fn ckks_sidecar_hnsw_search_points(
                 cache.insert(cache_key, graph.clone());
                 graph
             } else {
-                return Err(StorageError::bad_input(format!(
-                    "encrypted vector '{vector_name}' HNSW sidecar search requires an existing segment-native or persisted CKKS ciphertext graph; query-time graph build is disabled to avoid foreground pairwise CKKS scoring. Retry without hnsw_ef/exact=false to use brute-force sidecar scoring, or rebuild the encrypted vector index.",
-                )));
+                return Err(StorageError::bad_input(
+                    "encrypted vector HNSW sidecar search requires an existing segment-native or persisted CKKS ciphertext graph; query-time graph build is disabled to avoid foreground pairwise CKKS scoring. Retry without hnsw_ef/exact=false to use brute-force sidecar scoring, or rebuild the encrypted vector index.",
+                ));
             }
         }
     };
@@ -11319,9 +11319,14 @@ mod tests {
         )
         .expect_err("query-time CKKS graph cache miss must fail fast");
 
+        let rendered = format!("{err}");
         assert!(
-            format!("{err}").contains("query-time graph build is disabled"),
+            rendered.contains("query-time graph build is disabled"),
             "unexpected error: {err}",
+        );
+        assert!(
+            !rendered.contains("embedding"),
+            "HNSW cache miss error leaked vector name: {err}",
         );
     }
 

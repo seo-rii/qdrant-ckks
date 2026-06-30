@@ -16713,10 +16713,11 @@ esac
                 .unwrap_err();
                 assert!(matches!(
                     err,
-                    StorageError::BadInput { description }
+                    StorageError::BadInput { ref description }
                         if description.contains(
                             "does not support quantization, indexed_only, or ACORN search params"
                         )
+                        && !description.contains("encrypted vector '")
                 ));
             }
 
@@ -17041,10 +17042,11 @@ esac
                 .unwrap_err();
                 assert!(matches!(
                     err,
-                    StorageError::BadInput { description }
+                    StorageError::BadInput { ref description }
                         if description.contains(
                             "does not support quantization, indexed_only, or ACORN search params"
                         )
+                        && !description.contains("encrypted vector '")
                 ));
             }
 
@@ -17378,6 +17380,7 @@ esac
                     err.message()
                         .contains("does not support quantization, indexed_only, or ACORN")
                 );
+                assert!(!err.message().contains("encrypted vector '"));
             }
 
             let grpc_conflicting_query = api::rest::SearchRequestInternal::try_from(
@@ -17575,6 +17578,7 @@ esac
                     err.message()
                         .contains("does not support quantization, indexed_only, or ACORN")
                 );
+                assert!(!err.message().contains("encrypted vector '"));
             }
 
             let mut wrong_context_query = fake_ckks_client_query(b"fake-ckks-query:2", 2);
