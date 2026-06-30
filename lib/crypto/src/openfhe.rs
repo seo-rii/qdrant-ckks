@@ -2426,6 +2426,71 @@ done
         assert_eq!(ciphertext, vec![1]);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn bridge_batch_request_retries_once_after_worker_exits_before_response() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::Builder::new()
+            .prefix("qdrant-sec-openfhe-batch-retry-")
+            .tempdir_in(std::env::current_dir().unwrap())
+            .unwrap();
+        let marker = dir.path().join("first-worker-exited");
+        let script = dir.path().join("openfhe-bridge");
+        let expected_profile = CkksParameters::default().security_profile().unwrap();
+        let script_body = format!(
+            r#"#!/bin/sh
+if [ ! -f "{marker}" ]; then
+  : > "{marker}"
+  exit 0
+fi
+while IFS= read -r _line; do
+  printf '%s\n' '{{"version":1,"ciphertexts":["AQ","Ag"],"security_profile":"{expected_profile}","security_level_bits":128}}'
+done
+"#,
+            marker = marker.display(),
+        );
+        std::fs::write(&script, script_body).unwrap();
+        let mut dir_permissions = std::fs::metadata(dir.path()).unwrap().permissions();
+        dir_permissions.set_mode(0o700);
+        std::fs::set_permissions(dir.path(), dir_permissions).unwrap();
+        let mut script_permissions = std::fs::metadata(&script).unwrap().permissions();
+        script_permissions.set_mode(0o700);
+        std::fs::set_permissions(&script, script_permissions).unwrap();
+
+        let backend = CommandOpenFheBackend::new_unchecked(&script)
+            .with_timeout(Duration::from_secs(2))
+            .with_pool_size(NonZeroUsize::new(1).unwrap());
+        let parameters = CkksParameters::default();
+        let public_material = crate::vector::CkksPublicMaterial::new(
+            b"batch-retry-test-context",
+            b"batch-retry-test-public-key",
+        )
+        .unwrap();
+        let items = [
+            crate::vector::CkksVectorBatchItem {
+                point_id: "point-1",
+                values: &[1.0, 2.0],
+            },
+            crate::vector::CkksVectorBatchItem {
+                point_id: "point-2",
+                values: &[3.0, 4.0],
+            },
+        ];
+
+        let ciphertexts = backend
+            .encrypt_batch(CkksBatchEncryptionInput {
+                parameters: &parameters,
+                public_material: &public_material,
+                collection: "docs",
+                vector_name: "embedding",
+                items: &items,
+            })
+            .expect("second bridge worker should satisfy the retried batch request");
+
+        assert_eq!(ciphertexts, vec![vec![1], vec![2]]);
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn checked_bridge_spawn_program_uses_validated_proc_fd_path() {
