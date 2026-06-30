@@ -453,7 +453,9 @@ mod private_hnsw_rest_tests {
     };
 
     const PRIVATE_HNSW_CLIENT_STATE_REDACTION_ALIASES: &[&str] = &[
+        "clientStateBackup",
         "clientStateBackups",
+        "client_state_backup",
         "client_state_backups",
         "clientStateSnapshot",
         "clientStateSnapshots",
@@ -469,6 +471,7 @@ mod private_hnsw_rest_tests {
         "client_state_ciphertext_hashes",
         "client_state_ciphertext_sha256",
         "client_state_ciphertexts_sha256",
+        "encryptedClientStateBackup",
         "encryptedClientStateBackups",
         "encrypted_client_state_backups",
         "encryptedClientStateSnapshot",
@@ -1136,7 +1139,9 @@ mod private_hnsw_rest_tests {
                 ("client.state", "client.state"),
                 ("position.map", "position.map"),
                 ("stash.backup", "stash.backup"),
+                ("clientStateBackup.json", "clientStateBackup.json"),
                 ("clientStateBackups.json", "clientStateBackups.json"),
+                ("client_state_backup.json", "client_state_backup.json"),
                 ("clientStateSnapshot.json", "clientStateSnapshot.json"),
                 ("clientStateSnapshots.json", "clientStateSnapshots.json"),
                 ("client_state_snapshot.json", "client_state_snapshot.json"),
@@ -1165,6 +1170,10 @@ mod private_hnsw_rest_tests {
                 (
                     "client_state_ciphertexts_sha256.json",
                     "client_state_ciphertexts_sha256.json",
+                ),
+                (
+                    "encryptedClientStateBackup.json",
+                    "encryptedClientStateBackup.json",
                 ),
                 (
                     "encryptedClientStateBackups.json",
@@ -1256,12 +1265,15 @@ mod private_hnsw_rest_tests {
                 assert!(!body.contains("client.state"), "{body}");
                 assert!(!body.contains("position.map"), "{body}");
                 assert!(!body.contains("stash.backup"), "{body}");
+                assert!(!body.contains("clientStateBackup"), "{body}");
                 assert!(!body.contains("clientStateBackups"), "{body}");
+                assert!(!body.contains("client_state_backup"), "{body}");
                 assert!(!body.contains("clientStateSnapshot"), "{body}");
                 assert!(!body.contains("clientStateSnapshots"), "{body}");
                 assert!(!body.contains("client_state_snapshot"), "{body}");
                 assert!(!body.contains("client_state_snapshots"), "{body}");
                 assert!(!body.contains("clientStateCiphertext"), "{body}");
+                assert!(!body.contains("encryptedClientStateBackup"), "{body}");
                 assert!(!body.contains("encryptedClientStateBackups"), "{body}");
                 assert!(!body.contains("encryptedClientStateSnapshot"), "{body}");
                 assert!(!body.contains("encryptedClientStateSnapshots"), "{body}");
@@ -1287,12 +1299,15 @@ mod private_hnsw_rest_tests {
                         "client.state",
                         "position.map",
                         "stash.backup",
+                        "clientStateBackup",
                         "clientStateBackups",
+                        "client_state_backup",
                         "clientStateSnapshot",
                         "clientStateSnapshots",
                         "client_state_snapshot",
                         "client_state_snapshots",
                         "clientStateCiphertext",
+                        "encryptedClientStateBackup",
                         "encryptedClientStateBackups",
                         "encryptedClientStateSnapshot",
                         "encryptedClientStateSnapshots",

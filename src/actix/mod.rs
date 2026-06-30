@@ -864,7 +864,7 @@ mod tests {
         );
         assert_eq!(
             redact_private_oram_access_path(
-                "/collections/docs/private-hnsw/text/session/encryptedClientStateBackups-sentinel?token=query-sentinel"
+                "/collections/docs/private-hnsw/text/session/encryptedClientStateBackup-sentinel?token=query-sentinel"
             ),
             "/collections/docs/private-hnsw/text/session/{session_id}/[redacted]?[redacted]"
         );
@@ -881,7 +881,9 @@ mod tests {
             "/collections/docs/private-hnsw/text/session/{session_id}/[redacted]?[redacted]"
         );
         for session_alias in [
+            "clientStateBackup-sentinel",
             "clientStateBackups-sentinel",
+            "client_state_backup-sentinel",
             "clientStateSnapshot-sentinel",
             "clientStateSnapshots-sentinel",
             "client_state_snapshot-sentinel",
@@ -893,6 +895,7 @@ mod tests {
             "client_state_ciphertext_sha256-sentinel",
             "client_state_ciphertexts_sha256-sentinel",
             "client_state_ciphertext-sentinel",
+            "encryptedClientStateBackup-sentinel",
             "encryptedClientStateCiphertextHashes-sentinel",
             "encryptedClientStateCiphertextSha256-sentinel",
             "encryptedClientStateCiphertextsSha256-sentinel",
@@ -953,7 +956,9 @@ mod tests {
             "/collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted]"
         );
         for session_alias in [
+            "clientStateBackup-sentinel",
             "clientStateBackups-sentinel",
+            "client_state_backup-sentinel",
             "clientStateSnapshot-sentinel",
             "clientStateSnapshots-sentinel",
             "client_state_snapshot-sentinel",
@@ -964,6 +969,7 @@ mod tests {
             "client_state_ciphertext_hashes-sentinel",
             "client_state_ciphertext_sha256-sentinel",
             "client_state_ciphertexts_sha256-sentinel",
+            "encryptedClientStateBackup-sentinel",
             "encryptedClientStateCiphertextHashes-sentinel",
             "encryptedClientStateCiphertextSha256-sentinel",
             "encryptedClientStateCiphertextsSha256-sentinel",
@@ -1176,11 +1182,11 @@ mod tests {
             (
                 actix_test::TestRequest::post()
                     .uri(
-                        "/collections/docs/private-hnsw/text/session/encryptedClientStateBackups-sentinel/read_paths?token=query-sentinel",
+                        "/collections/docs/private-hnsw/text/session/encryptedClientStateBackup-sentinel/read_paths?token=query-sentinel",
                     )
                     .to_srv_request(),
                 "POST /collections/docs/private-hnsw/text/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
-                ["encryptedClientStateBackups-sentinel", "query-sentinel"],
+                ["encryptedClientStateBackup-sentinel", "query-sentinel"],
             ),
             (
                 actix_test::TestRequest::post()
@@ -1289,7 +1295,9 @@ mod tests {
         }
 
         for sentinel in [
+            "clientStateBackup-sentinel",
             "clientStateBackups-sentinel",
+            "client_state_backup-sentinel",
             "clientStateSnapshot-sentinel",
             "clientStateSnapshots-sentinel",
             "client_state_snapshot-sentinel",
@@ -1301,6 +1309,7 @@ mod tests {
             "client_state_ciphertext_sha256-sentinel",
             "client_state_ciphertexts_sha256-sentinel",
             "client_state_ciphertext-sentinel",
+            "encryptedClientStateBackup-sentinel",
             "encryptedClientStateCiphertextHashes-sentinel",
             "encryptedClientStateCiphertextSha256-sentinel",
             "encryptedClientStateCiphertextsSha256-sentinel",
@@ -1343,7 +1352,9 @@ mod tests {
         }
 
         for sentinel in [
+            "clientStateBackup-sentinel",
             "clientStateBackups-sentinel",
+            "client_state_backup-sentinel",
             "clientStateSnapshot-sentinel",
             "clientStateSnapshots-sentinel",
             "client_state_snapshot-sentinel",
@@ -1354,6 +1365,7 @@ mod tests {
             "client_state_ciphertext_hashes-sentinel",
             "client_state_ciphertext_sha256-sentinel",
             "client_state_ciphertexts_sha256-sentinel",
+            "encryptedClientStateBackup-sentinel",
             "encryptedClientStateCiphertextHashes-sentinel",
             "encryptedClientStateCiphertextSha256-sentinel",
             "encryptedClientStateCiphertextsSha256-sentinel",

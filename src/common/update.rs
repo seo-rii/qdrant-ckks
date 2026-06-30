@@ -11495,7 +11495,9 @@ esac
     }
 
     const PRIVATE_RESULT_ORAM_PAYLOAD_ALIAS_SENTINELS: &[&str] = &[
+        "clientStateBackup",
         "clientStateBackups",
+        "client_state_backup",
         "client_state_backups",
         "clientStateSnapshot",
         "clientStateSnapshots",
@@ -11511,6 +11513,7 @@ esac
         "client_state_ciphertext_hashes",
         "client_state_ciphertext_sha256",
         "client_state_ciphertexts_sha256",
+        "encryptedClientStateBackup",
         "encryptedClientStateBackups",
         "encrypted_client_state_backups",
         "encryptedClientStateSnapshot",

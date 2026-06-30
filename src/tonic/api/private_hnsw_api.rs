@@ -531,7 +531,9 @@ mod private_hnsw_grpc_tests {
     };
 
     const PRIVATE_HNSW_CLIENT_STATE_REDACTION_ALIASES: &[&str] = &[
+        "clientStateBackup",
         "clientStateBackups",
+        "client_state_backup",
         "client_state_backups",
         "clientStateSnapshot",
         "clientStateSnapshots",
@@ -547,6 +549,7 @@ mod private_hnsw_grpc_tests {
         "client_state_ciphertext_hashes",
         "client_state_ciphertext_sha256",
         "client_state_ciphertexts_sha256",
+        "encryptedClientStateBackup",
         "encryptedClientStateBackups",
         "encrypted_client_state_backups",
         "encryptedClientStateSnapshot",
@@ -1112,7 +1115,9 @@ mod private_hnsw_grpc_tests {
                 "client.state",
                 "position.map",
                 "stash.backup",
+                "clientStateBackup.json",
                 "clientStateBackups.json",
+                "client_state_backup.json",
                 "clientStateSnapshot.json",
                 "clientStateSnapshots.json",
                 "client_state_snapshot.json",
@@ -1124,6 +1129,7 @@ mod private_hnsw_grpc_tests {
                 "clientStateCiphertextsSha256.json",
                 "client_state_ciphertext_sha256.json",
                 "client_state_ciphertexts_sha256.json",
+                "encryptedClientStateBackup.json",
                 "encryptedClientStateBackups.json",
                 "encryptedClientStateSnapshot.json",
                 "encryptedClientStateSnapshots.json",
@@ -1169,12 +1175,15 @@ mod private_hnsw_grpc_tests {
                 assert!(!err.message().contains("client.state"));
                 assert!(!err.message().contains("position.map"));
                 assert!(!err.message().contains("stash.backup"));
+                assert!(!err.message().contains("clientStateBackup"));
                 assert!(!err.message().contains("clientStateBackups"));
+                assert!(!err.message().contains("client_state_backup"));
                 assert!(!err.message().contains("clientStateSnapshot"));
                 assert!(!err.message().contains("clientStateSnapshots"));
                 assert!(!err.message().contains("client_state_snapshot"));
                 assert!(!err.message().contains("client_state_snapshots"));
                 assert!(!err.message().contains("clientStateCiphertext"));
+                assert!(!err.message().contains("encryptedClientStateBackup"));
                 assert!(!err.message().contains("encryptedClientStateBackups"));
                 assert!(!err.message().contains("encryptedClientStateSnapshot"));
                 assert!(!err.message().contains("encryptedClientStateSnapshots"));
@@ -1196,12 +1205,15 @@ mod private_hnsw_grpc_tests {
                         "client.state",
                         "position.map",
                         "stash.backup",
+                        "clientStateBackup",
                         "clientStateBackups",
+                        "client_state_backup",
                         "clientStateSnapshot",
                         "clientStateSnapshots",
                         "client_state_snapshot",
                         "client_state_snapshots",
                         "clientStateCiphertext",
+                        "encryptedClientStateBackup",
                         "encryptedClientStateBackups",
                         "encryptedClientStateSnapshot",
                         "encryptedClientStateSnapshots",

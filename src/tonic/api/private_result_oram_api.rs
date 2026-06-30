@@ -441,7 +441,9 @@ mod private_result_oram_grpc_tests {
     const NEXT_EPOCH: u64 = 43;
     const SESSION_ID: &str = "session-1";
     const PRIVATE_RESULT_ORAM_CLIENT_STATE_REDACTION_ALIASES: &[&str] = &[
+        "clientStateBackup",
         "clientStateBackups",
+        "client_state_backup",
         "client_state_backups",
         "clientStateSnapshot",
         "clientStateSnapshots",
@@ -457,6 +459,7 @@ mod private_result_oram_grpc_tests {
         "client_state_ciphertext_hashes",
         "client_state_ciphertext_sha256",
         "client_state_ciphertexts_sha256",
+        "encryptedClientStateBackup",
         "encryptedClientStateBackups",
         "encrypted_client_state_backups",
         "encryptedClientStateSnapshot",
