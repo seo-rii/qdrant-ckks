@@ -2388,6 +2388,48 @@ mod tests {
             .join(format!("{bucket_id:08}.bucket"))
     }
 
+    fn assert_private_hnsw_restore_error_redacts_common(rendered: &str) {
+        for forbidden in [
+            PRIVATE_HNSW_ORAM_DIR,
+            PRIVATE_RESULT_ORAM_DIR,
+            VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+            PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+            PRIVATE_HNSW_ORAM_BINDING,
+            PRIVATE_RESULT_ORAM_BINDING,
+            "docs_text_private_hnsw",
+            "docs_private_hnsw",
+            "tenant-a/vector-private-rk",
+            "tenant-a/private-hnsw-signing-v1",
+            "tenant-a/private-result-signing-v1",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW restore preflight leaked `{forbidden}`: {rendered}",
+            );
+        }
+    }
+
+    fn assert_private_result_restore_error_redacts_common(rendered: &str) {
+        for forbidden in [
+            PRIVATE_RESULT_ORAM_DIR,
+            PRIVATE_HNSW_ORAM_DIR,
+            PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+            VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+            PRIVATE_RESULT_ORAM_BINDING,
+            PRIVATE_HNSW_ORAM_BINDING,
+            "docs_body_private_result",
+            "docs_private_result_oram",
+            "tenant-a/result-private-rk",
+            "tenant-a/private-result-signing-v1",
+            "tenant-a/private-hnsw-signing-v1",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "private result ORAM restore preflight leaked `{forbidden}`: {rendered}",
+            );
+        }
+    }
+
     #[test]
     fn private_oram_snapshot_restore_error_mapping_redacts_qdrant_sec_fields() {
         let hnsw = private_hnsw_restore_error(
@@ -4042,6 +4084,7 @@ mod tests {
         assert!(rendered.contains("collection_id mismatch"));
         assert!(!rendered.contains(&manifest.collection_id), "{rendered}");
         assert!(!rendered.contains(&uuid.to_string()), "{rendered}");
+        assert_private_result_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -4083,6 +4126,7 @@ mod tests {
             !rendered.contains(&manifest.owner_signing_key_id),
             "{rendered}"
         );
+        assert_private_result_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -4112,6 +4156,7 @@ mod tests {
             !rendered.contains("tenant-a/result-private-rk"),
             "{rendered}"
         );
+        assert_private_result_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -4141,6 +4186,7 @@ mod tests {
             !rendered.contains("tenant-a/result-private-rk"),
             "{rendered}"
         );
+        assert_private_result_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -4167,6 +4213,7 @@ mod tests {
         assert!(rendered.contains("manifest rk_epoch mismatch"));
         assert!(!rendered.contains("8"), "{rendered}");
         assert!(!rendered.contains("7"), "{rendered}");
+        assert_private_result_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -4598,6 +4645,7 @@ mod tests {
 
         assert!(rendered.contains("manifest key_id mismatch"));
         assert!(!rendered.contains(&manifest.key_id), "{rendered}");
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -4623,6 +4671,7 @@ mod tests {
 
         assert!(rendered.contains("manifest rk_id mismatch"));
         assert!(!rendered.contains(&manifest.rk_id), "{rendered}");
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -4648,6 +4697,7 @@ mod tests {
 
         assert!(rendered.contains("manifest rk_epoch mismatch"));
         assert!(!rendered.contains("8"), "{rendered}");
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -5364,6 +5414,7 @@ mod tests {
             !rendered.contains(&manifest.owner_signing_key_id),
             "{rendered}"
         );
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 
     #[test]
@@ -5387,6 +5438,7 @@ mod tests {
         assert!(rendered.contains("collection_id mismatch"));
         assert!(!rendered.contains(&manifest.collection_id), "{rendered}");
         assert!(!rendered.contains(&uuid.to_string()), "{rendered}");
+        assert_private_hnsw_restore_error_redacts_common(&rendered);
     }
 
     #[test]
