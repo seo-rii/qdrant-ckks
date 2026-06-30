@@ -446,10 +446,10 @@ mod private_hnsw_rest_tests {
 
     use super::*;
     use crate::common::private_hnsw_wire_fixture::{
-        BASE_EPOCH, COLLECTION_ID, MAX_CIPHERTEXT_BYTES, NEXT_EPOCH, PrivateHnswRouteWireFixture,
-        SESSION_ID, SIGNING_KEY_ID, create_plain_collection, create_private_hnsw_collection,
-        create_private_hnsw_collection_with_private_result_oram, route_e2e_guard, test_dispatcher,
-        test_distributed_dispatcher,
+        BASE_EPOCH, COLLECTION_ID, COLLECTION_NAME, KEY_ID, MAX_CIPHERTEXT_BYTES, NEXT_EPOCH,
+        PrivateHnswRouteWireFixture, SESSION_ID, SIGNING_KEY_ID, create_plain_collection,
+        create_private_hnsw_collection, create_private_hnsw_collection_with_private_result_oram,
+        route_e2e_guard, test_dispatcher, test_distributed_dispatcher,
     };
 
     fn json_roundtrip<T>(value: &T) -> T
@@ -497,6 +497,35 @@ mod private_hnsw_rest_tests {
             assert!(
                 !rendered.contains(forbidden),
                 "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
+            );
+        }
+    }
+
+    fn assert_private_hnsw_guard_error_redacts(rendered: &str, extra_forbidden: &[&str]) {
+        for forbidden in [
+            COLLECTION_NAME,
+            "text_private_hnsw",
+            "docs_private_hnsw_v1",
+            KEY_ID,
+            SIGNING_KEY_ID,
+            qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_HNSW_ORAM_BINDING,
+            qdrant_sec::PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
+            qdrant_sec::PRIVATE_RESULT_ORAM_BINDING,
+            "payload_private_result_oram",
+            "docs_private_result_oram_v1",
+            "private_hnsw_oram",
+            "private_result_oram",
+        ] {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for forbidden in extra_forbidden {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW guard leaked `{forbidden}`: {rendered}",
             );
         }
     }
@@ -2619,6 +2648,14 @@ mod private_hnsw_rest_tests {
                 !active_snapshot_session_error.contains(active_snapshot_client_id),
                 "{active_snapshot_session_error}"
             );
+            assert_private_hnsw_guard_error_redacts(
+                &active_snapshot_session_error,
+                &[
+                    active_snapshot_client_id,
+                    &fixture.encrypted_build.root_hash,
+                    &fixture.manifest_signature.sig,
+                ],
+            );
             let active_snapshot_manifest_upload_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
@@ -2635,6 +2672,10 @@ mod private_hnsw_rest_tests {
             assert!(
                 !active_snapshot_manifest_upload_error.contains("private_hnsw_oram"),
                 "{active_snapshot_manifest_upload_error}"
+            );
+            assert_private_hnsw_guard_error_redacts(
+                &active_snapshot_manifest_upload_error,
+                &[&fixture.manifest.root_hash, &fixture.manifest_signature.sig],
             );
             let mut active_snapshot_bucket_upload = fixture.encrypted_build.buckets.clone();
             active_snapshot_bucket_upload[0].ciphertext =
@@ -2661,6 +2702,13 @@ mod private_hnsw_rest_tests {
             assert!(
                 !active_snapshot_bucket_upload_error.contains("private_hnsw_oram"),
                 "{active_snapshot_bucket_upload_error}"
+            );
+            assert_private_hnsw_guard_error_redacts(
+                &active_snapshot_bucket_upload_error,
+                &[
+                    "active-snapshot-bucket-upload-ciphertext-sentinel",
+                    &fixture.encrypted_build.root_hash,
+                ],
             );
             drop(snapshot_guard);
 
@@ -2696,6 +2744,14 @@ mod private_hnsw_rest_tests {
                 !active_lifecycle_session_error.contains(active_lifecycle_client_id),
                 "{active_lifecycle_session_error}"
             );
+            assert_private_hnsw_guard_error_redacts(
+                &active_lifecycle_session_error,
+                &[
+                    active_lifecycle_client_id,
+                    &fixture.encrypted_build.root_hash,
+                    &fixture.manifest_signature.sig,
+                ],
+            );
             let active_lifecycle_manifest_upload_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
@@ -2712,6 +2768,10 @@ mod private_hnsw_rest_tests {
             assert!(
                 !active_lifecycle_manifest_upload_error.contains("private_hnsw_oram"),
                 "{active_lifecycle_manifest_upload_error}"
+            );
+            assert_private_hnsw_guard_error_redacts(
+                &active_lifecycle_manifest_upload_error,
+                &[&fixture.manifest.root_hash, &fixture.manifest_signature.sig],
             );
             let mut active_lifecycle_bucket_upload = fixture.encrypted_build.buckets.clone();
             active_lifecycle_bucket_upload[0].ciphertext =
@@ -2738,6 +2798,13 @@ mod private_hnsw_rest_tests {
             assert!(
                 !active_lifecycle_bucket_upload_error.contains("private_hnsw_oram"),
                 "{active_lifecycle_bucket_upload_error}"
+            );
+            assert_private_hnsw_guard_error_redacts(
+                &active_lifecycle_bucket_upload_error,
+                &[
+                    "active-lifecycle-bucket-upload-ciphertext-sentinel",
+                    &fixture.encrypted_build.root_hash,
+                ],
             );
             drop(lifecycle_guard);
 
@@ -2780,6 +2847,15 @@ mod private_hnsw_rest_tests {
                 !active_snapshot_error.contains("private_hnsw_oram"),
                 "{active_snapshot_error}"
             );
+            assert_private_hnsw_guard_error_redacts(
+                &active_snapshot_error,
+                &[
+                    &session_id,
+                    &fixture.encrypted_build.root_hash,
+                    &fixture.encrypted_build.buckets[0].ciphertext,
+                    &fixture.manifest_signature.sig,
+                ],
+            );
             let active_full_snapshot_error =
                 crate::common::snapshots::do_create_full_snapshot(&dispatcher, auth.clone())
                     .await
@@ -2801,6 +2877,15 @@ mod private_hnsw_rest_tests {
                 !active_full_snapshot_error.contains("private_hnsw_oram"),
                 "{active_full_snapshot_error}"
             );
+            assert_private_hnsw_guard_error_redacts(
+                &active_full_snapshot_error,
+                &[
+                    &session_id,
+                    &fixture.encrypted_build.root_hash,
+                    &fixture.encrypted_build.buckets[0].ciphertext,
+                    &fixture.manifest_signature.sig,
+                ],
+            );
 
             let duplicate_session_client_id = "tenant-a/sdk-instance-2";
             let duplicate_session_error = post_json_error_contains!(
@@ -2817,6 +2902,10 @@ mod private_hnsw_rest_tests {
             assert!(
                 !duplicate_session_error.contains(duplicate_session_client_id),
                 "{duplicate_session_error}"
+            );
+            assert_private_hnsw_guard_error_redacts(
+                &duplicate_session_error,
+                &[duplicate_session_client_id, &session_id],
             );
 
             let (refreshed_manifest, refreshed_signature) =
@@ -2837,6 +2926,14 @@ mod private_hnsw_rest_tests {
             assert!(
                 !active_manifest_upload_error.contains(&session_id),
                 "{active_manifest_upload_error}"
+            );
+            assert_private_hnsw_guard_error_redacts(
+                &active_manifest_upload_error,
+                &[
+                    &refreshed_manifest.root_hash,
+                    &refreshed_manifest.owner_signing_key_id,
+                    &session_id,
+                ],
             );
             assert_eq!(
                 uploaded_store.read_manifest().unwrap(),
@@ -2868,6 +2965,14 @@ mod private_hnsw_rest_tests {
             assert!(
                 !active_bucket_upload_error.contains(&session_id),
                 "{active_bucket_upload_error}"
+            );
+            assert_private_hnsw_guard_error_redacts(
+                &active_bucket_upload_error,
+                &[
+                    "active-session-bucket-upload-ciphertext-sentinel",
+                    &fixture.encrypted_build.root_hash,
+                    &session_id,
+                ],
             );
             assert_eq!(
                 uploaded_store
