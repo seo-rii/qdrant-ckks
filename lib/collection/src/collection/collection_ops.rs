@@ -666,5 +666,14 @@ mod tests {
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+        for sentinel in [
+            "client_state_ciphertext",
+            "encrypted_client_state_ciphertext_hash",
+            "positionMapBackups",
+            "tokenPositionMapBackups",
+            "stashBackups",
+        ] {
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
     }
 }
