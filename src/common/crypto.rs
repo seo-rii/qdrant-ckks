@@ -2753,7 +2753,7 @@ fn validate_collection_crypto_runtime_inner_with_crypto_id(
             }
             if has_server_side_keyed_provider
                 && decode_cluster_key_attestation_secret()
-                    .map_err(|err| StorageError::bad_input(err.to_string()))?
+                    .map_err(cluster_key_attestation_storage_error)?
                     .is_none()
             {
                 return Err(StorageError::bad_input(format!(
@@ -2914,6 +2914,10 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
     });
     let digest = Sha256::digest(&canonical);
     BASE64URL_NOPAD.encode(&digest)
+}
+
+fn cluster_key_attestation_storage_error(_err: CryptoSetupError) -> StorageError {
+    StorageError::bad_input("crypto cluster key attestation config is invalid")
 }
 
 fn decode_cluster_key_attestation_secret() -> Result<Option<Zeroizing<Vec<u8>>>, CryptoSetupError> {
@@ -9772,6 +9776,46 @@ mod tests {
     use super::*;
     use crate::settings::CryptoInstanceConfig;
 
+    static CLUSTER_KEY_ATTESTATION_ENV_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    fn cluster_key_attestation_env_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        CLUSTER_KEY_ATTESTATION_ENV_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap()
+    }
+
+    struct ClusterKeyAttestationEnvRestore {
+        previous: Option<String>,
+    }
+
+    impl Drop for ClusterKeyAttestationEnvRestore {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(previous) => std::env::set_var(CLUSTER_KEY_ATTESTATION_ENV, previous),
+                    None => std::env::remove_var(CLUSTER_KEY_ATTESTATION_ENV),
+                }
+            }
+        }
+    }
+
+    fn set_cluster_key_attestation_env_for_test(value: &str) -> ClusterKeyAttestationEnvRestore {
+        let previous = std::env::var(CLUSTER_KEY_ATTESTATION_ENV).ok();
+        unsafe {
+            std::env::set_var(CLUSTER_KEY_ATTESTATION_ENV, value);
+        }
+        ClusterKeyAttestationEnvRestore { previous }
+    }
+
+    fn remove_cluster_key_attestation_env_for_test() -> ClusterKeyAttestationEnvRestore {
+        let previous = std::env::var(CLUSTER_KEY_ATTESTATION_ENV).ok();
+        unsafe {
+            std::env::remove_var(CLUSTER_KEY_ATTESTATION_ENV);
+        }
+        ClusterKeyAttestationEnvRestore { previous }
+    }
+
     #[test]
     fn crypto_setup_error_debug_redacts_runtime_values() {
         let sentinel = "crypto-setup-debug-sentinel";
@@ -13690,12 +13734,9 @@ mod tests {
 
     #[test]
     fn crypto_runtime_capability_fingerprint_tracks_attested_resource_key_bytes() {
-        unsafe {
-            std::env::set_var(
-                CLUSTER_KEY_ATTESTATION_ENV,
-                BASE64URL_NOPAD.encode(&[42_u8; 32]),
-            );
-        }
+        let _attestation_env_guard = cluster_key_attestation_env_test_guard();
+        let _attestation_env_restore =
+            set_cluster_key_attestation_env_for_test(&BASE64URL_NOPAD.encode(&[42_u8; 32]));
         let mk_material = "tenant-a/mk";
         let rk_material = "tenant-a/docs-rk";
         let wrapped_rk_config = |rk_secret: [u8; 32]| {
@@ -13781,9 +13822,6 @@ mod tests {
             [("peer-rk", peer_fingerprint.as_str())],
         )
         .expect_err("attested RK drift must fail runtime parity validation");
-        unsafe {
-            std::env::remove_var(CLUSTER_KEY_ATTESTATION_ENV);
-        }
         assert!(err.to_string().contains("peer-rk"));
     }
 
@@ -18558,9 +18596,8 @@ mod tests {
             ..Settings::new(None).unwrap()
         };
         settings.cluster.enabled = true;
-        unsafe {
-            std::env::remove_var(CLUSTER_KEY_ATTESTATION_ENV);
-        }
+        let _attestation_env_guard = cluster_key_attestation_env_test_guard();
+        let _attestation_env_restore = remove_cluster_key_attestation_env_for_test();
         let params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
@@ -18588,6 +18625,89 @@ mod tests {
                 if description.contains(CLUSTER_KEY_ATTESTATION_ENV)
                     && description.contains("resource-key commitments")
         ));
+    }
+
+    #[test]
+    fn validate_collection_crypto_runtime_redacts_invalid_cluster_attestation_config() {
+        let mut settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: None,
+                ckks_grouped_max_candidates: crate::settings::default_ckks_grouped_max_candidates(),
+                ckks_scoring_source_batch_max:
+                    crate::settings::default_ckks_scoring_source_batch_max(),
+                ckks_query_nonce_replay_ttl_secs:
+                    crate::settings::default_ckks_query_nonce_replay_ttl_secs(),
+                ckks_query_nonce_replay_cache_max_entries:
+                    crate::settings::default_ckks_query_nonce_replay_cache_max_entries(),
+                allow_inline_key_material: true,
+                instances: HashMap::from([(
+                    "docs_payload_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_AES_GCM_PROVIDER.to_string(),
+                        materials: HashMap::from([(
+                            PAYLOAD_SYM_KEY_ROLE.to_string(),
+                            "tenant-a/docs-rk".to_string(),
+                        )]),
+                        backend_ref: None,
+                        options: json!({
+                            "key_id": "tenant-a/docs",
+                            "material_fingerprint_id": "tenant-a/docs-rk@v1",
+                        }),
+                    },
+                )]),
+                materials: HashMap::from([(
+                    "tenant-a/docs-rk".to_string(),
+                    CryptoMaterialConfig {
+                        kind: SYMMETRIC_KEY_32_KIND.to_string(),
+                        source: Some("inline".to_string()),
+                        value_b64: Some(BASE64URL_NOPAD.encode(&[7_u8; 32])),
+                        rk_epoch: Some(1),
+                        state: Some(RESOURCE_KEY_STATE_ACTIVE.to_string()),
+                        scope: Some("collection:docs".to_string()),
+                        ..CryptoMaterialConfig::default()
+                    },
+                )]),
+                backends: HashMap::new(),
+            },
+            ..Settings::new(None).unwrap()
+        };
+        settings.cluster.enabled = true;
+        let invalid_attestation = "invalid-cluster-attestation-secret";
+        let _attestation_env_guard = cluster_key_attestation_env_test_guard();
+        let _attestation_env_restore =
+            set_cluster_key_attestation_env_for_test(invalid_attestation);
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/docs".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 0,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_conf".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "docs_payload_v1".to_string(),
+                    binding: Some(PAYLOAD_FIELD_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect_err("invalid cluster key attestation config must fail closed");
+        let description = err.to_string();
+        assert!(
+            description.contains("crypto cluster key attestation config is invalid"),
+            "{description}",
+        );
+        assert!(!description.contains(invalid_attestation), "{description}");
+        assert!(
+            !description.contains(CLUSTER_KEY_ATTESTATION_ENV),
+            "{description}"
+        );
+        assert!(!description.contains("base64url"), "{description}");
     }
 
     #[test]
