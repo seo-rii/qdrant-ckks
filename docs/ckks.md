@@ -1061,11 +1061,13 @@ wrapper also reject token batches that are not an exact multiple of
 fixed token batch through the client-held token-position map into session
 `read_buckets` bucket-id sequences that preserve shared path bucket duplicates,
 so ORAM path volume is not reduced by deduplicating overlapping paths. The SDK
-planner rejects repeated full paths within a single fixed-size read batch, and
-server read validation accepts duplicate bucket ids for shared path prefixes
-but rejects empty, repeated full-path, non-whole-path-shaped, non-canonical
-Path ORAM heap paths, or batches that do not exactly match the configured fixed
-path budget. The crypto crate also
+ordered planner distributes same-leaf tokens across fixed-size read batches
+when the configured batch count can accommodate them, and rejects impossible
+leaf-collision schedules before a server request is built. Server read
+validation accepts duplicate bucket ids for shared path prefixes but rejects
+empty, repeated full-path, non-whole-path-shaped, non-canonical Path ORAM heap
+paths, or batches that do not exactly match the configured fixed path budget.
+The crypto crate also
 exposes canonical `read_buckets`
 message/sign/verify helpers that bind collection/key lineage, index epoch,
 root hash, bucket count, and the exact padded bucket-id sequence; REST and gRPC
@@ -1100,7 +1102,7 @@ rejects empty commits, duplicate bucket ids, malformed bucket hashes, stale
 epoch/root, and invalid signatures before storage changes. Multi-batch result
 fetches therefore use repeated fixed-size read/commit windows. The HNSW SDK
 finalizer maps only real HNSW hits back to fetched payload blocks and validates
-fetch-token order, point-token binding, and deleted-payload rejection before
+the fetched token set, point-token binding, and deleted-payload rejection before
 exposing payload bytes to the caller. A canonical plaintext client-state
 snapshot shape now round-trips the result ORAM token position map and stash for
 client-side backup validation, and an encrypted snapshot helper seals that backup

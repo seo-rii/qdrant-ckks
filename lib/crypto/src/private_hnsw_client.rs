@@ -1008,14 +1008,20 @@ pub fn finalize_private_hnsw_private_result_fetch(
         ));
     }
 
-    for (access, expected_token) in token_fetch_result
-        .accesses
-        .iter()
-        .zip(&fetch_plan.payload_fetch_tokens)
-    {
-        if access.payload_fetch_token != *expected_token
-            || access.block.payload_fetch_token != *expected_token
+    let mut fetched_by_token = BTreeMap::new();
+    for access in &token_fetch_result.accesses {
+        if access.block.payload_fetch_token != access.payload_fetch_token
+            || fetched_by_token
+                .insert(access.payload_fetch_token, access)
+                .is_some()
         {
+            return Err(PrivateHnswClientError::InvalidSearchConfig(
+                "payload_fetch_tokens",
+            ));
+        }
+    }
+    for expected_token in &fetch_plan.payload_fetch_tokens {
+        if !fetched_by_token.contains_key(expected_token) {
             return Err(PrivateHnswClientError::InvalidSearchConfig(
                 "payload_fetch_tokens",
             ));
@@ -1023,15 +1029,13 @@ pub fn finalize_private_hnsw_private_result_fetch(
     }
 
     let mut results = Vec::with_capacity(fetch_plan.real_result_count);
-    for (hit, access) in result
-        .hits
-        .iter()
-        .zip(token_fetch_result.accesses.iter())
-        .take(fetch_plan.real_result_count)
-    {
+    for hit in result.hits.iter().take(fetch_plan.real_result_count) {
         let payload_fetch_token = hit
             .payload_fetch_token
             .ok_or(PrivateHnswClientError::MissingPayloadFetchToken)?;
+        let access = fetched_by_token.get(&payload_fetch_token).ok_or(
+            PrivateHnswClientError::InvalidSearchConfig("payload_fetch_tokens"),
+        )?;
         validate_private_hnsw_result_payload_block(hit, payload_fetch_token, &access.block)?;
         results.push(PrivateHnswPrivateResultPayload {
             node_id: hit.node_id,
@@ -7743,6 +7747,24 @@ mod tests {
         assert_eq!(payloads.results[0].payload, vec![1, 2, 3]);
         assert_eq!(payloads.results[1].node_id, [2; 32]);
         assert_eq!(payloads.results[1].payload, vec![4, 5, 6]);
+
+        let shuffled_token_fetch = PrivateResultOramTokenFetchResult {
+            accesses: vec![
+                result_token_access([99; 32], [199; 32], vec![9]),
+                result_token_access([12; 32], [22; 32], vec![4, 5, 6]),
+                result_token_access([100; 32], [200; 32], vec![10]),
+                result_token_access([11; 32], [21; 32], vec![1, 2, 3]),
+            ],
+            updated_buckets: Vec::new(),
+        };
+        let shuffled_payloads =
+            finalize_private_hnsw_private_result_fetch(&result, &plan, &shuffled_token_fetch)
+                .unwrap();
+        assert_eq!(shuffled_payloads.results.len(), 2);
+        assert_eq!(shuffled_payloads.results[0].payload_fetch_token, [11; 32]);
+        assert_eq!(shuffled_payloads.results[0].payload, vec![1, 2, 3]);
+        assert_eq!(shuffled_payloads.results[1].payload_fetch_token, [12; 32]);
+        assert_eq!(shuffled_payloads.results[1].payload, vec![4, 5, 6]);
     }
 
     #[test]

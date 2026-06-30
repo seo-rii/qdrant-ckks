@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
@@ -1165,6 +1165,21 @@ impl Debug for PrivateResultOramReadBucketPlan {
 }
 
 #[derive(Clone, PartialEq, Eq)]
+pub struct PrivateResultOramOrderedReadBucketPlan {
+    pub payload_fetch_tokens: Vec<[u8; 32]>,
+    pub read_plan: PrivateResultOramReadBucketPlan,
+}
+
+impl Debug for PrivateResultOramOrderedReadBucketPlan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramOrderedReadBucketPlan")
+            .field("payload_fetch_token_count", &"[redacted]")
+            .field("read_plan", &self.read_plan)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramEncryptedBucketBatch {
     pub index_epoch: u64,
     pub root_hash: String,
@@ -1613,6 +1628,103 @@ pub fn plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
         batches,
         token_count: payload_fetch_tokens.len(),
         path_batch_size,
+    })
+}
+
+pub fn plan_private_result_oram_ordered_read_bucket_batches_for_fetch_tokens(
+    manifest: &PrivateResultOramManifest,
+    payload_fetch_tokens: &[[u8; 32]],
+    token_positions: &[PrivateResultOramFetchTokenPosition],
+) -> Result<PrivateResultOramOrderedReadBucketPlan, PrivateResultOramError> {
+    validate_private_result_oram_manifest_shape(manifest)?;
+    if manifest.bucket_count != private_result_oram_bucket_count(manifest.oram.tree_height)? {
+        return Err(PrivateResultOramError::InvalidManifestField("bucket_count"));
+    }
+    if payload_fetch_tokens.is_empty() {
+        return Err(PrivateResultOramError::InvalidFetchPlanField(
+            "payload_fetch_tokens",
+        ));
+    }
+    let path_batch_size = usize::try_from(manifest.oram.path_batch_size)
+        .map_err(|_| PrivateResultOramError::InvalidFetchPlanField("path_batch_size"))?;
+    if path_batch_size == 0 {
+        return Err(PrivateResultOramError::InvalidFetchPlanField(
+            "path_batch_size",
+        ));
+    }
+    if payload_fetch_tokens.len() % path_batch_size != 0 {
+        return Err(PrivateResultOramError::InvalidFetchPlanField(
+            "payload_fetch_tokens",
+        ));
+    }
+    let batch_count = payload_fetch_tokens.len() / path_batch_size;
+
+    let mut positions = BTreeMap::new();
+    for position in token_positions {
+        validate_private_result_oram_leaf(position.leaf, manifest.oram.tree_height)?;
+        if positions
+            .insert(position.payload_fetch_token, position.leaf)
+            .is_some()
+        {
+            return Err(PrivateResultOramError::DuplicatePayloadFetchTokenPosition);
+        }
+    }
+
+    let mut seen_tokens = BTreeSet::new();
+    let mut tokens_by_leaf = BTreeMap::<u64, VecDeque<[u8; 32]>>::new();
+    for token in payload_fetch_tokens {
+        if !seen_tokens.insert(*token) {
+            return Err(PrivateResultOramError::DuplicatePayloadFetchToken);
+        }
+        let leaf = positions
+            .get(token)
+            .copied()
+            .ok_or(PrivateResultOramError::MissingPayloadFetchTokenPosition)?;
+        tokens_by_leaf.entry(leaf).or_default().push_back(*token);
+    }
+
+    if tokens_by_leaf
+        .values()
+        .any(|tokens| tokens.len() > batch_count)
+    {
+        return Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"));
+    }
+
+    let mut ordered_payload_fetch_tokens = Vec::with_capacity(payload_fetch_tokens.len());
+    for _batch_index in 0..batch_count {
+        let mut batch_leaves = BTreeSet::new();
+        for _slot in 0..path_batch_size {
+            let mut selected_leaf = None;
+            let mut selected_len = 0;
+            for (leaf, tokens) in &tokens_by_leaf {
+                if batch_leaves.contains(leaf) || tokens.is_empty() {
+                    continue;
+                }
+                if selected_leaf.is_none() || tokens.len() > selected_len {
+                    selected_leaf = Some(*leaf);
+                    selected_len = tokens.len();
+                }
+            }
+            let Some(leaf) = selected_leaf else {
+                return Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"));
+            };
+            let token = tokens_by_leaf
+                .get_mut(&leaf)
+                .and_then(VecDeque::pop_front)
+                .ok_or(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))?;
+            batch_leaves.insert(leaf);
+            ordered_payload_fetch_tokens.push(token);
+        }
+    }
+
+    let read_plan = plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
+        manifest,
+        &ordered_payload_fetch_tokens,
+        token_positions,
+    )?;
+    Ok(PrivateResultOramOrderedReadBucketPlan {
+        payload_fetch_tokens: ordered_payload_fetch_tokens,
+        read_plan,
     })
 }
 
@@ -6574,6 +6686,88 @@ mod tests {
         assert_eq!(plan.batches[0].bucket_ids, vec![0, 2, 5, 12, 0, 2, 6, 13]);
         assert_eq!(plan.batches[1].token_count, 2);
         assert_eq!(plan.batches[1].bucket_ids, vec![0, 1, 3, 8, 0, 1, 3, 7]);
+    }
+
+    #[test]
+    fn ordered_fetch_token_read_plan_distributes_leaf_collisions() {
+        let manifest = small_fetch_manifest();
+        let positions = vec![
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [1; 32],
+                leaf: 5,
+            },
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [2; 32],
+                leaf: 5,
+            },
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [3; 32],
+                leaf: 6,
+            },
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [4; 32],
+                leaf: 7,
+            },
+        ];
+
+        assert_eq!(
+            plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
+                &manifest,
+                &[[1; 32], [2; 32], [3; 32], [4; 32]],
+                &positions,
+            ),
+            Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))
+        );
+
+        let ordered = plan_private_result_oram_ordered_read_bucket_batches_for_fetch_tokens(
+            &manifest,
+            &[[1; 32], [2; 32], [3; 32], [4; 32]],
+            &positions,
+        )
+        .unwrap();
+
+        assert_eq!(
+            ordered.payload_fetch_tokens,
+            vec![[1; 32], [3; 32], [2; 32], [4; 32]]
+        );
+        assert_eq!(ordered.read_plan.token_count, 4);
+        assert_eq!(ordered.read_plan.path_batch_size, 2);
+        assert_eq!(ordered.read_plan.batches.len(), 2);
+        assert_eq!(
+            ordered.read_plan.batches[0].bucket_ids,
+            vec![0, 2, 5, 12, 0, 2, 6, 13]
+        );
+        assert_eq!(
+            ordered.read_plan.batches[1].bucket_ids,
+            vec![0, 2, 5, 12, 0, 2, 6, 14]
+        );
+
+        let impossible_positions = vec![
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [1; 32],
+                leaf: 5,
+            },
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [2; 32],
+                leaf: 5,
+            },
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [3; 32],
+                leaf: 5,
+            },
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: [4; 32],
+                leaf: 6,
+            },
+        ];
+        assert_eq!(
+            plan_private_result_oram_ordered_read_bucket_batches_for_fetch_tokens(
+                &manifest,
+                &[[1; 32], [2; 32], [3; 32], [4; 32]],
+                &impossible_positions,
+            ),
+            Err(PrivateResultOramError::InvalidFetchPlanField("bucket_ids"))
+        );
     }
 
     #[test]
