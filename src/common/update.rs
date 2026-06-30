@@ -1682,16 +1682,16 @@ pub async fn do_reencrypt_stale_payloads_for_crypto_migration(
     let collection = toc.get_collection(&collection_pass).await?;
     let collection_config = collection.config_snapshot().await;
     let Some(encryption) = collection_config.params.effective_encryption() else {
-        return Err(StorageError::bad_input(format!(
-            "payload crypto migration for collection {collection_name} requires an encrypted collection",
-        )));
+        return Err(StorageError::bad_input(
+            "payload crypto migration requires an encrypted collection",
+        ));
     };
     if !matches!(
         encryption.migration_state,
         CryptoMigrationState::Encrypting | CryptoMigrationState::Rotating
     ) {
         return Err(StorageError::bad_input(format!(
-            "payload re-encrypt migration for collection {collection_name} requires migration_state=encrypting or rotating; current state is {:?}",
+            "payload re-encrypt migration requires migration_state=encrypting or rotating; current state is {:?}",
             encryption.migration_state,
         )));
     }
@@ -1707,14 +1707,14 @@ pub async fn do_reencrypt_stale_payloads_for_crypto_migration(
     )
     .map_err(payload_runtime_invalid_storage_error)?
     else {
-        return Err(StorageError::bad_input(format!(
-            "payload crypto migration for collection {collection_name} requires a server-side payload encryption rule",
-        )));
+        return Err(StorageError::bad_input(
+            "payload crypto migration requires a server-side payload encryption rule",
+        ));
     };
     if !plan.has_server_encrypt_rules() {
-        return Err(StorageError::bad_input(format!(
-            "payload crypto migration for collection {collection_name} requires server-side payload encryption rules; client-side envelopes are store-only and cannot be re-encrypted by Qdrant",
-        )));
+        return Err(StorageError::bad_input(
+            "payload crypto migration requires server-side payload encryption rules; client-side envelopes are store-only and cannot be re-encrypted by Qdrant",
+        ));
     }
 
     let rewrite_payload = |point_id: &ExtendedPointId,
@@ -1730,11 +1730,7 @@ pub async fn do_reencrypt_stale_payloads_for_crypto_migration(
                         .collect::<Vec<_>>(),
                 )
             })
-            .map_err(|err| {
-                CollectionError::bad_input(format!(
-                    "payload crypto migration rewrite failed for point {point_id}: {err}",
-                ))
-            })
+            .map_err(|_| CollectionError::bad_input("payload crypto migration rewrite failed"))
     };
     if dry_run {
         collection
@@ -1763,13 +1759,13 @@ pub async fn do_decrypt_payloads_for_crypto_migration(
     let collection = toc.get_collection(&collection_pass).await?;
     let collection_config = collection.config_snapshot().await;
     let Some(encryption) = collection_config.params.effective_encryption() else {
-        return Err(StorageError::bad_input(format!(
-            "payload crypto decryption migration for collection {collection_name} requires an encrypted collection",
-        )));
+        return Err(StorageError::bad_input(
+            "payload crypto decryption migration requires an encrypted collection",
+        ));
     };
     if encryption.migration_state != CryptoMigrationState::Decrypting {
         return Err(StorageError::bad_input(format!(
-            "payload decryption migration for collection {collection_name} requires migration_state=decrypting; current state is {:?}",
+            "payload decryption migration requires migration_state=decrypting; current state is {:?}",
             encryption.migration_state,
         )));
     }
@@ -1785,24 +1781,20 @@ pub async fn do_decrypt_payloads_for_crypto_migration(
     )
     .map_err(payload_runtime_invalid_storage_error)?
     else {
-        return Err(StorageError::bad_input(format!(
-            "payload crypto decryption migration for collection {collection_name} requires server-side payload encryption rules",
-        )));
+        return Err(StorageError::bad_input(
+            "payload crypto decryption migration requires server-side payload encryption rules",
+        ));
     };
     if !plan.has_server_encrypt_rules() || plan.has_client_envelope_rules() {
-        return Err(StorageError::bad_input(format!(
-            "payload crypto decryption migration for collection {collection_name} requires only server-side payload encryption rules; client-side envelopes are store-only and cannot be decrypted by Qdrant",
-        )));
+        return Err(StorageError::bad_input(
+            "payload crypto decryption migration requires only server-side payload encryption rules; client-side envelopes are store-only and cannot be decrypted by Qdrant",
+        ));
     }
 
     let decrypt_payload =
         |point_id: &ExtendedPointId, payload: &mut Payload| -> CollectionResult<usize> {
             plan.decrypt_payload_for_crypto_migration(&point_id.to_string(), payload)
-                .map_err(|err| {
-                    CollectionError::bad_input(format!(
-                        "payload crypto migration decrypt failed for point {point_id}: {err}",
-                    ))
-                })
+                .map_err(|_| CollectionError::bad_input("payload crypto migration decrypt failed"))
         };
     if dry_run {
         collection
@@ -2945,7 +2937,7 @@ async fn maybe_encrypt_point_payload_update(
     if operation.filter.is_some() {
         if touches_encrypted_payload {
             return Err(StorageError::bad_input(format!(
-                "{operation_name} with a filter cannot update encrypted payload fields in collection {collection_name}; use point-specific upsert/set_payload so encryption can bind AAD to each point id",
+                "{operation_name} with a filter cannot update encrypted payload fields; use point-specific upsert/set_payload so encryption can bind AAD to each point id",
             )));
         }
         return Ok((
@@ -2957,7 +2949,7 @@ async fn maybe_encrypt_point_payload_update(
     if operation.key.is_some() {
         if touches_encrypted_payload {
             return Err(StorageError::bad_input(format!(
-                "{operation_name} with a key path cannot update encrypted payload fields in collection {collection_name}; use a full point-specific payload update so the selected encrypted fields can be sealed with their canonical field paths",
+                "{operation_name} with a key path cannot update encrypted payload fields; use a full point-specific payload update so the selected encrypted fields can be sealed with their canonical field paths",
             )));
         }
         return Ok((
@@ -2969,7 +2961,7 @@ async fn maybe_encrypt_point_payload_update(
     let Some(points) = operation.points.as_ref() else {
         if touches_encrypted_payload {
             return Err(StorageError::bad_input(format!(
-                "{operation_name} cannot update encrypted payload fields without point ids in collection {collection_name}; send point-specific updates so encryption can bind AAD to each point id",
+                "{operation_name} cannot update encrypted payload fields without point ids; send point-specific updates so encryption can bind AAD to each point id",
             )));
         }
         return Ok((
@@ -2981,7 +2973,7 @@ async fn maybe_encrypt_point_payload_update(
     if points.is_empty() {
         if touches_encrypted_payload {
             return Err(StorageError::bad_input(format!(
-                "{operation_name} cannot update encrypted payload fields without point ids in collection {collection_name}; send point-specific updates so encryption can bind AAD to each point id",
+                "{operation_name} cannot update encrypted payload fields without point ids; send point-specific updates so encryption can bind AAD to each point id",
             )));
         }
         return Ok((
@@ -2993,7 +2985,7 @@ async fn maybe_encrypt_point_payload_update(
     if points.len() > 1 && touches_encrypted_payload {
         if plan.has_client_envelope_rules() {
             return Err(StorageError::bad_input(format!(
-                "{operation_name} cannot reuse client-side encrypted payload envelopes across multiple point ids in collection {collection_name}; send one point-specific update per client envelope",
+                "{operation_name} cannot reuse client-side encrypted payload envelopes across multiple point ids; send one point-specific update per client envelope",
             )));
         }
         let mut encrypted_operations = Vec::with_capacity(points.len());
@@ -3065,13 +3057,13 @@ async fn maybe_encrypt_point_payload_update(
 
 fn ensure_client_envelope_cluster_nonce_ledger_available(
     runtime_settings: &Settings,
-    collection_name: &str,
+    _collection_name: &str,
     has_client_envelope_rules: bool,
 ) -> Result<(), StorageError> {
     if runtime_settings.cluster.enabled && has_client_envelope_rules {
-        return Err(StorageError::bad_input(format!(
-            "client-side encrypted payload writes in clustered mode for collection {collection_name} require a cluster-wide nonce replay ledger; this build only provides request, process, and collection-local replay caches",
-        )));
+        return Err(StorageError::bad_input(
+            "client-side encrypted payload writes in clustered mode require a cluster-wide nonce replay ledger; this build only provides request, process, and collection-local replay caches",
+        ));
     }
     Ok(())
 }
@@ -18922,6 +18914,8 @@ esac
                     err,
                     StorageError::BadInput { description }
                         if description.contains(expected_error)
+                            && !description.contains("docs")
+                            && !description.contains("body")
                 ));
             }
 
@@ -19123,6 +19117,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cluster-wide nonce replay ledger")
+                        && !description.contains("client_docs")
+                        && !description.contains("body")
             ));
             let err = do_set_payload(
                 UncheckedTocProvider::new_unchecked(&toc),
@@ -19155,6 +19151,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cluster-wide nonce replay ledger")
+                        && !description.contains("client_docs")
+                        && !description.contains("body")
             ));
             let err = do_overwrite_payload(
                 UncheckedTocProvider::new_unchecked(&toc),
@@ -19187,6 +19185,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cluster-wide nonce replay ledger")
+                        && !description.contains("client_docs")
+                        && !description.contains("body")
             ));
             let err = do_batch_update_points(
                 UncheckedTocProvider::new_unchecked(&toc),
@@ -19225,6 +19225,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cluster-wide nonce replay ledger")
+                        && !description.contains("client_docs")
+                        && !description.contains("body")
             ));
             let err = do_batch_update_points(
                 UncheckedTocProvider::new_unchecked(&toc),
@@ -19260,6 +19262,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cluster-wide nonce replay ledger")
+                        && !description.contains("client_docs")
+                        && !description.contains("body")
             ));
             let err = do_batch_update_points(
                 UncheckedTocProvider::new_unchecked(&toc),
@@ -19295,6 +19299,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cluster-wide nonce replay ledger")
+                        && !description.contains("client_docs")
+                        && !description.contains("body")
             ));
 
             do_upsert_points(
@@ -19529,6 +19535,8 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cannot reuse client-side encrypted payload envelopes")
+                        && !description.contains("client_docs")
+                        && !description.contains("body")
             ));
 
             let err = do_upsert_points(
@@ -19787,7 +19795,7 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cannot delete encrypted payload field")
-                        && description.contains("body")
+                        && !description.contains("body")
             ));
 
             let err = do_clear_payload(
@@ -19812,7 +19820,7 @@ esac
                 err,
                 StorageError::BadInput { description }
                     if description.contains("cannot clear payloads")
-                        && description.contains("body")
+                        && !description.contains("body")
             ));
 
             let err = do_clear_payload(
