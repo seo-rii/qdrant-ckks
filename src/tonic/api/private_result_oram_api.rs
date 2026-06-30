@@ -2099,6 +2099,85 @@ mod private_result_oram_grpc_tests {
             assert!(!err.message().contains("private_result_oram"));
             drop(snapshot_guard);
 
+            let lifecycle_guard =
+                crate::common::snapshots::begin_private_oram_collection_lifecycle_guard(
+                    &dispatcher,
+                    &auth,
+                    COLLECTION_NAME,
+                )
+                .await
+                .unwrap();
+            let active_lifecycle_client_id = "tenant-a/sdk-instance-active-lifecycle";
+            let err = PrivateResultOram::open_private_result_oram_session(
+                &service,
+                Request::new(grpc::OpenPrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    client_id: active_lifecycle_client_id.to_string(),
+                    desired_epoch: BASE_EPOCH,
+                    fixed_budget: true,
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("active collection lifecycle operation")
+            );
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
+            assert!(!err.message().contains("private_result_oram"));
+            assert!(!err.message().contains(active_lifecycle_client_id));
+            let err = PrivateResultOram::upload_private_result_oram_manifest(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramManifestRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    manifest: Some(manifest_to_proto(fixture.manifest.clone())),
+                    signature: Some(signature_to_proto(fixture.signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("active collection lifecycle operation")
+            );
+            assert!(!err.message().contains(&fixture.manifest.root_hash));
+            assert!(!err.message().contains("private_result_oram"));
+            let mut active_lifecycle_bucket_upload = fixture.buckets.clone();
+            active_lifecycle_bucket_upload[0].ciphertext =
+                "active-result-lifecycle-bucket-ciphertext-sentinel".to_string();
+            let err = PrivateResultOram::upload_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::UploadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    buckets: active_lifecycle_bucket_upload
+                        .into_iter()
+                        .map(bucket_to_proto)
+                        .collect(),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(
+                err.message()
+                    .contains("active collection lifecycle operation")
+            );
+            assert!(
+                !err.message()
+                    .contains("active-result-lifecycle-bucket-ciphertext-sentinel")
+            );
+            assert!(
+                !err.message().contains(&fixture.manifest.root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(!err.message().contains("private_result_oram"));
+            drop(lifecycle_guard);
+
             let client_id_sentinel = "result-session-client-id-sentinel";
             let err = PrivateResultOram::open_private_result_oram_session(
                 &service,
