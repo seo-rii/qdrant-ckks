@@ -790,8 +790,12 @@ epoch/root.
 Unknown session id handling for `read_paths`, `commit`, and `close` returns
 sanitized errors without echoing the submitted session id.
 SDKs may use `refresh_private_hnsw_oram_manifest_for_commit` or
-`sign_private_hnsw_oram_manifest_refresh` when they want an updated signed
-manifest body; the server does not require that refresh for session reopen.
+`sign_private_hnsw_oram_manifest_refresh` when a commit plan was built from
+the same signed manifest and they want an updated signed manifest body. The
+server does not require that refresh for session reopen; clients that continue
+from `epochs/current.json` without uploading a refreshed manifest must plan the
+next commit against the live epoch/root and leaf commitments rather than the
+older upload-anchor manifest.
 Before the first signed manifest upload, REST and gRPC manifest read, bucket
 upload, and session open calls fail closed with a sanitized `NotFound`
 response; they do not surface collection-local private ORAM paths. Corrupt
@@ -1147,13 +1151,15 @@ bucket commitment to collection/key lineage, bucket id, index epoch, and
 `ciphertext_sha256`, while encoded ciphertext length is bounded before decode
 and `private_result_oram_merkle_root_for_commitments`
 fixes the root hash calculation over those commitments.
-`plan_private_result_oram_commit` prepares signed writeback plans by checking
-old-root consistency, bucket epoch/range uniqueness, the next root, and commit
-signature bucket refs. `plan_private_result_oram_commit_for_manifest` uses the
-signed manifest epoch/root/bucket_count as the old commit context and rejects
-updated bucket commitments that are not bound to the bucket ciphertext hash
-plus collection/key lineage and the proposed bucket epoch. It also enforces the
-same fixed writeback budget as the server commit guard.
+`plan_private_result_oram_commit` prepares signed writeback plans from the live
+old epoch/root and current leaf commitments by checking old-root consistency,
+bucket epoch/range uniqueness, the next root, and commit signature bucket refs.
+`plan_private_result_oram_commit_for_manifest` is the manifest-bound variant
+for the first commit after upload or after an optional signed manifest refresh:
+it uses the signed manifest epoch/root/bucket_count as the old commit context
+and rejects updated bucket commitments that are not bound to the bucket
+ciphertext hash plus collection/key lineage and the proposed bucket epoch. It
+also enforces the same fixed writeback budget as the server commit guard.
 `sign_private_result_oram_manifest` and
 `sign_private_result_oram_commit` provide the matching SDK-side Ed25519 signing
 helpers, while `sign_private_result_oram_read_buckets_for_manifest` signs
@@ -1388,18 +1394,21 @@ the signed read context from the current manifest and enforces the manifest's
 fixed `oram.path_batch_size` and tree-bounded leaf labels before producing the
 Ed25519 request signature.
 Before submitting an ORAM writeback, clients can call
-`plan_private_hnsw_oram_commit_for_manifest` to bind commit planning to the
-current signed manifest, updated bucket ciphertext hashes,
-collection/vector/key lineage, and proposed bucket epoch before producing
-signature bucket refs. The planner enforces the same fixed writeback budget as
-the server commit guard and rejects malformed manifest context before bucket
-commitment planning. After the writeback commit succeeds, clients can optionally
+`plan_private_hnsw_oram_commit` with the live old epoch/root and current leaf
+commitments to produce signature bucket refs. When the live old epoch/root is
+the same as the signed manifest, `plan_private_hnsw_oram_commit_for_manifest`
+adds manifest-bound validation for collection/vector/key lineage, fixed
+writeback budget, and updated bucket commitments before producing the same
+commit plan shape. After the writeback commit succeeds, clients can optionally
 call `refresh_private_hnsw_oram_manifest_for_commit` to derive the next signed
-manifest body from the commit plan, or
+manifest body from that manifest-bound plan, or
 `sign_private_hnsw_oram_manifest_refresh` to derive and sign it in one step;
 both first validate the current manifest shape and reject a plan whose old
-epoch/root does not match it. Session open does not require this refresh because
-the live epoch/root is tracked by current epoch CAS and Merkle metadata.
+epoch/root does not match it. Session open and later commits do not require this
+refresh because the live epoch/root is tracked by current epoch CAS and Merkle
+metadata; without a refreshed manifest, clients should continue with
+`plan_private_hnsw_oram_commit` using the current epoch/root returned by the
+session/read state.
 The server-side private HNSW tests now package a tiny SDK-built encrypted index,
 sign its manifest, and verify that the initial
 bucket upload bundle satisfies the same manifest epoch/root and Merkle
