@@ -2858,6 +2858,16 @@ mod private_hnsw_rest_tests {
                 !result_privacy_error.contains(result_privacy_client_id),
                 "{result_privacy_error}"
             );
+            for sentinel in [
+                fixture.encrypted_build.root_hash.as_str(),
+                fixture.manifest_signature.sig.as_str(),
+                "private_payload_oram_required",
+            ] {
+                assert!(
+                    !result_privacy_error.contains(sentinel),
+                    "{result_privacy_error}"
+                );
+            }
 
             let auth = Auth::new_internal(Access::full("private HNSW ORAM route test"));
             let collection_pass = auth

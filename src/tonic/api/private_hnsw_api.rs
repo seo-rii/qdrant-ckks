@@ -3153,6 +3153,13 @@ mod private_hnsw_grpc_tests {
                     .contains("requested result_privacy does not match manifest")
             );
             assert!(!err.message().contains(result_privacy_client_id));
+            for sentinel in [
+                fixture.encrypted_build.root_hash.as_str(),
+                fixture.manifest_signature.sig.as_str(),
+                "private_payload_oram_required",
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let auth = Auth::new_internal(Access::full("private HNSW ORAM grpc test"));
             let collection_pass = auth
