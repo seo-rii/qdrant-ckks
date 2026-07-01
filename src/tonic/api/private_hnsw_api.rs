@@ -7024,6 +7024,8 @@ mod private_hnsw_grpc_tests {
             let paths = vec![fixture.entry_leaf_label()];
             let mut wrong_read_signature = fixture.sign_read_paths(&paths, 1, true);
             wrong_read_signature.key_id = alternate_key_id.to_string();
+            let wrong_read_path = paths[0].clone();
+            let wrong_read_signature_sig = wrong_read_signature.sig.clone();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -7053,6 +7055,15 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                wrong_read_path.as_str(),
+                wrong_read_signature_sig.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let run = fixture.run_single_search_collect_writeback();
             let mut wrong_commit_signature = run.commit_signature;
