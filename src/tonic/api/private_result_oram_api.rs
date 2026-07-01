@@ -4701,6 +4701,32 @@ mod private_result_oram_grpc_tests {
                 );
             }
 
+            let reopened = PrivateResultOram::open_private_result_oram_session(
+                &service,
+                Request::new(grpc::OpenPrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    client_id: "tenant-a/result-sdk-instance-2".to_string(),
+                    desired_epoch: NEXT_EPOCH,
+                    fixed_budget: true,
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(reopened.index_epoch, NEXT_EPOCH);
+            assert_eq!(reopened.root_hash, new_root_hash);
+            let reopened_closed = PrivateResultOram::close_private_result_oram_session(
+                &service,
+                Request::new(grpc::ClosePrivateResultOramSessionRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: reopened.session_id,
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert!(reopened_closed.closed);
+
             let missing_close_session_id = "close-session-id-sentinel";
             let missing_close = PrivateResultOram::close_private_result_oram_session(
                 &service,

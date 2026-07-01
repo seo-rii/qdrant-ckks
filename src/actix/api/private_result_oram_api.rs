@@ -3811,6 +3811,26 @@ mod private_result_oram_rest_tests {
                 );
             }
 
+            let reopened_session = post_json_ok!(
+                "/collections/docs/private-result-oram/session",
+                OpenPrivateResultOramSessionRequest {
+                    client_id: "tenant-a/result-sdk-instance-2".to_string(),
+                    desired_epoch: NEXT_EPOCH,
+                    fixed_budget: true,
+                }
+            );
+            assert_eq!(reopened_session["index_epoch"], NEXT_EPOCH);
+            assert_eq!(reopened_session["root_hash"], new_root_hash);
+            let reopened_session_id = reopened_session["session_id"].as_str().unwrap();
+            let reopened_close_request = actix_test::TestRequest::post()
+                .uri(&format!(
+                    "/collections/docs/private-result-oram/session/{reopened_session_id}/close"
+                ))
+                .to_request();
+            let reopened_close_response =
+                actix_test::call_service(&app, reopened_close_request).await;
+            assert_eq!(reopened_close_response.status(), StatusCode::OK);
+
             let missing_close_session_id = "close-session-id-sentinel";
             let missing_close_request = actix_test::TestRequest::post()
                 .uri(&format!(
