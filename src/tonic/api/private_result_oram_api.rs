@@ -4294,6 +4294,19 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains("owner_signing_key_id")
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                new_root_hash.as_str(),
+                commit_signature.sig.as_str(),
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !malformed_commit_key.message().contains(sentinel),
+                    "{}",
+                    malformed_commit_key.message()
+                );
+            }
 
             let alt_commit_signature =
                 fixture.commit_signature_with_alt_key(&updated_bucket, &new_root_hash);
@@ -4351,6 +4364,19 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(commit_signature_body_sentinel)
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                new_root_hash.as_str(),
+                SIGNING_KEY_ID,
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !malformed_commit_signature.message().contains(sentinel),
+                    "{}",
+                    malformed_commit_signature.message()
+                );
+            }
 
             let commit_signature_alg_sentinel = "rsa-pss-result-commit-sentinel";
             let mut unsupported_commit_signature = commit_signature.clone();
