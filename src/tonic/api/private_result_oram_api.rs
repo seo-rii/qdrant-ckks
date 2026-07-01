@@ -3245,6 +3245,7 @@ mod private_result_oram_grpc_tests {
             }
 
             let alt_read_signature = fixture.read_signature_with_alt_key(&read_bucket_ids);
+            let alt_read_signature_sig = alt_read_signature.sig.clone();
             let alt_read_key = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::ReadPrivateResultOramBucketsRequest {
@@ -3265,6 +3266,18 @@ mod private_result_oram_grpc_tests {
                     .contains("signature key_id does not match manifest owner_signing_key_id")
             );
             assert!(!alt_read_key.message().contains(ALT_SIGNING_KEY_ID));
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                alt_read_signature_sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !alt_read_key.message().contains(sentinel),
+                    "{}",
+                    alt_read_key.message()
+                );
+            }
 
             let signature_body_sentinel = "signature!sentinel";
             let malformed_read_signature = PrivateResultOram::read_private_result_oram_buckets(
@@ -4335,6 +4348,7 @@ mod private_result_oram_grpc_tests {
 
             let alt_commit_signature =
                 fixture.commit_signature_with_alt_key(&updated_bucket, &new_root_hash);
+            let alt_commit_signature_sig = alt_commit_signature.sig.clone();
             let alt_commit_key = PrivateResultOram::commit_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::CommitPrivateResultOramBucketsRequest {
@@ -4357,6 +4371,19 @@ mod private_result_oram_grpc_tests {
                     .contains("signature key_id does not match manifest owner_signing_key_id")
             );
             assert!(!alt_commit_key.message().contains(ALT_SIGNING_KEY_ID));
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                new_root_hash.as_str(),
+                alt_commit_signature_sig.as_str(),
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !alt_commit_key.message().contains(sentinel),
+                    "{}",
+                    alt_commit_key.message()
+                );
+            }
 
             let commit_signature_body_sentinel = "commit-signature!sentinel";
             let malformed_commit_signature = PrivateResultOram::commit_private_result_oram_buckets(

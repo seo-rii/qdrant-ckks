@@ -2904,6 +2904,7 @@ mod private_result_oram_rest_tests {
             }
 
             let alt_read_signature = fixture.read_signature_with_alt_key(&read_bucket_ids);
+            let alt_read_signature_sig = alt_read_signature.sig.clone();
             let alt_read_key_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
@@ -2917,6 +2918,17 @@ mod private_result_oram_rest_tests {
                 "signature key_id does not match manifest owner_signing_key_id"
             );
             assert!(!alt_read_key_error.contains(ALT_SIGNING_KEY_ID));
+            for sentinel in [
+                session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                alt_read_signature_sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !alt_read_key_error.contains(sentinel),
+                    "{alt_read_key_error}"
+                );
+            }
 
             let signature_body_sentinel = "signature!sentinel";
             let malformed_read_signature_error = post_json_error_contains!(
@@ -3517,6 +3529,7 @@ mod private_result_oram_rest_tests {
 
             let alt_commit_signature =
                 fixture.commit_signature_with_alt_key(&updated_bucket, &new_root_hash);
+            let alt_commit_signature_sig = alt_commit_signature.sig.clone();
             let alt_commit_key_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",
                 CommitPrivateResultOramBucketsRequest {
@@ -3532,6 +3545,18 @@ mod private_result_oram_rest_tests {
                 "signature key_id does not match manifest owner_signing_key_id"
             );
             assert!(!alt_commit_key_error.contains(ALT_SIGNING_KEY_ID));
+            for sentinel in [
+                session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                new_root_hash.as_str(),
+                alt_commit_signature_sig.as_str(),
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !alt_commit_key_error.contains(sentinel),
+                    "{alt_commit_key_error}"
+                );
+            }
 
             let commit_signature_body_sentinel = "commit-signature!sentinel";
             let malformed_commit_signature_error = post_json_error_contains!(
