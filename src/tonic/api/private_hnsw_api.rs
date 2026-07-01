@@ -515,7 +515,8 @@ mod private_hnsw_grpc_tests {
     use qdrant_sec::{
         DistanceKind, PrivateHnswClientError, PrivateHnswEncryptedPathBatch,
         PrivateHnswSearchParams, ResultPrivacyMode, encode_private_hnsw_oram_leaf_label,
-        open_private_hnsw_oram_verified_path_batch, plan_private_hnsw_oram_commit,
+        open_private_hnsw_oram_verified_path_batch,
+        plan_private_hnsw_oram_commit_for_manifest_context,
         search_private_hnsw_oram_encrypted_verified,
     };
     use storage::rbac::{Access, AccessRequirements, Auth};
@@ -1128,7 +1129,8 @@ mod private_hnsw_grpc_tests {
             .first()
             .expect("private HNSW gRPC fixture must include a leaf commitment");
         assert!(fixture.leaf_commitments.contains(leaf_commitment));
-        let commit_plan = plan_private_hnsw_oram_commit(
+        let commit_plan = plan_private_hnsw_oram_commit_for_manifest_context(
+            &fixture.manifest,
             BASE_EPOCH,
             NEXT_EPOCH,
             &fixture.encrypted_build.root_hash,
