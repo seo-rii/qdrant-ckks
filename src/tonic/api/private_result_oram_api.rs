@@ -742,11 +742,24 @@ mod private_result_oram_grpc_tests {
         }
 
         fn read_signature(&self, bucket_ids: &[u64]) -> qdrant_sec::PrivateResultOramSignature {
+            self.read_signature_for_epoch(
+                self.manifest.index_epoch,
+                &self.manifest.root_hash,
+                bucket_ids,
+            )
+        }
+
+        fn read_signature_for_epoch(
+            &self,
+            index_epoch: u64,
+            root_hash: &str,
+            bucket_ids: &[u64],
+        ) -> qdrant_sec::PrivateResultOramSignature {
             if let Ok(signature) = sign_private_result_oram_read_buckets_for_manifest_context(
                 &self.signing_key,
                 &self.manifest,
-                self.manifest.index_epoch,
-                &self.manifest.root_hash,
+                index_epoch,
+                root_hash,
                 bucket_ids,
             ) {
                 return signature;
@@ -760,8 +773,8 @@ mod private_result_oram_grpc_tests {
                     rk_epoch: self.manifest.rk_epoch,
                     signing_key_id: SIGNING_KEY_ID,
                 },
-                self.manifest.index_epoch,
-                &self.manifest.root_hash,
+                index_epoch,
+                root_hash,
                 self.manifest.bucket_count,
                 bucket_ids,
             )
@@ -4718,6 +4731,24 @@ mod private_result_oram_grpc_tests {
             .into_inner();
             assert_eq!(reopened.index_epoch, NEXT_EPOCH);
             assert_eq!(reopened.root_hash, new_root_hash);
+            let reopened_read_signature =
+                fixture.read_signature_for_epoch(NEXT_EPOCH, &new_root_hash, &read_bucket_ids);
+            let reopened_read = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: reopened.session_id.clone(),
+                    index_epoch: NEXT_EPOCH,
+                    root_hash: new_root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(reopened_read_signature)),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(reopened_read.index_epoch, NEXT_EPOCH);
+            assert_eq!(reopened_read.root_hash, new_root_hash);
             let reopened_closed = PrivateResultOram::close_private_result_oram_session(
                 &service,
                 Request::new(grpc::ClosePrivateResultOramSessionRequest {

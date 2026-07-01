@@ -724,11 +724,24 @@ mod private_result_oram_rest_tests {
         }
 
         fn read_signature(&self, bucket_ids: &[u64]) -> qdrant_sec::PrivateResultOramSignature {
+            self.read_signature_for_epoch(
+                self.manifest.index_epoch,
+                &self.manifest.root_hash,
+                bucket_ids,
+            )
+        }
+
+        fn read_signature_for_epoch(
+            &self,
+            index_epoch: u64,
+            root_hash: &str,
+            bucket_ids: &[u64],
+        ) -> qdrant_sec::PrivateResultOramSignature {
             if let Ok(signature) = sign_private_result_oram_read_buckets_for_manifest_context(
                 &self.signing_key,
                 &self.manifest,
-                self.manifest.index_epoch,
-                &self.manifest.root_hash,
+                index_epoch,
+                root_hash,
                 bucket_ids,
             ) {
                 return signature;
@@ -742,8 +755,8 @@ mod private_result_oram_rest_tests {
                     rk_epoch: self.manifest.rk_epoch,
                     signing_key_id: SIGNING_KEY_ID,
                 },
-                self.manifest.index_epoch,
-                &self.manifest.root_hash,
+                index_epoch,
+                root_hash,
                 self.manifest.bucket_count,
                 bucket_ids,
             )
@@ -3824,6 +3837,20 @@ mod private_result_oram_rest_tests {
             assert_eq!(reopened_session["index_epoch"], NEXT_EPOCH);
             assert_eq!(reopened_session["root_hash"], new_root_hash);
             let reopened_session_id = reopened_session["session_id"].as_str().unwrap();
+            let reopened_read_signature =
+                fixture.read_signature_for_epoch(NEXT_EPOCH, &new_root_hash, &read_bucket_ids);
+            let reopened_read = post_json_ok!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: reopened_session_id.to_string(),
+                    index_epoch: NEXT_EPOCH,
+                    root_hash: new_root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: reopened_read_signature,
+                }
+            );
+            assert_eq!(reopened_read["index_epoch"], NEXT_EPOCH);
+            assert_eq!(reopened_read["root_hash"], new_root_hash);
             let reopened_close_request = actix_test::TestRequest::post()
                 .uri(&format!(
                     "/collections/docs/private-result-oram/session/{reopened_session_id}/close"
