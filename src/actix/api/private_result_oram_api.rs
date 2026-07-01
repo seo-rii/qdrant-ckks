@@ -1801,6 +1801,7 @@ mod private_result_oram_rest_tests {
 
             let mut alt_manifest_signature = fixture.signature.clone();
             alt_manifest_signature.key_id = ALT_SIGNING_KEY_ID.to_string();
+            let alt_manifest_signature_sig = alt_manifest_signature.sig.clone();
             let alt_manifest_key_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/manifest",
                 UploadPrivateResultOramManifestRequest {
@@ -1811,9 +1812,19 @@ mod private_result_oram_rest_tests {
                 "signature key_id does not match manifest owner_signing_key_id"
             );
             assert!(!alt_manifest_key_error.contains(ALT_SIGNING_KEY_ID));
+            for sentinel in [
+                fixture.manifest.root_hash.as_str(),
+                alt_manifest_signature_sig.as_str(),
+            ] {
+                assert!(
+                    !alt_manifest_key_error.contains(sentinel),
+                    "{alt_manifest_key_error}"
+                );
+            }
 
             let mut unconfigured_manifest_signature = fixture.signature.clone();
             unconfigured_manifest_signature.key_id = UNCONFIGURED_SIGNING_KEY_ID.to_string();
+            let unconfigured_manifest_signature_sig = unconfigured_manifest_signature.sig.clone();
             let unconfigured_manifest_key_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/manifest",
                 UploadPrivateResultOramManifestRequest {
@@ -1825,6 +1836,15 @@ mod private_result_oram_rest_tests {
             );
             assert!(!unconfigured_manifest_key_error.contains(UNCONFIGURED_SIGNING_KEY_ID));
             assert!(!unconfigured_manifest_key_error.contains("not configured"));
+            for sentinel in [
+                fixture.manifest.root_hash.as_str(),
+                unconfigured_manifest_signature_sig.as_str(),
+            ] {
+                assert!(
+                    !unconfigured_manifest_key_error.contains(sentinel),
+                    "{unconfigured_manifest_key_error}"
+                );
+            }
 
             macro_rules! assert_manifest_mismatch_error_redacts {
                 ($body:expr, $signature_sig:expr) => {{
