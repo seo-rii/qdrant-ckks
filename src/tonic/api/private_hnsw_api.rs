@@ -2367,9 +2367,16 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            for sentinel in [
+                fixture.manifest.root_hash.as_str(),
+                fixture.manifest_signature.sig.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let mut alternate_manifest_signature = fixture.manifest_signature.clone();
             alternate_manifest_signature.key_id = alternate_manifest_key_id.to_string();
+            let alternate_manifest_signature_sig = alternate_manifest_signature.sig.clone();
             let err = PrivateHnswOram::upload_private_hnsw_manifest(
                 &service,
                 Request::new(grpc::UploadPrivateHnswManifestRequest {
@@ -2392,6 +2399,12 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            for sentinel in [
+                fixture.manifest.root_hash.as_str(),
+                alternate_manifest_signature_sig.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let manifest_signature_alg_sentinel = "manifest-signature-alg-sentinel";
             let err = PrivateHnswOram::upload_private_hnsw_manifest(

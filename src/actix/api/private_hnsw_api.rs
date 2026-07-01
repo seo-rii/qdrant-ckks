@@ -2228,9 +2228,19 @@ mod private_hnsw_rest_tests {
                 !unknown_manifest_key_error.contains(signature_key_id_sentinel),
                 "{unknown_manifest_key_error}"
             );
+            for sentinel in [
+                fixture.manifest.root_hash.as_str(),
+                fixture.manifest_signature.sig.as_str(),
+            ] {
+                assert!(
+                    !unknown_manifest_key_error.contains(sentinel),
+                    "{unknown_manifest_key_error}"
+                );
+            }
 
             let mut alternate_manifest_signature = fixture.manifest_signature.clone();
             alternate_manifest_signature.key_id = alternate_signing_key_id.to_string();
+            let alternate_manifest_signature_sig = alternate_manifest_signature.sig.clone();
             let alternate_manifest_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/manifest",
                 UploadPrivateHnswManifestRequest {
@@ -2245,6 +2255,15 @@ mod private_hnsw_rest_tests {
                 !alternate_manifest_key_error.contains(alternate_signing_key_id),
                 "{alternate_manifest_key_error}"
             );
+            for sentinel in [
+                fixture.manifest.root_hash.as_str(),
+                alternate_manifest_signature_sig.as_str(),
+            ] {
+                assert!(
+                    !alternate_manifest_key_error.contains(sentinel),
+                    "{alternate_manifest_key_error}"
+                );
+            }
 
             let manifest_signature_alg_sentinel = "manifest-signature-alg-sentinel";
             let unknown_key_malformed_alg_error = post_json_error_contains!(
