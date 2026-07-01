@@ -3572,13 +3572,15 @@ mod private_hnsw_rest_tests {
                 "request validation failed"
             );
 
+            let unknown_read_key_signature_sig = fixture.client_signature().sig;
+            let unknown_read_path = fixture.entry_leaf_label();
             let unknown_read_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![fixture.entry_leaf_label()],
+                    paths: vec![unknown_read_path.clone()],
                     padding: OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
@@ -3586,7 +3588,7 @@ mod private_hnsw_rest_tests {
                     client_signature: PrivateHnswClientSignature {
                         alg: "ed25519".to_string(),
                         key_id: signature_key_id_sentinel.to_string(),
-                        sig: fixture.client_signature().sig,
+                        sig: unknown_read_key_signature_sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -3597,6 +3599,18 @@ mod private_hnsw_rest_tests {
                 !unknown_read_key_error.contains(signature_key_id_sentinel),
                 "{unknown_read_key_error}"
             );
+            for sentinel in [
+                session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                unknown_read_path.as_str(),
+                unknown_read_key_signature_sig.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unknown_read_key_error.contains(sentinel),
+                    "{unknown_read_key_error}"
+                );
+            }
 
             let alternate_read_path = fixture.entry_leaf_label();
             let mut alternate_read_signature =
@@ -4263,6 +4277,7 @@ mod private_hnsw_rest_tests {
                 .unwrap();
             assert_pre_commit_state_unchanged();
 
+            let unknown_commit_key_signature_sig = fixture.client_signature().sig;
             let unknown_commit_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -4275,7 +4290,7 @@ mod private_hnsw_rest_tests {
                     commit_signature: PrivateHnswClientSignature {
                         alg: "ed25519".to_string(),
                         key_id: signature_key_id_sentinel.to_string(),
-                        sig: fixture.client_signature().sig,
+                        sig: unknown_commit_key_signature_sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -4286,6 +4301,18 @@ mod private_hnsw_rest_tests {
                 !unknown_commit_key_error.contains(signature_key_id_sentinel),
                 "{unknown_commit_key_error}"
             );
+            for sentinel in [
+                session_id.as_str(),
+                search_run.commit_plan.old_root_hash.as_str(),
+                search_run.commit_plan.new_root_hash.as_str(),
+                unknown_commit_key_signature_sig.as_str(),
+                search_run.updated_buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unknown_commit_key_error.contains(sentinel),
+                    "{unknown_commit_key_error}"
+                );
+            }
 
             let mut alternate_commit_signature = search_run.commit_signature.clone();
             alternate_commit_signature.key_id = alternate_signing_key_id.to_string();

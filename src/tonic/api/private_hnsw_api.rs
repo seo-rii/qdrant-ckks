@@ -3857,6 +3857,8 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains(&missing_dummy_signature_key_id));
             assert!(!err.message().contains(&missing_dummy_signature_sig));
 
+            let unknown_read_key_signature_sig = fixture.client_signature().sig;
+            let unknown_read_key_path = fixture.entry_leaf_label();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -3865,7 +3867,7 @@ mod private_hnsw_grpc_tests {
                     session_id: session.session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![fixture.entry_leaf_label()],
+                    paths: vec![unknown_read_key_path.clone()],
                     padding: Some(grpc::OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
@@ -3894,7 +3896,7 @@ mod private_hnsw_grpc_tests {
                     client_signature: Some(grpc::PrivateHnswSignature {
                         alg: "ed25519".to_string(),
                         key_id: signature_key_id_sentinel.to_string(),
-                        sig: fixture.client_signature().sig,
+                        sig: unknown_read_key_signature_sig.clone(),
                     }),
                 }),
             )
@@ -3911,6 +3913,15 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                unknown_read_key_path.as_str(),
+                unknown_read_key_signature_sig.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let invalid_read_key_id_sentinel = "read-signature-key!sentinel";
             let invalid_read_key_path = fixture.entry_leaf_label();
@@ -4423,6 +4434,7 @@ mod private_hnsw_grpc_tests {
                 search_run.updated_buckets[0].ciphertext.clone();
             let stale_current_commit_signature_key_id = search_run.commit_signature.key_id.clone();
             let stale_current_commit_signature_sig = search_run.commit_signature.sig.clone();
+            let unknown_commit_key_signature_sig = fixture.client_signature().sig;
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -4592,7 +4604,7 @@ mod private_hnsw_grpc_tests {
                     commit_signature: Some(grpc::PrivateHnswSignature {
                         alg: "ed25519".to_string(),
                         key_id: signature_key_id_sentinel.to_string(),
-                        sig: fixture.client_signature().sig,
+                        sig: unknown_commit_key_signature_sig.clone(),
                     }),
                 }),
             )
@@ -4609,6 +4621,15 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                search_run.commit_plan.old_root_hash.as_str(),
+                search_run.commit_plan.new_root_hash.as_str(),
+                unknown_commit_key_signature_sig.as_str(),
+                search_run.updated_buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let invalid_commit_key_id_sentinel = "commit-signature-key!sentinel";
             let invalid_commit_key_sig = fixture.client_signature().sig;
