@@ -468,9 +468,11 @@ mod tests {
              access_volume=access-volume-snake-sentinel, \
              access_volume_count=access-volume-count-snake-sentinel, \
              access_volume_length=access-volume-length-snake-sentinel, \
+             access_volume_lengths=access-volume-lengths-snake-sentinel, \
              proof_value=proof-value-snake-sentinel, \
              proofValue=proof-value-camel-sentinel, \
              proof_values=proof-values-snake-sentinel, \
+             proofValues=proof-values-camel-sentinel, \
              clientStateSnapshot=client-state-snapshot-camel-sentinel, \
              clientStateSnapshots=client-state-snapshots-camel-sentinel, \
              client_state_snapshot=client-state-snapshot-snake-sentinel, \
