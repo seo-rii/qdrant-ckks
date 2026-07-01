@@ -465,6 +465,12 @@ mod tests {
              accessVolume=access-volume-camel-sentinel, \
              accessVolumeCount=access-volume-count-camel-sentinel, \
              accessVolumeLength=access-volume-length-camel-sentinel, \
+             access_volume=access-volume-snake-sentinel, \
+             access_volume_count=access-volume-count-snake-sentinel, \
+             access_volume_length=access-volume-length-snake-sentinel, \
+             proof_value=proof-value-snake-sentinel, \
+             proofValue=proof-value-camel-sentinel, \
+             proof_values=proof-values-snake-sentinel, \
              clientStateSnapshot=client-state-snapshot-camel-sentinel, \
              clientStateSnapshots=client-state-snapshots-camel-sentinel, \
              client_state_snapshot=client-state-snapshot-snake-sentinel, \
@@ -548,6 +554,12 @@ mod tests {
         assert!(!message.contains("access-volume-camel-sentinel"));
         assert!(!message.contains("access-volume-count-camel-sentinel"));
         assert!(!message.contains("access-volume-length-camel-sentinel"));
+        assert!(!message.contains("access-volume-snake-sentinel"));
+        assert!(!message.contains("access-volume-count-snake-sentinel"));
+        assert!(!message.contains("access-volume-length-snake-sentinel"));
+        assert!(!message.contains("proof-value-snake-sentinel"));
+        assert!(!message.contains("proof-value-camel-sentinel"));
+        assert!(!message.contains("proof-values-snake-sentinel"));
         assert!(!message.contains("client-state-snapshot-camel-sentinel"));
         assert!(!message.contains("client-state-snapshots-camel-sentinel"));
         assert!(!message.contains("client-state-snapshot-snake-sentinel"));
