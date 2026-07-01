@@ -1461,6 +1461,12 @@ mod tests {
             json!(["qdrant-sec-private-result-proof-values-log-sentinel"]);
         private_result_oram["private_result_oram"]["proofValue"] =
             json!("qdrant-sec-private-result-camel-proof-value-log-sentinel");
+        private_result_oram["private_result_oram"]["access_volume"] =
+            json!("qdrant-sec-private-result-access-volume-log-sentinel");
+        private_result_oram["private_result_oram"]["accessVolume"] =
+            json!("qdrant-sec-private-result-camel-access-volume-log-sentinel");
+        private_result_oram["private_result_oram"]["accessVolumeLength"] =
+            json!("qdrant-sec-private-result-camel-access-volume-length-log-sentinel");
         for (key, field_value) in [
             (
                 "owner_signing_key_id",
