@@ -795,6 +795,10 @@ mod tests {
             "client_state_snapshot-sentinel",
             "client_state_snapshots-sentinel",
             "client_state_ciphertext-sentinel",
+            "clientStateCiphertextHash-sentinel",
+            "clientStateCiphertextHashes-sentinel",
+            "client_state_ciphertext_hash-sentinel",
+            "client_state_ciphertext_hashes-sentinel",
             "clientStateCiphertextSha256-sentinel",
             "clientStateCiphertextsSha256-sentinel",
             "client_state_ciphertext_sha256-sentinel",
@@ -806,6 +810,10 @@ mod tests {
             "encrypted_client_state_backup-sentinel",
             "encrypted_client_state_snapshot-sentinel",
             "encrypted_client_state_snapshots-sentinel",
+            "encryptedClientStateCiphertextHash-sentinel",
+            "encryptedClientStateCiphertextHashes-sentinel",
+            "encrypted_client_state_ciphertext_hash-sentinel",
+            "encrypted_client_state_ciphertext_hashes-sentinel",
             "encryptedClientStateCiphertextSha256-sentinel",
             "encryptedClientStateCiphertextsSha256-sentinel",
             "encrypted_client_state_ciphertext_sha256-sentinel",
@@ -844,7 +852,7 @@ mod tests {
                 collection_name: "private-hnsw-collection-label".into(),
                 vector_name: "vector-name-sentinel".into(),
                 session_id: "client_state_ciphertext-sentinel".into(),
-                root_hash: "clientStateCiphertextSha256-sentinel".into(),
+                root_hash: "clientStateCiphertextHash-sentinel".into(),
                 paths: sensitive.iter().map(ToString::to_string).collect(),
                 ..Default::default()
             }))
@@ -857,7 +865,7 @@ mod tests {
                 collection_name: "private-hnsw-collection-label".into(),
                 vector_name: "vector-name-sentinel".into(),
                 session_id: "encrypted_client_state-sentinel".into(),
-                old_root_hash: "encryptedClientStateCiphertextSha256-sentinel".into(),
+                old_root_hash: "encryptedClientStateCiphertextHash-sentinel".into(),
                 new_root_hash: "stateCiphertextsSha256-sentinel".into(),
                 ..Default::default()
             }))
@@ -941,6 +949,10 @@ mod tests {
             "client_state_snapshot-sentinel",
             "client_state_snapshots-sentinel",
             "client_state_ciphertext-sentinel",
+            "clientStateCiphertextHash-sentinel",
+            "clientStateCiphertextHashes-sentinel",
+            "client_state_ciphertext_hash-sentinel",
+            "client_state_ciphertext_hashes-sentinel",
             "clientStateCiphertextSha256-sentinel",
             "clientStateCiphertextsSha256-sentinel",
             "client_state_ciphertext_sha256-sentinel",
@@ -951,6 +963,10 @@ mod tests {
             "encrypted_client_state_backup-sentinel",
             "encrypted_client_state_snapshot-sentinel",
             "encrypted_client_state_snapshots-sentinel",
+            "encryptedClientStateCiphertextHash-sentinel",
+            "encryptedClientStateCiphertextHashes-sentinel",
+            "encrypted_client_state_ciphertext_hash-sentinel",
+            "encrypted_client_state_ciphertext_hashes-sentinel",
             "encryptedClientStateCiphertextSha256-sentinel",
             "encryptedClientStateCiphertextsSha256-sentinel",
             "encrypted_client_state_ciphertext_sha256-sentinel",
@@ -996,7 +1012,7 @@ mod tests {
             .read_private_result_oram_buckets(Request::new(ReadPrivateResultOramBucketsRequest {
                 collection_name: "private-result-collection-label".into(),
                 session_id: "token_position_map_backups-sentinel".into(),
-                root_hash: "clientStateCiphertextsSha256-sentinel".into(),
+                root_hash: "clientStateCiphertextHashes-sentinel".into(),
                 bucket_ids: vec![42],
                 ..Default::default()
             }))
@@ -1009,7 +1025,7 @@ mod tests {
                 CommitPrivateResultOramBucketsRequest {
                     collection_name: "private-result-collection-label".into(),
                     session_id: "state_ciphertext_hash-sentinel".into(),
-                    old_root_hash: "encryptedClientStateCiphertextsSha256-sentinel".into(),
+                    old_root_hash: "encryptedClientStateCiphertextHashes-sentinel".into(),
                     new_root_hash: "stateCiphertextSha256-sentinel".into(),
                     updated_buckets: vec![Default::default()],
                     ..Default::default()
