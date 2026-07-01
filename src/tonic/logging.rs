@@ -243,6 +243,12 @@ mod tests {
              sessionIds=session-list-camel-sentinel \
              access_count=access-count-sentinel \
              accessCounts=access-counts-camel-sentinel \
+             access_volume=access-volume-snake-sentinel \
+             accessVolume=access-volume-camel-sentinel \
+             access_volume_count=access-volume-count-snake-sentinel \
+             accessVolumeCounts=access-volume-counts-camel-sentinel \
+             access_volume_len=access-volume-len-snake-sentinel \
+             accessVolumeLength=access-volume-length-camel-sentinel \
              path_count=path-count-sentinel \
              pathCounts=path-counts-camel-sentinel \
              read_bucket_count=read-bucket-count-sentinel \
@@ -482,6 +488,12 @@ mod tests {
         assert!(!rendered.contains("session-list-camel-sentinel"));
         assert!(!rendered.contains("access-count-sentinel"));
         assert!(!rendered.contains("access-counts-camel-sentinel"));
+        assert!(!rendered.contains("access-volume-snake-sentinel"));
+        assert!(!rendered.contains("access-volume-camel-sentinel"));
+        assert!(!rendered.contains("access-volume-count-snake-sentinel"));
+        assert!(!rendered.contains("access-volume-counts-camel-sentinel"));
+        assert!(!rendered.contains("access-volume-len-snake-sentinel"));
+        assert!(!rendered.contains("access-volume-length-camel-sentinel"));
         assert!(!rendered.contains("path-count-sentinel"));
         assert!(!rendered.contains("path-counts-camel-sentinel"));
         assert!(!rendered.contains("read-bucket-count-sentinel"));
