@@ -778,7 +778,8 @@ later session can open at that new epoch. REST and gRPC live fixtures now close
 the committed session, verify that the closed session id cannot be reused for
 `read_paths`, verify that unknown close-session ids are not reflected in error
 responses, and re-open successfully at the committed epoch without manifest
-refresh.
+refresh. They also use the reopened session's live epoch/root to perform a
+signed `read_paths` call, so post-commit progress is covered past session open.
 For initial signed manifest upload, Qdrant writes the manifest/signature before
 publishing `epochs/current.json`, so a manifest-store write failure does not
 leave a current epoch without a corresponding signed manifest.
@@ -1190,7 +1191,9 @@ The separate manifest upload helper publishes the initial epoch only after the
 manifest/signature write succeeds, accepts current manifest reupload only when
 the stored manifest and signature are byte-identical, and allows a post-commit
 manifest refresh when `current.json` has already advanced to the new
-epoch/root.
+epoch/root. REST and gRPC live fixtures also reopen at that committed epoch
+without manifest refresh and perform a signed `read_buckets` call using the
+live epoch/root.
 Manifest upload, manifest read, session open, bucket upload, and snapshot
 restore preflight validate the stored manifest signature shape and require the
 signature `key_id` to match the manifest's `owner_signing_key_id` before looking
