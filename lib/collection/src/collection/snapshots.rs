@@ -1693,11 +1693,44 @@ fn private_oram_snapshot_layout_error_contains_sensitive_marker(rendered: &str) 
         "visited_node_id",
         "visited_node_ids",
     ];
+    const COMPACT_SENSITIVE_MARKERS: &[&str] = &[
+        "accessedleaflabels",
+        "bucketid",
+        "bucketids",
+        "clientsignature",
+        "commitsignature",
+        "entrynodeid",
+        "leafhash",
+        "leaflabel",
+        "manifestsignature",
+        "newroothash",
+        "nodeid",
+        "oldroothash",
+        "pathlabel",
+        "payloadfetchtoken",
+        "payloadfetchtokens",
+        "pointtoken",
+        "readbucketid",
+        "readbucketids",
+        "readsignature",
+        "roothash",
+        "siblinghash",
+        "visitednodeid",
+        "visitednodeids",
+    ];
 
     let rendered = rendered.to_ascii_lowercase();
-    SENSITIVE_MARKERS
+    if SENSITIVE_MARKERS
         .iter()
         .any(|marker| rendered.contains(marker))
+    {
+        return true;
+    }
+
+    let compact_rendered = rendered.replace(['_', '-', '.', ' '], "");
+    COMPACT_SENSITIVE_MARKERS
+        .iter()
+        .any(|marker| compact_rendered.contains(marker))
 }
 
 fn looks_like_base64url_private_oram_token(token: &str) -> bool {
@@ -2539,6 +2572,24 @@ mod tests {
         assert!(result_short.contains("private result ORAM snapshot layout validation failed"));
         for marker in result_short_markers {
             assert!(!result_short.contains(marker), "{result_short}");
+        }
+
+        let result_camel_markers = [
+            "result-camel-read-bucket-id",
+            "result-camel-payload-token",
+            "result-camel-sibling-hash",
+        ];
+        let result_camel = sanitize_private_result_oram_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private result ORAM readBucketIds {} payloadFetchTokens {} siblingHash {}",
+                result_camel_markers[0], result_camel_markers[1], result_camel_markers[2],
+            )),
+        )
+        .to_string();
+        assert!(result_camel.contains("private result ORAM snapshot layout validation failed"));
+        for marker in result_camel_markers {
+            assert!(!result_camel.contains(marker), "{result_camel}");
         }
 
         let safe = sanitize_private_hnsw_snapshot_layout_error(
