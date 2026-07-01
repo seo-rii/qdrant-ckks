@@ -3110,6 +3110,8 @@ mod private_result_oram_rest_tests {
             assert!(!malformed_path_error.contains("valid ORAM paths"));
 
             let unknown_read_session_sentinel = "read-session-id-sentinel";
+            let unknown_read_session_signature = fixture.read_signature(&read_bucket_ids);
+            let unknown_read_session_signature_sig = unknown_read_session_signature.sig.clone();
             let unknown_read_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
@@ -3117,7 +3119,7 @@ mod private_result_oram_rest_tests {
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
                     bucket_ids: read_bucket_ids.clone(),
-                    read_signature: fixture.read_signature(&read_bucket_ids),
+                    read_signature: unknown_read_session_signature,
                 },
                 StatusCode::BAD_REQUEST,
                 "session is missing or expired"
@@ -3126,6 +3128,16 @@ mod private_result_oram_rest_tests {
                 !unknown_read_error.contains(unknown_read_session_sentinel),
                 "{unknown_read_error}"
             );
+            for sentinel in [
+                fixture.manifest.root_hash.as_str(),
+                unknown_read_session_signature_sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unknown_read_error.contains(sentinel),
+                    "{unknown_read_error}"
+                );
+            }
 
             let oversized_read_session_id = "s".repeat(129);
             let malformed_read_session_id = "bad/session-id";
@@ -3169,6 +3181,17 @@ mod private_result_oram_rest_tests {
                 !unknown_commit_error.contains(unknown_commit_session_sentinel),
                 "{unknown_commit_error}"
             );
+            for sentinel in [
+                fixture.manifest.root_hash.as_str(),
+                new_root_hash.as_str(),
+                commit_signature.sig.as_str(),
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unknown_commit_error.contains(sentinel),
+                    "{unknown_commit_error}"
+                );
+            }
 
             let oversized_commit_session_id = "s".repeat(129);
             let malformed_commit_session_id = "bad/session-id";

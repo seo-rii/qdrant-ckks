@@ -3564,6 +3564,8 @@ mod private_result_oram_grpc_tests {
             assert!(!malformed_path_read.message().contains("valid ORAM paths"));
 
             let unknown_read_session_sentinel = "read-session-id-sentinel";
+            let unknown_read_session_signature = fixture.read_signature(&read_bucket_ids);
+            let unknown_read_session_signature_sig = unknown_read_session_signature.sig.clone();
             let unknown_read = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::ReadPrivateResultOramBucketsRequest {
@@ -3572,9 +3574,7 @@ mod private_result_oram_grpc_tests {
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.manifest.root_hash.clone(),
                     bucket_ids: read_bucket_ids.clone(),
-                    read_signature: Some(signature_to_proto(
-                        fixture.read_signature(&read_bucket_ids),
-                    )),
+                    read_signature: Some(signature_to_proto(unknown_read_session_signature)),
                 }),
             )
             .await
@@ -3592,6 +3592,17 @@ mod private_result_oram_grpc_tests {
                 "{}",
                 unknown_read.message()
             );
+            for sentinel in [
+                fixture.manifest.root_hash.as_str(),
+                unknown_read_session_signature_sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unknown_read.message().contains(sentinel),
+                    "{}",
+                    unknown_read.message()
+                );
+            }
 
             let oversized_read_session_id = "s".repeat(129);
             let malformed_read_session_id = "bad/session-id";
@@ -3658,6 +3669,18 @@ mod private_result_oram_grpc_tests {
                 "{}",
                 unknown_commit.message()
             );
+            for sentinel in [
+                fixture.manifest.root_hash.as_str(),
+                new_root_hash.as_str(),
+                commit_signature.sig.as_str(),
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unknown_commit.message().contains(sentinel),
+                    "{}",
+                    unknown_commit.message()
+                );
+            }
 
             let oversized_commit_session_id = "s".repeat(129);
             let malformed_commit_session_id = "bad/session-id";
