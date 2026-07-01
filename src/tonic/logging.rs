@@ -249,6 +249,8 @@ mod tests {
              accessVolumeCounts=access-volume-counts-camel-sentinel \
              access_volume_len=access-volume-len-snake-sentinel \
              accessVolumeLength=access-volume-length-camel-sentinel \
+             access_volume_lengths=access-volume-lengths-snake-sentinel \
+             accessVolumeLengths=access-volume-lengths-camel-sentinel \
              path_count=path-count-sentinel \
              pathCounts=path-counts-camel-sentinel \
              read_bucket_count=read-bucket-count-sentinel \
@@ -470,6 +472,7 @@ mod tests {
              proof_value=proof-value-sentinel \
              proofValue=proof-value-camel-sentinel \
              proof_values=proof-values-sentinel \
+             proofValues=proof-values-camel-sentinel \
              sibling=sibling-sentinel \
              siblings=siblings-sentinel \
              sibling_hash=sibling-hash-sentinel \
