@@ -302,6 +302,9 @@ mod tests {
              readPathLabel=read-path-label-camel-sentinel \
              accessCount=access-count-camel-sentinel \
              accessCounts=access-counts-camel-sentinel \
+             accessVolume=access-volume-camel-sentinel \
+             accessVolumeCount=access-volume-count-camel-sentinel \
+             accessVolumeLength=access-volume-length-camel-sentinel \
              pathCount=path-count-camel-sentinel \
              pathCounts=path-counts-camel-sentinel \
              bucketIdCounts=bucket-id-counts-camel-sentinel \
@@ -406,6 +409,9 @@ mod tests {
         assert!(!redacted.contains("read-path-label-camel-sentinel"));
         assert!(!redacted.contains("access-count-camel-sentinel"));
         assert!(!redacted.contains("access-counts-camel-sentinel"));
+        assert!(!redacted.contains("access-volume-camel-sentinel"));
+        assert!(!redacted.contains("access-volume-count-camel-sentinel"));
+        assert!(!redacted.contains("access-volume-length-camel-sentinel"));
         assert!(!redacted.contains("path-count-camel-sentinel"));
         assert!(!redacted.contains("path-counts-camel-sentinel"));
         assert!(!redacted.contains("bucket-id-counts-camel-sentinel"));
