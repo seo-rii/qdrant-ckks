@@ -24340,7 +24340,8 @@ mod tests {
         assert!(
             matches!(err, StorageError::BadInput { ref description }
                 if description.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER)
-                    && description.contains("client-led private ORAM sessions")),
+                    && description.contains("client-led private ORAM sessions")
+                    && !description.contains("embedding")),
             "unexpected error: {err:?}",
         );
     }
