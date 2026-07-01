@@ -4061,11 +4061,20 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains("commit signature verification failed")
             );
-            assert!(
-                !invalid_commit_signature
-                    .message()
-                    .contains(&wrong_commit_signature.sig)
-            );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                new_root_hash.as_str(),
+                wrong_commit_signature.key_id.as_str(),
+                wrong_commit_signature.sig.as_str(),
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !invalid_commit_signature.message().contains(sentinel),
+                    "{}",
+                    invalid_commit_signature.message()
+                );
+            }
 
             let duplicate_commit_buckets = vec![updated_bucket.clone(), updated_bucket.clone()];
             let leaf_commitment = fixture.buckets[0].bucket_commitment.clone();
