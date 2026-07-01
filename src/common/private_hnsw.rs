@@ -1028,7 +1028,7 @@ fn validate_private_hnsw_read_fixed_path_budget(
     padding: PrivateHnswReadPadding,
     path_count: usize,
     session_path_batch_size: u32,
-) -> StorageResult<usize> {
+) -> StorageResult<()> {
     let session_path_batch_size: usize = session_path_batch_size.try_into().map_err(|_| {
         StorageError::bad_request("private HNSW ORAM session path budget exceeds platform capacity")
     })?;
@@ -1040,7 +1040,7 @@ fn validate_private_hnsw_read_fixed_path_budget(
             "private HNSW ORAM read_paths request must match fixed path budget",
         ));
     }
-    Ok(session_path_batch_size)
+    Ok(())
 }
 
 pub async fn do_read_private_hnsw_paths(
@@ -2602,10 +2602,7 @@ mod private_hnsw_tests {
             requested_paths: 2,
             dummy_paths_included: true,
         };
-        assert_eq!(
-            validate_private_hnsw_read_fixed_path_budget(valid_padding, 2, 2).unwrap(),
-            2
-        );
+        validate_private_hnsw_read_fixed_path_budget(valid_padding, 2, 2).unwrap();
 
         let wrong_requested_paths = PrivateHnswReadPadding {
             requested_paths: 1,
