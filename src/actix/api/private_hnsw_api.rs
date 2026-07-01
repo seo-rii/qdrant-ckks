@@ -3783,6 +3783,8 @@ mod private_hnsw_rest_tests {
             let unknown_read_session_sentinel = "read-session-id-sentinel";
             let unknown_read_paths = vec![fixture.entry_leaf_label()];
             let unknown_read_signature = fixture.sign_read_paths(&unknown_read_paths, 1, true);
+            let unknown_read_path = unknown_read_paths[0].clone();
+            let unknown_read_signature_sig = unknown_read_signature.sig.clone();
             let unknown_read_session_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
@@ -3807,6 +3809,17 @@ mod private_hnsw_rest_tests {
                 !unknown_read_session_error.contains(unknown_read_session_sentinel),
                 "{unknown_read_session_error}"
             );
+            for sentinel in [
+                fixture.encrypted_build.root_hash.as_str(),
+                unknown_read_path.as_str(),
+                unknown_read_signature_sig.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unknown_read_session_error.contains(sentinel),
+                    "{unknown_read_session_error}"
+                );
+            }
 
             let oversized_read_session_id = "s".repeat(129);
             let malformed_read_session_id = "bad/session-id";
@@ -4490,6 +4503,17 @@ mod private_hnsw_rest_tests {
                 !unknown_commit_session_error.contains(unknown_commit_session_sentinel),
                 "{unknown_commit_session_error}"
             );
+            for sentinel in [
+                search_run.commit_plan.old_root_hash.as_str(),
+                search_run.commit_plan.new_root_hash.as_str(),
+                search_run.commit_signature.sig.as_str(),
+                search_run.updated_buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unknown_commit_session_error.contains(sentinel),
+                    "{unknown_commit_session_error}"
+                );
+            }
 
             let oversized_commit_session_id = "s".repeat(129);
             let malformed_commit_session_id = "bad/session-id";
