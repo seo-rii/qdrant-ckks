@@ -3579,16 +3579,18 @@ mod private_hnsw_rest_tests {
                 "{unknown_read_key_error}"
             );
 
+            let alternate_read_path = fixture.entry_leaf_label();
             let mut alternate_read_signature =
-                fixture.sign_read_paths(&[fixture.entry_leaf_label()], 1, true);
+                fixture.sign_read_paths(std::slice::from_ref(&alternate_read_path), 1, true);
             alternate_read_signature.key_id = alternate_signing_key_id.to_string();
+            let alternate_read_signature_sig = alternate_read_signature.sig.clone();
             let alternate_read_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![fixture.entry_leaf_label()],
+                    paths: vec![alternate_read_path.clone()],
                     padding: OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
@@ -3607,6 +3609,18 @@ mod private_hnsw_rest_tests {
                 !alternate_read_key_error.contains(alternate_signing_key_id),
                 "{alternate_read_key_error}"
             );
+            for sentinel in [
+                session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                alternate_read_path.as_str(),
+                alternate_read_signature_sig.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !alternate_read_key_error.contains(sentinel),
+                    "{alternate_read_key_error}"
+                );
+            }
 
             let invalid_read_key_id_sentinel = "read-signature-key!sentinel";
             let invalid_read_key_path = fixture.entry_leaf_label();
