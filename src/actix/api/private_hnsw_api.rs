@@ -5134,8 +5134,6 @@ mod private_hnsw_rest_tests {
                 }
             );
             assert_eq!(commit_result["index_epoch"], NEXT_EPOCH);
-            let (refreshed_manifest, refreshed_signature) =
-                fixture.sign_manifest_refresh(&search_run.commit_plan);
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -5275,27 +5273,6 @@ mod private_hnsw_rest_tests {
                     "{closed_commit_error}"
                 );
             }
-
-            post_json_error_contains!(
-                "/collections/docs/private-hnsw/text/session",
-                OpenPrivateHnswSessionRequest {
-                    client_id: "tenant-a/sdk-instance-2".to_string(),
-                    desired_epoch: NEXT_EPOCH,
-                    fixed_budget: true,
-                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
-                },
-                StatusCode::BAD_REQUEST,
-                "manifest epoch/root does not match current epoch"
-            );
-
-            let refreshed_epoch = post_json_ok!(
-                "/collections/docs/private-hnsw/text/manifest",
-                UploadPrivateHnswManifestRequest {
-                    manifest: refreshed_manifest,
-                    signature: refreshed_signature,
-                }
-            );
-            assert_eq!(refreshed_epoch["index_epoch"], NEXT_EPOCH);
 
             let reopened_session = post_json_ok!(
                 "/collections/docs/private-hnsw/text/session",

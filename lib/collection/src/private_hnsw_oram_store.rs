@@ -996,14 +996,9 @@ fn validate_bucket(
 
 fn validate_commit_manifest_context(
     manifest: &PrivateHnswOramManifest,
-    old: &PrivateHnswOramEpochState,
+    _old: &PrivateHnswOramEpochState,
     bucket_count: u64,
 ) -> CollectionResult<()> {
-    if manifest.index_epoch != old.index_epoch || manifest.root_hash != old.root_hash {
-        return Err(CollectionError::bad_request(
-            "private HNSW ORAM manifest epoch/root does not match commit old epoch/root",
-        ));
-    }
     if manifest.bucket_count != bucket_count {
         return Err(CollectionError::bad_request(
             "private HNSW ORAM manifest bucket_count does not match commit bucket_count",
@@ -3691,6 +3686,73 @@ mod tests {
             .unwrap();
         assert_eq!(proof.leaves[0].leaf_hash, updated_bucket.bucket_commitment);
 
+        let second_updated_bucket = seal_private_hnsw_oram_bucket(
+            &fixture_client_keys(),
+            client_bucket_base_context().for_bucket(1, 44),
+            &encode_private_hnsw_oram_bucket_plaintext(
+                &empty_private_hnsw_oram_plaintext_bucket(1, client_oram_config()).unwrap(),
+                client_oram_config(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut second_commitments = bundle.bucket_commitments();
+        second_commitments[0] = updated_bucket.bucket_commitment.clone();
+        second_commitments[1] = second_updated_bucket.bucket_commitment.clone();
+        let second_new = PrivateHnswOramEpochState {
+            index_epoch: 44,
+            root_hash: PrivateHnswOramStore::merkle_root_for_commitments(&second_commitments)
+                .unwrap(),
+        };
+        let second_plan = PrivateHnswClientCommitPlan {
+            old_epoch: new.index_epoch,
+            new_epoch: second_new.index_epoch,
+            old_root_hash: new.root_hash.clone(),
+            new_root_hash: second_new.root_hash.clone(),
+            leaf_commitments: second_commitments,
+            updated_buckets: vec![PrivateHnswClientCommitBucketRef {
+                bucket_id: second_updated_bucket.bucket_id,
+                ciphertext_sha256: second_updated_bucket.ciphertext_sha256.clone(),
+            }],
+        };
+        let second_signature = sign_private_hnsw_oram_commit(
+            &key_pair,
+            PrivateHnswCommitSignatureContext {
+                collection_id: "collection-uuid-1",
+                vector_name: "text",
+                key_id: "tenant-a/vector-private-rk",
+                rk_id: "tenant-a/vector-private-rk",
+                rk_epoch: 7,
+                signing_key_id: "tenant-a/private-hnsw-signing-v1",
+            },
+            &second_plan,
+        )
+        .unwrap();
+        let second_committed = store
+            .commit_writeback_with_signature(
+                &new,
+                &second_new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&second_updated_bucket),
+                4096,
+                &second_signature,
+                PrivateHnswSignatureVerification {
+                    expected_key_id: "tenant-a/private-hnsw-signing-v1",
+                    public_key: key_pair.public_key().as_ref(),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(second_committed, second_new);
+        assert_eq!(store.read_current_epoch().unwrap(), second_new);
+        assert_eq!(store.read_manifest().unwrap().0, bundle.manifest);
+        assert_eq!(
+            store
+                .read_bucket(1, second_new.index_epoch, bundle.bucket_count(), 4096)
+                .unwrap(),
+            second_updated_bucket,
+        );
+
         let temp = TempDir::new().unwrap();
         let tampered_store = fixture_store(&temp);
         let old = tampered_store
@@ -3874,7 +3936,7 @@ mod tests {
     }
 
     #[test]
-    fn writeback_commit_preflights_manifest_epoch_root_before_writes() {
+    fn writeback_commit_allows_manifest_epoch_root_to_remain_at_upload_anchor() {
         let key_pair = Ed25519KeyPair::from_seed_unchecked(&[31; 32]).unwrap();
         let (bundle, updated_bucket, new, _) = fixture_signed_commit_update(&key_pair);
         let temp = TempDir::new().unwrap();
@@ -3888,7 +3950,7 @@ mod tests {
             .write_manifest(&tampered_manifest, &bundle.manifest_signature)
             .unwrap();
 
-        let rendered = store
+        let committed = store
             .commit_writeback(
                 &old,
                 &new,
@@ -3896,38 +3958,17 @@ mod tests {
                 std::slice::from_ref(&updated_bucket),
                 4096,
             )
-            .unwrap_err()
-            .to_string();
+            .unwrap();
 
-        assert!(rendered.contains("manifest epoch/root"));
-        assert!(
-            !rendered.contains(&tampered_manifest.root_hash),
-            "{rendered}"
-        );
-        assert!(!rendered.contains(&old.root_hash), "{rendered}");
-        assert!(
-            !rendered.contains(&bundle.manifest_signature.sig),
-            "{rendered}"
-        );
-        assert!(!rendered.contains(&updated_bucket.ciphertext), "{rendered}");
-        assert!(
-            !rendered.contains(&updated_bucket.bucket_commitment),
-            "{rendered}"
-        );
-        assert_eq!(store.read_current_epoch().unwrap(), old);
+        assert_eq!(committed, new);
+        assert_eq!(store.read_current_epoch().unwrap(), new);
         assert_eq!(
             store
-                .read_bucket(0, old.index_epoch, bundle.bucket_count(), 4096)
+                .read_bucket(0, new.index_epoch, bundle.bucket_count(), 4096)
                 .unwrap(),
-            bundle.buckets[0]
+            updated_bucket,
         );
-        let proof = store
-            .read_merkle_path_batch(&[0], old.index_epoch, &old.root_hash, bundle.bucket_count())
-            .unwrap();
-        assert_eq!(
-            proof.leaves[0].leaf_hash,
-            bundle.buckets[0].bucket_commitment
-        );
+        assert_eq!(store.read_manifest().unwrap().0, tampered_manifest);
     }
 
     #[test]

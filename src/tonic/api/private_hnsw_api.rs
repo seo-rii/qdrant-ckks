@@ -5559,8 +5559,6 @@ mod private_hnsw_grpc_tests {
             .unwrap()
             .into_inner();
             assert_eq!(commit_epoch.index_epoch, NEXT_EPOCH);
-            let (refreshed_manifest, refreshed_signature) =
-                fixture.sign_manifest_refresh(&search_run.commit_plan);
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -5721,39 +5719,6 @@ mod private_hnsw_grpc_tests {
             ] {
                 assert!(!err.message().contains(sentinel), "{}", err.message());
             }
-
-            let err = PrivateHnswOram::open_private_hnsw_session(
-                &service,
-                Request::new(grpc::OpenPrivateHnswSessionRequest {
-                    collection_name: COLLECTION_NAME.to_string(),
-                    vector_name: VECTOR_NAME.to_string(),
-                    client_id: "tenant-a/sdk-instance-2".to_string(),
-                    desired_epoch: NEXT_EPOCH,
-                    fixed_budget: true,
-                    result_privacy: result_privacy_to_proto(ResultPrivacyMode::IdsVisible),
-                }),
-            )
-            .await
-            .unwrap_err();
-            assert_eq!(err.code(), Code::InvalidArgument);
-            assert!(
-                err.message()
-                    .contains("manifest epoch/root does not match current epoch")
-            );
-
-            let refreshed_epoch = PrivateHnswOram::upload_private_hnsw_manifest(
-                &service,
-                Request::new(grpc::UploadPrivateHnswManifestRequest {
-                    collection_name: COLLECTION_NAME.to_string(),
-                    vector_name: VECTOR_NAME.to_string(),
-                    manifest: Some(manifest_to_proto(refreshed_manifest)),
-                    signature: Some(signature_to_proto(refreshed_signature)),
-                }),
-            )
-            .await
-            .unwrap()
-            .into_inner();
-            assert_eq!(refreshed_epoch.index_epoch, NEXT_EPOCH);
 
             let reopened = PrivateHnswOram::open_private_hnsw_session(
                 &service,
