@@ -4466,6 +4466,15 @@ mod tests {
             let messages = [
                 plaintext_vector_write_error_for_encryption_rule(vector_name, &rule, false)
                     .to_string(),
+                reject_private_hnsw_oram_read_only_point_operation(
+                    &CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints {
+                        ids: vec![1.into()],
+                    }),
+                    &encryption,
+                    false,
+                )
+                .unwrap_err()
+                .to_string(),
                 encrypted_vector_return_error(
                     &encryption,
                     &WithVector::Selector(vec![vector_name.to_string()]),
