@@ -2852,10 +2852,14 @@ pub fn plan_private_hnsw_oram_speculative_prefetch(
         }
     }
     let real_path_count = leaves.len();
-    let mut next_padding_offset = 0;
+    let mut next_padding_leaf = padding_leaf;
     while leaves.len() < fixed_path_count {
-        let leaf = (padding_leaf + next_padding_offset) % leaf_count;
-        next_padding_offset += 1;
+        let leaf = next_padding_leaf;
+        next_padding_leaf = if next_padding_leaf + 1 == leaf_count {
+            0
+        } else {
+            next_padding_leaf + 1
+        };
         if seen_leaves.insert(leaf) {
             leaves.push(leaf);
         }
