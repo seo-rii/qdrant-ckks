@@ -880,22 +880,22 @@ mod private_hnsw_grpc_tests {
 
     #[test]
     fn proto_enum_conversions_reject_unknown_values_without_reflecting_value() {
-        let unsupported = 987_654;
+        for unsupported in [0, 987_654] {
+            let err = distance_from_proto(unsupported).unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("distance"));
+            assert!(!err.message().contains(&unsupported.to_string()));
 
-        let err = distance_from_proto(unsupported).unwrap_err();
-        assert_eq!(err.code(), Code::InvalidArgument);
-        assert!(err.message().contains("distance"));
-        assert!(!err.message().contains(&unsupported.to_string()));
+            let err = result_privacy_from_proto(unsupported).unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("result_privacy"));
+            assert!(!err.message().contains(&unsupported.to_string()));
 
-        let err = result_privacy_from_proto(unsupported).unwrap_err();
-        assert_eq!(err.code(), Code::InvalidArgument);
-        assert!(err.message().contains("result_privacy"));
-        assert!(!err.message().contains(&unsupported.to_string()));
-
-        let err = oram_kind_from_proto(unsupported).unwrap_err();
-        assert_eq!(err.code(), Code::InvalidArgument);
-        assert!(err.message().contains("kind"));
-        assert!(!err.message().contains(&unsupported.to_string()));
+            let err = oram_kind_from_proto(unsupported).unwrap_err();
+            assert_eq!(err.code(), Code::InvalidArgument);
+            assert!(err.message().contains("kind"));
+            assert!(!err.message().contains(&unsupported.to_string()));
+        }
     }
 
     #[test]
