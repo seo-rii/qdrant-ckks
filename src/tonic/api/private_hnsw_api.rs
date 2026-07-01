@@ -4570,6 +4570,7 @@ mod private_hnsw_grpc_tests {
             );
 
             let invalid_commit_key_id_sentinel = "commit-signature-key!sentinel";
+            let invalid_commit_key_sig = fixture.client_signature().sig;
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -4589,7 +4590,7 @@ mod private_hnsw_grpc_tests {
                     commit_signature: Some(grpc::PrivateHnswSignature {
                         alg: "ed25519".to_string(),
                         key_id: invalid_commit_key_id_sentinel.to_string(),
-                        sig: fixture.client_signature().sig,
+                        sig: invalid_commit_key_sig.clone(),
                     }),
                 }),
             )
@@ -4603,6 +4604,15 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                search_run.commit_plan.old_root_hash.as_str(),
+                search_run.commit_plan.new_root_hash.as_str(),
+                invalid_commit_key_sig.as_str(),
+                search_run.updated_buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
@@ -4636,6 +4646,15 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                search_run.commit_plan.old_root_hash.as_str(),
+                search_run.commit_plan.new_root_hash.as_str(),
+                SIGNING_KEY_ID,
+                search_run.updated_buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let commit_signature_alg_sentinel = "rsa-pss-hnsw-commit-sentinel";
             let mut unsupported_commit_signature = search_run.commit_signature.clone();

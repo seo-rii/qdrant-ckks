@@ -4244,6 +4244,7 @@ mod private_hnsw_rest_tests {
             );
 
             let invalid_commit_key_id_sentinel = "commit-signature-key!sentinel";
+            let invalid_commit_key_sig = fixture.client_signature().sig;
             let invalid_commit_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -4256,7 +4257,7 @@ mod private_hnsw_rest_tests {
                     commit_signature: PrivateHnswClientSignature {
                         alg: "ed25519".to_string(),
                         key_id: invalid_commit_key_id_sentinel.to_string(),
-                        sig: fixture.client_signature().sig,
+                        sig: invalid_commit_key_sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -4267,6 +4268,18 @@ mod private_hnsw_rest_tests {
                 !invalid_commit_key_error.contains(invalid_commit_key_id_sentinel),
                 "{invalid_commit_key_error}"
             );
+            for sentinel in [
+                session_id.as_str(),
+                search_run.commit_plan.old_root_hash.as_str(),
+                search_run.commit_plan.new_root_hash.as_str(),
+                invalid_commit_key_sig.as_str(),
+                search_run.updated_buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !invalid_commit_key_error.contains(sentinel),
+                    "{invalid_commit_key_error}"
+                );
+            }
 
             let malformed_commit_signature_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
@@ -4290,6 +4303,18 @@ mod private_hnsw_rest_tests {
                 !malformed_commit_signature_error.contains(signature_body_sentinel),
                 "{malformed_commit_signature_error}"
             );
+            for sentinel in [
+                session_id.as_str(),
+                search_run.commit_plan.old_root_hash.as_str(),
+                search_run.commit_plan.new_root_hash.as_str(),
+                SIGNING_KEY_ID,
+                search_run.updated_buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !malformed_commit_signature_error.contains(sentinel),
+                    "{malformed_commit_signature_error}"
+                );
+            }
 
             let commit_signature_alg_sentinel = "rsa-pss-hnsw-commit-sentinel";
             let mut unsupported_commit_signature = search_run.commit_signature.clone();
