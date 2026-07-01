@@ -5662,6 +5662,8 @@ mod private_hnsw_grpc_tests {
 
             let closed_read_paths = vec![fixture.entry_leaf_label()];
             let closed_read_signature = fixture.sign_read_paths(&closed_read_paths, 1, true);
+            let closed_read_path = closed_read_paths[0].clone();
+            let closed_read_signature_sig = closed_read_signature.sig.clone();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -5682,13 +5684,22 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("session is missing or expired"));
+            for sentinel in [
+                closed_session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                closed_read_path.as_str(),
+                closed_read_signature_sig.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
                     collection_name: COLLECTION_NAME.to_string(),
                     vector_name: VECTOR_NAME.to_string(),
-                    session_id: closed_session_id,
+                    session_id: closed_session_id.clone(),
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
                     old_root_hash: search_run.commit_plan.old_root_hash.clone(),
@@ -5706,6 +5717,15 @@ mod private_hnsw_grpc_tests {
             .unwrap_err();
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("session is missing or expired"));
+            for sentinel in [
+                closed_session_id.as_str(),
+                search_run.commit_plan.old_root_hash.as_str(),
+                search_run.commit_plan.new_root_hash.as_str(),
+                search_run.commit_signature.sig.as_str(),
+                search_run.updated_buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let err = PrivateHnswOram::open_private_hnsw_session(
                 &service,

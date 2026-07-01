@@ -5221,7 +5221,9 @@ mod private_hnsw_rest_tests {
 
             let closed_read_paths = vec![fixture.entry_leaf_label()];
             let closed_read_signature = fixture.sign_read_paths(&closed_read_paths, 1, true);
-            post_json_error_contains!(
+            let closed_read_path = closed_read_paths[0].clone();
+            let closed_read_signature_sig = closed_read_signature.sig.clone();
+            let closed_read_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
@@ -5241,8 +5243,17 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "session is missing or expired"
             );
+            for sentinel in [
+                session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                closed_read_path.as_str(),
+                closed_read_signature_sig.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(!closed_read_error.contains(sentinel), "{closed_read_error}");
+            }
 
-            post_json_error_contains!(
+            let closed_commit_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
                     session_id: session_id.clone(),
@@ -5260,6 +5271,18 @@ mod private_hnsw_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "session is missing or expired"
             );
+            for sentinel in [
+                session_id.as_str(),
+                search_run.commit_plan.old_root_hash.as_str(),
+                search_run.commit_plan.new_root_hash.as_str(),
+                search_run.commit_signature.sig.as_str(),
+                search_run.updated_buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !closed_commit_error.contains(sentinel),
+                    "{closed_commit_error}"
+                );
+            }
 
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/session",
