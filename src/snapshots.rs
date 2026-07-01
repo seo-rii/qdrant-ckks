@@ -875,6 +875,20 @@ mod tests {
             "encryptedClientStateSnapshots.json",
             "encrypted_client_state_snapshot.json",
             "encrypted_client_state_snapshots.json",
+            "oramPositionMapBackup.json",
+            "oramPositionMapBackups.json",
+            "oram_position_map_backup.json",
+            "oram_position_map_backups.json",
+            "positionMapBackup.json",
+            "positionMapBackups.json",
+            "position_map_backup.json",
+            "position_map_backups.json",
+            "stashBackup.json",
+            "stashBackups.json",
+            "tokenPositionMapBackup.json",
+            "tokenPositionMapBackups.json",
+            "token_position_map_backup.json",
+            "token_position_map_backups.json",
         ] {
             let collection_dir = TempDir::new().unwrap();
             write_recovered_private_hnsw_snapshot_fixture(collection_dir.path(), &fixture, false);
@@ -1239,6 +1253,20 @@ mod tests {
             "encryptedClientStateSnapshots.json",
             "encrypted_client_state_snapshot.json",
             "encrypted_client_state_snapshots.json",
+            "oramPositionMapBackup.json",
+            "oramPositionMapBackups.json",
+            "oram_position_map_backup.json",
+            "oram_position_map_backups.json",
+            "positionMapBackup.json",
+            "positionMapBackups.json",
+            "position_map_backup.json",
+            "position_map_backups.json",
+            "stashBackup.json",
+            "stashBackups.json",
+            "tokenPositionMapBackup.json",
+            "tokenPositionMapBackups.json",
+            "token_position_map_backup.json",
+            "token_position_map_backups.json",
         ] {
             let collection_dir = TempDir::new().unwrap();
             write_recovered_private_result_snapshot_fixture(collection_dir.path(), &fixture, false);
