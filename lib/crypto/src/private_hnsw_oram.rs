@@ -2002,8 +2002,29 @@ mod tests {
             ..input
         };
         assert_eq!(
+            try_private_hnsw_oram_read_paths_signature_message(empty_paths),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
+        assert_eq!(
             validate_private_hnsw_oram_read_paths_signature(
                 empty_paths,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
+
+        let zero_requested_paths = PrivateHnswOramReadPathsSignatureInput {
+            requested_paths: 0,
+            ..input
+        };
+        assert_eq!(
+            try_private_hnsw_oram_read_paths_signature_message(zero_requested_paths),
+            Err(PrivateHnswOramError::InvalidReadPathsSignature)
+        );
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                zero_requested_paths,
                 "malformed-signature",
                 verification,
             ),
