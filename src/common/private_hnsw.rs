@@ -2561,6 +2561,17 @@ mod private_hnsw_tests {
             .to_string();
         assert!(rendered.contains("tree_height is invalid"));
         assert!(!rendered.contains("63"), "{rendered}");
+
+        let leaf = BASE64URL_NOPAD.encode(&0u64.to_be_bytes());
+        let sentinel_bucket_count = 987_654_321_u64;
+        let rendered = bucket_ids_for_path_batch(&[leaf], 3, sentinel_bucket_count)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("bucket_count does not match tree_height"));
+        assert!(
+            !rendered.contains(&sentinel_bucket_count.to_string()),
+            "{rendered}"
+        );
     }
 
     #[test]
