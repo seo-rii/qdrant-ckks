@@ -4618,6 +4618,77 @@ mod private_result_oram_grpc_tests {
             .into_inner();
             assert!(closed.closed);
 
+            let closed_read_signature = fixture.read_signature(&read_bucket_ids);
+            let closed_read_signature_sig = closed_read_signature.sig.clone();
+            let closed_read = PrivateResultOram::read_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::ReadPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: Some(signature_to_proto(closed_read_signature)),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(closed_read.code(), Code::InvalidArgument);
+            assert!(
+                closed_read
+                    .message()
+                    .contains("session is missing or expired")
+            );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                closed_read_signature_sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !closed_read.message().contains(sentinel),
+                    "{}",
+                    closed_read.message()
+                );
+            }
+
+            let (closed_commit_bucket, closed_commit_signature, closed_commit_new_root_hash) =
+                fixture.commit_bucket();
+            let closed_commit = PrivateResultOram::commit_private_result_oram_buckets(
+                &service,
+                Request::new(grpc::CommitPrivateResultOramBucketsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    session_id: session.session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: closed_commit_new_root_hash.clone(),
+                    updated_buckets: vec![bucket_to_proto(closed_commit_bucket.clone())],
+                    commit_signature: Some(signature_to_proto(closed_commit_signature.clone())),
+                }),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(closed_commit.code(), Code::InvalidArgument);
+            assert!(
+                closed_commit
+                    .message()
+                    .contains("session is missing or expired")
+            );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                closed_commit_new_root_hash.as_str(),
+                closed_commit_signature.sig.as_str(),
+                closed_commit_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !closed_commit.message().contains(sentinel),
+                    "{}",
+                    closed_commit.message()
+                );
+            }
+
             let missing_close_session_id = "close-session-id-sentinel";
             let missing_close = PrivateResultOram::close_private_result_oram_session(
                 &service,

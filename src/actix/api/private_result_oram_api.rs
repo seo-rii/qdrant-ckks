@@ -3747,6 +3747,58 @@ mod private_result_oram_rest_tests {
                 format!("/collections/docs/private-result-oram/session/{session_id}/close");
             let _ = post_json_ok!(close_uri.as_str(), serde_json::json!({}));
 
+            let closed_read_signature = fixture.read_signature(&read_bucket_ids);
+            let closed_read_signature_sig = closed_read_signature.sig.clone();
+            let closed_read_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/read_buckets",
+                ReadPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: fixture.manifest.index_epoch,
+                    root_hash: fixture.manifest.root_hash.clone(),
+                    bucket_ids: read_bucket_ids.clone(),
+                    read_signature: closed_read_signature,
+                },
+                StatusCode::BAD_REQUEST,
+                "session is missing or expired"
+            );
+            for sentinel in [
+                session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                closed_read_signature_sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(!closed_read_error.contains(sentinel), "{closed_read_error}");
+            }
+
+            let (closed_commit_bucket, closed_commit_signature, closed_commit_new_root_hash) =
+                fixture.commit_bucket();
+            let closed_commit_error = post_json_error_contains!(
+                "/collections/docs/private-result-oram/oram/commit",
+                CommitPrivateResultOramBucketsRequest {
+                    session_id: session_id.clone(),
+                    old_epoch: BASE_EPOCH,
+                    new_epoch: NEXT_EPOCH,
+                    old_root_hash: fixture.manifest.root_hash.clone(),
+                    new_root_hash: closed_commit_new_root_hash.clone(),
+                    updated_buckets: vec![closed_commit_bucket.clone()],
+                    commit_signature: closed_commit_signature.clone(),
+                },
+                StatusCode::BAD_REQUEST,
+                "session is missing or expired"
+            );
+            for sentinel in [
+                session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                closed_commit_new_root_hash.as_str(),
+                closed_commit_signature.sig.as_str(),
+                closed_commit_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !closed_commit_error.contains(sentinel),
+                    "{closed_commit_error}"
+                );
+            }
+
             let missing_close_session_id = "close-session-id-sentinel";
             let missing_close_request = actix_test::TestRequest::post()
                 .uri(&format!(
