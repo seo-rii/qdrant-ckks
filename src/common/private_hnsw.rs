@@ -1024,6 +1024,25 @@ pub async fn do_open_private_hnsw_session(
     Ok(response)
 }
 
+fn validate_private_hnsw_read_fixed_path_budget(
+    padding: PrivateHnswReadPadding,
+    path_count: usize,
+    session_path_batch_size: u32,
+) -> StorageResult<usize> {
+    let session_path_batch_size: usize = session_path_batch_size.try_into().map_err(|_| {
+        StorageError::bad_request("private HNSW ORAM session path budget exceeds platform capacity")
+    })?;
+    if padding.requested_paths != session_path_batch_size as u32
+        || path_count != session_path_batch_size
+        || !padding.dummy_paths_included
+    {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM read_paths request must match fixed path budget",
+        ));
+    }
+    Ok(session_path_batch_size)
+}
+
 pub async fn do_read_private_hnsw_paths(
     toc: &TableOfContent,
     auth: &Auth,
@@ -1069,20 +1088,11 @@ pub async fn do_read_private_hnsw_paths(
                     "private HNSW ORAM session epoch/root mismatch",
                 ));
             }
-            let session_path_batch_size: usize =
-                session.path_batch_size.try_into().map_err(|_| {
-                    StorageError::bad_request(
-                        "private HNSW ORAM session path budget exceeds platform capacity",
-                    )
-                })?;
-            if padding.requested_paths != session.path_batch_size
-                || paths.len() != session_path_batch_size
-                || !padding.dummy_paths_included
-            {
-                return Err(StorageError::bad_request(
-                    "private HNSW ORAM read_paths request must match fixed path budget",
-                ));
-            }
+            validate_private_hnsw_read_fixed_path_budget(
+                padding,
+                paths.len(),
+                session.path_batch_size,
+            )?;
             validate_session_signature_owner_key(session, &client_signature.key_id)?;
             let public_key = request_context.signature_public_key(&client_signature.key_id)?;
             let path_refs = paths.iter().map(String::as_str).collect::<Vec<_>>();
@@ -2584,6 +2594,51 @@ mod private_hnsw_tests {
         assert!(!rendered.contains("session is missing or expired"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains(&BASE64URL_NOPAD.encode(&5u64.to_be_bytes())));
+    }
+
+    #[test]
+    fn read_path_fixed_budget_rejects_padding_mismatch() {
+        let valid_padding = PrivateHnswReadPadding {
+            requested_paths: 2,
+            dummy_paths_included: true,
+        };
+        assert_eq!(
+            validate_private_hnsw_read_fixed_path_budget(valid_padding, 2, 2).unwrap(),
+            2
+        );
+
+        let wrong_requested_paths = PrivateHnswReadPadding {
+            requested_paths: 1,
+            dummy_paths_included: true,
+        };
+        let err =
+            validate_private_hnsw_read_fixed_path_budget(wrong_requested_paths, 2, 2).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("fixed path budget"), "{rendered}");
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("1"), "{rendered}");
+        assert!(!rendered.contains("2"), "{rendered}");
+
+        let err = validate_private_hnsw_read_fixed_path_budget(valid_padding, 1, 2).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("fixed path budget"), "{rendered}");
+        assert!(!rendered.contains("session is missing or expired"));
+        assert!(!rendered.contains("private_hnsw_oram"));
+        assert!(!rendered.contains("1"), "{rendered}");
+        assert!(!rendered.contains("2"), "{rendered}");
+
+        let missing_dummy_padding = PrivateHnswReadPadding {
+            requested_paths: 2,
+            dummy_paths_included: false,
+        };
+        let err =
+            validate_private_hnsw_read_fixed_path_budget(missing_dummy_padding, 2, 2).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("fixed path budget"), "{rendered}");
+        assert!(!rendered.contains("dummy"), "{rendered}");
+        assert!(!rendered.contains("false"), "{rendered}");
+        assert!(!rendered.contains("private_hnsw_oram"));
     }
 
     #[test]
