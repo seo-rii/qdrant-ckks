@@ -6985,6 +6985,10 @@ mod private_hnsw_grpc_tests {
             let run = fixture.run_single_search_collect_writeback();
             let mut wrong_commit_signature = run.commit_signature;
             wrong_commit_signature.key_id = alternate_key_id.to_string();
+            let wrong_commit_signature_sig = wrong_commit_signature.sig.clone();
+            let wrong_commit_old_root = fixture.encrypted_build.root_hash.clone();
+            let wrong_commit_new_root = run.commit_plan.new_root_hash.clone();
+            let wrong_commit_ciphertext = run.updated_buckets[0].ciphertext.clone();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -6993,8 +6997,8 @@ mod private_hnsw_grpc_tests {
                     session_id: session.session_id.clone(),
                     old_epoch: BASE_EPOCH,
                     new_epoch: NEXT_EPOCH,
-                    old_root_hash: fixture.encrypted_build.root_hash.clone(),
-                    new_root_hash: run.commit_plan.new_root_hash,
+                    old_root_hash: wrong_commit_old_root.clone(),
+                    new_root_hash: wrong_commit_new_root.clone(),
                     updated_buckets: run
                         .updated_buckets
                         .into_iter()
@@ -7016,6 +7020,15 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                wrong_commit_old_root.as_str(),
+                wrong_commit_new_root.as_str(),
+                wrong_commit_signature_sig.as_str(),
+                wrong_commit_ciphertext.as_str(),
+            ] {
+                assert!(!err.message().contains(sentinel), "{}", err.message());
+            }
 
             let closed = PrivateHnswOram::close_private_hnsw_session(
                 &service,

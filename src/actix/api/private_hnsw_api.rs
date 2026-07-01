@@ -4270,6 +4270,7 @@ mod private_hnsw_rest_tests {
 
             let mut alternate_commit_signature = search_run.commit_signature.clone();
             alternate_commit_signature.key_id = alternate_signing_key_id.to_string();
+            let alternate_commit_signature_sig = alternate_commit_signature.sig.clone();
             let alternate_commit_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -4293,6 +4294,18 @@ mod private_hnsw_rest_tests {
                 !alternate_commit_key_error.contains(alternate_signing_key_id),
                 "{alternate_commit_key_error}"
             );
+            for sentinel in [
+                session_id.as_str(),
+                search_run.commit_plan.old_root_hash.as_str(),
+                search_run.commit_plan.new_root_hash.as_str(),
+                alternate_commit_signature_sig.as_str(),
+                search_run.updated_buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !alternate_commit_key_error.contains(sentinel),
+                    "{alternate_commit_key_error}"
+                );
+            }
 
             let invalid_commit_key_id_sentinel = "commit-signature-key!sentinel";
             let invalid_commit_key_sig = fixture.client_signature().sig;
