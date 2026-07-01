@@ -2642,6 +2642,16 @@ mod private_result_oram_tests {
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains("3"), "{rendered}");
 
+        let sentinel_bucket_id = 987_654_321_u64;
+        let under_budget_with_sentinel =
+            validate_bucket_read_request(&manifest, &[0, 1, sentinel_bucket_id]).unwrap_err();
+        let rendered = under_budget_with_sentinel.to_string();
+        assert!(rendered.contains("fixed path budget"));
+        assert!(
+            !rendered.contains(&sentinel_bucket_id.to_string()),
+            "{rendered}"
+        );
+
         let duplicate_path =
             validate_bucket_read_request(&manifest, &[0, 1, 3, 0, 1, 3]).unwrap_err();
         let rendered = duplicate_path.to_string();
@@ -2649,6 +2659,18 @@ mod private_result_oram_tests {
         assert!(!rendered.contains("session is missing or expired"));
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains("3"), "{rendered}");
+
+        let duplicate_path_with_sentinel = validate_bucket_read_request(
+            &manifest,
+            &[0, 1, sentinel_bucket_id, 0, 1, sentinel_bucket_id],
+        )
+        .unwrap_err();
+        let rendered = duplicate_path_with_sentinel.to_string();
+        assert!(rendered.contains("duplicate ORAM path"));
+        assert!(
+            !rendered.contains(&sentinel_bucket_id.to_string()),
+            "{rendered}"
+        );
 
         let malformed_path =
             validate_bucket_read_request(&manifest, &[0, 2, 3, 0, 1, 4]).unwrap_err();
