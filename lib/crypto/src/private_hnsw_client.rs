@@ -3582,6 +3582,24 @@ pub fn plan_private_hnsw_oram_commit_for_manifest(
     current_leaf_commitments: &[String],
     updated_buckets: &[PrivateHnswOramBucket],
 ) -> Result<PrivateHnswClientCommitPlan, PrivateHnswClientError> {
+    plan_private_hnsw_oram_commit_for_manifest_context(
+        manifest,
+        manifest.index_epoch,
+        new_epoch,
+        &manifest.root_hash,
+        current_leaf_commitments,
+        updated_buckets,
+    )
+}
+
+pub fn plan_private_hnsw_oram_commit_for_manifest_context(
+    manifest: &PrivateHnswOramManifest,
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: &str,
+    current_leaf_commitments: &[String],
+    updated_buckets: &[PrivateHnswOramBucket],
+) -> Result<PrivateHnswClientCommitPlan, PrivateHnswClientError> {
     validate_private_hnsw_oram_manifest_shape(manifest)
         .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest"))?;
     let manifest_bucket_count = usize::try_from(manifest.bucket_count)
@@ -3589,7 +3607,7 @@ pub fn plan_private_hnsw_oram_commit_for_manifest(
     if current_leaf_commitments.len() != manifest_bucket_count {
         return Err(PrivateHnswClientError::BucketCountMismatch);
     }
-    if new_epoch <= manifest.index_epoch {
+    if new_epoch <= old_epoch {
         return Err(PrivateHnswClientError::InvalidCommitEpoch);
     }
     if updated_buckets.is_empty() {
@@ -3601,9 +3619,7 @@ pub fn plan_private_hnsw_oram_commit_for_manifest(
             "updated_buckets",
         ));
     }
-    if private_hnsw_oram_merkle_root_for_commitments(current_leaf_commitments)?
-        != manifest.root_hash
-    {
+    if private_hnsw_oram_merkle_root_for_commitments(current_leaf_commitments)? != old_root_hash {
         return Err(PrivateHnswClientError::MerkleRootMismatch);
     }
     let base_context = PrivateHnswBucketAeadBaseContext {
@@ -3625,9 +3641,9 @@ pub fn plan_private_hnsw_oram_commit_for_manifest(
         )?;
     }
     let plan = plan_private_hnsw_oram_commit(
-        manifest.index_epoch,
+        old_epoch,
         new_epoch,
-        &manifest.root_hash,
+        old_root_hash,
         current_leaf_commitments,
         updated_buckets,
     )?;
@@ -6589,6 +6605,70 @@ mod tests {
             Err(PrivateHnswClientError::InvalidManifestSignatureContext(
                 "manifest"
             ))
+        );
+    }
+
+    #[test]
+    fn commit_plan_for_manifest_context_allows_live_epoch_after_commit() {
+        let leaf_commitments = vec![commitment(1), commitment(2), commitment(3)];
+        let old_root = private_hnsw_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let mut manifest = fixture_manifest();
+        manifest.oram.tree_height = 1;
+        manifest.oram.path_batch_size = 2;
+        manifest.fixed_budget.paths_per_round = 2;
+        manifest.bucket_count = leaf_commitments.len() as u64;
+        manifest.logical_node_count = 2;
+        manifest.dummy_node_count = 0;
+        manifest.root_hash = old_root;
+
+        let first_bucket = fixture_context_commit_bucket(2, 43, 9, &manifest);
+        let first_plan = plan_private_hnsw_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &leaf_commitments,
+            std::slice::from_ref(&first_bucket),
+        )
+        .unwrap();
+
+        let second_bucket = fixture_context_commit_bucket(1, 44, 10, &manifest);
+        assert_eq!(
+            plan_private_hnsw_oram_commit_for_manifest(
+                &manifest,
+                44,
+                &first_plan.leaf_commitments,
+                std::slice::from_ref(&second_bucket),
+            ),
+            Err(PrivateHnswClientError::MerkleRootMismatch)
+        );
+
+        let second_plan = plan_private_hnsw_oram_commit_for_manifest_context(
+            &manifest,
+            first_plan.new_epoch,
+            44,
+            &first_plan.new_root_hash,
+            &first_plan.leaf_commitments,
+            std::slice::from_ref(&second_bucket),
+        )
+        .unwrap();
+        assert_eq!(second_plan.old_epoch, first_plan.new_epoch);
+        assert_eq!(second_plan.old_root_hash, first_plan.new_root_hash);
+        assert_eq!(
+            second_plan.leaf_commitments[1],
+            second_bucket.bucket_commitment
+        );
+
+        let mut wrong_commitment = second_bucket;
+        wrong_commitment.bucket_commitment = commitment(99);
+        assert_eq!(
+            plan_private_hnsw_oram_commit_for_manifest_context(
+                &manifest,
+                first_plan.new_epoch,
+                44,
+                &first_plan.new_root_hash,
+                &first_plan.leaf_commitments,
+                std::slice::from_ref(&wrong_commitment),
+            ),
+            Err(PrivateHnswClientError::InvalidBucketCommitment)
         );
     }
 
