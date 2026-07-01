@@ -467,6 +467,9 @@ mod tests {
              merkleProof=merkle-proof-camel-sentinel \
              proof=proof-sentinel \
              proofs=proofs-sentinel \
+             proof_value=proof-value-sentinel \
+             proofValue=proof-value-camel-sentinel \
+             proof_values=proof-values-sentinel \
              sibling=sibling-sentinel \
              siblings=siblings-sentinel \
              sibling_hash=sibling-hash-sentinel \
