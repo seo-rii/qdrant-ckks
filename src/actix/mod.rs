@@ -1058,6 +1058,22 @@ mod tests {
             ),
             "/collections/docs/private-hnsw/text/oram/read_paths?[redacted]"
         );
+        for query in [
+            "proof_value=proof-value-query-sentinel",
+            "proofValue=proofValue-query-sentinel",
+            "proof_values=proof-values-query-sentinel",
+            "access_volume=access-volume-query-sentinel",
+            "accessVolume=accessVolume-query-sentinel",
+            "access_volume_count=access-volume-count-query-sentinel",
+            "accessVolumeLength=accessVolumeLength-query-sentinel",
+        ] {
+            assert_eq!(
+                redact_private_oram_access_path(&format!(
+                    "/collections/docs/private-hnsw/text/oram/read_paths?{query}"
+                )),
+                "/collections/docs/private-hnsw/text/oram/read_paths?[redacted]"
+            );
+        }
         assert_eq!(
             redact_private_oram_access_path(
                 "/collections/docs/private-hnsw/text/buckets/bucket-id-sentinel"
@@ -1100,6 +1116,22 @@ mod tests {
             ),
             "/collections/docs/private-result-oram/oram/read_buckets?[redacted]"
         );
+        for query in [
+            "proof_value=proof-value-query-sentinel",
+            "proofValue=proofValue-query-sentinel",
+            "proof_values=proof-values-query-sentinel",
+            "access_volume=access-volume-query-sentinel",
+            "accessVolume=accessVolume-query-sentinel",
+            "access_volume_count=access-volume-count-query-sentinel",
+            "accessVolumeLength=accessVolumeLength-query-sentinel",
+        ] {
+            assert_eq!(
+                redact_private_oram_access_path(&format!(
+                    "/collections/docs/private-result-oram/oram/read_buckets?{query}"
+                )),
+                "/collections/docs/private-result-oram/oram/read_buckets?[redacted]"
+            );
+        }
         assert_eq!(
             redact_private_oram_access_path(
                 "/collections/docs/private-result-oram/buckets/result-bucket-id-sentinel"
@@ -1325,6 +1357,42 @@ mod tests {
                     .to_srv_request(),
                 "POST /collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
                 ["state_ciphertext_hash-sentinel", "query-sentinel"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-hnsw/text/oram/read_paths?proof_value=proof-value-query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-hnsw/text/oram/read_paths?[redacted] HTTP/1.1",
+                ["proof-value-query-sentinel", "proof_value"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-hnsw/text/oram/read_paths?accessVolume=accessVolume-query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-hnsw/text/oram/read_paths?[redacted] HTTP/1.1",
+                ["accessVolume-query-sentinel", "accessVolume"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-result-oram/oram/read_buckets?proof_values=proof-values-query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-result-oram/oram/read_buckets?[redacted] HTTP/1.1",
+                ["proof-values-query-sentinel", "proof_values"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-result-oram/oram/read_buckets?accessVolumeLength=accessVolumeLength-query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-result-oram/oram/read_buckets?[redacted] HTTP/1.1",
+                ["accessVolumeLength-query-sentinel", "accessVolumeLength"],
             ),
         ];
 
