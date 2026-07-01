@@ -3230,6 +3230,19 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains("owner_signing_key_id")
             );
+            let expected_read_signature = fixture.read_signature(&read_bucket_ids);
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                expected_read_signature.sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !malformed_read_key.message().contains(sentinel),
+                    "{}",
+                    malformed_read_key.message()
+                );
+            }
 
             let alt_read_signature = fixture.read_signature_with_alt_key(&read_bucket_ids);
             let alt_read_key = PrivateResultOram::read_private_result_oram_buckets(
@@ -3282,6 +3295,18 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(signature_body_sentinel)
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                SIGNING_KEY_ID,
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !malformed_read_signature.message().contains(sentinel),
+                    "{}",
+                    malformed_read_signature.message()
+                );
+            }
 
             let read_signature_alg_sentinel = "rsa-pss-result-read-sentinel";
             let mut unsupported_read_signature = fixture.read_signature(&read_bucket_ids);

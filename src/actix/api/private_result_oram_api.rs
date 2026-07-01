@@ -2890,6 +2890,18 @@ mod private_result_oram_rest_tests {
                 "{malformed_read_key_error}"
             );
             assert!(!malformed_read_key_error.contains("owner_signing_key_id"));
+            let expected_read_signature = fixture.read_signature(&read_bucket_ids);
+            for sentinel in [
+                session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                expected_read_signature.sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !malformed_read_key_error.contains(sentinel),
+                    "{malformed_read_key_error}"
+                );
+            }
 
             let alt_read_signature = fixture.read_signature_with_alt_key(&read_bucket_ids);
             let alt_read_key_error = post_json_error_contains!(
@@ -2927,6 +2939,17 @@ mod private_result_oram_rest_tests {
                 !malformed_read_signature_error.contains(signature_body_sentinel),
                 "{malformed_read_signature_error}"
             );
+            for sentinel in [
+                session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                SIGNING_KEY_ID,
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !malformed_read_signature_error.contains(sentinel),
+                    "{malformed_read_signature_error}"
+                );
+            }
 
             let read_signature_alg_sentinel = "rsa-pss-result-read-sentinel";
             let mut unsupported_read_signature = fixture.read_signature(&read_bucket_ids);
