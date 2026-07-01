@@ -1555,6 +1555,22 @@ mod tests {
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
             ),
             (
+                "/collections/docs/private-hnsw/text/oram/read_paths?proof_value=hnsw-query-proof-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+            ),
+            (
+                "/collections/docs/private-hnsw/text/oram/read_paths?proofValue=hnsw-query-proofValue-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+            ),
+            (
+                "/collections/docs/private-hnsw/text/oram/read_paths?access_volume=hnsw-query-access-volume-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+            ),
+            (
+                "/collections/docs/private-hnsw/text/oram/read_paths?accessVolume=hnsw-query-accessVolume-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+            ),
+            (
                 "/collections/docs/private-hnsw/text/oram/commit",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/commit",
             ),
@@ -1595,6 +1611,22 @@ mod tests {
                 "/collections/{collection_name}/private-result-oram/oram/read_buckets",
             ),
             (
+                "/collections/docs/private-result-oram/oram/read_buckets?proof_values=result-query-proof-values-sentinel",
+                "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+            ),
+            (
+                "/collections/docs/private-result-oram/oram/read_buckets?proofValue=result-query-proofValue-sentinel",
+                "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+            ),
+            (
+                "/collections/docs/private-result-oram/oram/read_buckets?access_volume_count=result-query-access-volume-count-sentinel",
+                "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+            ),
+            (
+                "/collections/docs/private-result-oram/oram/read_buckets?accessVolumeLength=result-query-accessVolumeLength-sentinel",
+                "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+            ),
+            (
                 "/collections/docs/private-result-oram/oram/commit",
                 "/collections/{collection_name}/private-result-oram/oram/commit",
             ),
@@ -1618,6 +1650,10 @@ mod tests {
                 "root-hash-sentinel",
                 "leaf-label-sentinel",
                 "hnsw-query-leaf-sentinel",
+                "hnsw-query-proof-sentinel",
+                "hnsw-query-proofValue-sentinel",
+                "hnsw-query-access-volume-sentinel",
+                "hnsw-query-accessVolume-sentinel",
                 "updated-bucket-sentinel",
                 "accessVolume-sentinel",
                 "accessVolumeCount-sentinel",
@@ -1696,6 +1732,10 @@ mod tests {
                 "result-bucket-id-sentinel",
                 "result-root-hash-sentinel",
                 "result-query-bucket-sentinel",
+                "result-query-proof-values-sentinel",
+                "result-query-proofValue-sentinel",
+                "result-query-access-volume-count-sentinel",
+                "result-query-accessVolumeLength-sentinel",
                 "result-updated-bucket-sentinel",
                 "result-session-id-sentinel",
                 "result-query-session-sentinel",
