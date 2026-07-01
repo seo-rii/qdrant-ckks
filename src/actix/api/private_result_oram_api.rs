@@ -2750,6 +2750,9 @@ mod private_result_oram_rest_tests {
             assert!(!read_wrong_root_error.contains(&fixture.buckets[0].ciphertext));
 
             let read_root_sentinel = "AAAA";
+            let malformed_read_root_signature = fixture.read_signature(&read_bucket_ids);
+            let malformed_read_root_signature_key_id = malformed_read_root_signature.key_id.clone();
+            let malformed_read_root_signature_sig = malformed_read_root_signature.sig.clone();
             let malformed_read_root_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
@@ -2757,12 +2760,24 @@ mod private_result_oram_rest_tests {
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: read_root_sentinel.to_string(),
                     bucket_ids: read_bucket_ids.clone(),
-                    read_signature: fixture.read_signature(&read_bucket_ids),
+                    read_signature: malformed_read_root_signature,
                 },
                 StatusCode::BAD_REQUEST,
                 "root_hash must be a base64url sha256 value"
             );
             assert!(!malformed_read_root_error.contains(read_root_sentinel));
+            for sentinel in [
+                session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                malformed_read_root_signature_key_id.as_str(),
+                malformed_read_root_signature_sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !malformed_read_root_error.contains(sentinel),
+                    "{malformed_read_root_error}"
+                );
+            }
 
             let wrong_read_signature = fixture.read_signature(&[0, 1, 4, 0, 1, 3]);
             let invalid_read_signature_error = post_json_error_contains!(
@@ -2777,7 +2792,18 @@ mod private_result_oram_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "read_buckets signature verification failed"
             );
-            assert!(!invalid_read_signature_error.contains(&wrong_read_signature.sig));
+            for sentinel in [
+                session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                wrong_read_signature.key_id.as_str(),
+                wrong_read_signature.sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !invalid_read_signature_error.contains(sentinel),
+                    "{invalid_read_signature_error}"
+                );
+            }
 
             let invalid_signature_bad_path_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
@@ -2791,8 +2817,18 @@ mod private_result_oram_rest_tests {
                 StatusCode::BAD_REQUEST,
                 "read_buckets signature verification failed"
             );
-            assert!(!invalid_signature_bad_path_error.contains(&wrong_read_signature.sig));
-            assert!(!invalid_signature_bad_path_error.contains(&fixture.buckets[0].ciphertext));
+            for sentinel in [
+                session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                wrong_read_signature.key_id.as_str(),
+                wrong_read_signature.sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !invalid_signature_bad_path_error.contains(sentinel),
+                    "{invalid_signature_bad_path_error}"
+                );
+            }
             assert!(!invalid_signature_bad_path_error.contains("valid ORAM paths"));
 
             let invalid_signature_out_of_range_error = post_json_error_contains!(

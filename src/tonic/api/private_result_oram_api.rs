@@ -3010,6 +3010,9 @@ mod private_result_oram_grpc_tests {
             );
 
             let read_root_sentinel = "AAAA";
+            let malformed_read_root_signature = fixture.read_signature(&read_bucket_ids);
+            let malformed_read_root_signature_key_id = malformed_read_root_signature.key_id.clone();
+            let malformed_read_root_signature_sig = malformed_read_root_signature.sig.clone();
             let malformed_read_root_err = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::ReadPrivateResultOramBucketsRequest {
@@ -3018,9 +3021,7 @@ mod private_result_oram_grpc_tests {
                     index_epoch: BASE_EPOCH,
                     root_hash: read_root_sentinel.to_string(),
                     bucket_ids: read_bucket_ids.clone(),
-                    read_signature: Some(signature_to_proto(
-                        fixture.read_signature(&read_bucket_ids),
-                    )),
+                    read_signature: Some(signature_to_proto(malformed_read_root_signature)),
                 }),
             )
             .await
@@ -3036,6 +3037,19 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(read_root_sentinel)
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                malformed_read_root_signature_key_id.as_str(),
+                malformed_read_root_signature_sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !malformed_read_root_err.message().contains(sentinel),
+                    "{}",
+                    malformed_read_root_err.message()
+                );
+            }
 
             let wrong_read_signature = fixture.read_signature(&[0, 1, 4, 0, 1, 3]);
             let invalid_read_signature = PrivateResultOram::read_private_result_oram_buckets(
@@ -3057,11 +3071,19 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains("read_buckets signature verification failed")
             );
-            assert!(
-                !invalid_read_signature
-                    .message()
-                    .contains(&wrong_read_signature.sig)
-            );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                wrong_read_signature.key_id.as_str(),
+                wrong_read_signature.sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !invalid_read_signature.message().contains(sentinel),
+                    "{}",
+                    invalid_read_signature.message()
+                );
+            }
 
             let invalid_signature_bad_path = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
@@ -3082,20 +3104,23 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains("read_buckets signature verification failed")
             );
-            assert!(
-                !invalid_signature_bad_path
-                    .message()
-                    .contains(&wrong_read_signature.sig)
-            );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                wrong_read_signature.key_id.as_str(),
+                wrong_read_signature.sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !invalid_signature_bad_path.message().contains(sentinel),
+                    "{}",
+                    invalid_signature_bad_path.message()
+                );
+            }
             assert!(
                 !invalid_signature_bad_path
                     .message()
                     .contains("valid ORAM paths")
-            );
-            assert!(
-                !invalid_signature_bad_path
-                    .message()
-                    .contains(&fixture.buckets[0].ciphertext)
             );
 
             let invalid_signature_out_of_range =
