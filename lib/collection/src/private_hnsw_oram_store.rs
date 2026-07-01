@@ -4599,6 +4599,17 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("out of range"));
         assert!(!rendered.contains("4"), "{rendered}");
+
+        let sentinel_bucket_id = 987_654_321_u64;
+        let err = store
+            .read_merkle_path_batch(&[sentinel_bucket_id], 42, &root, 4)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("out of range"));
+        assert!(
+            !rendered.contains(&sentinel_bucket_id.to_string()),
+            "{rendered}"
+        );
     }
 
     #[test]
