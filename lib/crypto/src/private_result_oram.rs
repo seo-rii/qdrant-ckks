@@ -2654,6 +2654,22 @@ pub fn sign_private_result_oram_read_buckets_for_manifest(
     manifest: &PrivateResultOramManifest,
     bucket_ids: &[u64],
 ) -> Result<PrivateResultOramSignature, PrivateResultOramError> {
+    sign_private_result_oram_read_buckets_for_manifest_context(
+        key_pair,
+        manifest,
+        manifest.index_epoch,
+        &manifest.root_hash,
+        bucket_ids,
+    )
+}
+
+pub fn sign_private_result_oram_read_buckets_for_manifest_context(
+    key_pair: &Ed25519KeyPair,
+    manifest: &PrivateResultOramManifest,
+    index_epoch: u64,
+    root_hash: &str,
+    bucket_ids: &[u64],
+) -> Result<PrivateResultOramSignature, PrivateResultOramError> {
     validate_private_result_oram_manifest_shape(manifest)?;
     let path_len = usize::try_from(manifest.oram.tree_height)
         .ok()
@@ -2680,8 +2696,8 @@ pub fn sign_private_result_oram_read_buckets_for_manifest(
             rk_epoch: manifest.rk_epoch,
             signing_key_id: &manifest.owner_signing_key_id,
         },
-        manifest.index_epoch,
-        &manifest.root_hash,
+        index_epoch,
+        root_hash,
         manifest.bucket_count,
         bucket_ids,
     )
@@ -8852,6 +8868,35 @@ mod tests {
         .unwrap();
 
         assert_eq!(signature.key_id, manifest.owner_signing_key_id);
+        let live_root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
+        let live_signature = sign_private_result_oram_read_buckets_for_manifest_context(
+            &key_pair,
+            &manifest,
+            manifest.index_epoch + 1,
+            &live_root_hash,
+            &bucket_ids,
+        )
+        .unwrap();
+        validate_private_result_oram_read_buckets_signature(
+            PrivateResultOramReadBucketsSignatureInput {
+                collection_id: &manifest.collection_id,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                index_epoch: manifest.index_epoch + 1,
+                root_hash: &live_root_hash,
+                bucket_count: manifest.bucket_count,
+                bucket_ids: &bucket_ids,
+                signature_alg: &live_signature.alg,
+                signature_key_id: &live_signature.key_id,
+            },
+            &live_signature.sig,
+            PrivateResultOramSignatureVerification {
+                expected_key_id: &manifest.owner_signing_key_id,
+                public_key: key_pair.public_key().as_ref(),
+            },
+        )
+        .unwrap();
         assert_eq!(
             sign_private_result_oram_read_buckets_for_manifest(
                 &key_pair,

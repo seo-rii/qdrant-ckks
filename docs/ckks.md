@@ -1086,10 +1086,13 @@ message/sign/verify helpers that bind collection/key lineage, index epoch,
 root hash, bucket count, and the exact padded bucket-id sequence; REST and gRPC
 `read_buckets` handlers now require that signature before encrypted buckets are
 read or detailed path-shape errors are returned.
-`sign_private_result_oram_read_buckets_for_manifest` derives that read signature
-context from the signed manifest and enforces the fixed
-`oram.path_batch_size * (oram.tree_height + 1)` bucket-id volume and canonical
-Path ORAM heap path shape before signing.
+`sign_private_result_oram_read_buckets_for_manifest_context` derives that read
+signature context from the signed manifest lineage while taking the live index
+epoch/root explicitly. It enforces the fixed `oram.path_batch_size *
+(oram.tree_height + 1)` bucket-id volume and canonical Path ORAM heap path shape
+before signing. `sign_private_result_oram_read_buckets_for_manifest` is the
+convenience wrapper for the first read after upload or after an optional
+manifest refresh, when the signed manifest epoch/root is the live read context.
 The planner also rejects missing token positions, duplicate fetch tokens,
 duplicate token-position entries, and out-of-range leaves before a server
 request is built. The crypto crate also has a client-only private result ORAM
@@ -1164,8 +1167,9 @@ refresh: it uses the signed manifest epoch/root/bucket_count as the old commit
 context.
 `sign_private_result_oram_manifest` and
 `sign_private_result_oram_commit` provide the matching SDK-side Ed25519 signing
-helpers, while `sign_private_result_oram_read_buckets_for_manifest` signs
-manifest-bound fixed-size `read_buckets` requests. `PrivateResultOramUploadBundle` and
+helpers, while `sign_private_result_oram_read_buckets_for_manifest_context`
+signs manifest-lineage-bound fixed-size `read_buckets` requests with a live
+epoch/root. `PrivateResultOramUploadBundle` and
 `package_private_result_oram_upload_bundle` package a signed manifest with a
 complete ordered bucket set whose commitments match the manifest root.
 `validate_private_result_oram_upload_bundle` and the bundle's
@@ -1391,10 +1395,13 @@ The collection-local private HNSW ORAM store exposes matching initial upload
 bundle entrypoints; the signed variant verifies the owner Ed25519 manifest
 signature before creating the private index layout, so a bad signature leaves
 `epochs/current.json` absent and does not write bucket files.
-For ORAM path reads, `sign_private_hnsw_oram_read_paths_for_manifest` derives
-the signed read context from the current manifest and enforces the manifest's
-fixed `oram.path_batch_size` and tree-bounded leaf labels before producing the
-Ed25519 request signature.
+For ORAM path reads, `sign_private_hnsw_oram_read_paths_for_manifest_context`
+derives the signed read context from the signed manifest lineage plus the live
+epoch/root and enforces the manifest's fixed `oram.path_batch_size` and
+tree-bounded leaf labels before producing the Ed25519 request signature.
+`sign_private_hnsw_oram_read_paths_for_manifest` is the convenience wrapper for
+the first read after upload or after an optional manifest refresh, when the
+manifest epoch/root is the live read context.
 Before submitting an ORAM writeback, clients can call
 `plan_private_hnsw_oram_commit_for_manifest_context` with the live old
 epoch/root, current leaf commitments, and signed manifest to produce signature

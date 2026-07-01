@@ -3774,6 +3774,22 @@ pub fn sign_private_hnsw_oram_read_paths_for_manifest(
     manifest: &PrivateHnswOramManifest,
     paths: &[String],
 ) -> Result<PrivateHnswOramSignature, PrivateHnswClientError> {
+    sign_private_hnsw_oram_read_paths_for_manifest_context(
+        key_pair,
+        manifest,
+        manifest.index_epoch,
+        &manifest.root_hash,
+        paths,
+    )
+}
+
+pub fn sign_private_hnsw_oram_read_paths_for_manifest_context(
+    key_pair: &Ed25519KeyPair,
+    manifest: &PrivateHnswOramManifest,
+    index_epoch: u64,
+    root_hash: &str,
+    paths: &[String],
+) -> Result<PrivateHnswOramSignature, PrivateHnswClientError> {
     validate_private_hnsw_oram_manifest_shape(manifest)
         .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("manifest"))?;
     let mut seen_paths = BTreeSet::new();
@@ -3795,8 +3811,8 @@ pub fn sign_private_hnsw_oram_read_paths_for_manifest(
             rk_epoch: manifest.rk_epoch,
             signing_key_id: &manifest.owner_signing_key_id,
         },
-        manifest.index_epoch,
-        &manifest.root_hash,
+        index_epoch,
+        root_hash,
         paths,
         manifest.oram.path_batch_size,
         true,
@@ -6965,6 +6981,37 @@ mod tests {
         .unwrap();
 
         assert_eq!(signature.key_id, manifest.owner_signing_key_id);
+        let live_root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
+        let live_signature = sign_private_hnsw_oram_read_paths_for_manifest_context(
+            &key_pair,
+            &manifest,
+            manifest.index_epoch + 1,
+            &live_root_hash,
+            &paths,
+        )
+        .unwrap();
+        validate_private_hnsw_oram_read_paths_signature(
+            PrivateHnswOramReadPathsSignatureInput {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                index_epoch: manifest.index_epoch + 1,
+                root_hash: &live_root_hash,
+                paths: &path_refs,
+                requested_paths: manifest.oram.path_batch_size,
+                dummy_paths_included: true,
+                signature_alg: &live_signature.alg,
+                signature_key_id: &live_signature.key_id,
+            },
+            &live_signature.sig,
+            PrivateHnswSignatureVerification {
+                expected_key_id: &manifest.owner_signing_key_id,
+                public_key: key_pair.public_key().as_ref(),
+            },
+        )
+        .unwrap();
         assert_eq!(
             sign_private_hnsw_oram_read_paths_for_manifest(&key_pair, &manifest, &paths[..1]),
             Err(PrivateHnswClientError::InvalidCommitSignatureContext(
