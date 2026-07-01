@@ -1694,6 +1694,12 @@ fn private_oram_snapshot_layout_error_contains_sensitive_marker(rendered: &str) 
         "visited_node_ids",
     ];
     const COMPACT_SENSITIVE_MARKERS: &[&str] = &[
+        "accessvolume",
+        "accessvolumecount",
+        "accessvolumecounts",
+        "accessvolumelen",
+        "accessvolumelength",
+        "accessvolumelengths",
         "accessedleaflabels",
         "bucketid",
         "bucketids",
@@ -1710,9 +1716,13 @@ fn private_oram_snapshot_layout_error_contains_sensitive_marker(rendered: &str) 
         "payloadfetchtoken",
         "payloadfetchtokens",
         "pointtoken",
+        "proofvalue",
+        "proofvalues",
         "readbucketid",
         "readbucketids",
         "readsignature",
+        "resultid",
+        "resultids",
         "roothash",
         "siblinghash",
         "visitednodeid",
@@ -2578,12 +2588,23 @@ mod tests {
             "result-camel-read-bucket-id",
             "result-camel-payload-token",
             "result-camel-sibling-hash",
+            "result-camel-proof-value",
+            "result-camel-access-volume-length",
+            "result-camel-result-id",
+            "result-camel-visited-node",
         ];
         let result_camel = sanitize_private_result_oram_snapshot_layout_error(
             temp_dir.path(),
             CollectionError::bad_request(format!(
-                "private result ORAM readBucketIds {} payloadFetchTokens {} siblingHash {}",
-                result_camel_markers[0], result_camel_markers[1], result_camel_markers[2],
+                "private result ORAM readBucketIds {} payloadFetchTokens {} siblingHash {} \
+                 proofValue {} accessVolumeLength {} resultIds {} visitedNodeIds {}",
+                result_camel_markers[0],
+                result_camel_markers[1],
+                result_camel_markers[2],
+                result_camel_markers[3],
+                result_camel_markers[4],
+                result_camel_markers[5],
+                result_camel_markers[6],
             )),
         )
         .to_string();
