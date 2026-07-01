@@ -5559,6 +5559,7 @@ mod private_hnsw_grpc_tests {
             .unwrap()
             .into_inner();
             assert_eq!(commit_epoch.index_epoch, NEXT_EPOCH);
+            assert_eq!(commit_epoch.root_hash, search_run.commit_plan.new_root_hash);
             let err = PrivateHnswOram::commit_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramCommitRequest {
@@ -5735,6 +5736,7 @@ mod private_hnsw_grpc_tests {
             .unwrap()
             .into_inner();
             assert_eq!(reopened.index_epoch, NEXT_EPOCH);
+            assert_eq!(reopened.root_hash, search_run.commit_plan.new_root_hash);
             let closed = PrivateHnswOram::close_private_hnsw_session(
                 &service,
                 Request::new(grpc::ClosePrivateHnswSessionRequest {

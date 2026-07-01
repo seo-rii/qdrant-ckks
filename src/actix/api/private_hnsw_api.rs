@@ -5134,6 +5134,10 @@ mod private_hnsw_rest_tests {
                 }
             );
             assert_eq!(commit_result["index_epoch"], NEXT_EPOCH);
+            assert_eq!(
+                commit_result["root_hash"],
+                search_run.commit_plan.new_root_hash
+            );
             post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",
                 OramCommitRequest {
@@ -5284,6 +5288,10 @@ mod private_hnsw_rest_tests {
                 }
             );
             assert_eq!(reopened_session["index_epoch"], NEXT_EPOCH);
+            assert_eq!(
+                reopened_session["root_hash"],
+                search_run.commit_plan.new_root_hash
+            );
             let reopened_session_id = reopened_session["session_id"].as_str().unwrap();
             let close_request = actix_test::TestRequest::post()
                 .uri(&format!(
