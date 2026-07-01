@@ -2809,6 +2809,18 @@ mod tests {
             json!("single-read-path-label-a"),
         );
         insert_test_json_field(
+            &mut first,
+            &["read_buckets"],
+            "access_volume",
+            json!("access-volume-a"),
+        );
+        insert_test_json_field(
+            &mut first,
+            &["read_buckets"],
+            "proof_value",
+            json!("proof-value-a"),
+        );
+        insert_test_json_field(
             &mut second,
             &["read_buckets"],
             "read_path",
@@ -2819,6 +2831,18 @@ mod tests {
             &["read_buckets"],
             "read_path_label",
             json!("single-read-path-label-b"),
+        );
+        insert_test_json_field(
+            &mut second,
+            &["read_buckets"],
+            "access_volume",
+            json!("access-volume-b"),
+        );
+        insert_test_json_field(
+            &mut second,
+            &["read_buckets"],
+            "proof_value",
+            json!("proof-value-b"),
         );
         redact_sensitive_log_fields(&mut first);
         redact_sensitive_log_fields(&mut second);
@@ -3003,6 +3027,18 @@ mod tests {
             json!("private-oram-camel-single-read-path-label-a"),
         );
         insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "accessVolume",
+            json!("private-oram-camel-access-volume-a"),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "proofValue",
+            json!("private-oram-camel-proof-value-a"),
+        );
+        insert_test_json_field(
             &mut camel_second,
             &["readBuckets"],
             "readPath",
@@ -3013,6 +3049,18 @@ mod tests {
             &["readBuckets"],
             "readPathLabel",
             json!("private-oram-camel-single-read-path-label-b"),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "accessVolume",
+            json!("private-oram-camel-access-volume-b"),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "proofValue",
+            json!("private-oram-camel-proof-value-b"),
         );
         redact_sensitive_log_fields(&mut camel_first);
         redact_sensitive_log_fields(&mut camel_second);
