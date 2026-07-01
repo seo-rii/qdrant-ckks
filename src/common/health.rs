@@ -539,6 +539,12 @@ mod tests {
              state_ciphertext=state-ciphertext-snake-sentinel, \
              state_ciphertext_hash=state-ciphertext-hash-snake-sentinel, \
              state_ciphertext_hashes=state-ciphertext-hashes-snake-sentinel, \
+             token_maps=token-maps-snake-sentinel, \
+             token_map_snapshots=token-map-snapshots-snake-sentinel, \
+             tokenMapBackup=token-map-backup-camel-singular-sentinel, \
+             token_map_backup=token-map-backup-snake-singular-sentinel, \
+             token_map_backups=token-map-backups-snake-sentinel, \
+             tokenMapBackups=token-map-backups-camel-sentinel, \
              token_position_maps=token-position-maps-snake-sentinel, \
              token_position_map_snapshots=token-position-map-snapshots-snake-sentinel, \
              tokenPositionMapBackup=token-position-map-backup-camel-singular-sentinel, \
@@ -626,6 +632,12 @@ mod tests {
         assert!(!message.contains("state-ciphertext-snake-sentinel"));
         assert!(!message.contains("state-ciphertext-hash-snake-sentinel"));
         assert!(!message.contains("state-ciphertext-hashes-snake-sentinel"));
+        assert!(!message.contains("token-maps-snake-sentinel"));
+        assert!(!message.contains("token-map-snapshots-snake-sentinel"));
+        assert!(!message.contains("token-map-backup-camel-singular-sentinel"));
+        assert!(!message.contains("token-map-backup-snake-singular-sentinel"));
+        assert!(!message.contains("token-map-backups-snake-sentinel"));
+        assert!(!message.contains("token-map-backups-camel-sentinel"));
         assert!(!message.contains("token-position-maps-snake-sentinel"));
         assert!(!message.contains("token-position-map-snapshots-snake-sentinel"));
         assert!(!message.contains("token-position-map-backup-camel-singular-sentinel"));

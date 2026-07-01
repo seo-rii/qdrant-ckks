@@ -525,6 +525,23 @@ mod tests {
                 },
             ]),
         );
+        unsafe_store_name.add_param(
+            std::borrow::Cow::from("token_map_aliases"),
+            &serde_json::json!([
+                "tokenMap.json",
+                "tokenMaps.json",
+                "token_map.json",
+                "token_maps.json",
+                "tokenMapBackup.json",
+                "tokenMapBackups.json",
+                "token_map_backup.json",
+                "token_map_backups.json",
+                "tokenMapSnapshot.json",
+                "tokenMapSnapshots.json",
+                "token_map_snapshot.json",
+                "token_map_snapshots.json",
+            ]),
+        );
         let unsafe_store_name_message = describe_error(&unsafe_store_name);
         assert!(unsafe_store_name_message.contains("safe non-client-state store path"));
         assert!(!unsafe_store_name_message.contains("stash_private_hnsw"));
@@ -620,6 +637,18 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("state_ciphertext_hashes"));
         assert!(!unsafe_store_name_message.contains("state_ciphertext_sha256"));
         assert!(!unsafe_store_name_message.contains("state_ciphertexts_sha256"));
+        assert!(!unsafe_store_name_message.contains("tokenMap"));
+        assert!(!unsafe_store_name_message.contains("tokenMaps"));
+        assert!(!unsafe_store_name_message.contains("token_map"));
+        assert!(!unsafe_store_name_message.contains("token_maps"));
+        assert!(!unsafe_store_name_message.contains("tokenMapBackup"));
+        assert!(!unsafe_store_name_message.contains("tokenMapBackups"));
+        assert!(!unsafe_store_name_message.contains("token_map_backup"));
+        assert!(!unsafe_store_name_message.contains("token_map_backups"));
+        assert!(!unsafe_store_name_message.contains("tokenMapSnapshot"));
+        assert!(!unsafe_store_name_message.contains("tokenMapSnapshots"));
+        assert!(!unsafe_store_name_message.contains("token_map_snapshot"));
+        assert!(!unsafe_store_name_message.contains("token_map_snapshots"));
         assert!(!unsafe_store_name_message.contains("tokenPositionMap"));
         assert!(!unsafe_store_name_message.contains("tokenPositionMaps"));
         assert!(!unsafe_store_name_message.contains("token_position_map"));

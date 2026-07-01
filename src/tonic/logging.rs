@@ -441,6 +441,12 @@ mod tests {
              stash=stash-sentinel \
              stashBackup=stash-backup-sentinel \
              stashBackups=stash-backups-camel-sentinel \
+             tokenMap=token-map-camel-sentinel \
+             token_map=token-map-snake-sentinel \
+             tokenMapBackup=token-map-backup-camel-sentinel \
+             token_map_backup=token-map-backup-snake-sentinel \
+             tokenMapBackups=token-map-backups-camel-sentinel \
+             token_map_backups=token-map-backups-snake-sentinel \
              tokenPositionMap=token-position-map-camel-sentinel \
              token_position_map=token-position-map-snake-sentinel \
              tokenPositionMapBackup=token-position-map-backup-camel-sentinel \
@@ -688,6 +694,12 @@ mod tests {
         assert!(!rendered.contains("stash-sentinel"));
         assert!(!rendered.contains("stash-backup-sentinel"));
         assert!(!rendered.contains("stash-backups-camel-sentinel"));
+        assert!(!rendered.contains("token-map-camel-sentinel"));
+        assert!(!rendered.contains("token-map-snake-sentinel"));
+        assert!(!rendered.contains("token-map-backup-camel-sentinel"));
+        assert!(!rendered.contains("token-map-backup-snake-sentinel"));
+        assert!(!rendered.contains("token-map-backups-camel-sentinel"));
+        assert!(!rendered.contains("token-map-backups-snake-sentinel"));
         assert!(!rendered.contains("token-position-map-camel-sentinel"));
         assert!(!rendered.contains("token-position-map-snake-sentinel"));
         assert!(!rendered.contains("token-position-map-backup-camel-sentinel"));
