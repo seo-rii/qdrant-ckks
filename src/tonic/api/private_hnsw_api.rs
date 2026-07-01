@@ -5739,6 +5739,38 @@ mod private_hnsw_grpc_tests {
             .into_inner();
             assert_eq!(reopened.index_epoch, NEXT_EPOCH);
             assert_eq!(reopened.root_hash, search_run.commit_plan.new_root_hash);
+            let reopened_read_paths = vec![fixture.entry_leaf_label()];
+            let reopened_read_signature = fixture.sign_read_paths_for_epoch(
+                NEXT_EPOCH,
+                &search_run.commit_plan.new_root_hash,
+                &reopened_read_paths,
+                1,
+                true,
+            );
+            let reopened_read = PrivateHnswOram::read_private_hnsw_paths(
+                &service,
+                Request::new(grpc::OramReadPathsRequest {
+                    collection_name: COLLECTION_NAME.to_string(),
+                    vector_name: VECTOR_NAME.to_string(),
+                    session_id: reopened.session_id.clone(),
+                    index_epoch: NEXT_EPOCH,
+                    root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    paths: reopened_read_paths,
+                    padding: Some(grpc::OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    }),
+                    client_signature: Some(signature_to_proto(reopened_read_signature)),
+                }),
+            )
+            .await
+            .unwrap()
+            .into_inner();
+            assert_eq!(reopened_read.index_epoch, NEXT_EPOCH);
+            assert_eq!(
+                reopened_read.root_hash,
+                search_run.commit_plan.new_root_hash
+            );
             let closed = PrivateHnswOram::close_private_hnsw_session(
                 &service,
                 Request::new(grpc::ClosePrivateHnswSessionRequest {

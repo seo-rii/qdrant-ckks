@@ -5293,6 +5293,37 @@ mod private_hnsw_rest_tests {
                 search_run.commit_plan.new_root_hash
             );
             let reopened_session_id = reopened_session["session_id"].as_str().unwrap();
+            let reopened_read_paths = vec![fixture.entry_leaf_label()];
+            let reopened_read_signature = fixture.sign_read_paths_for_epoch(
+                NEXT_EPOCH,
+                &search_run.commit_plan.new_root_hash,
+                &reopened_read_paths,
+                1,
+                true,
+            );
+            let reopened_read = post_json_ok!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: reopened_session_id.to_string(),
+                    index_epoch: NEXT_EPOCH,
+                    root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    paths: reopened_read_paths,
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: reopened_read_signature.alg,
+                        key_id: reopened_read_signature.key_id,
+                        sig: reopened_read_signature.sig,
+                    },
+                }
+            );
+            assert_eq!(reopened_read["index_epoch"], NEXT_EPOCH);
+            assert_eq!(
+                reopened_read["root_hash"],
+                search_run.commit_plan.new_root_hash
+            );
             let close_request = actix_test::TestRequest::post()
                 .uri(&format!(
                     "/collections/docs/private-hnsw/text/session/{reopened_session_id}/close"

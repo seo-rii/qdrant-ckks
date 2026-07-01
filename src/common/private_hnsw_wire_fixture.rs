@@ -424,12 +424,29 @@ impl PrivateHnswRouteWireFixture {
         requested_paths: u32,
         dummy_paths_included: bool,
     ) -> PrivateHnswOramSignature {
+        self.sign_read_paths_for_epoch(
+            self.encrypted_build.index_epoch,
+            &self.encrypted_build.root_hash,
+            paths,
+            requested_paths,
+            dummy_paths_included,
+        )
+    }
+
+    pub(crate) fn sign_read_paths_for_epoch(
+        &self,
+        index_epoch: u64,
+        root_hash: &str,
+        paths: &[String],
+        requested_paths: u32,
+        dummy_paths_included: bool,
+    ) -> PrivateHnswOramSignature {
         if requested_paths == self.manifest.oram.path_batch_size && dummy_paths_included {
             if let Ok(signature) = sign_private_hnsw_oram_read_paths_for_manifest_context(
                 &self.signing_key,
                 &self.manifest,
-                self.encrypted_build.index_epoch,
-                &self.encrypted_build.root_hash,
+                index_epoch,
+                root_hash,
                 paths,
             ) {
                 return signature;
@@ -445,8 +462,8 @@ impl PrivateHnswRouteWireFixture {
                 rk_epoch: RK_EPOCH,
                 signing_key_id: SIGNING_KEY_ID,
             },
-            self.encrypted_build.index_epoch,
-            &self.encrypted_build.root_hash,
+            index_epoch,
+            root_hash,
             paths,
             requested_paths,
             dummy_paths_included,
