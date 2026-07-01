@@ -3194,6 +3194,7 @@ mod private_result_oram_grpc_tests {
             let unconfigured_read_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
             let mut unconfigured_read_key_signature = fixture.read_signature(&read_bucket_ids);
             unconfigured_read_key_signature.key_id = unconfigured_read_key_id_sentinel.to_string();
+            let unconfigured_read_key_signature_sig = unconfigured_read_key_signature.sig.clone();
             let unconfigured_read_key = PrivateResultOram::read_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::ReadPrivateResultOramBucketsRequest {
@@ -3219,6 +3220,18 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(unconfigured_read_key_id_sentinel)
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                unconfigured_read_key_signature_sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unconfigured_read_key.message().contains(sentinel),
+                    "{}",
+                    unconfigured_read_key.message()
+                );
+            }
 
             let malformed_read_key_id_sentinel = "result-read-signature-key!sentinel";
             let mut malformed_read_key_signature = fixture.read_signature(&read_bucket_ids);
@@ -4292,6 +4305,8 @@ mod private_result_oram_grpc_tests {
             let mut unconfigured_commit_key_signature = commit_signature.clone();
             unconfigured_commit_key_signature.key_id =
                 unconfigured_commit_key_id_sentinel.to_string();
+            let unconfigured_commit_key_signature_sig =
+                unconfigured_commit_key_signature.sig.clone();
             let unconfigured_commit_key = PrivateResultOram::commit_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::CommitPrivateResultOramBucketsRequest {
@@ -4319,6 +4334,19 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(unconfigured_commit_key_id_sentinel)
             );
+            for sentinel in [
+                session.session_id.as_str(),
+                fixture.manifest.root_hash.as_str(),
+                new_root_hash.as_str(),
+                unconfigured_commit_key_signature_sig.as_str(),
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(
+                    !unconfigured_commit_key.message().contains(sentinel),
+                    "{}",
+                    unconfigured_commit_key.message()
+                );
+            }
 
             let malformed_commit_key_id_sentinel = "result-commit-signature-key!sentinel";
             let mut malformed_commit_key_signature = commit_signature.clone();
