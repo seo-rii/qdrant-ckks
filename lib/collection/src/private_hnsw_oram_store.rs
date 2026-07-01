@@ -1512,6 +1512,12 @@ fn compact_path_component_is_client_owned_oram_state_alias(value: &str) -> bool 
             | "orampositionmaps"
             | "orampositionmapsnapshot"
             | "orampositionmapsnapshots"
+            | "tokenmap"
+            | "tokenmapbackup"
+            | "tokenmapbackups"
+            | "tokenmaps"
+            | "tokenmapsnapshot"
+            | "tokenmapsnapshots"
             | "tokenpositionmap"
             | "tokenpositionmapbackup"
             | "tokenpositionmapbackups"
@@ -2117,6 +2123,18 @@ mod tests {
             "stateCiphertextsSha256",
             "payload_fetch_token",
             "payloadFetchToken",
+            "token_map",
+            "token_maps",
+            "tokenMap",
+            "tokenMaps",
+            "token_map_backup",
+            "token_map_backups",
+            "tokenMapBackup",
+            "tokenMapBackups",
+            "token_map_snapshot",
+            "token_map_snapshots",
+            "tokenMapSnapshot",
+            "tokenMapSnapshots",
             "token_position_map",
             "token_position_maps",
             "tokenPositionMap",
