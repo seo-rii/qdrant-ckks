@@ -1199,26 +1199,9 @@ mod private_hnsw_grpc_tests {
                 assert!(!err.message().contains("client.state"));
                 assert!(!err.message().contains("position.map"));
                 assert!(!err.message().contains("stash.backup"));
-                assert!(!err.message().contains("clientStateBackup"));
-                assert!(!err.message().contains("clientStateBackups"));
-                assert!(!err.message().contains("client_state_backup"));
-                assert!(!err.message().contains("clientStateSnapshot"));
-                assert!(!err.message().contains("clientStateSnapshots"));
-                assert!(!err.message().contains("client_state_snapshot"));
-                assert!(!err.message().contains("client_state_snapshots"));
-                assert!(!err.message().contains("clientStateCiphertext"));
-                assert!(!err.message().contains("encryptedClientStateBackup"));
-                assert!(!err.message().contains("encryptedClientStateBackups"));
-                assert!(!err.message().contains("encryptedClientStateSnapshot"));
-                assert!(!err.message().contains("encryptedClientStateSnapshots"));
-                assert!(!err.message().contains("encrypted_client_state_snapshot"));
-                assert!(!err.message().contains("encrypted_client_state_snapshots"));
-                assert!(!err.message().contains("encryptedClientStateCiphertextHash"));
-                assert!(!err.message().contains("positionMapBackups"));
-                assert!(!err.message().contains("oramPositionMapBackups"));
-                assert!(!err.message().contains("stateCiphertextHash"));
-                assert!(!err.message().contains("tokenPositionMapBackups"));
-                assert!(!err.message().contains("stashBackups"));
+                for alias in PRIVATE_HNSW_CLIENT_STATE_REDACTION_ALIASES {
+                    assert!(!err.message().contains(alias));
+                }
                 assert!(!err.message().contains("private_hnsw_oram"));
                 assert!(!err.message().contains("/tmp"));
                 assert_private_hnsw_route_message_redacts(

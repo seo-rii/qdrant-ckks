@@ -1216,29 +1216,9 @@ mod private_hnsw_rest_tests {
                 assert!(!body.contains("client.state"), "{body}");
                 assert!(!body.contains("position.map"), "{body}");
                 assert!(!body.contains("stash.backup"), "{body}");
-                assert!(!body.contains("clientStateBackup"), "{body}");
-                assert!(!body.contains("clientStateBackups"), "{body}");
-                assert!(!body.contains("client_state_backup"), "{body}");
-                assert!(!body.contains("clientStateSnapshot"), "{body}");
-                assert!(!body.contains("clientStateSnapshots"), "{body}");
-                assert!(!body.contains("client_state_snapshot"), "{body}");
-                assert!(!body.contains("client_state_snapshots"), "{body}");
-                assert!(!body.contains("clientStateCiphertext"), "{body}");
-                assert!(!body.contains("encryptedClientStateBackup"), "{body}");
-                assert!(!body.contains("encryptedClientStateBackups"), "{body}");
-                assert!(!body.contains("encryptedClientStateSnapshot"), "{body}");
-                assert!(!body.contains("encryptedClientStateSnapshots"), "{body}");
-                assert!(!body.contains("encrypted_client_state_snapshot"), "{body}");
-                assert!(!body.contains("encrypted_client_state_snapshots"), "{body}");
-                assert!(
-                    !body.contains("encryptedClientStateCiphertextHash"),
-                    "{body}"
-                );
-                assert!(!body.contains("positionMapBackups"), "{body}");
-                assert!(!body.contains("oramPositionMapBackups"), "{body}");
-                assert!(!body.contains("stateCiphertextHash"), "{body}");
-                assert!(!body.contains("tokenPositionMapBackups"), "{body}");
-                assert!(!body.contains("stashBackups"), "{body}");
+                for alias in PRIVATE_HNSW_CLIENT_STATE_REDACTION_ALIASES {
+                    assert!(!body.contains(alias), "{body}");
+                }
                 assert!(!body.contains("private_hnsw_oram"), "{body}");
                 assert!(!body.contains("/tmp"), "{body}");
                 assert_private_hnsw_route_error_redacts(
