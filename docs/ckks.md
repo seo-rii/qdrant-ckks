@@ -770,13 +770,15 @@ race a client-led traversal/writeback session. The upload path also holds a
 registry write-window guard while manifest or bucket files are being written;
 same-index session opens and duplicate uploads fail closed until that guard is
 released.
-Because the manifest signs the current index epoch/root, a writeback commit
-that advances epoch/root must be followed by a freshly signed manifest upload
-before a later session can open at that new epoch. REST and gRPC live fixtures
-now close the committed session, verify that re-open fails against the stale
-manifest, verify that the closed session id cannot be reused for `read_paths`,
-verify that unknown close-session ids are not reflected in error responses,
-upload a refreshed signed manifest, and then re-open successfully.
+The manifest signs the upload anchor epoch/root and non-secret index policy,
+while `epochs/current.json`, Merkle metadata, and CAS are authoritative for the
+live epoch/root after writeback commits. A writeback commit that advances
+epoch/root does not require Qdrant to receive a freshly signed manifest before a
+later session can open at that new epoch. REST and gRPC live fixtures now close
+the committed session, verify that the closed session id cannot be reused for
+`read_paths`, verify that unknown close-session ids are not reflected in error
+responses, and re-open successfully at the committed epoch without manifest
+refresh.
 For initial signed manifest upload, Qdrant writes the manifest/signature before
 publishing `epochs/current.json`, so a manifest-store write failure does not
 leave a current epoch without a corresponding signed manifest.
@@ -787,9 +789,9 @@ past the stored manifest and the uploaded manifest matches the new current
 epoch/root.
 Unknown session id handling for `read_paths`, `commit`, and `close` returns
 sanitized errors without echoing the submitted session id.
-SDKs should use `refresh_private_hnsw_oram_manifest_for_commit` or
-`sign_private_hnsw_oram_manifest_refresh` so the refresh is bound to the commit
-plan's old epoch/root before a new manifest is signed.
+SDKs may use `refresh_private_hnsw_oram_manifest_for_commit` or
+`sign_private_hnsw_oram_manifest_refresh` when they want an updated signed
+manifest body; the server does not require that refresh for session reopen.
 Before the first signed manifest upload, REST and gRPC manifest read, bucket
 upload, and session open calls fail closed with a sanitized `NotFound`
 response; they do not surface collection-local private ORAM paths. Corrupt
@@ -1202,8 +1204,8 @@ bucket ids or bucket epochs. Current-epoch and Merkle tree context errors are
 also fixed messages without stored/requested epoch, bucket-count, or
 unsupported-version values. Its file/directory hardening helpers also avoid
 reflecting collection-local paths, temp filenames, symlink targets, or OS error
-strings. The writeback helper preflights stale current
-epochs and manifest epoch/root context before bucket/Merkle writes. It rejects
+strings. The writeback helper preflights stale current epochs, bucket count, and
+bucket commitment context before bucket/Merkle writes. It rejects
 empty writebacks before storage state changes, and REST/gRPC commit request-size
 validation allows at most the manifest `bucket_count` updated buckets so
 multi-batch fixed result fetches can be committed without exceeding a
@@ -1391,12 +1393,13 @@ current signed manifest, updated bucket ciphertext hashes,
 collection/vector/key lineage, and proposed bucket epoch before producing
 signature bucket refs. The planner enforces the same fixed writeback budget as
 the server commit guard and rejects malformed manifest context before bucket
-commitment planning. After the writeback commit succeeds, clients can call
-`refresh_private_hnsw_oram_manifest_for_commit` to derive the next signed
+commitment planning. After the writeback commit succeeds, clients can optionally
+call `refresh_private_hnsw_oram_manifest_for_commit` to derive the next signed
 manifest body from the commit plan, or
 `sign_private_hnsw_oram_manifest_refresh` to derive and sign it in one step;
 both first validate the current manifest shape and reject a plan whose old
-epoch/root does not match it.
+epoch/root does not match it. Session open does not require this refresh because
+the live epoch/root is tracked by current epoch CAS and Merkle metadata.
 The server-side private HNSW tests now package a tiny SDK-built encrypted index,
 sign its manifest, and verify that the initial
 bucket upload bundle satisfies the same manifest epoch/root and Merkle
@@ -1411,9 +1414,9 @@ buckets and a Merkle path batch proof into the SDK verifier, so proof-bearing
 wire responses are checked before bucket decryption. Dispatcher-backed REST and
 gRPC live route tests now create encrypted collections with stable UUIDs, upload
 the SDK manifest and bucket bundle through the private HNSW APIs, open sessions,
-sign live `read_paths` requests, verify responses with the SDK Merkle verifier, commit
-writeback buckets, close the sessions, refresh the signed manifest at the
-committed epoch/root, and re-open at the new epoch. Initial manifest upload
+sign live `read_paths` requests, verify responses with the SDK Merkle verifier,
+commit writeback buckets, close the sessions, and re-open at the new epoch
+without refreshing the signed manifest. Initial manifest upload
 creates the private epoch layout when no current epoch exists; repeated uploads
 still require the current epoch/root to match, and a mismatched upload leaves
 the stored current epoch untouched. ORAM commits may carry unchanged

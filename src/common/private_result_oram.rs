@@ -674,11 +674,12 @@ pub async fn do_open_private_result_oram_session(
     let current_epoch = store
         .read_current_epoch()
         .map_err(private_result_oram_epoch_store_error)?;
-    if current_epoch.index_epoch != manifest_epoch.epoch
-        || current_epoch.root_hash != manifest.root_hash
+    if current_epoch.index_epoch < manifest_epoch.epoch
+        || (current_epoch.index_epoch == manifest_epoch.epoch
+            && current_epoch.root_hash != manifest.root_hash)
     {
         return Err(StorageError::bad_request(
-            "private result ORAM manifest epoch/root does not match current epoch",
+            "private result ORAM current epoch is inconsistent with manifest epoch",
         ));
     }
     if desired_epoch != current_epoch.index_epoch {
