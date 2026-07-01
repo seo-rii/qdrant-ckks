@@ -311,6 +311,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "access_paths"
                         | "access_count"
                         | "access_counts"
+                        | "access_volume"
+                        | "access_volume_count"
+                        | "access_volume_counts"
+                        | "access_volume_len"
+                        | "access_volume_length"
+                        | "access_volume_lengths"
                         | "block_plaintext"
                         | "block_plaintexts"
                         | "bucket_commitment"
@@ -636,6 +642,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "accesspaths"
                         | "accesscount"
                         | "accesscounts"
+                        | "accessvolume"
+                        | "accessvolumecount"
+                        | "accessvolumecounts"
+                        | "accessvolumelen"
+                        | "accessvolumelength"
+                        | "accessvolumelengths"
                         | "blockplaintext"
                         | "blockplaintexts"
                         | "bucketcommitment"
@@ -1342,6 +1354,14 @@ mod tests {
             json!("qdrant-sec-private-oram-proof-value-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["proofValue"] =
             json!("qdrant-sec-private-oram-camel-proof-value-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["access_volume"] =
+            json!("qdrant-sec-private-hnsw-access-volume-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["accessVolume"] =
+            json!("qdrant-sec-private-hnsw-camel-access-volume-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["accessVolumeCount"] =
+            json!("qdrant-sec-private-hnsw-camel-access-volume-count-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["access_volume_length"] =
+            json!("qdrant-sec-private-hnsw-access-volume-length-log-sentinel");
         let mut private_hnsw_graph = json!({
             "private_hnsw": {
                 "node_id": "qdrant-sec-private-hnsw-node-id-log-sentinel",
@@ -2006,6 +2026,14 @@ mod tests {
                 json!("qdrant-sec-private-oram-count-log-sentinel-access-count"),
             ),
             (
+                "accessVolume",
+                json!("qdrant-sec-private-oram-count-log-sentinel-access-volume"),
+            ),
+            (
+                "access_volume_length",
+                json!("qdrant-sec-private-oram-count-log-sentinel-access-volume-length"),
+            ),
+            (
                 "tokenCount",
                 json!("qdrant-sec-private-oram-count-log-sentinel-token-count"),
             ),
@@ -2051,6 +2079,10 @@ mod tests {
             "qdrant-sec-private-hnsw-path-log-sentinel",
             "qdrant-sec-private-hnsw-access-path-log-sentinel",
             "qdrant-sec-private-hnsw-camel-access-path-log-sentinel",
+            "qdrant-sec-private-hnsw-access-volume-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-access-volume-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-access-volume-count-log-sentinel",
+            "qdrant-sec-private-hnsw-access-volume-length-log-sentinel",
             "qdrant-sec-private-hnsw-root-hash-log-sentinel",
             "qdrant-sec-private-hnsw-camel-root-hash-log-sentinel",
             "qdrant-sec-private-hnsw-old-root-hash-log-sentinel",
