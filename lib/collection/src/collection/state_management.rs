@@ -581,7 +581,7 @@ mod tests {
                         binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
                     },
                     EncryptionRuleRef {
-                        id: "tokenPositionMapBackup.json".to_string(),
+                        id: "tokenMapBackup.json".to_string(),
                         selector: EncryptionSelector::PayloadPaths {
                             paths: vec![
                                 "stashBackup.json".to_string(),
@@ -595,6 +595,9 @@ mod tests {
                                 "state_ciphertext_hashes.json".to_string(),
                                 "state_ciphertext_sha256.json".to_string(),
                                 "state_ciphertexts_sha256.json".to_string(),
+                                "tokenMapBackups.json".to_string(),
+                                "token_map_backup.json".to_string(),
+                                "token_map_backups.json".to_string(),
                                 "tokenPositionMapBackups.json".to_string(),
                                 "token_position_map_backup.json".to_string(),
                                 "token_position_map_backups.json".to_string(),
@@ -665,6 +668,10 @@ mod tests {
             "oramPositionMapBackup",
             "oramPositionMapBackups",
             "oram_position_map_backup",
+            "tokenMapBackup",
+            "tokenMapBackups",
+            "token_map_backup",
+            "token_map_backups",
             "tokenPositionMapBackup",
             "tokenPositionMapBackups",
             "token_position_map_backup",
