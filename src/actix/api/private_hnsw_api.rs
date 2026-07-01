@@ -3609,13 +3609,15 @@ mod private_hnsw_rest_tests {
             );
 
             let invalid_read_key_id_sentinel = "read-signature-key!sentinel";
+            let invalid_read_key_path = fixture.entry_leaf_label();
+            let invalid_read_key_sig = fixture.client_signature().sig;
             let invalid_read_key_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![fixture.entry_leaf_label()],
+                    paths: vec![invalid_read_key_path.clone()],
                     padding: OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
@@ -3623,7 +3625,7 @@ mod private_hnsw_rest_tests {
                     client_signature: PrivateHnswClientSignature {
                         alg: "ed25519".to_string(),
                         key_id: invalid_read_key_id_sentinel.to_string(),
-                        sig: fixture.client_signature().sig,
+                        sig: invalid_read_key_sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -3634,15 +3636,28 @@ mod private_hnsw_rest_tests {
                 !invalid_read_key_error.contains(invalid_read_key_id_sentinel),
                 "{invalid_read_key_error}"
             );
+            for sentinel in [
+                session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                invalid_read_key_path.as_str(),
+                invalid_read_key_sig.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !invalid_read_key_error.contains(sentinel),
+                    "{invalid_read_key_error}"
+                );
+            }
 
             let signature_body_sentinel = "signature!sentinel";
+            let malformed_read_signature_path = fixture.entry_leaf_label();
             let malformed_read_signature_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
                     session_id: session_id.clone(),
                     index_epoch: BASE_EPOCH,
                     root_hash: fixture.encrypted_build.root_hash.clone(),
-                    paths: vec![fixture.entry_leaf_label()],
+                    paths: vec![malformed_read_signature_path.clone()],
                     padding: OramReadPadding {
                         requested_paths: 1,
                         dummy_paths_included: true,
@@ -3660,6 +3675,18 @@ mod private_hnsw_rest_tests {
                 !malformed_read_signature_error.contains(signature_body_sentinel),
                 "{malformed_read_signature_error}"
             );
+            for sentinel in [
+                session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                malformed_read_signature_path.as_str(),
+                SIGNING_KEY_ID,
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+            ] {
+                assert!(
+                    !malformed_read_signature_error.contains(sentinel),
+                    "{malformed_read_signature_error}"
+                );
+            }
 
             let read_signature_alg_sentinel = "rsa-pss-hnsw-read-sentinel";
             let unsupported_read_paths = vec![fixture.entry_leaf_label()];
