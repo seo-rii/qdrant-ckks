@@ -1985,7 +1985,7 @@ pub fn plan_private_hnsw_oram_neighbor_clustered_leaves(
     }
 
     for index in 0..blocks.len() {
-        if !clustered_indexes.contains(&index) {
+        if !visited.contains(&blocks[index].node_id) {
             clustered_indexes.push(index);
         }
     }
