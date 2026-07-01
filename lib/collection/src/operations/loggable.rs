@@ -425,6 +425,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "oram_position_maps"
                         | "oram_position_map_snapshot"
                         | "oram_position_map_snapshots"
+                        | "token_map"
+                        | "token_map_backup"
+                        | "token_map_backups"
+                        | "token_maps"
+                        | "token_map_snapshot"
+                        | "token_map_snapshots"
                         | "token_position_map"
                         | "token_count"
                         | "token_counts"
@@ -618,6 +624,12 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "pathlabels"
                         | "readpathlabel"
                         | "readpathlabels"
+                        | "tokenmap"
+                        | "tokenmapbackup"
+                        | "tokenmapbackups"
+                        | "tokenmaps"
+                        | "tokenmapsnapshot"
+                        | "tokenmapsnapshots"
                         | "readpath"
                         | "readpaths"
                         | "readbucket"
@@ -2486,9 +2498,18 @@ mod tests {
             "token_position_map_backups": ["qdrant-sec-private-oram-token-position-map-backups-alias-log-sentinel"],
             "token_position_map_snapshot": "qdrant-sec-private-oram-token-position-map-snapshot-alias-log-sentinel",
             "token_position_map_snapshots": ["qdrant-sec-private-oram-token-position-map-snapshots-alias-log-sentinel"],
+            "token_map": "qdrant-sec-private-oram-token-map-alias-log-sentinel",
+            "token_maps": ["qdrant-sec-private-oram-token-maps-alias-log-sentinel"],
+            "token_map_backups": ["qdrant-sec-private-oram-token-map-backups-alias-log-sentinel"],
+            "token_map_snapshot": "qdrant-sec-private-oram-token-map-snapshot-alias-log-sentinel",
+            "token_map_snapshots": ["qdrant-sec-private-oram-token-map-snapshots-alias-log-sentinel"],
             "tokenPositionMap": "qdrant-sec-private-oram-camel-token-position-map-alias-log-sentinel",
             "tokenPositionMaps": ["qdrant-sec-private-oram-camel-token-position-maps-alias-log-sentinel"],
             "tokenPositionMapSnapshots": ["qdrant-sec-private-oram-camel-token-position-map-snapshots-alias-log-sentinel"],
+            "tokenMap": "qdrant-sec-private-oram-camel-token-map-alias-log-sentinel",
+            "tokenMaps": ["qdrant-sec-private-oram-camel-token-maps-alias-log-sentinel"],
+            "tokenMapBackups": ["qdrant-sec-private-oram-camel-token-map-backups-alias-log-sentinel"],
+            "tokenMapSnapshots": ["qdrant-sec-private-oram-camel-token-map-snapshots-alias-log-sentinel"],
             "stashSnapshot": "qdrant-sec-private-oram-camel-stash-snapshot-alias-log-sentinel",
             "stashSnapshots": ["qdrant-sec-private-oram-camel-stash-snapshots-alias-log-sentinel"],
             "stash_backups": ["qdrant-sec-private-oram-stash-backups-alias-log-sentinel"],
@@ -2555,9 +2576,18 @@ mod tests {
             "qdrant-sec-private-oram-token-position-map-backups-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-map-snapshot-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-map-snapshots-alias-log-sentinel",
+            "qdrant-sec-private-oram-token-map-alias-log-sentinel",
+            "qdrant-sec-private-oram-token-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-token-map-backups-alias-log-sentinel",
+            "qdrant-sec-private-oram-token-map-snapshot-alias-log-sentinel",
+            "qdrant-sec-private-oram-token-map-snapshots-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-token-position-map-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-token-position-maps-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-token-position-map-snapshots-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-token-map-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-token-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-token-map-backups-alias-log-sentinel",
+            "qdrant-sec-private-oram-camel-token-map-snapshots-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-stash-snapshot-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-stash-snapshots-alias-log-sentinel",
             "qdrant-sec-private-oram-stash-backups-alias-log-sentinel",
