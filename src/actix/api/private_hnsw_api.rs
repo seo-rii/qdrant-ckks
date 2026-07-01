@@ -3308,6 +3308,8 @@ mod private_hnsw_rest_tests {
             let path_label_sentinel = "qdrant-sec-private-hnsw-path-label-sentinel";
             let sentinel_paths = vec![path_label_sentinel.to_string()];
             let sentinel_signature = fixture.client_signature();
+            let sentinel_signature_key_id = sentinel_signature.key_id.clone();
+            let sentinel_signature_sig = sentinel_signature.sig.clone();
             let read_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
@@ -3329,12 +3331,28 @@ mod private_hnsw_rest_tests {
                 "request validation failed"
             );
             assert!(!read_error.contains(path_label_sentinel), "{read_error}");
+            assert!(!read_error.contains(&session_id), "{read_error}");
+            assert!(
+                !read_error.contains(&fixture.encrypted_build.root_hash),
+                "{read_error}"
+            );
+            assert!(
+                !read_error.contains(&sentinel_signature_key_id),
+                "{read_error}"
+            );
+            assert!(
+                !read_error.contains(&sentinel_signature_sig),
+                "{read_error}"
+            );
             assert!(
                 !read_error.contains(&fixture.encrypted_build.buckets[0].ciphertext),
                 "{read_error}"
             );
             let oversized_path_label_sentinel =
                 format!("{}{}", fixture.entry_leaf_label(), "A".repeat(128));
+            let oversized_signature = fixture.client_signature();
+            let oversized_signature_key_id = oversized_signature.key_id.clone();
+            let oversized_signature_sig = oversized_signature.sig.clone();
             let oversized_path_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
@@ -3347,9 +3365,9 @@ mod private_hnsw_rest_tests {
                         dummy_paths_included: true,
                     },
                     client_signature: PrivateHnswClientSignature {
-                        alg: "ed25519".to_string(),
-                        key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        alg: oversized_signature.alg,
+                        key_id: oversized_signature.key_id,
+                        sig: oversized_signature.sig,
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -3360,7 +3378,19 @@ mod private_hnsw_rest_tests {
                 "{oversized_path_error}"
             );
             assert!(
+                !oversized_path_error.contains(&session_id),
+                "{oversized_path_error}"
+            );
+            assert!(
                 !oversized_path_error.contains(&fixture.encrypted_build.root_hash),
+                "{oversized_path_error}"
+            );
+            assert!(
+                !oversized_path_error.contains(&oversized_signature_key_id),
+                "{oversized_path_error}"
+            );
+            assert!(
+                !oversized_path_error.contains(&oversized_signature_sig),
                 "{oversized_path_error}"
             );
             assert!(
@@ -3368,6 +3398,7 @@ mod private_hnsw_rest_tests {
                 "{oversized_path_error}"
             );
             let unauthenticated_path_label_sentinel = fixture.entry_leaf_label();
+            let unauthenticated_signature_sig = fixture.client_signature().sig;
             let unauthenticated_path_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/read_paths",
                 OramReadPathsRequest {
@@ -3382,7 +3413,7 @@ mod private_hnsw_rest_tests {
                     client_signature: PrivateHnswClientSignature {
                         alg: "ed25519".to_string(),
                         key_id: SIGNING_KEY_ID.to_string(),
-                        sig: fixture.client_signature().sig,
+                        sig: unauthenticated_signature_sig.clone(),
                     },
                 },
                 StatusCode::BAD_REQUEST,
@@ -3398,6 +3429,18 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !unauthenticated_path_error.contains(&fixture.encrypted_build.root_hash),
+                "{unauthenticated_path_error}"
+            );
+            assert!(
+                !unauthenticated_path_error.contains(&session_id),
+                "{unauthenticated_path_error}"
+            );
+            assert!(
+                !unauthenticated_path_error.contains(SIGNING_KEY_ID),
+                "{unauthenticated_path_error}"
+            );
+            assert!(
+                !unauthenticated_path_error.contains(&unauthenticated_signature_sig),
                 "{unauthenticated_path_error}"
             );
             assert!(

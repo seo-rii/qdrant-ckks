@@ -3630,6 +3630,8 @@ mod private_hnsw_grpc_tests {
             let path_label_sentinel = "qdrant-sec-private-hnsw-path-label-sentinel";
             let sentinel_paths = vec![path_label_sentinel.to_string()];
             let sentinel_signature = fixture.client_signature();
+            let sentinel_signature_key_id = sentinel_signature.key_id.clone();
+            let sentinel_signature_sig = sentinel_signature.sig.clone();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -3651,12 +3653,19 @@ mod private_hnsw_grpc_tests {
             assert_eq!(err.code(), Code::InvalidArgument);
             assert!(err.message().contains("request validation failed"));
             assert!(!err.message().contains(path_label_sentinel));
+            assert!(!err.message().contains(&session.session_id));
+            assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
+            assert!(!err.message().contains(&sentinel_signature_key_id));
+            assert!(!err.message().contains(&sentinel_signature_sig));
             assert!(
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext)
             );
             let oversized_path_label_sentinel =
                 format!("{}{}", fixture.entry_leaf_label(), "A".repeat(128));
+            let oversized_signature = fixture.client_signature();
+            let oversized_signature_key_id = oversized_signature.key_id.clone();
+            let oversized_signature_sig = oversized_signature.sig.clone();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -3670,7 +3679,7 @@ mod private_hnsw_grpc_tests {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     }),
-                    client_signature: Some(signature_to_proto(fixture.client_signature())),
+                    client_signature: Some(signature_to_proto(oversized_signature)),
                 }),
             )
             .await
@@ -3683,7 +3692,22 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
             assert!(
+                !err.message().contains(&session.session_id),
+                "{}",
+                err.message()
+            );
+            assert!(
                 !err.message().contains(&fixture.encrypted_build.root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&oversized_signature_key_id),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&oversized_signature_sig),
                 "{}",
                 err.message()
             );
@@ -3694,6 +3718,9 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
             let unauthenticated_path_label_sentinel = fixture.entry_leaf_label();
+            let unauthenticated_signature = fixture.client_signature();
+            let unauthenticated_signature_key_id = unauthenticated_signature.key_id.clone();
+            let unauthenticated_signature_sig = unauthenticated_signature.sig.clone();
             let err = PrivateHnswOram::read_private_hnsw_paths(
                 &service,
                 Request::new(grpc::OramReadPathsRequest {
@@ -3707,7 +3734,7 @@ mod private_hnsw_grpc_tests {
                         requested_paths: 1,
                         dummy_paths_included: true,
                     }),
-                    client_signature: Some(signature_to_proto(fixture.client_signature())),
+                    client_signature: Some(signature_to_proto(unauthenticated_signature)),
                 }),
             )
             .await
@@ -3717,6 +3744,26 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains("leaf label"));
             assert!(
                 !err.message().contains(&unauthenticated_path_label_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&session.session_id),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&fixture.encrypted_build.root_hash),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&unauthenticated_signature_key_id),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message().contains(&unauthenticated_signature_sig),
                 "{}",
                 err.message()
             );
