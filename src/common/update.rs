@@ -5702,6 +5702,39 @@ esac
             point_vectors_touch_private_hnsw_oram_config(&default_point, &default_params),
             Some(DEFAULT_VECTOR_NAME.to_string()),
         );
+
+        for private_alias in [
+            "clientStateCiphertextHash",
+            "encrypted_client_state_snapshot",
+            "oramPositionMapBackup",
+            "token_position_map_backups",
+        ] {
+            let mut alias_params = private_hnsw_vector_params();
+            if let Some(encryption) = alias_params.encryption.as_mut() {
+                encryption.rules[0].selector = EncryptionSelector::VectorNames {
+                    names: vec![private_alias.to_string()],
+                };
+            }
+
+            let alias_batch = PointInsertOperationsInternal::PointsBatch(
+                collection::operations::point_ops::BatchPersisted {
+                    ids: vec![1.into()],
+                    vectors: BatchVectorStructPersisted::Named(HashMap::from([(
+                        private_alias.to_string(),
+                        vec![VectorPersisted::Dense(vec![0.1, 0.2])],
+                    )])),
+                    payloads: None,
+                },
+            );
+            let detected =
+                upsert_vectors_touch_private_hnsw_oram_config(&alias_batch, &alias_params).unwrap();
+            assert_eq!(detected, private_alias);
+
+            let message = private_hnsw_oram_api_required_message(&detected);
+            assert!(message.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+            assert!(message.contains("/private-hnsw/{vector}/session"));
+            assert!(!message.contains(private_alias), "{message}");
+        }
     }
 
     #[test]
