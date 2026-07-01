@@ -1010,6 +1010,12 @@ fn compact_vector_name_is_client_owned_oram_state_alias(value: &str) -> bool {
             | "orampositionmapbackups"
             | "orampositionmapsnapshot"
             | "orampositionmapsnapshots"
+            | "tokenmap"
+            | "tokenmaps"
+            | "tokenmapbackup"
+            | "tokenmapbackups"
+            | "tokenmapsnapshot"
+            | "tokenmapsnapshots"
             | "tokenpositionmap"
             | "tokenpositionmaps"
             | "tokenpositionmapbackup"
@@ -1783,6 +1789,7 @@ mod tests {
             "stateCiphertexts.json",
             "positionMapSnapshots.json",
             "oram_position_map_backups.json",
+            "tokenMapSnapshots.json",
             "tokenPositionMapSnapshots.json",
             "stash_snapshots.json",
         ] {

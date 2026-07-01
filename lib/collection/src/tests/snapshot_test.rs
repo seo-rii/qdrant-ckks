@@ -1111,9 +1111,18 @@ async fn test_snapshot_private_oram_store_files_are_archived() {
         "stash",
         "stashBackup",
         "stashBackups",
+        "tokenMap",
+        "tokenMapBackup",
+        "tokenMapBackups",
+        "token_map",
+        "token_map_backup",
+        "token_map_backups",
         "tokenPositionMap",
         "tokenPositionMapBackup",
         "tokenPositionMapBackups",
+        "token_position_map",
+        "token_position_map_backup",
+        "token_position_map_backups",
     ] {
         assert!(
             !archive_paths.iter().any(|path| path.contains(forbidden)),
