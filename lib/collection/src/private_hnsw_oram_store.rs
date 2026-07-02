@@ -1792,6 +1792,7 @@ mod tests {
         private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_merkle_root_for_commitments,
         seal_private_hnsw_oram_bucket, seal_private_hnsw_oram_plaintext_index,
         search_private_hnsw_oram_encrypted_verified, sign_private_hnsw_oram_commit,
+        verify_private_hnsw_oram_merkle_proof_json,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use tempfile::TempDir;
@@ -4639,6 +4640,10 @@ mod tests {
         let store = fixture_store(&temp);
         let leaf_commitments = vec![root_hash(1), root_hash(2), root_hash(3), root_hash(4)];
         let root = PrivateHnswOramStore::merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let mut bucket1 = fixture_bucket(1, 42, b"encrypted hnsw bucket 1");
+        bucket1.bucket_commitment = leaf_commitments[1].clone();
+        let mut bucket3 = fixture_bucket(3, 42, b"encrypted hnsw bucket 3");
+        bucket3.bucket_commitment = leaf_commitments[3].clone();
 
         store
             .write_merkle_tree_from_commitments(42, root.clone(), leaf_commitments.clone())
@@ -4661,6 +4666,15 @@ mod tests {
             .unwrap();
         assert_eq!(duplicate_proof.leaves.len(), 3);
         assert_eq!(duplicate_proof.leaves[0], duplicate_proof.leaves[2]);
+        let duplicate_proof_json = serde_json::to_string(&duplicate_proof).unwrap();
+        verify_private_hnsw_oram_merkle_proof_json(
+            &duplicate_proof_json,
+            42,
+            &root,
+            4,
+            &[bucket1.clone(), bucket3, bucket1],
+        )
+        .unwrap();
 
         let err = store.read_merkle_path_batch(&[], 42, &root, 4).unwrap_err();
         assert!(err.to_string().contains("bucket batch is empty"));
