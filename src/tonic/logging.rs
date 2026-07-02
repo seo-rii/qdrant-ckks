@@ -412,12 +412,14 @@ mod tests {
              client_state_ciphertext_hash.bin=client-state-ciphertext-hash-bin-sentinel \
              client_state_ciphertext_hashes=client-state-ciphertext-hashes-snake-sentinel \
              client_state_ciphertext_hashes.bin=client-state-ciphertext-hashes-bin-sentinel \
+             client_state_ciphertext_hashes.json=client-state-ciphertext-hashes-json-sentinel \
              client_state_ciphertext_sha256=client-state-ciphertext-sha256-snake-sentinel \
              client_state_ciphertexts_sha256=client-state-ciphertexts-sha256-snake-sentinel \
              client_state_ciphertexts_sha256.bin=client-state-ciphertexts-sha256-bin-sentinel \
              client_state_ciphertexts_sha256.json=client-state-ciphertexts-sha256-json-sentinel \
              encrypted_client_state_ciphertext_hash=encrypted-client-state-ciphertext-hash-snake-sentinel \
              encrypted_client_state_ciphertext_hash.bin=encrypted-client-state-ciphertext-hash-bin-sentinel \
+             encrypted_client_state_ciphertext_hashes.json=encrypted-client-state-ciphertext-hashes-json-sentinel \
              encrypted_client_state_ciphertext_sha256=encrypted-client-state-ciphertext-sha256-snake-sentinel \
              encrypted_client_state_ciphertexts_sha256=encrypted-client-state-ciphertexts-sha256-snake-sentinel \
              encrypted_client_state_ciphertexts_sha256.bin=encrypted-client-state-ciphertexts-sha256-bin-sentinel \
@@ -440,6 +442,7 @@ mod tests {
              state_ciphertext_hash.bin=state-ciphertext-hash-bin-sentinel \
              state_ciphertext_hashes=state-ciphertext-hashes-snake-sentinel \
              state_ciphertext_hashes.bin=state-ciphertext-hashes-bin-sentinel \
+             state_ciphertext_hashes.json=state-ciphertext-hashes-json-sentinel \
              state_ciphertext_sha256=state-ciphertext-sha256-snake-sentinel \
              state_ciphertexts_sha256=state-ciphertexts-sha256-snake-sentinel \
              state_ciphertexts_sha256.bin=state-ciphertexts-sha256-bin-sentinel \
