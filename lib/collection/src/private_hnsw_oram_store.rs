@@ -1958,6 +1958,7 @@ mod tests {
             "stateCiphertexts.json",
             "state_ciphertext_hash",
             "state_ciphertext_hash.bin",
+            "state_ciphertext_hashes.json",
             "state_ciphertext_sha256",
             "stateCiphertextSha256.json",
             "state_ciphertexts_sha256",
