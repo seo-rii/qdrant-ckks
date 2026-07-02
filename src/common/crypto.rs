@@ -24298,6 +24298,33 @@ mod tests {
                     && !description.contains("unsupported option")),
             "unexpected error: {err:?}",
         );
+
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options = private_hnsw_oram_options();
+        let nested_secret_option = "oram.client_secret";
+        let nested_secret_value =
+            "qdrant-sec-private-hnsw-collection-runtime-nested-secret-sentinel";
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["oram"]["client_secret"] = json!(nested_secret_value);
+        let err = validate_collection_crypto_runtime_inner(&settings, "docs", &params)
+            .expect_err("collection runtime must reject invalid nested private HNSW options");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private HNSW ORAM runtime instance is invalid")
+                    && !description.contains("docs_private_hnsw_v1")
+                    && !description.contains(nested_secret_option)
+                    && !description.contains(nested_secret_value)
+                    && !description.contains("unsupported option")),
+            "unexpected error: {err:?}",
+        );
     }
 
     #[test]
