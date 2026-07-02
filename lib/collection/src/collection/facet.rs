@@ -194,6 +194,29 @@ mod tests {
     }
 
     #[test]
+    fn facet_private_result_oram_errors_redact_client_state_aliases() {
+        for private_result_path in [
+            "payload_fetch_token",
+            "state_ciphertext_hash",
+            "state_ciphertext_hash.bin",
+            "state_ciphertext_sha256",
+            "state_ciphertext_sha256.json",
+            "token_map_backup",
+            "token_position_map_backups",
+        ] {
+            let encryption = private_result_oram_encryption(private_result_path);
+            let key = private_result_path.parse::<JsonPath>().unwrap();
+            let err = ensure_facet_key_does_not_touch_encrypted_payload(&key, &encryption)
+                .expect_err("private result ORAM payload facets must fail closed")
+                .to_string();
+
+            assert!(err.contains("cannot use private result ORAM payload field"));
+            assert!(err.contains("/private-result-oram/session"));
+            assert!(!err.contains(private_result_path), "{err}");
+        }
+    }
+
+    #[test]
     fn facet_private_result_oram_invalid_payload_path_error_is_sanitized() {
         let secret_path = "document.body[private-result-facet-secret";
         let encryption = private_result_oram_encryption(secret_path);
