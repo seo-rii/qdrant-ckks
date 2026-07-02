@@ -3755,6 +3755,18 @@ mod tests {
                 .unwrap(),
             second_updated_bucket,
         );
+        let proof = store
+            .read_merkle_path_batch(
+                &[1],
+                second_new.index_epoch,
+                &second_new.root_hash,
+                bundle.bucket_count(),
+            )
+            .unwrap();
+        assert_eq!(
+            proof.leaves[0].leaf_hash,
+            second_updated_bucket.bucket_commitment
+        );
 
         let temp = TempDir::new().unwrap();
         let tampered_store = fixture_store(&temp);
