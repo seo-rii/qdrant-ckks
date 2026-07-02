@@ -559,13 +559,16 @@ mod private_result_oram_grpc_tests {
     const PRIVATE_RESULT_ORAM_CLIENT_STATE_FILENAME_REDACTION_ALIASES: &[&str] = &[
         "client_state_ciphertext_hashes.bin",
         "client_state_ciphertexts_sha256.bin",
+        "client_state_ciphertexts_sha256.json",
         "encrypted_client_state_snapshot.bin",
         "encrypted_client_state_snapshot.json",
         "encrypted_client_state_snapshots.json",
         "encrypted_client_state_ciphertext_hashes.bin",
         "encrypted_client_state_ciphertexts_sha256.bin",
+        "encrypted_client_state_ciphertexts_sha256.json",
         "state_ciphertext_hashes.bin",
         "state_ciphertexts_sha256.bin",
+        "state_ciphertexts_sha256.json",
     ];
 
     struct PrivateResultRouteFixture {
