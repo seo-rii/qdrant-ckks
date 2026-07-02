@@ -1530,6 +1530,7 @@ mod tests {
         PrivateResultOramSignatureVerification, private_result_oram_bucket_commitment,
         private_result_oram_merkle_root_for_commitments, sign_private_result_oram_commit,
         sign_private_result_oram_manifest, verify_private_result_oram_merkle_proof,
+        verify_private_result_oram_merkle_proof_json,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use tempfile::TempDir;
@@ -3698,6 +3699,15 @@ mod tests {
         assert_eq!(duplicate_proof.leaves[0], duplicate_proof.leaves[2]);
         verify_private_result_oram_merkle_proof(
             &duplicate_proof,
+            42,
+            &root,
+            3,
+            &[bucket0.clone(), bucket2.clone(), bucket0.clone()],
+        )
+        .unwrap();
+        let duplicate_proof_json = serde_json::to_string(&duplicate_proof).unwrap();
+        verify_private_result_oram_merkle_proof_json(
+            &duplicate_proof_json,
             42,
             &root,
             3,
