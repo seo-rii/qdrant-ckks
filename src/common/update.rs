@@ -5705,7 +5705,14 @@ esac
 
         for private_alias in [
             "clientStateCiphertextHash",
+            "client_state_ciphertext_hashes.bin",
+            "client_state_ciphertexts_sha256.bin",
             "encrypted_client_state_snapshot",
+            "encrypted_client_state_snapshot.bin",
+            "encrypted_client_state_snapshot.json",
+            "encrypted_client_state_snapshots.json",
+            "encrypted_client_state_ciphertext_hashes.bin",
+            "encrypted_client_state_ciphertexts_sha256.bin",
             "oramPositionMapBackup",
             "token_position_map_backups",
         ] {
