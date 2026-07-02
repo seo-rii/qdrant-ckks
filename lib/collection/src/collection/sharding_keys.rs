@@ -407,6 +407,7 @@ mod tests {
         "clientStateCiphertextHashes.json",
         "clientStateCiphertextSha256.json",
         "clientStateCiphertextsSha256.json",
+        "client_state_ciphertext_hash.json",
         "client_state_ciphertext_hashes.json",
         "client_state_ciphertext_sha256.json",
         "client_state_ciphertexts_sha256.bin",
@@ -444,6 +445,7 @@ mod tests {
         "state_ciphertexts_sha256.json",
         "state_ciphertext.bin",
         "state_ciphertext_hash.bin",
+        "state_ciphertext_hash.json",
     ];
 
     const PRIVATE_ORAM_SHARD_KEY_REDACTION_STEMS: &[&str] = &[
