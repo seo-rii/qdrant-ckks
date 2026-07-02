@@ -150,13 +150,17 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                     key
                 };
                 let compact_key;
-                let key_without_separators = if key.bytes().any(|byte| matches!(byte, b'_' | b'-'))
-                {
-                    compact_key = key.replace('_', "").replace('-', "");
-                    compact_key.as_str()
-                } else {
-                    key
-                };
+                let key_without_separators =
+                    if key.bytes().any(|byte| matches!(byte, b'_' | b'-' | b'.')) {
+                        compact_key = key.replace(['_', '-', '.'], "");
+                        compact_key.as_str()
+                    } else {
+                        key
+                    };
+                let key_without_separators = key_without_separators
+                    .strip_suffix("json")
+                    .or_else(|| key_without_separators.strip_suffix("bin"))
+                    .unwrap_or(key_without_separators);
                 if matches!(
                     key,
                     "payload"
@@ -2518,12 +2522,26 @@ mod tests {
             "stash_snapshots": ["qdrant-sec-private-oram-stash-snapshots-alias-log-sentinel"],
             "stash": "qdrant-sec-private-oram-stash-alias-log-sentinel"
         });
+        let mut file_name_aliases = json!({
+            "client_state_ciphertext_hash.bin": "qdrant-sec-private-oram-client-state-ciphertext-hash-bin-alias-log-sentinel",
+            "encrypted.client.state": "qdrant-sec-private-oram-encrypted-client-state-dotted-alias-log-sentinel",
+            "encrypted_client_state.json": "qdrant-sec-private-oram-encrypted-client-state-json-alias-log-sentinel",
+            "encrypted_client_state_ciphertext_hash.bin": "qdrant-sec-private-oram-encrypted-client-state-ciphertext-hash-bin-alias-log-sentinel",
+            "state_ciphertext_hash.bin": "qdrant-sec-private-oram-state-ciphertext-hash-bin-alias-log-sentinel",
+            "state_ciphertext_hashes.bin": ["qdrant-sec-private-oram-state-ciphertext-hashes-bin-alias-log-sentinel"],
+            "token.position.map": "qdrant-sec-private-oram-token-position-map-dotted-alias-log-sentinel",
+            "token_position_map_backup.json": "qdrant-sec-private-oram-token-position-map-backup-json-alias-log-sentinel",
+            "stashBackup.json": "qdrant-sec-private-oram-stash-backup-json-alias-log-sentinel",
+            "stashBackups.json": ["qdrant-sec-private-oram-stash-backups-json-alias-log-sentinel"]
+        });
         redact_sensitive_log_fields(&mut position_map_aliases);
         redact_sensitive_log_fields(&mut state_and_position_aliases);
+        redact_sensitive_log_fields(&mut file_name_aliases);
         let position_map_aliases_serialized = format!(
-            "{}{}",
+            "{}{}{}",
             serde_json::to_string(&position_map_aliases).unwrap(),
             serde_json::to_string(&state_and_position_aliases).unwrap(),
+            serde_json::to_string(&file_name_aliases).unwrap(),
         );
         for leaked in [
             "qdrant-sec-private-oram-position-map-alias-log-sentinel",
@@ -2537,12 +2555,15 @@ mod tests {
             "qdrant-sec-private-oram-client-state-ciphertexts-alias-log-sentinel",
             "qdrant-sec-private-oram-client-state-ciphertext-alias-log-sentinel",
             "qdrant-sec-private-oram-client-state-ciphertext-hash-alias-log-sentinel",
+            "qdrant-sec-private-oram-client-state-ciphertext-hash-bin-alias-log-sentinel",
             "qdrant-sec-private-oram-client-state-ciphertext-hashes-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-client-state-ciphertext-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-client-state-ciphertexts-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-client-state-ciphertext-hash-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-client-state-ciphertext-hashes-alias-log-sentinel",
             "qdrant-sec-private-oram-encrypted-client-state-alias-log-sentinel",
+            "qdrant-sec-private-oram-encrypted-client-state-dotted-alias-log-sentinel",
+            "qdrant-sec-private-oram-encrypted-client-state-json-alias-log-sentinel",
             "qdrant-sec-private-oram-encrypted-client-states-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-encrypted-client-state-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-encrypted-client-states-alias-log-sentinel",
@@ -2555,13 +2576,16 @@ mod tests {
             "qdrant-sec-private-oram-camel-encrypted-client-state-ciphertext-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-encrypted-client-state-ciphertexts-alias-log-sentinel",
             "qdrant-sec-private-oram-encrypted-client-state-ciphertext-hash-alias-log-sentinel",
+            "qdrant-sec-private-oram-encrypted-client-state-ciphertext-hash-bin-alias-log-sentinel",
             "qdrant-sec-private-oram-encrypted-client-state-ciphertext-hashes-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-encrypted-client-state-ciphertext-hash-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-encrypted-client-state-ciphertext-hashes-alias-log-sentinel",
             "qdrant-sec-private-oram-state-ciphertext-alias-log-sentinel",
             "qdrant-sec-private-oram-state-ciphertexts-alias-log-sentinel",
             "qdrant-sec-private-oram-state-ciphertext-hash-alias-log-sentinel",
+            "qdrant-sec-private-oram-state-ciphertext-hash-bin-alias-log-sentinel",
             "qdrant-sec-private-oram-state-ciphertext-hashes-alias-log-sentinel",
+            "qdrant-sec-private-oram-state-ciphertext-hashes-bin-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-state-ciphertext-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-state-ciphertexts-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-state-ciphertext-hash-alias-log-sentinel",
@@ -2574,7 +2598,9 @@ mod tests {
             "qdrant-sec-private-oram-camel-oram-position-map-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-oram-position-maps-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-map-alias-log-sentinel",
+            "qdrant-sec-private-oram-token-position-map-dotted-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-token-position-map-backup-json-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-map-backups-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-map-snapshot-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-map-snapshots-alias-log-sentinel",
@@ -2592,6 +2618,8 @@ mod tests {
             "qdrant-sec-private-oram-camel-token-map-snapshots-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-stash-snapshot-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-stash-snapshots-alias-log-sentinel",
+            "qdrant-sec-private-oram-stash-backup-json-alias-log-sentinel",
+            "qdrant-sec-private-oram-stash-backups-json-alias-log-sentinel",
             "qdrant-sec-private-oram-stash-backups-alias-log-sentinel",
             "qdrant-sec-private-oram-stash-snapshots-alias-log-sentinel",
             "qdrant-sec-private-oram-stash-alias-log-sentinel",
