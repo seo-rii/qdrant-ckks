@@ -663,6 +663,31 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("token_position_map_snapshot"));
         assert!(!unsafe_store_name_message.contains("token_position_map_snapshots"));
 
+        let mut unsafe_hash_store_name =
+            ValidationError::new("private_hnsw_oram_safe_vector_store_name");
+        unsafe_hash_store_name.add_param(
+            std::borrow::Cow::from("value"),
+            &serde_json::json!([
+                {
+                    "id": "hash_private_hnsw",
+                    "selector": {
+                        "names": [
+                            "encrypted_client_state_ciphertexts_sha256.bin",
+                            "state_ciphertexts_sha256.bin",
+                        ]
+                    },
+                    "binding": "private-hnsw-oram/v1",
+                },
+            ]),
+        );
+        let unsafe_hash_store_name_message = describe_error(&unsafe_hash_store_name);
+        assert!(unsafe_hash_store_name_message.contains("safe non-client-state store path"));
+        assert!(!unsafe_hash_store_name_message.contains("hash_private_hnsw"));
+        assert!(
+            !unsafe_hash_store_name_message.contains("encrypted_client_state_ciphertexts_sha256")
+        );
+        assert!(!unsafe_hash_store_name_message.contains("state_ciphertexts_sha256"));
+
         let mut overlap = ValidationError::new("overlapping_encryption_selector");
         overlap.add_param(
             std::borrow::Cow::from("value"),
