@@ -3171,6 +3171,7 @@ mod tests {
             old.root_hash.as_str(),
             new.root_hash.as_str(),
             updated_bucket.ciphertext.as_str(),
+            updated_bucket.ciphertext_sha256.as_str(),
             updated_bucket.bucket_commitment.as_str(),
         ] {
             assert!(!rendered.contains(sentinel), "{rendered}");
