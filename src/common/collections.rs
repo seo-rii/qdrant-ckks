@@ -1947,6 +1947,7 @@ mod tests {
                 "state_ciphertext_hash.json".to_string(),
                 "state_ciphertext_hashes.json".to_string(),
                 "state_ciphertext_sha256.json".to_string(),
+                "state_ciphertexts_sha256.bin".to_string(),
                 "state_ciphertexts_sha256.json".to_string(),
             ];
         }
@@ -2111,6 +2112,7 @@ mod tests {
                     "state_ciphertext_hashes.bin",
                     "state_ciphertext_sha256",
                     "state_ciphertexts_sha256",
+                    "state_ciphertexts_sha256.bin",
                     "tokenPositionMapBackups",
                     PRIVATE_RESULT_ORAM_BINDING,
                     "private_result_oram",
