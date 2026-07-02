@@ -3529,6 +3529,23 @@ mod private_hnsw_tests {
         assert!(rendered.contains("signature key_id is invalid"));
         assert!(!rendered.contains(malformed_key_id), "{rendered}");
 
+        for alias_key_id in [
+            "encrypted.client.state!sentinel",
+            "encrypted_client_state_ciphertext_hash.bin!sentinel",
+            "stashBackup.json!sentinel",
+            "state_ciphertext_hashes.bin!sentinel",
+        ] {
+            let err = validate_client_signature_shape(&PrivateHnswClientSignature {
+                alg: "ed25519".to_string(),
+                key_id: alias_key_id.to_string(),
+                sig: BASE64URL_NOPAD.encode(&[7; 64]),
+            })
+            .unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("signature key_id is invalid"));
+            assert!(!rendered.contains(alias_key_id), "{rendered}");
+        }
+
         let oversized = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 64]), "A".repeat(64));
         let err = validate_client_signature_shape(&PrivateHnswClientSignature {
             alg: "ed25519".to_string(),
@@ -3802,6 +3819,25 @@ mod private_hnsw_tests {
         .to_string();
         assert!(rendered.contains("request validation failed"));
         assert!(!rendered.contains(malformed_key_id), "{rendered}");
+
+        for alias_key_id in [
+            "encrypted.client.state!sentinel",
+            "encrypted_client_state_ciphertext_hash.bin!sentinel",
+            "stashBackup.json!sentinel",
+            "state_ciphertext_hashes.bin!sentinel",
+        ] {
+            let rendered = private_hnsw_error(
+                validate_private_hnsw_oram_manifest_signature_shape(&PrivateHnswOramSignature {
+                    alg: "ed25519".to_string(),
+                    key_id: alias_key_id.to_string(),
+                    sig: BASE64URL_NOPAD.encode(&[7; 64]),
+                })
+                .unwrap_err(),
+            )
+            .to_string();
+            assert!(rendered.contains("request validation failed"));
+            assert!(!rendered.contains(alias_key_id), "{rendered}");
+        }
 
         let oversized_signature = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 64]), "A".repeat(64));
         let rendered = private_hnsw_error(
