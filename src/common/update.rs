@@ -5713,6 +5713,7 @@ esac
             "encrypted_client_state_snapshots.json",
             "encrypted_client_state_ciphertext_hashes.bin",
             "encrypted_client_state_ciphertexts_sha256.bin",
+            "state_ciphertexts_sha256.bin",
             "oramPositionMapBackup",
             "token_position_map_backups",
         ] {
