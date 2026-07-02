@@ -8681,6 +8681,10 @@ mod tests {
             ..input
         };
         assert_eq!(
+            try_private_result_oram_read_buckets_signature_message(empty_input),
+            Err(PrivateResultOramError::InvalidReadBucketsSignature)
+        );
+        assert_eq!(
             validate_private_result_oram_read_buckets_signature(
                 empty_input,
                 "malformed-signature",
