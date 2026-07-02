@@ -414,11 +414,13 @@ mod tests {
              client_state_ciphertext_hashes.bin=client-state-ciphertext-hashes-bin-sentinel \
              client_state_ciphertext_sha256=client-state-ciphertext-sha256-snake-sentinel \
              client_state_ciphertexts_sha256=client-state-ciphertexts-sha256-snake-sentinel \
+             client_state_ciphertexts_sha256.bin=client-state-ciphertexts-sha256-bin-sentinel \
              client_state_ciphertexts_sha256.json=client-state-ciphertexts-sha256-json-sentinel \
              encrypted_client_state_ciphertext_hash=encrypted-client-state-ciphertext-hash-snake-sentinel \
              encrypted_client_state_ciphertext_hash.bin=encrypted-client-state-ciphertext-hash-bin-sentinel \
              encrypted_client_state_ciphertext_sha256=encrypted-client-state-ciphertext-sha256-snake-sentinel \
              encrypted_client_state_ciphertexts_sha256=encrypted-client-state-ciphertexts-sha256-snake-sentinel \
+             encrypted_client_state_ciphertexts_sha256.bin=encrypted-client-state-ciphertexts-sha256-bin-sentinel \
              encrypted_client_state_ciphertexts_sha256.json=encrypted-client-state-ciphertexts-sha256-json-sentinel \
              encryptedClientStateCiphertext=encrypted-client-state-ciphertext-camel-sentinel \
              encrypted_client_state_ciphertext=encrypted-client-state-ciphertext-snake-sentinel \
@@ -440,6 +442,7 @@ mod tests {
              state_ciphertext_hashes.bin=state-ciphertext-hashes-bin-sentinel \
              state_ciphertext_sha256=state-ciphertext-sha256-snake-sentinel \
              state_ciphertexts_sha256=state-ciphertexts-sha256-snake-sentinel \
+             state_ciphertexts_sha256.bin=state-ciphertexts-sha256-bin-sentinel \
              position_map=position-map-snake-sentinel \
              positionMap=position-map-camel-sentinel \
              positionMapBackup=position-map-backup-camel-sentinel \
