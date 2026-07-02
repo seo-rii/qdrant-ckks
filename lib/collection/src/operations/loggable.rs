@@ -1370,6 +1370,14 @@ mod tests {
             json!("qdrant-sec-private-oram-proof-value-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["proofValue"] =
             json!("qdrant-sec-private-oram-camel-proof-value-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["ciphertext_sha256"] =
+            json!("qdrant-sec-private-oram-ciphertext-sha256-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["ciphertextSha256"] =
+            json!("qdrant-sec-private-oram-camel-ciphertext-sha256-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["updated_buckets"][0]["ciphertext_sha256"] =
+            json!("qdrant-sec-private-oram-nested-ciphertext-sha256-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["updated_bucket"]["ciphertextSha256"] =
+            json!("qdrant-sec-private-oram-updated-single-camel-ciphertext-sha256-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["access_volume"] =
             json!("qdrant-sec-private-hnsw-access-volume-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["accessVolume"] =
@@ -1430,6 +1438,8 @@ mod tests {
                 "new_root_hash": "qdrant-sec-private-result-new-root-hash-log-sentinel",
                 "bucket_ids": ["qdrant-sec-private-result-bucket-id-log-sentinel"],
                 "bucketIds": ["qdrant-sec-private-result-camel-bucket-id-log-sentinel"],
+                "ciphertext_sha256": "qdrant-sec-private-result-ciphertext-sha256-log-sentinel",
+                "ciphertextSha256": "qdrant-sec-private-result-camel-ciphertext-sha256-log-sentinel",
                 "bucket_commitments": ["qdrant-sec-private-result-bucket-commitment-log-sentinel"],
                 "bucketCommitments": ["qdrant-sec-private-result-camel-bucket-commitment-log-sentinel"],
                 "read_signature": "qdrant-sec-private-result-read-signature-log-sentinel",
@@ -1439,10 +1449,12 @@ mod tests {
                 "requestSignature": "qdrant-sec-private-result-camel-request-signature-log-sentinel",
                 "updated_buckets": [{
                     "bucket_id": "qdrant-sec-private-result-updated-bucket-id-log-sentinel",
+                    "ciphertext_sha256": "qdrant-sec-private-result-updated-ciphertext-sha256-log-sentinel",
                     "bucket_commitment": "qdrant-sec-private-result-updated-bucket-commitment-log-sentinel"
                 }],
                 "updated_bucket": {
                     "bucket_id": "qdrant-sec-private-result-updated-single-bucket-id-log-sentinel",
+                    "ciphertextSha256": "qdrant-sec-private-result-updated-single-camel-ciphertext-sha256-log-sentinel",
                     "bucket_commitment": "qdrant-sec-private-result-updated-single-bucket-commitment-log-sentinel"
                 },
                 "updatedBuckets": [{
@@ -2129,6 +2141,8 @@ mod tests {
             "qdrant-sec-private-oram-camel-bucket-id-sequence-log-sentinel",
             "qdrant-sec-private-oram-bucket-sequences-log-sentinel",
             "qdrant-sec-private-oram-camel-bucket-sequences-log-sentinel",
+            "qdrant-sec-private-oram-ciphertext-sha256-log-sentinel",
+            "qdrant-sec-private-oram-camel-ciphertext-sha256-log-sentinel",
             "qdrant-sec-private-oram-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-bucket-commitments-log-sentinel",
             "qdrant-sec-private-oram-camel-bucket-commitment-log-sentinel",
@@ -2138,8 +2152,10 @@ mod tests {
             "qdrant-sec-private-oram-leaf-commitment-log-sentinel",
             "qdrant-sec-private-oram-camel-leaf-commitment-log-sentinel",
             "qdrant-sec-private-oram-nested-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-nested-ciphertext-sha256-log-sentinel",
             "qdrant-sec-private-oram-nested-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-updated-single-bucket-id-log-sentinel",
+            "qdrant-sec-private-oram-updated-single-camel-ciphertext-sha256-log-sentinel",
             "qdrant-sec-private-oram-updated-single-bucket-commitment-log-sentinel",
             "qdrant-sec-private-oram-camel-updated-bucket-log-sentinel",
             "qdrant-sec-private-oram-updated-bucket-id-flat-log-sentinel",
@@ -2272,6 +2288,8 @@ mod tests {
             "qdrant-sec-private-result-short-bucket-sequence-log-sentinel",
             "qdrant-sec-private-result-camel-short-bucket-sequence-log-sentinel",
             "qdrant-sec-private-result-short-bucket-sequences-log-sentinel",
+            "qdrant-sec-private-result-ciphertext-sha256-log-sentinel",
+            "qdrant-sec-private-result-camel-ciphertext-sha256-log-sentinel",
             "qdrant-sec-private-result-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-camel-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-leaf-commitment-log-sentinel",
@@ -2284,8 +2302,10 @@ mod tests {
             "qdrant-sec-private-result-camel-commit-signature-log-sentinel",
             "qdrant-sec-private-result-camel-request-signature-log-sentinel",
             "qdrant-sec-private-result-updated-bucket-id-log-sentinel",
+            "qdrant-sec-private-result-updated-ciphertext-sha256-log-sentinel",
             "qdrant-sec-private-result-updated-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-updated-single-bucket-id-log-sentinel",
+            "qdrant-sec-private-result-updated-single-camel-ciphertext-sha256-log-sentinel",
             "qdrant-sec-private-result-updated-single-bucket-commitment-log-sentinel",
             "qdrant-sec-private-result-camel-updated-bucket-id-log-sentinel",
             "qdrant-sec-private-result-camel-updated-bucket-commitment-log-sentinel",
