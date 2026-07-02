@@ -2514,11 +2514,25 @@ mod private_result_oram_tests {
 
         for alias_key_id in [
             "encrypted.client.state!sentinel",
+            "client_state_ciphertext_hash.bin!sentinel",
+            "client_state_ciphertext_hash.json!sentinel",
+            "client_state_ciphertext_hashes.bin!sentinel",
+            "client_state_ciphertext_hashes.json!sentinel",
+            "client_state_ciphertext_sha256.bin!sentinel",
+            "client_state_ciphertext_sha256.json!sentinel",
             "encrypted_client_state_ciphertext_hash.bin!sentinel",
             "encrypted_client_state_ciphertext_hash.json!sentinel",
+            "encrypted_client_state_ciphertext_hashes.bin!sentinel",
+            "encrypted_client_state_ciphertext_hashes.json!sentinel",
+            "encrypted_client_state_ciphertext_sha256.bin!sentinel",
+            "encrypted_client_state_ciphertext_sha256.json!sentinel",
             "stashBackup.json!sentinel",
+            "state_ciphertext_hash.bin!sentinel",
+            "state_ciphertext_hash.json!sentinel",
             "state_ciphertext_hashes.bin!sentinel",
             "state_ciphertext_hashes.json!sentinel",
+            "state_ciphertext_sha256.bin!sentinel",
+            "state_ciphertext_sha256.json!sentinel",
         ] {
             let rendered = private_result_oram_error(
                 validate_private_result_oram_manifest_signature_shape(
@@ -2564,11 +2578,25 @@ mod private_result_oram_tests {
 
         for alias_signature in [
             "encrypted.client.state",
+            "client_state_ciphertext_hash.bin",
+            "client_state_ciphertext_hash.json",
+            "client_state_ciphertext_hashes.bin",
+            "client_state_ciphertext_hashes.json",
+            "client_state_ciphertext_sha256.bin",
+            "client_state_ciphertext_sha256.json",
             "encrypted_client_state_ciphertext_hash.bin",
             "encrypted_client_state_ciphertext_hash.json",
+            "encrypted_client_state_ciphertext_hashes.bin",
+            "encrypted_client_state_ciphertext_hashes.json",
+            "encrypted_client_state_ciphertext_sha256.bin",
+            "encrypted_client_state_ciphertext_sha256.json",
             "stashBackup.json",
+            "state_ciphertext_hash.bin",
+            "state_ciphertext_hash.json",
             "state_ciphertext_hashes.bin",
             "state_ciphertext_hashes.json",
+            "state_ciphertext_sha256.bin",
+            "state_ciphertext_sha256.json",
         ] {
             let rendered = private_result_oram_error(
                 validate_private_result_oram_manifest_signature_shape(
