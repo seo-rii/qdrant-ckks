@@ -2761,6 +2761,7 @@ mod tests {
         assert!(!rendered.contains(&mismatched_signature.manifest_signature.sig));
         assert!(!rendered.contains(&mismatched_signature.manifest.root_hash));
         assert!(!rendered.contains(&mismatched_signature.buckets[0].ciphertext));
+        assert!(!rendered.contains(&mismatched_signature.buckets[0].ciphertext_sha256));
         assert!(!rendered.contains(&mismatched_signature.buckets[0].bucket_commitment));
 
         let mut tampered = bundle.clone();
