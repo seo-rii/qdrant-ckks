@@ -3433,6 +3433,7 @@ mod private_result_oram_rest_tests {
                 "commit updated_buckets must contain"
             );
             assert!(!oversized_commit_error.contains(&updated_bucket.ciphertext));
+            assert!(!oversized_commit_error.contains("1..=3"));
             assert!(!oversized_commit_error.contains("duplicate bucket id"));
             assert!(!oversized_commit_error.contains(&fixture.manifest.root_hash));
             assert!(!oversized_commit_error.contains(&new_root_hash));

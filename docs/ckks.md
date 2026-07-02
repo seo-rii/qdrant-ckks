@@ -2098,6 +2098,8 @@ Collection-local private ORAM store debug output also redacts Merkle tree/proof
 bucket counts.
 Private HNSW ORAM commit errors use a fixed writeback-budget message and do not
 reflect the concrete max writeback bucket count.
+Private result ORAM commit errors follow the same rule for fixed writeback
+budget failures.
 Private result ORAM bucket validation contexts redact expected epochs, bucket
 counts, and ciphertext size limits. Audit events never include request bodies.
 Prometheus request metrics may include fixed REST/gRPC endpoint labels and the

@@ -540,6 +540,7 @@
 - REST/gRPC private result ORAM bucket upload preflight도 mismatched 또는 malformed root hash를 submitted root hash와 bucket ciphertext 반사 없이 fail closed 한다.
 - REST/gRPC private result ORAM bucket upload ciphertext/hash mismatch 오류도 submitted bucket ciphertext body를 반사하지 않고 generic ciphertext validation failure로 멈춘다.
 - REST/gRPC private result ORAM `read_buckets`와 `commit`은 mismatched 또는 malformed root hash를 fail closed 하면서 submitted root hash, commit signature body, updated bucket ciphertext를 오류에 반사하지 않는다.
+- REST/gRPC private result ORAM commit fixed writeback budget 오류도 실제 max writeback bucket 수를 API 응답에 반사하지 않고 고정 문구로 반환한다.
 - REST/gRPC `read_paths` 오류 응답은 mismatched root hash sentinel, malformed path label sentinel, stored bucket ciphertext를 반사하지 않는다. path-to-bucket derivation helper도 하위 leaf-label decode 오류를 그대로 반사하지 않는다.
 - REST/gRPC `read_paths` missing encrypted bucket/proof 오류 응답은 collection-local `private_hnsw_oram` filesystem path를 반사하지 않는다.
 - REST/gRPC `read_paths`는 store current epoch/root가 active session과 맞지 않으면 bucket을 읽기 전에 fail closed 하고 stale root, stored bucket ciphertext, collection-local `private_hnsw_oram` path를 반사하지 않는다.
