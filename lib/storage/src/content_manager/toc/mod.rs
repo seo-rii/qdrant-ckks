@@ -926,6 +926,8 @@ mod tests {
         "encryptedClientStateCiphertextHashes.json",
         "encryptedClientStateCiphertextSha256.json",
         "encryptedClientStateCiphertextsSha256.json",
+        "encrypted_client_state_ciphertext.json",
+        "encrypted_client_state_ciphertexts.json",
         "encrypted_client_state_ciphertext_hash.json",
         "encrypted_client_state_ciphertext_hashes.json",
         "encrypted_client_state_ciphertext_sha256.bin",
