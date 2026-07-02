@@ -3484,6 +3484,18 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("root_hash is not base64url"));
         assert!(!rendered.contains(&malformed));
+
+        for alias_root_hash in [
+            "encrypted.client.state",
+            "encrypted_client_state_ciphertext_hash.bin",
+            "stashBackup.json",
+            "state_ciphertext_hashes.bin",
+        ] {
+            let err = validate_root_hash_string(alias_root_hash, "root_hash").unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("root_hash"));
+            assert!(!rendered.contains(alias_root_hash), "{rendered}");
+        }
     }
 
     #[test]

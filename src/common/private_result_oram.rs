@@ -2225,6 +2225,18 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("root_hash must be base64url without padding"));
         assert!(!rendered.contains(&malformed));
+
+        for alias_root_hash in [
+            "encrypted.client.state",
+            "encrypted_client_state_ciphertext_hash.bin",
+            "stashBackup.json",
+            "state_ciphertext_hashes.bin",
+        ] {
+            let err = validate_base64url_32_string(alias_root_hash, "root_hash").unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("root_hash"));
+            assert!(!rendered.contains(alias_root_hash), "{rendered}");
+        }
     }
 
     #[test]
