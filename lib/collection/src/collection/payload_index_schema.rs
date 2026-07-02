@@ -661,7 +661,9 @@ mod tests {
         for private_result_path in [
             "payload_fetch_token",
             "state_ciphertext_hash",
+            "state_ciphertext_hash.bin",
             "state_ciphertext_sha256",
+            "state_ciphertext_sha256.json",
             "token_map_backup",
             "token_position_map_backups",
         ] {
