@@ -2891,6 +2891,19 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("invalid path label"));
         assert!(!rendered.contains(&malformed), "{rendered}");
+
+        for alias_label in [
+            "encrypted.client.state",
+            "encrypted_client_state_ciphertext_hash.bin",
+            "stashBackup.json",
+            "state_ciphertext_hashes.bin",
+        ] {
+            let err =
+                validate_private_hnsw_read_path_labels(&[alias_label.to_string()], 3).unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("invalid path label"));
+            assert!(!rendered.contains(alias_label), "{rendered}");
+        }
     }
 
     #[test]
@@ -2909,6 +2922,18 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("invalid path label"));
         assert!(!rendered.contains(&malformed), "{rendered}");
+
+        for alias_label in [
+            "encrypted.client.state",
+            "encrypted_client_state_ciphertext_hash.bin",
+            "stashBackup.json",
+            "state_ciphertext_hashes.bin",
+        ] {
+            let err = bucket_ids_for_path_batch(&[alias_label.to_string()], 3, 15).unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("invalid path label"));
+            assert!(!rendered.contains(alias_label), "{rendered}");
+        }
     }
 
     #[test]
