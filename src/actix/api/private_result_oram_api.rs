@@ -538,6 +538,17 @@ mod private_result_oram_rest_tests {
         "token_position_map_snapshot",
         "token_position_map_snapshots",
     ];
+    const PRIVATE_RESULT_ORAM_CLIENT_STATE_FILENAME_REDACTION_ALIASES: &[&str] = &[
+        "client_state_ciphertext_hashes.bin",
+        "client_state_ciphertexts_sha256.bin",
+        "encrypted_client_state_snapshot.bin",
+        "encrypted_client_state_snapshot.json",
+        "encrypted_client_state_snapshots.json",
+        "encrypted_client_state_ciphertext_hashes.bin",
+        "encrypted_client_state_ciphertexts_sha256.bin",
+        "state_ciphertext_hashes.bin",
+        "state_ciphertexts_sha256.bin",
+    ];
 
     struct PrivateResultRouteFixture {
         manifest: PrivateResultOramManifest,
@@ -889,6 +900,12 @@ mod private_result_oram_rest_tests {
                 "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
             );
         }
+        for &forbidden in PRIVATE_RESULT_ORAM_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
+            );
+        }
     }
 
     fn assert_private_result_guard_error_redacts(rendered: &str, extra_forbidden: &[&str]) {
@@ -911,6 +928,12 @@ mod private_result_oram_rest_tests {
             );
         }
         for &forbidden in PRIVATE_RESULT_ORAM_CLIENT_STATE_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "private result ORAM guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_RESULT_ORAM_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "private result ORAM guard leaked `{forbidden}`: {rendered}",
