@@ -2421,6 +2421,10 @@ mod tests {
             ..input
         };
         assert_eq!(
+            try_private_hnsw_oram_commit_signature_message(empty_input),
+            Err(PrivateHnswOramError::EmptyCommit)
+        );
+        assert_eq!(
             validate_private_hnsw_oram_commit_signature(
                 empty_input,
                 "malformed-signature",
