@@ -575,6 +575,8 @@ mod private_hnsw_rest_tests {
         "encrypted_client_state_snapshots.json",
         "encrypted_client_state_ciphertext_hashes.bin",
         "encrypted_client_state_ciphertexts_sha256.bin",
+        "state_ciphertext_hashes.bin",
+        "state_ciphertexts_sha256.bin",
     ];
 
     fn json_roundtrip<T>(value: &T) -> T
