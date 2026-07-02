@@ -2850,6 +2850,9 @@ mod tests {
         assert!(!rendered.contains(&tampered_signature.sig));
         assert!(!rendered.contains(&original.manifest_signature.sig));
         assert!(!rendered.contains(&original.manifest.root_hash));
+        assert!(!rendered.contains(&original.buckets[0].ciphertext));
+        assert!(!rendered.contains(&original.buckets[0].ciphertext_sha256));
+        assert!(!rendered.contains(&original.buckets[0].bucket_commitment));
         assert_eq!(store.read_manifest().unwrap().1, tampered_signature);
         assert_eq!(
             store.read_current_epoch().unwrap().root_hash,
