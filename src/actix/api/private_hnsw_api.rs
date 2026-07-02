@@ -2247,6 +2247,10 @@ mod private_hnsw_rest_tests {
                 !alternate_manifest_key_error.contains(alternate_signing_key_id),
                 "{alternate_manifest_key_error}"
             );
+            assert!(
+                !alternate_manifest_key_error.contains(SIGNING_KEY_ID),
+                "{alternate_manifest_key_error}"
+            );
             for sentinel in [
                 fixture.manifest.root_hash.as_str(),
                 alternate_manifest_signature_sig.as_str(),
@@ -3634,6 +3638,10 @@ mod private_hnsw_rest_tests {
                 !alternate_read_key_error.contains(alternate_signing_key_id),
                 "{alternate_read_key_error}"
             );
+            assert!(
+                !alternate_read_key_error.contains(SIGNING_KEY_ID),
+                "{alternate_read_key_error}"
+            );
             for sentinel in [
                 session_id.as_str(),
                 fixture.encrypted_build.root_hash.as_str(),
@@ -4343,6 +4351,10 @@ mod private_hnsw_rest_tests {
             assert!(!alternate_commit_key_error.contains("not configured"));
             assert!(
                 !alternate_commit_key_error.contains(alternate_signing_key_id),
+                "{alternate_commit_key_error}"
+            );
+            assert!(
+                !alternate_commit_key_error.contains(SIGNING_KEY_ID),
                 "{alternate_commit_key_error}"
             );
             for sentinel in [

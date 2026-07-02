@@ -2396,6 +2396,7 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(!err.message().contains(SIGNING_KEY_ID), "{}", err.message());
             for sentinel in [
                 fixture.manifest.root_hash.as_str(),
                 alternate_manifest_signature_sig.as_str(),
@@ -7051,6 +7052,7 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(!err.message().contains(SIGNING_KEY_ID), "{}", err.message());
             for sentinel in [
                 session.session_id.as_str(),
                 fixture.encrypted_build.root_hash.as_str(),
@@ -7099,6 +7101,7 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(!err.message().contains(SIGNING_KEY_ID), "{}", err.message());
             for sentinel in [
                 session.session_id.as_str(),
                 wrong_commit_old_root.as_str(),
