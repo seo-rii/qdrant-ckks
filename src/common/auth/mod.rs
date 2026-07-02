@@ -363,6 +363,7 @@ mod tests {
              client_state_ciphertext=client-state-ciphertext-snake-sentinel \
              client_state_ciphertext_hash=client-state-ciphertext-hash-snake-sentinel \
              client_state_ciphertext_hash.bin=client-state-ciphertext-hash-bin-sentinel \
+             client_state_ciphertext_hash.json=client-state-ciphertext-hash-json-sentinel \
              client_state_ciphertext_hashes.bin=client-state-ciphertext-hashes-bin-sentinel \
              client_state_ciphertext_hashes.json=client-state-ciphertext-hashes-json-sentinel \
              client_state_ciphertext_hashes=client-state-ciphertext-hashes-snake-sentinel \
@@ -383,6 +384,7 @@ mod tests {
              encryptedClientStateCiphertext=encrypted-client-state-ciphertext-camel-sentinel \
              encrypted_client_state_ciphertext_hash=encrypted-client-state-ciphertext-hash-snake-sentinel \
              encrypted_client_state_ciphertext_hash.bin=encrypted-client-state-ciphertext-hash-bin-sentinel \
+             encrypted_client_state_ciphertext_hash.json=encrypted-client-state-ciphertext-hash-json-sentinel \
              encrypted_client_state_ciphertext_hashes.bin=encrypted-client-state-ciphertext-hashes-bin-sentinel \
              encrypted_client_state_ciphertext_hashes.json=encrypted-client-state-ciphertext-hashes-json-sentinel \
              encrypted_client_state_ciphertext_hashes=encrypted-client-state-ciphertext-hashes-snake-sentinel \
@@ -417,6 +419,7 @@ mod tests {
              state_ciphertext=state-ciphertext-snake-sentinel \
              state_ciphertext_hash=state-ciphertext-hash-snake-sentinel \
              state_ciphertext_hash.bin=state-ciphertext-hash-bin-sentinel \
+             state_ciphertext_hash.json=state-ciphertext-hash-json-sentinel \
              state_ciphertext_hashes=state-ciphertext-hashes-snake-sentinel \
              state_ciphertext_hashes.bin=state-ciphertext-hashes-bin-sentinel \
              state_ciphertext_hashes.json=state-ciphertext-hashes-json-sentinel \
@@ -500,6 +503,7 @@ mod tests {
         assert!(!redacted.contains("client-state-ciphertext-snake-sentinel"));
         assert!(!redacted.contains("client-state-ciphertext-hash-snake-sentinel"));
         assert!(!redacted.contains("client-state-ciphertext-hash-bin-sentinel"));
+        assert!(!redacted.contains("client-state-ciphertext-hash-json-sentinel"));
         assert!(!redacted.contains("client-state-ciphertext-hashes-bin-sentinel"));
         assert!(!redacted.contains("client-state-ciphertext-hashes-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-snake-sentinel"));
@@ -519,6 +523,7 @@ mod tests {
         assert!(!redacted.contains("encrypted-client-state-ciphertext-camel-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-hash-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-hash-bin-sentinel"));
+        assert!(!redacted.contains("encrypted-client-state-ciphertext-hash-json-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-hashes-bin-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-hashes-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-hash-camel-sentinel"));
@@ -552,6 +557,7 @@ mod tests {
         assert!(!redacted.contains("state-ciphertext-snake-sentinel"));
         assert!(!redacted.contains("state-ciphertext-hash-snake-sentinel"));
         assert!(!redacted.contains("state-ciphertext-hash-bin-sentinel"));
+        assert!(!redacted.contains("state-ciphertext-hash-json-sentinel"));
         assert!(!redacted.contains("state-ciphertext-hashes-snake-sentinel"));
         assert!(!redacted.contains("state-ciphertext-hashes-bin-sentinel"));
         assert!(!redacted.contains("token-maps-snake-sentinel"));
