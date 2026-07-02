@@ -3353,6 +3353,34 @@ mod tests {
         assert!(!rendered.contains("sentinel"));
         fs::remove_file(&hnsw_snake_state).unwrap();
 
+        let hnsw_snake_json_state = temp_dir
+            .path()
+            .join(PRIVATE_HNSW_ORAM_DIR)
+            .join("text")
+            .join("client_state_ciphertext_hash.json");
+        fs::write(
+            &hnsw_snake_json_state,
+            b"append HNSW snake json state sentinel",
+        )
+        .unwrap();
+
+        let archive = tempfile::NamedTempFile::new().unwrap();
+        let tar = BuilderExt::new_seekable_owned(File::create(archive.path()).unwrap());
+        let err = blocking_append_private_oram_snapshot_dir(
+            &tar,
+            &temp_dir.path().join(PRIVATE_HNSW_ORAM_DIR),
+            Path::new(PRIVATE_HNSW_ORAM_DIR),
+            PRIVATE_HNSW_ORAM_DIR,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("private HNSW ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains("client_state_ciphertext_hash"));
+        assert!(!rendered.contains("sentinel"));
+        fs::remove_file(&hnsw_snake_json_state).unwrap();
+
         let hnsw_camel_hashes = temp_dir
             .path()
             .join(PRIVATE_HNSW_ORAM_DIR)
@@ -3427,6 +3455,34 @@ mod tests {
         assert!(!rendered.contains("sentinel"));
 
         fs::remove_file(&result_position_map).unwrap();
+        let result_json_position_map = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("state_ciphertext_hash.json");
+        fs::write(
+            &result_json_position_map,
+            b"append result json position map sentinel",
+        )
+        .unwrap();
+
+        let archive = tempfile::NamedTempFile::new().unwrap();
+        let tar = BuilderExt::new_seekable_owned(File::create(archive.path()).unwrap());
+        let err = blocking_append_private_oram_snapshot_dir(
+            &tar,
+            &temp_dir.path().join(PRIVATE_RESULT_ORAM_DIR),
+            Path::new(PRIVATE_RESULT_ORAM_DIR),
+            PRIVATE_RESULT_ORAM_DIR,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered
+                .contains("private result ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains("state_ciphertext_hash"));
+        assert!(!rendered.contains("sentinel"));
+
+        fs::remove_file(&result_json_position_map).unwrap();
         fs::write(
             temp_dir
                 .path()
