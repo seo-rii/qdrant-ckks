@@ -6,7 +6,7 @@ use ring::signature::{ED25519, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::aead::{EncryptionError, validate_resource_key_id};
+use crate::aead::validate_resource_key_id;
 use crate::control_plane::{PRIVATE_HNSW_ORAM_BINDING, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER};
 
 pub const PRIVATE_HNSW_ORAM_MANIFEST_SIGNATURE_DOMAIN: &str =
@@ -1031,10 +1031,7 @@ fn compact_vector_name_is_client_owned_oram_state_alias(value: &str) -> bool {
 }
 
 fn validate_resource_id(value: &str) -> Result<(), PrivateHnswOramError> {
-    validate_resource_key_id(value).map_err(|err| match err {
-        EncryptionError::InvalidResourceKeyId => PrivateHnswOramError::InvalidResourceKeyId,
-        _ => PrivateHnswOramError::InvalidResourceKeyId,
-    })
+    validate_resource_key_id(value).map_err(|_| PrivateHnswOramError::InvalidResourceKeyId)
 }
 
 fn decode_base64url_32(value: &str, field: &'static str) -> Result<[u8; 32], PrivateHnswOramError> {
