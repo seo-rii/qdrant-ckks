@@ -3625,6 +3625,14 @@ mod tests {
             .to_string();
         assert!(err.contains("ciphertext_sha256 mismatch"));
         assert!(!err.contains(&hash_mismatch_bucket.ciphertext), "{err}");
+        assert!(
+            !err.contains(&hash_mismatch_bucket.ciphertext_sha256),
+            "{err}"
+        );
+        assert!(
+            !err.contains(&hash_mismatch_bucket.bucket_commitment),
+            "{err}"
+        );
         assert_writeback_target_unchanged();
 
         let mut short_ciphertext_bucket = updated_bucket.clone();
@@ -3658,6 +3666,14 @@ mod tests {
         assert!(err.contains("fixed ciphertext size"));
         assert!(!err.contains("short-hnsw-commit"));
         assert!(!err.contains(&short_ciphertext_bucket.ciphertext), "{err}");
+        assert!(
+            !err.contains(&short_ciphertext_bucket.ciphertext_sha256),
+            "{err}"
+        );
+        assert!(
+            !err.contains(&short_ciphertext_bucket.bucket_commitment),
+            "{err}"
+        );
         assert_writeback_target_unchanged();
 
         let expected_bytes =
@@ -3681,6 +3697,7 @@ mod tests {
 
         assert!(err.contains("fixed ciphertext size"));
         assert!(!err.contains(&oversized_bucket.ciphertext));
+        assert!(!err.contains(&oversized_bucket.ciphertext_sha256));
         assert_writeback_target_unchanged();
 
         let wrong_root_new = PrivateHnswOramEpochState {
@@ -3699,6 +3716,9 @@ mod tests {
             .to_string();
         assert!(err.contains("new_root_hash mismatch"));
         assert!(!err.contains(&wrong_root_new.root_hash), "{err}");
+        assert!(!err.contains(&updated_bucket.ciphertext), "{err}");
+        assert!(!err.contains(&updated_bucket.ciphertext_sha256), "{err}");
+        assert!(!err.contains(&updated_bucket.bucket_commitment), "{err}");
         assert_writeback_target_unchanged();
     }
 
