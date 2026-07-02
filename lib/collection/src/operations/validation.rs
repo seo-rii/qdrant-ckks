@@ -574,8 +574,11 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("client_state_ciphertexts"));
         assert!(!unsafe_store_name_message.contains("clientStateCiphertexts"));
         assert!(!unsafe_store_name_message.contains("client_state_ciphertext_hash"));
+        assert!(!unsafe_store_name_message.contains("client_state_ciphertext_hash.bin"));
         assert!(!unsafe_store_name_message.contains("client_state_ciphertext_hashes"));
+        assert!(!unsafe_store_name_message.contains("client_state_ciphertext_hashes.bin"));
         assert!(!unsafe_store_name_message.contains("client_state_ciphertext_sha256"));
+        assert!(!unsafe_store_name_message.contains("client_state_ciphertext_sha256.bin"));
         assert!(!unsafe_store_name_message.contains("client_state_ciphertexts_sha256"));
         assert!(!unsafe_store_name_message.contains("encryptedClientState"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStates"));
@@ -598,8 +601,15 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertextSha256"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStateCiphertextsSha256"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext_hash"));
+        assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext_hash.bin"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext_hashes"));
+        assert!(
+            !unsafe_store_name_message.contains("encrypted_client_state_ciphertext_hashes.bin")
+        );
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertext_sha256"));
+        assert!(
+            !unsafe_store_name_message.contains("encrypted_client_state_ciphertext_sha256.bin")
+        );
         assert!(!unsafe_store_name_message.contains("encrypted_client_state_ciphertexts_sha256"));
         assert!(!unsafe_store_name_message.contains("oramPositionMap"));
         assert!(!unsafe_store_name_message.contains("oramPositionMaps"));
@@ -635,8 +645,11 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("stateCiphertextsSha256"));
         assert!(!unsafe_store_name_message.contains("state_ciphertext"));
         assert!(!unsafe_store_name_message.contains("state_ciphertext_hash"));
+        assert!(!unsafe_store_name_message.contains("state_ciphertext_hash.bin"));
         assert!(!unsafe_store_name_message.contains("state_ciphertext_hashes"));
+        assert!(!unsafe_store_name_message.contains("state_ciphertext_hashes.bin"));
         assert!(!unsafe_store_name_message.contains("state_ciphertext_sha256"));
+        assert!(!unsafe_store_name_message.contains("state_ciphertext_sha256.bin"));
         assert!(!unsafe_store_name_message.contains("state_ciphertexts_sha256"));
         assert!(!unsafe_store_name_message.contains("tokenMap"));
         assert!(!unsafe_store_name_message.contains("tokenMaps"));
@@ -672,7 +685,16 @@ mod tests {
                     "id": "hash_private_hnsw",
                     "selector": {
                         "names": [
+                            "client_state_ciphertext_hash.bin",
+                            "client_state_ciphertext_hashes.bin",
+                            "client_state_ciphertext_sha256.bin",
+                            "encrypted_client_state_ciphertext_hash.bin",
+                            "encrypted_client_state_ciphertext_hashes.bin",
+                            "encrypted_client_state_ciphertext_sha256.bin",
                             "encrypted_client_state_ciphertexts_sha256.bin",
+                            "state_ciphertext_hash.bin",
+                            "state_ciphertext_hashes.bin",
+                            "state_ciphertext_sha256.bin",
                             "state_ciphertexts_sha256.bin",
                         ]
                     },
@@ -683,9 +705,22 @@ mod tests {
         let unsafe_hash_store_name_message = describe_error(&unsafe_hash_store_name);
         assert!(unsafe_hash_store_name_message.contains("safe non-client-state store path"));
         assert!(!unsafe_hash_store_name_message.contains("hash_private_hnsw"));
+        assert!(!unsafe_hash_store_name_message.contains("client_state_ciphertext_hash"));
+        assert!(!unsafe_hash_store_name_message.contains("client_state_ciphertext_hashes"));
+        assert!(!unsafe_hash_store_name_message.contains("client_state_ciphertext_sha256"));
+        assert!(!unsafe_hash_store_name_message.contains("encrypted_client_state_ciphertext_hash"));
+        assert!(
+            !unsafe_hash_store_name_message.contains("encrypted_client_state_ciphertext_hashes")
+        );
+        assert!(
+            !unsafe_hash_store_name_message.contains("encrypted_client_state_ciphertext_sha256")
+        );
         assert!(
             !unsafe_hash_store_name_message.contains("encrypted_client_state_ciphertexts_sha256")
         );
+        assert!(!unsafe_hash_store_name_message.contains("state_ciphertext_hash"));
+        assert!(!unsafe_hash_store_name_message.contains("state_ciphertext_hashes"));
+        assert!(!unsafe_hash_store_name_message.contains("state_ciphertext_sha256"));
         assert!(!unsafe_hash_store_name_message.contains("state_ciphertexts_sha256"));
 
         let mut overlap = ValidationError::new("overlapping_encryption_selector");
