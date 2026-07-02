@@ -657,6 +657,32 @@ mod tests {
     }
 
     #[test]
+    fn private_result_oram_payload_index_errors_redact_client_state_aliases() {
+        for private_result_path in [
+            "payload_fetch_token",
+            "state_ciphertext_hash",
+            "state_ciphertext_sha256",
+            "token_map_backup",
+            "token_position_map_backups",
+        ] {
+            let collection_params = params_with_private_result_oram_path(private_result_path);
+            let field_name = private_result_path.parse::<JsonPath>().unwrap();
+
+            let err = validate_payload_index_paths_for_encrypted_paths(
+                [&field_name],
+                &collection_params,
+                "create",
+            )
+            .unwrap_err()
+            .to_string();
+
+            assert!(err.contains("cannot use private result ORAM payload field"));
+            assert!(err.contains("/private-result-oram/session"));
+            assert!(!err.contains(private_result_path), "{err}");
+        }
+    }
+
+    #[test]
     fn payload_index_private_result_oram_invalid_payload_path_error_is_sanitized() {
         let secret_path = "document.body[private-result-index-secret";
         let collection_params = params_with_private_result_oram_path(secret_path);
