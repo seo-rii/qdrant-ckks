@@ -443,6 +443,7 @@ mod tests {
              state_ciphertext_sha256=state-ciphertext-sha256-snake-sentinel \
              state_ciphertexts_sha256=state-ciphertexts-sha256-snake-sentinel \
              state_ciphertexts_sha256.bin=state-ciphertexts-sha256-bin-sentinel \
+             state_ciphertexts_sha256.json=state-ciphertexts-sha256-json-sentinel \
              position_map=position-map-snake-sentinel \
              positionMap=position-map-camel-sentinel \
              positionMapBackup=position-map-backup-camel-sentinel \
@@ -683,10 +684,12 @@ mod tests {
         assert!(!rendered.contains("client-state-ciphertext-hashes-snake-sentinel"));
         assert!(!rendered.contains("client-state-ciphertext-sha256-snake-sentinel"));
         assert!(!rendered.contains("client-state-ciphertexts-sha256-snake-sentinel"));
+        assert!(!rendered.contains("client-state-ciphertexts-sha256-json-sentinel"));
         assert!(!rendered.contains("encrypted-client-state-ciphertext-hash-snake-sentinel"));
         assert!(!rendered.contains("encrypted-client-state-ciphertext-hash-bin-sentinel"));
         assert!(!rendered.contains("encrypted-client-state-ciphertext-sha256-snake-sentinel"));
         assert!(!rendered.contains("encrypted-client-state-ciphertexts-sha256-snake-sentinel"));
+        assert!(!rendered.contains("encrypted-client-state-ciphertexts-sha256-json-sentinel"));
         assert!(!rendered.contains("encrypted-client-state-ciphertext-camel-sentinel"));
         assert!(!rendered.contains("encrypted-client-state-ciphertext-snake-sentinel"));
         assert!(!rendered.contains("encrypted-client-state-ciphertext-hash-camel-sentinel"));
@@ -706,6 +709,7 @@ mod tests {
         assert!(!rendered.contains("state-ciphertext-hashes-bin-sentinel"));
         assert!(!rendered.contains("state-ciphertext-sha256-snake-sentinel"));
         assert!(!rendered.contains("state-ciphertexts-sha256-snake-sentinel"));
+        assert!(!rendered.contains("state-ciphertexts-sha256-json-sentinel"));
         assert!(!rendered.contains("position-map-snake-sentinel"));
         assert!(!rendered.contains("position-map-camel-sentinel"));
         assert!(!rendered.contains("position-map-backup-camel-sentinel"));
