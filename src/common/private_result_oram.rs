@@ -2112,10 +2112,12 @@ mod private_result_oram_tests {
             "encrypted.client.state!sentinel",
             "encrypted_client_state_snapshot!sentinel",
             "encrypted_client_state_ciphertext_hash.bin!sentinel",
+            "encrypted_client_state_ciphertext_hash.json!sentinel",
             "oramPositionMapBackup!sentinel",
             "stashBackup.json!sentinel",
             "stashBackups.json!sentinel",
             "state_ciphertext_hashes.bin!sentinel",
+            "state_ciphertext_hashes.json!sentinel",
             "tokenMapBackups!sentinel",
             "token_map_backups!sentinel",
             "token_position_map_backups!sentinel",
@@ -2154,8 +2156,10 @@ mod private_result_oram_tests {
             "encrypted.client.state/session",
             "encrypted_client_state_snapshot/session",
             "encrypted_client_state_ciphertext_hash.bin/session",
+            "encrypted_client_state_ciphertext_hash.json/session",
             "oramPositionMapBackup/session",
             "state_ciphertext_hashes.bin/session",
+            "state_ciphertext_hashes.json/session",
             "tokenMapBackups/session",
             "token_map_backups/session",
             "token_position_map_backups/session",
@@ -2229,8 +2233,10 @@ mod private_result_oram_tests {
         for alias_root_hash in [
             "encrypted.client.state",
             "encrypted_client_state_ciphertext_hash.bin",
+            "encrypted_client_state_ciphertext_hash.json",
             "stashBackup.json",
             "state_ciphertext_hashes.bin",
+            "state_ciphertext_hashes.json",
         ] {
             let err = validate_base64url_32_string(alias_root_hash, "root_hash").unwrap_err();
             let rendered = err.to_string();
@@ -2311,9 +2317,11 @@ mod private_result_oram_tests {
             "encrypted.client.state",
             "encrypted_client_state_ciphertext_hash",
             "encrypted_client_state_ciphertext_hash.bin",
+            "encrypted_client_state_ciphertext_hash.json",
             "encrypted_client_state_ciphertext_sha256",
             "stashBackup.json",
             "state_ciphertext_hashes.bin",
+            "state_ciphertext_hashes.json",
         ] {
             let err = signature_public_key(&instance, missing_alias_key_id).unwrap_err();
             let rendered = err.to_string();
@@ -2469,8 +2477,10 @@ mod private_result_oram_tests {
         for alias_key_id in [
             "encrypted.client.state!sentinel",
             "encrypted_client_state_ciphertext_hash.bin!sentinel",
+            "encrypted_client_state_ciphertext_hash.json!sentinel",
             "stashBackup.json!sentinel",
             "state_ciphertext_hashes.bin!sentinel",
+            "state_ciphertext_hashes.json!sentinel",
         ] {
             let rendered = private_result_oram_error(
                 validate_private_result_oram_manifest_signature_shape(
@@ -2517,8 +2527,10 @@ mod private_result_oram_tests {
         for alias_signature in [
             "encrypted.client.state",
             "encrypted_client_state_ciphertext_hash.bin",
+            "encrypted_client_state_ciphertext_hash.json",
             "stashBackup.json",
             "state_ciphertext_hashes.bin",
+            "state_ciphertext_hashes.json",
         ] {
             let rendered = private_result_oram_error(
                 validate_private_result_oram_manifest_signature_shape(
