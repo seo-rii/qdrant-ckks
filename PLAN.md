@@ -573,7 +573,7 @@
 - `qdrant-sec` private HNSW client와 private result ORAM error `Debug` 회귀도 Display와 같은 structured-value variant를 직접 렌더링해 bucket id, epoch, version, context sentinel, unsupported algorithm/detail이 반사되지 않는지 고정한다.
 - Collection store initial upload의 unsupported/tampered manifest signature 오류도 submitted algorithm, signature key/body, manifest root, bucket ciphertext/hash/commitment를 반사하지 않고 layout 생성 전 fail closed 된다.
 - Collection store writeback의 unsupported commit signature algorithm 오류도 submitted signature key/body, old/new root, updated bucket ciphertext, bucket commitment를 반사하지 않고 저장 epoch/bucket/Merkle 상태를 유지한다.
-- `qdrant-sec` private HNSW client와 private result ORAM client helper의 encryption wrapper error도 inner AEAD algorithm/detail 문자열을 Display에 붙이지 않는다.
+- `qdrant-sec` private result ORAM client helper의 encryption wrapper error는 inner AEAD algorithm/detail 문자열을 Display에 붙이지 않는다. Private HNSW helper는 resource-key validation 오류를 wrapper로 보존하지 않고 고정 `InvalidResourceKeyId`로 매핑해 submitted key detail을 반사하지 않는다.
 - snapshot creation/restore preflight는 on-disk private HNSW ORAM vector store가 collection encryption rule에 매칭되지 않거나, configured vector store가 없거나, parent store가 symlink이거나, client-owned ORAM state 또는 non-empty temp write state가 섞여 있으면 fail-closed로 거부한다.
 - manifest signature, manifest ORAM capacity, bucket hash, stale epoch, invalid commit signature, symlink/permission hardening, snapshot leakage, crash recovery는 현재 provider/store/API fixture에 추가되어 있다.
 
