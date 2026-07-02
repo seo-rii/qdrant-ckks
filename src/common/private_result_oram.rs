@@ -2107,9 +2107,15 @@ mod private_result_oram_tests {
 
         for alias_client_id in [
             "client_state_ciphertext!sentinel",
+            "client_state_ciphertext_hash.bin!sentinel",
             "clientStateCiphertextHash!sentinel",
+            "encrypted.client.state!sentinel",
             "encrypted_client_state_snapshot!sentinel",
+            "encrypted_client_state_ciphertext_hash.bin!sentinel",
             "oramPositionMapBackup!sentinel",
+            "stashBackup.json!sentinel",
+            "stashBackups.json!sentinel",
+            "state_ciphertext_hashes.bin!sentinel",
             "tokenMapBackups!sentinel",
             "token_map_backups!sentinel",
             "token_position_map_backups!sentinel",
