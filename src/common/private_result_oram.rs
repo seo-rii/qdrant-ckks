@@ -2492,6 +2492,27 @@ mod private_result_oram_tests {
         .to_string();
         assert!(rendered.contains("request validation failed"));
         assert!(!rendered.contains(&malformed_signature), "{rendered}");
+
+        for alias_signature in [
+            "encrypted.client.state",
+            "encrypted_client_state_ciphertext_hash.bin",
+            "stashBackup.json",
+            "state_ciphertext_hashes.bin",
+        ] {
+            let rendered = private_result_oram_error(
+                validate_private_result_oram_manifest_signature_shape(
+                    &PrivateResultOramSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: SIGNING_KEY_ID.to_string(),
+                        sig: alias_signature.to_string(),
+                    },
+                )
+                .unwrap_err(),
+            )
+            .to_string();
+            assert!(rendered.contains("request validation failed"));
+            assert!(!rendered.contains(alias_signature), "{rendered}");
+        }
     }
 
     #[test]

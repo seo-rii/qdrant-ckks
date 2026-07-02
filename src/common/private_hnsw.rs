@@ -3551,6 +3551,23 @@ mod private_hnsw_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("signature is not base64url"));
         assert!(!rendered.contains(&malformed));
+
+        for alias_sig in [
+            "encrypted.client.state",
+            "encrypted_client_state_ciphertext_hash.bin",
+            "stashBackup.json",
+            "state_ciphertext_hashes.bin",
+        ] {
+            let err = validate_client_signature_shape(&PrivateHnswClientSignature {
+                alg: "ed25519".to_string(),
+                key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+                sig: alias_sig.to_string(),
+            })
+            .unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("signature"));
+            assert!(!rendered.contains(alias_sig), "{rendered}");
+        }
     }
 
     #[test]
@@ -3812,6 +3829,25 @@ mod private_hnsw_tests {
         .to_string();
         assert!(rendered.contains("request validation failed"));
         assert!(!rendered.contains(&malformed_signature), "{rendered}");
+
+        for alias_signature in [
+            "encrypted.client.state",
+            "encrypted_client_state_ciphertext_hash.bin",
+            "stashBackup.json",
+            "state_ciphertext_hashes.bin",
+        ] {
+            let rendered = private_hnsw_error(
+                validate_private_hnsw_oram_manifest_signature_shape(&PrivateHnswOramSignature {
+                    alg: "ed25519".to_string(),
+                    key_id: "tenant-a/private-hnsw-signing-v1".to_string(),
+                    sig: alias_signature.to_string(),
+                })
+                .unwrap_err(),
+            )
+            .to_string();
+            assert!(rendered.contains("request validation failed"));
+            assert!(!rendered.contains(alias_signature), "{rendered}");
+        }
     }
 
     #[test]
