@@ -2701,25 +2701,24 @@ mod private_hnsw_tests {
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains(&malformed), "{rendered}");
 
-        let alias_label = "encrypted_client_state_ciphertext_hash".to_string();
-        let err =
-            validate_private_hnsw_read_path_label_request_shape(std::slice::from_ref(&alias_label))
-                .unwrap_err();
-        let rendered = err.to_string();
-        assert!(rendered.contains("request validation failed"));
-        assert!(!rendered.contains("session is missing or expired"));
-        assert!(!rendered.contains("private_hnsw_oram"));
-        assert!(!rendered.contains(&alias_label), "{rendered}");
-
-        let alias_label = "encrypted_client_state_ciphertext_sha256".to_string();
-        let err =
-            validate_private_hnsw_read_path_label_request_shape(std::slice::from_ref(&alias_label))
-                .unwrap_err();
-        let rendered = err.to_string();
-        assert!(rendered.contains("request validation failed"));
-        assert!(!rendered.contains("session is missing or expired"));
-        assert!(!rendered.contains("private_hnsw_oram"));
-        assert!(!rendered.contains(&alias_label), "{rendered}");
+        for alias_label in [
+            "encrypted.client.state",
+            "encrypted_client_state_ciphertext_hash",
+            "encrypted_client_state_ciphertext_hash.bin",
+            "encrypted_client_state_ciphertext_sha256",
+            "stashBackup.json",
+            "state_ciphertext_hashes.bin",
+        ] {
+            let err = validate_private_hnsw_read_path_label_request_shape(std::slice::from_ref(
+                &alias_label.to_string(),
+            ))
+            .unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("request validation failed"));
+            assert!(!rendered.contains("session is missing or expired"));
+            assert!(!rendered.contains("private_hnsw_oram"));
+            assert!(!rendered.contains(alias_label), "{rendered}");
+        }
     }
 
     #[test]
