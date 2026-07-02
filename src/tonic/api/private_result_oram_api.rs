@@ -3329,6 +3329,11 @@ mod private_result_oram_grpc_tests {
                     .contains("signature key_id does not match manifest owner_signing_key_id")
             );
             assert!(!alt_read_key.message().contains(ALT_SIGNING_KEY_ID));
+            assert!(
+                !alt_read_key
+                    .message()
+                    .contains(&fixture.manifest.owner_signing_key_id)
+            );
             for sentinel in [
                 session.session_id.as_str(),
                 fixture.manifest.root_hash.as_str(),
@@ -4472,6 +4477,11 @@ mod private_result_oram_grpc_tests {
                     .contains("signature key_id does not match manifest owner_signing_key_id")
             );
             assert!(!alt_commit_key.message().contains(ALT_SIGNING_KEY_ID));
+            assert!(
+                !alt_commit_key
+                    .message()
+                    .contains(&fixture.manifest.owner_signing_key_id)
+            );
             for sentinel in [
                 session.session_id.as_str(),
                 fixture.manifest.root_hash.as_str(),
