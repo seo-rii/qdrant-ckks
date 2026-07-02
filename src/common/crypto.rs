@@ -11484,6 +11484,99 @@ mod tests {
     }
 
     #[test]
+    fn validate_collection_crypto_runtime_sanitizes_private_result_oram_instance_errors() {
+        let mut settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "payload_result_oram_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_result_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let secret_option = "client_secret";
+        let secret_value = "qdrant-sec-private-result-collection-runtime-secret-sentinel";
+        settings
+            .crypto
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(secret_option.to_string(), json!(secret_value));
+        let params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a:result-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "body_private_result".to_string(),
+                    selector: EncryptionSelector::PayloadPaths {
+                        paths: vec!["body".to_string()],
+                    },
+                    instance: "payload_result_oram_v1".to_string(),
+                    binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+
+        let err =
+            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+                .expect_err("collection runtime must reject invalid private result ORAM instance");
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private result ORAM runtime instance is invalid")
+                    && !description.contains("payload_result_oram_v1")
+                    && !description.contains(secret_option)
+                    && !description.contains(secret_value)
+                    && !description.contains("unsupported option")),
+            "unexpected error: {err:?}",
+        );
+
+        settings
+            .crypto
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options = private_result_oram_options();
+        let nested_secret_option = "oram.client_secret";
+        let nested_secret_value =
+            "qdrant-sec-private-result-collection-runtime-nested-secret-sentinel";
+        settings
+            .crypto
+            .instances
+            .get_mut("payload_result_oram_v1")
+            .unwrap()
+            .options["oram"]["client_secret"] = json!(nested_secret_value);
+        let err =
+            validate_collection_crypto_runtime_with_crypto_id(&settings, "docs", "docs", &params)
+                .expect_err(
+                    "collection runtime must reject invalid nested private result ORAM options",
+                );
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private result ORAM runtime instance is invalid")
+                    && !description.contains("payload_result_oram_v1")
+                    && !description.contains(nested_secret_option)
+                    && !description.contains(nested_secret_value)
+                    && !description.contains("unsupported option")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn validate_crypto_settings_rejects_private_result_oram_server_materials_and_backend() {
         let material_sentinel = "tenant-a/private-result-server-rk-sentinel";
         let mut settings = CryptoSettings {
