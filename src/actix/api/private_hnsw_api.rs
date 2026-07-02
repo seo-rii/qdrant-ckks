@@ -567,6 +567,15 @@ mod private_hnsw_rest_tests {
         "token_position_map_snapshot",
         "token_position_map_snapshots",
     ];
+    const PRIVATE_HNSW_CLIENT_STATE_FILENAME_REDACTION_ALIASES: &[&str] = &[
+        "client_state_ciphertext_hashes.bin",
+        "client_state_ciphertexts_sha256.bin",
+        "encrypted_client_state_snapshot.bin",
+        "encrypted_client_state_snapshot.json",
+        "encrypted_client_state_snapshots.json",
+        "encrypted_client_state_ciphertext_hashes.bin",
+        "encrypted_client_state_ciphertexts_sha256.bin",
+    ];
 
     fn json_roundtrip<T>(value: &T) -> T
     where
@@ -621,6 +630,12 @@ mod private_hnsw_rest_tests {
                 "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
             );
         }
+        for &forbidden in PRIVATE_HNSW_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
+            );
+        }
     }
 
     fn assert_private_hnsw_guard_error_redacts(rendered: &str, extra_forbidden: &[&str]) {
@@ -645,6 +660,12 @@ mod private_hnsw_rest_tests {
             );
         }
         for &forbidden in PRIVATE_HNSW_CLIENT_STATE_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_HNSW_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "private HNSW guard leaked `{forbidden}`: {rendered}",
@@ -679,6 +700,12 @@ mod private_hnsw_rest_tests {
             );
         }
         for &forbidden in PRIVATE_HNSW_CLIENT_STATE_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW route error leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_HNSW_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "private HNSW route error leaked `{forbidden}`: {rendered}",
@@ -1209,6 +1236,11 @@ mod private_hnsw_rest_tests {
                     (alias.clone(), alias)
                 },
             ));
+            unsafe_vector_names.extend(
+                PRIVATE_HNSW_CLIENT_STATE_FILENAME_REDACTION_ALIASES
+                    .iter()
+                    .map(|alias| ((*alias).to_string(), (*alias).to_string())),
+            );
             for (route_vector_name, unsafe_vector_name) in unsafe_vector_names {
                 let request = actix_test::TestRequest::get()
                     .uri(&format!(
