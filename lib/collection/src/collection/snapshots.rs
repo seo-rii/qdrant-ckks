@@ -4958,6 +4958,7 @@ mod tests {
         assert!(rendered.contains("bucket commitments"));
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext_sha256), "{rendered}");
         assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
         assert_private_result_restore_error_redacts_common(&rendered);
     }
@@ -5021,6 +5022,7 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("fixed ciphertext size"));
         assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext_sha256), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert_private_result_restore_error_redacts_common(&rendered);
     }
@@ -5088,6 +5090,7 @@ mod tests {
         .unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("bucket commitment context"));
+        assert!(!rendered.contains(&bucket.ciphertext_sha256), "{rendered}");
         assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert_private_result_restore_error_redacts_common(&rendered);
@@ -6325,6 +6328,7 @@ mod tests {
         assert!(rendered.contains("bucket commitments"));
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext_sha256), "{rendered}");
         assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
         assert!(!rendered.contains("text"), "{rendered}");
         assert_private_hnsw_restore_error_redacts_common(&rendered);
@@ -6390,6 +6394,7 @@ mod tests {
         assert!(rendered.contains("fixed ciphertext size"));
         assert!(!rendered.contains("0"), "{rendered}");
         assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext_sha256), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
         assert_private_hnsw_restore_error_redacts_common(&rendered);
@@ -6459,6 +6464,7 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("commitment context mismatch"));
         assert!(!rendered.contains("0"), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext_sha256), "{rendered}");
         assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
         assert!(!rendered.contains(&manifest.root_hash), "{rendered}");
         assert!(!rendered.contains(PRIVATE_HNSW_ORAM_DIR));
