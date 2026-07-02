@@ -1848,6 +1848,11 @@ mod private_result_oram_grpc_tests {
                     .contains("signature key_id does not match manifest owner_signing_key_id")
             );
             assert!(!alt_manifest_key.message().contains(ALT_SIGNING_KEY_ID));
+            assert!(
+                !alt_manifest_key
+                    .message()
+                    .contains(&fixture.manifest.owner_signing_key_id)
+            );
             for sentinel in [
                 fixture.manifest.root_hash.as_str(),
                 alt_manifest_signature_sig.as_str(),
@@ -1887,6 +1892,11 @@ mod private_result_oram_grpc_tests {
                 !unconfigured_manifest_key
                     .message()
                     .contains("not configured")
+            );
+            assert!(
+                !unconfigured_manifest_key
+                    .message()
+                    .contains(&fixture.manifest.owner_signing_key_id)
             );
             for sentinel in [
                 fixture.manifest.root_hash.as_str(),
