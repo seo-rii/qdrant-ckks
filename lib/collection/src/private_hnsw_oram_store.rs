@@ -2909,8 +2909,10 @@ mod tests {
             .to_string();
         assert!(rendered.contains("existing bucket set"));
         assert!(!rendered.contains(&replacement.ciphertext));
+        assert!(!rendered.contains(&replacement.ciphertext_sha256));
         assert!(!rendered.contains(&replacement.bucket_commitment));
         assert!(!rendered.contains(&original.buckets[0].ciphertext));
+        assert!(!rendered.contains(&original.buckets[0].ciphertext_sha256));
         assert_eq!(
             store
                 .read_bucket(

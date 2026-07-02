@@ -2818,8 +2818,10 @@ mod tests {
 
         assert!(rendered.contains("existing bucket set"));
         assert!(!rendered.contains(&replacement.ciphertext));
+        assert!(!rendered.contains(&replacement.ciphertext_sha256));
         assert!(!rendered.contains(&replacement.bucket_commitment));
         assert!(!rendered.contains(&original.buckets[0].ciphertext));
+        assert!(!rendered.contains(&original.buckets[0].ciphertext_sha256));
         assert_eq!(
             store
                 .read_bucket(0, original.manifest.index_epoch, 3, 128)
