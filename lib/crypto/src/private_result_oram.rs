@@ -7633,6 +7633,14 @@ mod tests {
             &[bucket0.clone(), bucket0.clone()],
         )
         .unwrap();
+        verify_private_result_oram_merkle_proof_json(
+            &serde_json::to_string(&duplicate_proof).unwrap(),
+            42,
+            &root,
+            2,
+            &[bucket0.clone(), bucket0.clone()],
+        )
+        .unwrap();
 
         let mut conflicting_duplicate_bucket = bucket0.clone();
         let conflicting_raw = b"conflicting duplicate bucket";
