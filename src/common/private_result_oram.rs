@@ -2269,12 +2269,22 @@ mod private_result_oram_tests {
         assert!(!rendered.contains(&malformed));
 
         for alias_root_hash in [
+            "client_state_ciphertext_hash.bin",
+            "client_state_ciphertext_hash.json",
+            "client_state_ciphertext_sha256.bin",
+            "client_state_ciphertext_sha256.json",
             "encrypted.client.state",
             "encrypted_client_state_ciphertext_hash.bin",
             "encrypted_client_state_ciphertext_hash.json",
+            "encrypted_client_state_ciphertext_sha256.bin",
+            "encrypted_client_state_ciphertext_sha256.json",
             "stashBackup.json",
+            "state_ciphertext_hash.bin",
+            "state_ciphertext_hash.json",
             "state_ciphertext_hashes.bin",
             "state_ciphertext_hashes.json",
+            "state_ciphertext_sha256.bin",
+            "state_ciphertext_sha256.json",
         ] {
             let err = validate_base64url_32_string(alias_root_hash, "root_hash").unwrap_err();
             let rendered = err.to_string();
@@ -2352,14 +2362,24 @@ mod private_result_oram_tests {
         assert!(!rendered.contains(missing_key_id));
 
         for missing_alias_key_id in [
+            "client_state_ciphertext_hash.bin",
+            "client_state_ciphertext_hash.json",
+            "client_state_ciphertext_sha256.bin",
+            "client_state_ciphertext_sha256.json",
             "encrypted.client.state",
             "encrypted_client_state_ciphertext_hash",
             "encrypted_client_state_ciphertext_hash.bin",
             "encrypted_client_state_ciphertext_hash.json",
             "encrypted_client_state_ciphertext_sha256",
+            "encrypted_client_state_ciphertext_sha256.bin",
+            "encrypted_client_state_ciphertext_sha256.json",
             "stashBackup.json",
+            "state_ciphertext_hash.bin",
+            "state_ciphertext_hash.json",
             "state_ciphertext_hashes.bin",
             "state_ciphertext_hashes.json",
+            "state_ciphertext_sha256.bin",
+            "state_ciphertext_sha256.json",
         ] {
             let err = signature_public_key(&instance, missing_alias_key_id).unwrap_err();
             let rendered = err.to_string();
