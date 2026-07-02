@@ -373,6 +373,38 @@ mod tests {
         assert!(wrong_selector_message.contains("must use payload_paths selectors"));
         assert!(!wrong_selector_message.contains("result_wrong_selector_rule"));
         assert!(!wrong_selector_message.contains("result-secret-vector"));
+
+        let mut alias_overlap = ValidationError::new("overlapping_encryption_selector");
+        alias_overlap.add_param(
+            std::borrow::Cow::from("value"),
+            &serde_json::json!([
+                {
+                    "id": "state_hash_private_result",
+                    "selector": {
+                        "paths": [
+                            "payload_fetch_token",
+                            "state_ciphertext_hash.bin",
+                            "state_ciphertext_sha256.json",
+                            "token_position_map_backups"
+                        ]
+                    },
+                    "binding": "private-result-oram/v1",
+                },
+                {
+                    "id": "state_hash_client_payload",
+                    "selector": { "paths": ["state_ciphertext_hash.bin"] },
+                    "binding": "client-payload/v1",
+                },
+            ]),
+        );
+        let alias_overlap_message = describe_error(&alias_overlap);
+        assert!(alias_overlap_message.contains("private result ORAM payload selector overlaps"));
+        assert!(!alias_overlap_message.contains("state_hash_private_result"));
+        assert!(!alias_overlap_message.contains("state_hash_client_payload"));
+        assert!(!alias_overlap_message.contains("payload_fetch_token"));
+        assert!(!alias_overlap_message.contains("state_ciphertext_hash"));
+        assert!(!alias_overlap_message.contains("state_ciphertext_sha256"));
+        assert!(!alias_overlap_message.contains("token_position_map_backups"));
     }
 
     #[test]
