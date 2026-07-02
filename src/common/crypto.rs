@@ -24421,6 +24421,105 @@ mod tests {
     }
 
     #[test]
+    fn private_hnsw_oram_vector_write_plan_sanitizes_runtime_instance_errors() {
+        let mut settings = Settings {
+            crypto: CryptoSettings {
+                zero_trust_profile: Some(ZERO_TRUST_PROFILE_STRICT.to_string()),
+                allow_inline_key_material: false,
+                instances: HashMap::from([(
+                    "docs_private_hnsw_v1".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options: private_hnsw_oram_options(),
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let secret_option = "client_secret";
+        let secret_value = "qdrant-sec-private-hnsw-vector-plan-secret-sentinel";
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options
+            .as_object_mut()
+            .unwrap()
+            .insert(secret_option.to_string(), json!(secret_value));
+        let params = with_embedding_vector(
+            CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs-private-rk".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "embedding_private_hnsw".to_string(),
+                        selector: EncryptionSelector::VectorNames {
+                            names: vec!["embedding".to_string()],
+                        },
+                        instance: "docs_private_hnsw_v1".to_string(),
+                        binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            Distance::Cosine,
+        );
+
+        let err = match vector_write_plan_for_collection_with_crypto_id(
+            &settings, "docs", "docs", &params,
+        ) {
+            Ok(_) => panic!("vector write plan must reject invalid private HNSW instance"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private HNSW ORAM runtime instance is invalid")
+                    && !description.contains("docs_private_hnsw_v1")
+                    && !description.contains(secret_option)
+                    && !description.contains(secret_value)
+                    && !description.contains("unsupported option")),
+            "unexpected error: {err:?}",
+        );
+
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options = private_hnsw_oram_options();
+        let nested_secret_option = "oram.client_secret";
+        let nested_secret_value = "qdrant-sec-private-hnsw-vector-plan-nested-secret-sentinel";
+        settings
+            .crypto
+            .instances
+            .get_mut("docs_private_hnsw_v1")
+            .unwrap()
+            .options["oram"]["client_secret"] = json!(nested_secret_value);
+        let err = match vector_write_plan_for_collection_with_crypto_id(
+            &settings, "docs", "docs", &params,
+        ) {
+            Ok(_) => panic!("vector write plan must reject invalid nested private HNSW options",),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, StorageError::BadInput { ref description }
+                if description.contains("private HNSW ORAM runtime instance is invalid")
+                    && !description.contains("docs_private_hnsw_v1")
+                    && !description.contains(nested_secret_option)
+                    && !description.contains(nested_secret_value)
+                    && !description.contains("unsupported option")),
+            "unexpected error: {err:?}",
+        );
+    }
+
+    #[test]
     fn private_hnsw_oram_vector_write_plan_rejects_plaintext_write_and_server_scoring() {
         let settings = Settings {
             crypto: CryptoSettings {
