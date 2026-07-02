@@ -376,6 +376,7 @@ mod tests {
              encrypted_client_state_ciphertext_sha256=encrypted-client-state-ciphertext-sha256-snake-sentinel \
              encrypted_client_state_ciphertexts_sha256=encrypted-client-state-ciphertexts-sha256-snake-sentinel \
              encrypted_client_state_ciphertexts_sha256.bin=encrypted-client-state-ciphertexts-sha256-bin-sentinel \
+             encrypted_client_state_ciphertexts_sha256.json=encrypted-client-state-ciphertexts-sha256-json-sentinel \
              encryptedClientStateCiphertextSha256=encrypted-client-state-ciphertext-sha256-camel-sentinel \
              encryptedClientStateCiphertextsSha256=encrypted-client-state-ciphertexts-sha256-camel-sentinel \
              encryptedClientStateCiphertext=encrypted-client-state-ciphertext-camel-sentinel \
@@ -406,6 +407,7 @@ mod tests {
              state_ciphertext_sha256=state-ciphertext-sha256-snake-sentinel \
              state_ciphertexts_sha256=state-ciphertexts-sha256-snake-sentinel \
              state_ciphertexts_sha256.bin=state-ciphertexts-sha256-bin-sentinel \
+             state_ciphertexts_sha256.json=state-ciphertexts-sha256-json-sentinel \
              stateCiphertextSha256=state-ciphertext-sha256-camel-sentinel \
              stateCiphertextsSha256=state-ciphertexts-sha256-camel-sentinel \
              stateCiphertextHash=state-ciphertext-hash-camel-sentinel \
@@ -507,6 +509,8 @@ mod tests {
         assert!(!redacted.contains("encrypted-client-state-ciphertexts-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-sha256-snake-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertexts-sha256-snake-sentinel"));
+        assert!(!redacted.contains("encrypted-client-state-ciphertexts-sha256-bin-sentinel"));
+        assert!(!redacted.contains("encrypted-client-state-ciphertexts-sha256-json-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-sha256-camel-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertexts-sha256-camel-sentinel"));
         assert!(!redacted.contains("encrypted-client-state-ciphertext-camel-sentinel"));
@@ -536,6 +540,8 @@ mod tests {
         assert!(!redacted.contains("state-ciphertexts-snake-sentinel"));
         assert!(!redacted.contains("state-ciphertext-sha256-snake-sentinel"));
         assert!(!redacted.contains("state-ciphertexts-sha256-snake-sentinel"));
+        assert!(!redacted.contains("state-ciphertexts-sha256-bin-sentinel"));
+        assert!(!redacted.contains("state-ciphertexts-sha256-json-sentinel"));
         assert!(!redacted.contains("state-ciphertext-sha256-camel-sentinel"));
         assert!(!redacted.contains("state-ciphertexts-sha256-camel-sentinel"));
         assert!(!redacted.contains("state-ciphertext-hash-camel-sentinel"));

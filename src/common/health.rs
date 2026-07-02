@@ -542,6 +542,7 @@ mod tests {
              state_ciphertext_sha256=state-ciphertext-sha256-snake-sentinel, \
              state_ciphertexts_sha256=state-ciphertexts-sha256-snake-sentinel, \
              state_ciphertexts_sha256.bin=state-ciphertexts-sha256-bin-sentinel, \
+             state_ciphertexts_sha256.json=state-ciphertexts-sha256-json-sentinel, \
              stateCiphertextSha256=state-ciphertext-sha256-camel-sentinel, \
              stateCiphertextsSha256=state-ciphertexts-sha256-camel-sentinel, \
              stateCiphertextHash=state-ciphertext-hash-camel-sentinel, \
@@ -645,6 +646,7 @@ mod tests {
         assert!(!message.contains("state-ciphertext-sha256-snake-sentinel"));
         assert!(!message.contains("state-ciphertexts-sha256-snake-sentinel"));
         assert!(!message.contains("state-ciphertexts-sha256-bin-sentinel"));
+        assert!(!message.contains("state-ciphertexts-sha256-json-sentinel"));
         assert!(!message.contains("state-ciphertext-sha256-camel-sentinel"));
         assert!(!message.contains("state-ciphertexts-sha256-camel-sentinel"));
         assert!(!message.contains("state-ciphertext-hash-camel-sentinel"));
