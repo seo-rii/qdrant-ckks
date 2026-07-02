@@ -3382,10 +3382,16 @@ mod private_hnsw_tests {
 
         for alias_session_id in [
             "stashBackup/session",
+            "stashBackup.json/session",
             "stashBackups/session",
+            "stashBackups.json/session",
             "clientStateCiphertextHash/session",
+            "client_state_ciphertext_hash.bin/session",
+            "encrypted.client.state/session",
             "encrypted_client_state_snapshot/session",
+            "encrypted_client_state_ciphertext_hash.bin/session",
             "oramPositionMapBackup/session",
+            "state_ciphertext_hashes.bin/session",
             "tokenMapBackups/session",
             "token_map_backups/session",
             "token_position_map_backups/session",
