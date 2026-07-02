@@ -2702,14 +2702,24 @@ mod private_hnsw_tests {
         assert!(!rendered.contains(&malformed), "{rendered}");
 
         for alias_label in [
+            "client_state_ciphertext_hash.bin",
+            "client_state_ciphertext_hash.json",
+            "client_state_ciphertext_sha256.bin",
+            "client_state_ciphertext_sha256.json",
             "encrypted.client.state",
             "encrypted_client_state_ciphertext_hash",
             "encrypted_client_state_ciphertext_hash.bin",
             "encrypted_client_state_ciphertext_hash.json",
             "encrypted_client_state_ciphertext_sha256",
+            "encrypted_client_state_ciphertext_sha256.bin",
+            "encrypted_client_state_ciphertext_sha256.json",
             "stashBackup.json",
+            "state_ciphertext_hash.bin",
+            "state_ciphertext_hash.json",
             "state_ciphertext_hashes.bin",
             "state_ciphertext_hashes.json",
+            "state_ciphertext_sha256.bin",
+            "state_ciphertext_sha256.json",
         ] {
             let err = validate_private_hnsw_read_path_label_request_shape(std::slice::from_ref(
                 &alias_label.to_string(),
@@ -2895,12 +2905,22 @@ mod private_hnsw_tests {
         assert!(!rendered.contains(&malformed), "{rendered}");
 
         for alias_label in [
+            "client_state_ciphertext_hash.bin",
+            "client_state_ciphertext_hash.json",
+            "client_state_ciphertext_sha256.bin",
+            "client_state_ciphertext_sha256.json",
             "encrypted.client.state",
             "encrypted_client_state_ciphertext_hash.bin",
             "encrypted_client_state_ciphertext_hash.json",
+            "encrypted_client_state_ciphertext_sha256.bin",
+            "encrypted_client_state_ciphertext_sha256.json",
             "stashBackup.json",
+            "state_ciphertext_hash.bin",
+            "state_ciphertext_hash.json",
             "state_ciphertext_hashes.bin",
             "state_ciphertext_hashes.json",
+            "state_ciphertext_sha256.bin",
+            "state_ciphertext_sha256.json",
         ] {
             let err =
                 validate_private_hnsw_read_path_labels(&[alias_label.to_string()], 3).unwrap_err();
@@ -2928,12 +2948,22 @@ mod private_hnsw_tests {
         assert!(!rendered.contains(&malformed), "{rendered}");
 
         for alias_label in [
+            "client_state_ciphertext_hash.bin",
+            "client_state_ciphertext_hash.json",
+            "client_state_ciphertext_sha256.bin",
+            "client_state_ciphertext_sha256.json",
             "encrypted.client.state",
             "encrypted_client_state_ciphertext_hash.bin",
             "encrypted_client_state_ciphertext_hash.json",
+            "encrypted_client_state_ciphertext_sha256.bin",
+            "encrypted_client_state_ciphertext_sha256.json",
             "stashBackup.json",
+            "state_ciphertext_hash.bin",
+            "state_ciphertext_hash.json",
             "state_ciphertext_hashes.bin",
             "state_ciphertext_hashes.json",
+            "state_ciphertext_sha256.bin",
+            "state_ciphertext_sha256.json",
         ] {
             let err = bucket_ids_for_path_batch(&[alias_label.to_string()], 3, 15).unwrap_err();
             let rendered = err.to_string();
@@ -3534,12 +3564,22 @@ mod private_hnsw_tests {
         assert!(!rendered.contains(&malformed));
 
         for alias_root_hash in [
+            "client_state_ciphertext_hash.bin",
+            "client_state_ciphertext_hash.json",
+            "client_state_ciphertext_sha256.bin",
+            "client_state_ciphertext_sha256.json",
             "encrypted.client.state",
             "encrypted_client_state_ciphertext_hash.bin",
             "encrypted_client_state_ciphertext_hash.json",
+            "encrypted_client_state_ciphertext_sha256.bin",
+            "encrypted_client_state_ciphertext_sha256.json",
             "stashBackup.json",
+            "state_ciphertext_hash.bin",
+            "state_ciphertext_hash.json",
             "state_ciphertext_hashes.bin",
             "state_ciphertext_hashes.json",
+            "state_ciphertext_sha256.bin",
+            "state_ciphertext_sha256.json",
         ] {
             let err = validate_root_hash_string(alias_root_hash, "root_hash").unwrap_err();
             let rendered = err.to_string();
@@ -3636,12 +3676,22 @@ mod private_hnsw_tests {
         assert!(!rendered.contains(&malformed));
 
         for alias_sig in [
+            "client_state_ciphertext_hash.bin",
+            "client_state_ciphertext_hash.json",
+            "client_state_ciphertext_sha256.bin",
+            "client_state_ciphertext_sha256.json",
             "encrypted.client.state",
             "encrypted_client_state_ciphertext_hash.bin",
             "encrypted_client_state_ciphertext_hash.json",
+            "encrypted_client_state_ciphertext_sha256.bin",
+            "encrypted_client_state_ciphertext_sha256.json",
             "stashBackup.json",
+            "state_ciphertext_hash.bin",
+            "state_ciphertext_hash.json",
             "state_ciphertext_hashes.bin",
             "state_ciphertext_hashes.json",
+            "state_ciphertext_sha256.bin",
+            "state_ciphertext_sha256.json",
         ] {
             let err = validate_client_signature_shape(&PrivateHnswClientSignature {
                 alg: "ed25519".to_string(),
@@ -3682,14 +3732,24 @@ mod private_hnsw_tests {
         assert!(!rendered.contains(missing_key_id), "{rendered}");
 
         for missing_alias_key_id in [
+            "client_state_ciphertext_hash.bin",
+            "client_state_ciphertext_hash.json",
+            "client_state_ciphertext_sha256.bin",
+            "client_state_ciphertext_sha256.json",
             "encrypted.client.state",
             "encrypted_client_state_ciphertext_hash",
             "encrypted_client_state_ciphertext_hash.bin",
             "encrypted_client_state_ciphertext_hash.json",
             "encrypted_client_state_ciphertext_sha256",
+            "encrypted_client_state_ciphertext_sha256.bin",
+            "encrypted_client_state_ciphertext_sha256.json",
             "stashBackup.json",
+            "state_ciphertext_hash.bin",
+            "state_ciphertext_hash.json",
             "state_ciphertext_hashes.bin",
             "state_ciphertext_hashes.json",
+            "state_ciphertext_sha256.bin",
+            "state_ciphertext_sha256.json",
         ] {
             let err = signature_public_key(&instance, missing_alias_key_id).unwrap_err();
             let rendered = err.to_string();
