@@ -2482,6 +2482,7 @@ mod private_result_oram_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("signature key_id does not match manifest owner_signing_key_id"));
         assert!(!rendered.contains(&signature.key_id));
+        assert!(!rendered.contains(&manifest.owner_signing_key_id));
         assert!(!rendered.contains("not configured"));
     }
 
