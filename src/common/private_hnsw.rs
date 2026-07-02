@@ -3543,17 +3543,19 @@ mod private_hnsw_tests {
         assert!(rendered.contains("signature key id is not configured"));
         assert!(!rendered.contains(missing_key_id), "{rendered}");
 
-        let missing_alias_key_id = "encrypted_client_state_ciphertext_hash";
-        let err = signature_public_key(&instance, missing_alias_key_id).unwrap_err();
-        let rendered = err.to_string();
-        assert!(rendered.contains("signature key id is not configured"));
-        assert!(!rendered.contains(missing_alias_key_id), "{rendered}");
-
-        let missing_alias_key_id = "encrypted_client_state_ciphertext_sha256";
-        let err = signature_public_key(&instance, missing_alias_key_id).unwrap_err();
-        let rendered = err.to_string();
-        assert!(rendered.contains("signature key id is not configured"));
-        assert!(!rendered.contains(missing_alias_key_id), "{rendered}");
+        for missing_alias_key_id in [
+            "encrypted.client.state",
+            "encrypted_client_state_ciphertext_hash",
+            "encrypted_client_state_ciphertext_hash.bin",
+            "encrypted_client_state_ciphertext_sha256",
+            "stashBackup.json",
+            "state_ciphertext_hashes.bin",
+        ] {
+            let err = signature_public_key(&instance, missing_alias_key_id).unwrap_err();
+            let rendered = err.to_string();
+            assert!(rendered.contains("signature key id is not configured"));
+            assert!(!rendered.contains(missing_alias_key_id), "{rendered}");
+        }
 
         let oversized = format!("{}{}", BASE64URL_NOPAD.encode(&[7; 32]), "A".repeat(64));
         let err = decode_signature_public_key(&oversized).unwrap_err();
