@@ -1405,6 +1405,14 @@ tree-bounded leaf labels before producing the Ed25519 request signature.
 `sign_private_hnsw_oram_read_paths_for_manifest` is the convenience wrapper for
 the first read after upload or after an optional manifest refresh, when the
 manifest epoch/root is the live read context.
+The collection store returns `merkle_path_batch/v1` proofs for the encrypted
+bucket sequence served by `read_paths`, including repeated bucket/proof entries
+when fixed-size ORAM paths share buckets. The SDK-side Merkle proof verifier and
+JSON helper validate kind, epoch/root, bucket count, sibling order, and bucket
+commitment matches against that store-emitted DTO. Duplicate entries are allowed
+only when the repeated bucket/proof data is byte-identical; conflicting
+duplicates, empty proof/bucket sets, oversized proof JSON, or commitment
+mismatches fail closed before bucket ciphertext is opened.
 Before submitting an ORAM writeback, clients can call
 `plan_private_hnsw_oram_commit_for_manifest_context` with the live old
 epoch/root, current leaf commitments, and signed manifest to produce signature

@@ -7311,6 +7311,14 @@ mod tests {
             &[bucket.clone(), bucket.clone()],
         )
         .unwrap();
+        verify_private_hnsw_oram_merkle_proof_json(
+            &serde_json::to_string(&duplicate_proof).unwrap(),
+            42,
+            &root,
+            4,
+            &[bucket.clone(), bucket.clone()],
+        )
+        .unwrap();
 
         let mut conflicting_duplicate_bucket = bucket.clone();
         let conflicting_raw = b"conflicting duplicate HNSW bucket";
