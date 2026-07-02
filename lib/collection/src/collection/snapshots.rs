@@ -4122,6 +4122,40 @@ mod tests {
         assert!(!err.contains("sentinel"));
     }
 
+    #[test]
+    fn private_result_oram_restore_preflight_rejects_json_hash_state_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-result-restore-json-hash-state")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_result_config(uuid);
+        let manifest = private_result_manifest(uuid.to_string());
+        write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("state_ciphertext_hash.json"),
+            b"result json hash state sentinel",
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("client-owned ORAM state"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_RESULT_ORAM_DIR));
+        assert!(!err.contains("state_ciphertext_hash"));
+        assert!(!err.contains("sentinel"));
+    }
+
     #[cfg(unix)]
     #[test]
     fn private_result_oram_restore_preflight_rejects_nested_symlink_without_target_leak() {
@@ -5538,6 +5572,42 @@ mod tests {
         assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
         assert!(!err.contains("text"));
         assert!(!err.contains("stash"));
+        assert!(!err.contains("sentinel"));
+    }
+
+    #[test]
+    fn private_hnsw_oram_restore_preflight_rejects_json_hash_state_without_path_leak() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-hnsw-restore-json-hash-state")
+            .tempdir()
+            .unwrap();
+        let uuid = Uuid::from_u128(7);
+        let config = private_hnsw_config(uuid);
+        let manifest = private_hnsw_manifest(uuid.to_string());
+        write_private_hnsw_snapshot_fixture(temp_dir.path(), &manifest);
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_HNSW_ORAM_DIR)
+                .join("text")
+                .join("client_state_ciphertext_hash.json"),
+            b"hnsw json hash state sentinel",
+        )
+        .unwrap();
+
+        let err = Collection::validate_private_hnsw_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("client-owned ORAM state"), "{err}");
+        assert!(!err.contains(temp_dir.path().to_string_lossy().as_ref()));
+        assert!(!err.contains(PRIVATE_HNSW_ORAM_DIR));
+        assert!(!err.contains("text"));
+        assert!(!err.contains("client_state_ciphertext_hash"));
         assert!(!err.contains("sentinel"));
     }
 
