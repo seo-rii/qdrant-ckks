@@ -415,6 +415,8 @@ mod tests {
              client_state_ciphertext_hashes.bin=client-state-ciphertext-hashes-bin-sentinel \
              client_state_ciphertext_hashes.json=client-state-ciphertext-hashes-json-sentinel \
              client_state_ciphertext_sha256=client-state-ciphertext-sha256-snake-sentinel \
+             client_state_ciphertext_sha256.bin=client-state-ciphertext-sha256-bin-sentinel \
+             client_state_ciphertext_sha256.json=client-state-ciphertext-sha256-json-sentinel \
              client_state_ciphertexts_sha256=client-state-ciphertexts-sha256-snake-sentinel \
              client_state_ciphertexts_sha256.bin=client-state-ciphertexts-sha256-bin-sentinel \
              client_state_ciphertexts_sha256.json=client-state-ciphertexts-sha256-json-sentinel \
@@ -423,6 +425,8 @@ mod tests {
              encrypted_client_state_ciphertext_hash.json=encrypted-client-state-ciphertext-hash-json-sentinel \
              encrypted_client_state_ciphertext_hashes.json=encrypted-client-state-ciphertext-hashes-json-sentinel \
              encrypted_client_state_ciphertext_sha256=encrypted-client-state-ciphertext-sha256-snake-sentinel \
+             encrypted_client_state_ciphertext_sha256.bin=encrypted-client-state-ciphertext-sha256-bin-sentinel \
+             encrypted_client_state_ciphertext_sha256.json=encrypted-client-state-ciphertext-sha256-json-sentinel \
              encrypted_client_state_ciphertexts_sha256=encrypted-client-state-ciphertexts-sha256-snake-sentinel \
              encrypted_client_state_ciphertexts_sha256.bin=encrypted-client-state-ciphertexts-sha256-bin-sentinel \
              encrypted_client_state_ciphertexts_sha256.json=encrypted-client-state-ciphertexts-sha256-json-sentinel \
@@ -447,6 +451,8 @@ mod tests {
              state_ciphertext_hashes.bin=state-ciphertext-hashes-bin-sentinel \
              state_ciphertext_hashes.json=state-ciphertext-hashes-json-sentinel \
              state_ciphertext_sha256=state-ciphertext-sha256-snake-sentinel \
+             state_ciphertext_sha256.bin=state-ciphertext-sha256-bin-sentinel \
+             state_ciphertext_sha256.json=state-ciphertext-sha256-json-sentinel \
              state_ciphertexts_sha256=state-ciphertexts-sha256-snake-sentinel \
              state_ciphertexts_sha256.bin=state-ciphertexts-sha256-bin-sentinel \
              state_ciphertexts_sha256.json=state-ciphertexts-sha256-json-sentinel \
