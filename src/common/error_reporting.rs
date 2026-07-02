@@ -846,6 +846,7 @@ mod tests {
             "state_ciphertext_sha256=private-state-ciphertext-sha256-sentinel",
             "state_ciphertexts_sha256=[private-state-ciphertexts-sha256-sentinel]",
             "state_ciphertexts_sha256.bin=[private-state-ciphertexts-sha256-bin-sentinel]",
+            "state_ciphertexts_sha256.json=[private-state-ciphertexts-sha256-json-sentinel]",
             "stateCiphertext=private-state-ciphertext-camel-sentinel",
             "state_ciphertext_hash=private-state-ciphertext-hash-sentinel",
             "state_ciphertext_hash.bin=private-state-ciphertext-hash-bin-sentinel",
