@@ -23422,6 +23422,7 @@ mod tests {
             "state_ciphertext_hashes.json",
             "state_ciphertext_hashes.bin",
             "state_ciphertext_sha256.json",
+            "state_ciphertexts_sha256.bin",
             "state_ciphertexts_sha256.json",
             "tokenMap.json",
             "tokenMaps.json",
