@@ -1002,6 +1002,7 @@ mod tests {
             "encryptedClientStateCiphertextsSha256-sentinel",
             "encryptedClientStateSnapshot-sentinel",
             "encryptedClientStateSnapshots-sentinel",
+            "encrypted_client_state-sentinel",
             "encrypted_client_state_snapshot-sentinel",
             "encrypted_client_state_snapshots-sentinel",
             "encrypted_client_state_ciphertext_hashes-sentinel",
@@ -1338,6 +1339,15 @@ mod tests {
                     .to_srv_request(),
                 "POST /collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
                 ["token_position_map_backups-sentinel", "query-sentinel"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-result-oram/session/encrypted_client_state-sentinel/read_buckets?bucket_ids=query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
+                ["encrypted_client_state-sentinel", "query-sentinel"],
             ),
             (
                 actix_test::TestRequest::post()
