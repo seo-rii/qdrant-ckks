@@ -3382,6 +3382,8 @@ mod private_result_oram_grpc_tests {
                 fixture.manifest.root_hash.as_str(),
                 unconfigured_read_key_signature_sig.as_str(),
                 fixture.buckets[0].ciphertext.as_str(),
+                fixture.buckets[0].ciphertext_sha256.as_str(),
+                fixture.buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !unconfigured_read_key.message().contains(sentinel),
@@ -3428,6 +3430,8 @@ mod private_result_oram_grpc_tests {
                 fixture.manifest.root_hash.as_str(),
                 expected_read_signature.sig.as_str(),
                 fixture.buckets[0].ciphertext.as_str(),
+                fixture.buckets[0].ciphertext_sha256.as_str(),
+                fixture.buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !malformed_read_key.message().contains(sentinel),
@@ -3468,6 +3472,8 @@ mod private_result_oram_grpc_tests {
                 fixture.manifest.root_hash.as_str(),
                 alt_read_signature_sig.as_str(),
                 fixture.buckets[0].ciphertext.as_str(),
+                fixture.buckets[0].ciphertext_sha256.as_str(),
+                fixture.buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !alt_read_key.message().contains(sentinel),
@@ -3510,6 +3516,8 @@ mod private_result_oram_grpc_tests {
                 fixture.manifest.root_hash.as_str(),
                 SIGNING_KEY_ID,
                 fixture.buckets[0].ciphertext.as_str(),
+                fixture.buckets[0].ciphertext_sha256.as_str(),
+                fixture.buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !malformed_read_signature.message().contains(sentinel),
@@ -3552,6 +3560,9 @@ mod private_result_oram_grpc_tests {
                 fixture.manifest.root_hash.as_str(),
                 unsupported_read_key_id.as_str(),
                 unsupported_read_sig.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+                fixture.buckets[0].ciphertext_sha256.as_str(),
+                fixture.buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !unsupported_read_signature.message().contains(sentinel),
@@ -3758,6 +3769,8 @@ mod private_result_oram_grpc_tests {
                 fixture.manifest.root_hash.as_str(),
                 unknown_read_session_signature_sig.as_str(),
                 fixture.buckets[0].ciphertext.as_str(),
+                fixture.buckets[0].ciphertext_sha256.as_str(),
+                fixture.buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !unknown_read.message().contains(sentinel),
@@ -3836,6 +3849,8 @@ mod private_result_oram_grpc_tests {
                 new_root_hash.as_str(),
                 commit_signature.sig.as_str(),
                 updated_bucket.ciphertext.as_str(),
+                updated_bucket.ciphertext_sha256.as_str(),
+                updated_bucket.bucket_commitment.as_str(),
             ] {
                 assert!(
                     !unknown_commit.message().contains(sentinel),
@@ -4610,6 +4625,8 @@ mod private_result_oram_grpc_tests {
                 new_root_hash.as_str(),
                 unconfigured_commit_key_signature_sig.as_str(),
                 updated_bucket.ciphertext.as_str(),
+                updated_bucket.ciphertext_sha256.as_str(),
+                updated_bucket.bucket_commitment.as_str(),
             ] {
                 assert!(
                     !unconfigured_commit_key.message().contains(sentinel),
@@ -4658,6 +4675,8 @@ mod private_result_oram_grpc_tests {
                 new_root_hash.as_str(),
                 commit_signature.sig.as_str(),
                 updated_bucket.ciphertext.as_str(),
+                updated_bucket.ciphertext_sha256.as_str(),
+                updated_bucket.bucket_commitment.as_str(),
             ] {
                 assert!(
                     !malformed_commit_key.message().contains(sentinel),
@@ -4702,6 +4721,8 @@ mod private_result_oram_grpc_tests {
                 new_root_hash.as_str(),
                 alt_commit_signature_sig.as_str(),
                 updated_bucket.ciphertext.as_str(),
+                updated_bucket.ciphertext_sha256.as_str(),
+                updated_bucket.bucket_commitment.as_str(),
             ] {
                 assert!(
                     !alt_commit_key.message().contains(sentinel),
@@ -4747,6 +4768,8 @@ mod private_result_oram_grpc_tests {
                 new_root_hash.as_str(),
                 SIGNING_KEY_ID,
                 updated_bucket.ciphertext.as_str(),
+                updated_bucket.ciphertext_sha256.as_str(),
+                updated_bucket.bucket_commitment.as_str(),
             ] {
                 assert!(
                     !malformed_commit_signature.message().contains(sentinel),
@@ -4794,6 +4817,8 @@ mod private_result_oram_grpc_tests {
                 unsupported_commit_key_id.as_str(),
                 unsupported_commit_sig.as_str(),
                 updated_bucket.ciphertext.as_str(),
+                updated_bucket.ciphertext_sha256.as_str(),
+                updated_bucket.bucket_commitment.as_str(),
             ] {
                 assert!(
                     !unsupported_commit_signature.message().contains(sentinel),
@@ -4896,6 +4921,8 @@ mod private_result_oram_grpc_tests {
                 fixture.manifest.root_hash.as_str(),
                 closed_read_signature_sig.as_str(),
                 fixture.buckets[0].ciphertext.as_str(),
+                fixture.buckets[0].ciphertext_sha256.as_str(),
+                fixture.buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !closed_read.message().contains(sentinel),
@@ -4933,6 +4960,8 @@ mod private_result_oram_grpc_tests {
                 closed_commit_new_root_hash.as_str(),
                 closed_commit_signature.sig.as_str(),
                 closed_commit_bucket.ciphertext.as_str(),
+                closed_commit_bucket.ciphertext_sha256.as_str(),
+                closed_commit_bucket.bucket_commitment.as_str(),
             ] {
                 assert!(
                     !closed_commit.message().contains(sentinel),
