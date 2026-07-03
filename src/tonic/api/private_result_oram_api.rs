@@ -3256,6 +3256,8 @@ mod private_result_oram_grpc_tests {
                 wrong_read_signature.key_id.as_str(),
                 wrong_read_signature.sig.as_str(),
                 fixture.buckets[0].ciphertext.as_str(),
+                fixture.buckets[0].ciphertext_sha256.as_str(),
+                fixture.buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !invalid_read_signature.message().contains(sentinel),
@@ -3346,6 +3348,16 @@ mod private_result_oram_grpc_tests {
                 !invalid_signature_out_of_range
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !invalid_signature_out_of_range
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !invalid_signature_out_of_range
+                    .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
             );
 
             let unconfigured_read_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
@@ -3596,6 +3608,16 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !deduped_path_read
                     .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !deduped_path_read
+                    .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
+            );
+            assert!(
+                !deduped_path_read
+                    .message()
                     .contains(&fixture.manifest.root_hash)
             );
             assert!(!deduped_path_read.message().contains(&session.session_id));
@@ -3631,6 +3653,16 @@ mod private_result_oram_grpc_tests {
                 !under_budget_read
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !under_budget_read
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !under_budget_read
+                    .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
             );
             assert!(
                 !under_budget_read
@@ -3674,6 +3706,16 @@ mod private_result_oram_grpc_tests {
                 !duplicate_path_read
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !duplicate_path_read
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !duplicate_path_read
+                    .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
             );
             assert!(
                 !duplicate_path_read
@@ -3733,6 +3775,16 @@ mod private_result_oram_grpc_tests {
                 !malformed_path_read
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !malformed_path_read
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !malformed_path_read
+                    .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
             );
             assert!(!malformed_path_read.message().contains("valid ORAM paths"));
 

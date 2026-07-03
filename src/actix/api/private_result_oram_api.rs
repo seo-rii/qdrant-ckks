@@ -2951,6 +2951,8 @@ mod private_result_oram_rest_tests {
                 wrong_read_signature.key_id.as_str(),
                 wrong_read_signature.sig.as_str(),
                 fixture.buckets[0].ciphertext.as_str(),
+                fixture.buckets[0].ciphertext_sha256.as_str(),
+                fixture.buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !invalid_signature_bad_path_error.contains(sentinel),
@@ -2973,6 +2975,14 @@ mod private_result_oram_rest_tests {
             );
             assert!(!invalid_signature_out_of_range_error.contains(&wrong_read_signature.sig));
             assert!(!invalid_signature_out_of_range_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(
+                !invalid_signature_out_of_range_error
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !invalid_signature_out_of_range_error
+                    .contains(&fixture.buckets[0].bucket_commitment)
+            );
             assert!(!invalid_signature_out_of_range_error.contains(&fixture.manifest.root_hash));
             assert!(!invalid_signature_out_of_range_error.contains(&session_id));
             assert!(!invalid_signature_out_of_range_error.contains("bucket id is out of range"));
@@ -3163,6 +3173,8 @@ mod private_result_oram_rest_tests {
                 "whole ORAM paths"
             );
             assert!(!deduped_path_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!deduped_path_error.contains(&fixture.buckets[0].ciphertext_sha256));
+            assert!(!deduped_path_error.contains(&fixture.buckets[0].bucket_commitment));
             assert!(!deduped_path_error.contains(&fixture.manifest.root_hash));
             assert!(!deduped_path_error.contains(&session_id));
             assert!(!deduped_path_error.contains(&deduped_path_signature.key_id));
@@ -3183,6 +3195,8 @@ mod private_result_oram_rest_tests {
                 "fixed path budget"
             );
             assert!(!under_budget_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!under_budget_error.contains(&fixture.buckets[0].ciphertext_sha256));
+            assert!(!under_budget_error.contains(&fixture.buckets[0].bucket_commitment));
             assert!(!under_budget_error.contains(&fixture.manifest.root_hash));
             assert!(!under_budget_error.contains(&session_id));
             assert!(!under_budget_error.contains(&under_budget_signature.key_id));
@@ -3203,6 +3217,8 @@ mod private_result_oram_rest_tests {
                 "duplicate ORAM path"
             );
             assert!(!duplicate_path_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!duplicate_path_error.contains(&fixture.buckets[0].ciphertext_sha256));
+            assert!(!duplicate_path_error.contains(&fixture.buckets[0].bucket_commitment));
             assert!(!duplicate_path_error.contains(&fixture.manifest.root_hash));
             assert!(!duplicate_path_error.contains(&session_id));
             assert!(!duplicate_path_error.contains(&duplicate_path_signature.key_id));
@@ -3227,6 +3243,8 @@ mod private_result_oram_rest_tests {
             assert!(!malformed_path_error.contains(&session_id));
             assert!(!malformed_path_error.contains(&malformed_path_signature.sig));
             assert!(!malformed_path_error.contains(&fixture.buckets[0].ciphertext));
+            assert!(!malformed_path_error.contains(&fixture.buckets[0].ciphertext_sha256));
+            assert!(!malformed_path_error.contains(&fixture.buckets[0].bucket_commitment));
             assert!(!malformed_path_error.contains("valid ORAM paths"));
 
             let unknown_read_session_sentinel = "read-session-id-sentinel";
