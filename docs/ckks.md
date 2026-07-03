@@ -1475,7 +1475,10 @@ benchmarks without exposing plaintext vectors, distances beyond client-local
 hits, or decrypted neighbor lists. Strict SDK flows should call
 `validate_private_hnsw_strict_search_result` before result fetch or commit so a
 search that stopped before consuming `fixed_steps` is treated as a failed
-fixed-budget search, not a shortened private query.
+fixed-budget search, not a shortened private query. The strict validator also
+requires canonical access leaf-label shape and finite hit distances, and the
+private result ORAM payload finalizer repeats the finite-distance check before
+returning payload bytes for real hits.
 `cargo bench -p qdrant-sec --bench private_hnsw_oram_bench` provides the
 initial SDK-side benchmark harness for plaintext reference index build and
 fixed-budget plaintext ORAM-HNSW traversal, including an upper-layer client
