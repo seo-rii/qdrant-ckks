@@ -3343,6 +3343,8 @@ mod private_result_oram_rest_tests {
             );
             assert!(!commit_wrong_old_root_error.contains(&commit_wrong_old_root));
             assert!(!commit_wrong_old_root_error.contains(&updated_bucket.ciphertext));
+            assert!(!commit_wrong_old_root_error.contains(&updated_bucket.ciphertext_sha256));
+            assert!(!commit_wrong_old_root_error.contains(&updated_bucket.bucket_commitment));
             assert!(!commit_wrong_old_root_error.contains(&new_root_hash));
             assert!(!commit_wrong_old_root_error.contains(&session_id));
             assert!(!commit_wrong_old_root_error.contains(&commit_signature.key_id));
@@ -3369,6 +3371,8 @@ mod private_result_oram_rest_tests {
             assert!(!malformed_commit_old_root_error.contains(&commit_signature.key_id));
             assert!(!malformed_commit_old_root_error.contains(&commit_signature.sig));
             assert!(!malformed_commit_old_root_error.contains(&updated_bucket.ciphertext));
+            assert!(!malformed_commit_old_root_error.contains(&updated_bucket.ciphertext_sha256));
+            assert!(!malformed_commit_old_root_error.contains(&updated_bucket.bucket_commitment));
 
             let commit_wrong_new_root = BASE64URL_NOPAD.encode(&[11; 32]);
             let commit_wrong_new_root_error = post_json_error_contains!(
@@ -3391,6 +3395,8 @@ mod private_result_oram_rest_tests {
             assert!(!commit_wrong_new_root_error.contains(&session_id));
             assert!(!commit_wrong_new_root_error.contains(&commit_signature.key_id));
             assert!(!commit_wrong_new_root_error.contains(&updated_bucket.ciphertext));
+            assert!(!commit_wrong_new_root_error.contains(&updated_bucket.ciphertext_sha256));
+            assert!(!commit_wrong_new_root_error.contains(&updated_bucket.bucket_commitment));
 
             let commit_new_root_sentinel = "AAAA";
             let malformed_commit_new_root_error = post_json_error_contains!(
@@ -3413,6 +3419,8 @@ mod private_result_oram_rest_tests {
             assert!(!malformed_commit_new_root_error.contains(&commit_signature.key_id));
             assert!(!malformed_commit_new_root_error.contains(&commit_signature.sig));
             assert!(!malformed_commit_new_root_error.contains(&updated_bucket.ciphertext));
+            assert!(!malformed_commit_new_root_error.contains(&updated_bucket.ciphertext_sha256));
+            assert!(!malformed_commit_new_root_error.contains(&updated_bucket.bucket_commitment));
 
             let empty_commit_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",

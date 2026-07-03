@@ -3911,6 +3911,16 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(&updated_bucket.ciphertext)
             );
+            assert!(
+                !commit_wrong_old_root_err
+                    .message()
+                    .contains(&updated_bucket.ciphertext_sha256)
+            );
+            assert!(
+                !commit_wrong_old_root_err
+                    .message()
+                    .contains(&updated_bucket.bucket_commitment)
+            );
             assert!(!commit_wrong_old_root_err.message().contains(&new_root_hash));
             assert!(
                 !commit_wrong_old_root_err
@@ -3981,6 +3991,16 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(&updated_bucket.ciphertext)
             );
+            assert!(
+                !malformed_commit_old_root_err
+                    .message()
+                    .contains(&updated_bucket.ciphertext_sha256)
+            );
+            assert!(
+                !malformed_commit_old_root_err
+                    .message()
+                    .contains(&updated_bucket.bucket_commitment)
+            );
 
             let commit_wrong_new_root = BASE64URL_NOPAD.encode(&[11; 32]);
             let commit_wrong_new_root_err = PrivateResultOram::commit_private_result_oram_buckets(
@@ -4033,6 +4053,16 @@ mod private_result_oram_grpc_tests {
                 !commit_wrong_new_root_err
                     .message()
                     .contains(&updated_bucket.ciphertext)
+            );
+            assert!(
+                !commit_wrong_new_root_err
+                    .message()
+                    .contains(&updated_bucket.ciphertext_sha256)
+            );
+            assert!(
+                !commit_wrong_new_root_err
+                    .message()
+                    .contains(&updated_bucket.bucket_commitment)
             );
 
             let commit_new_root_sentinel = "AAAA";
@@ -4087,6 +4117,16 @@ mod private_result_oram_grpc_tests {
                 !malformed_commit_new_root_err
                     .message()
                     .contains(&updated_bucket.ciphertext)
+            );
+            assert!(
+                !malformed_commit_new_root_err
+                    .message()
+                    .contains(&updated_bucket.ciphertext_sha256)
+            );
+            assert!(
+                !malformed_commit_new_root_err
+                    .message()
+                    .contains(&updated_bucket.bucket_commitment)
             );
 
             let empty_commit = PrivateResultOram::commit_private_result_oram_buckets(
