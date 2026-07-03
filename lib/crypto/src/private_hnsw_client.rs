@@ -2373,6 +2373,7 @@ pub fn encode_private_hnsw_oram_bucket_plaintext(
     if bucket.blocks.len() != config.bucket_size {
         return Err(PrivateHnswClientError::BucketPlaintextSlotCountMismatch);
     }
+    validate_private_hnsw_plaintext_bucket_tokens(&bucket.blocks)?;
     let bucket_size_u32: u32 = config
         .bucket_size
         .try_into()
@@ -2452,7 +2453,30 @@ pub fn decode_private_hnsw_oram_bucket_plaintext(
         }
     }
 
+    validate_private_hnsw_plaintext_bucket_tokens(&blocks)?;
     Ok(PrivateHnswOramPlaintextBucket { bucket_id, blocks })
+}
+
+fn validate_private_hnsw_plaintext_bucket_tokens(
+    blocks: &[Option<PrivateHnswNodeBlockPlaintext>],
+) -> Result<(), PrivateHnswClientError> {
+    let mut node_ids = BTreeSet::new();
+    let mut point_tokens = BTreeSet::new();
+    let mut payload_fetch_tokens = BTreeSet::new();
+    for block in blocks.iter().flatten() {
+        if !node_ids.insert(block.node_id) {
+            return Err(PrivateHnswClientError::DuplicateBlock);
+        }
+        if !point_tokens.insert(block.point_token) {
+            return Err(PrivateHnswClientError::DuplicatePointToken);
+        }
+        if let Some(payload_fetch_token) = block.payload_fetch_token {
+            if !payload_fetch_tokens.insert(payload_fetch_token) {
+                return Err(PrivateHnswClientError::DuplicatePayloadFetchToken);
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn open_private_hnsw_oram_plaintext_bucket(
@@ -6209,6 +6233,56 @@ mod tests {
         assert_eq!(
             decode_private_hnsw_oram_bucket_plaintext(3, &tampered, config),
             Err(PrivateHnswClientError::InvalidBucketPlaintext)
+        );
+
+        let duplicate_point_a = node_block_with_id(9);
+        let mut duplicate_point_b = node_block_with_id(10);
+        duplicate_point_b.point_token = duplicate_point_a.point_token;
+        let duplicate_point_bucket = PrivateHnswOramPlaintextBucket {
+            bucket_id: 3,
+            blocks: vec![
+                Some(duplicate_point_a.clone()),
+                Some(duplicate_point_b.clone()),
+            ],
+        };
+        assert_eq!(
+            encode_private_hnsw_oram_bucket_plaintext(&duplicate_point_bucket, config),
+            Err(PrivateHnswClientError::DuplicatePointToken)
+        );
+
+        let mut duplicate_point_encoded =
+            Vec::with_capacity(private_hnsw_bucket_plaintext_len(config).unwrap());
+        duplicate_point_encoded.extend_from_slice(BUCKET_PLAINTEXT_MAGIC);
+        push_u16(&mut duplicate_point_encoded, BUCKET_PLAINTEXT_VERSION);
+        push_u32(&mut duplicate_point_encoded, config.bucket_size as u32);
+        push_u32(&mut duplicate_point_encoded, config.block_size_bytes as u32);
+        for block in [duplicate_point_a, duplicate_point_b] {
+            duplicate_point_encoded.push(1);
+            duplicate_point_encoded.extend_from_slice(
+                &encode_private_hnsw_node_block(
+                    &block,
+                    config.block_size_bytes,
+                    config.fixed_neighbor_slots,
+                )
+                .unwrap(),
+            );
+        }
+        assert_eq!(
+            decode_private_hnsw_oram_bucket_plaintext(3, &duplicate_point_encoded, config),
+            Err(PrivateHnswClientError::DuplicatePointToken)
+        );
+
+        let mut duplicate_payload_a = node_block_with_id(11);
+        duplicate_payload_a.payload_fetch_token = Some([77; 32]);
+        let mut duplicate_payload_b = node_block_with_id(12);
+        duplicate_payload_b.payload_fetch_token = Some([77; 32]);
+        let duplicate_payload_bucket = PrivateHnswOramPlaintextBucket {
+            bucket_id: 3,
+            blocks: vec![Some(duplicate_payload_a), Some(duplicate_payload_b)],
+        };
+        assert_eq!(
+            encode_private_hnsw_oram_bucket_plaintext(&duplicate_payload_bucket, config),
+            Err(PrivateHnswClientError::DuplicatePayloadFetchToken)
         );
     }
 

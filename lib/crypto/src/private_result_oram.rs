@@ -1982,6 +1982,7 @@ pub fn encode_private_result_oram_bucket_plaintext(
     if bucket.blocks.len() != config.bucket_size {
         return Err(PrivateResultOramError::BucketPlaintextSlotCountMismatch);
     }
+    validate_private_result_plaintext_bucket_tokens(&bucket.blocks)?;
     let bucket_size_u32: u32 = config
         .bucket_size
         .try_into()
@@ -2068,7 +2069,24 @@ pub fn decode_private_result_oram_bucket_plaintext(
         return Err(PrivateResultOramError::InvalidBucketPlaintext);
     }
 
+    validate_private_result_plaintext_bucket_tokens(&blocks)?;
     Ok(PrivateResultOramPlaintextBucket { bucket_id, blocks })
+}
+
+fn validate_private_result_plaintext_bucket_tokens(
+    blocks: &[Option<PrivateResultOramPayloadBlockPlaintext>],
+) -> Result<(), PrivateResultOramError> {
+    let mut payload_fetch_tokens = BTreeSet::new();
+    let mut point_tokens = BTreeSet::new();
+    for block in blocks.iter().flatten() {
+        if !payload_fetch_tokens.insert(block.payload_fetch_token) {
+            return Err(PrivateResultOramError::DuplicatePayloadFetchToken);
+        }
+        if !point_tokens.insert(block.point_token) {
+            return Err(PrivateResultOramError::DuplicatePointToken);
+        }
+    }
+    Ok(())
 }
 
 pub fn seal_private_result_oram_bucket(
@@ -4984,6 +5002,53 @@ mod tests {
         assert_eq!(
             decode_private_result_oram_bucket_plaintext(3, &tampered, config),
             Err(PrivateResultOramError::InvalidBucketPlaintext)
+        );
+
+        let duplicate_point_a = payload_block(9);
+        let mut duplicate_point_b = payload_block(10);
+        duplicate_point_b.point_token = duplicate_point_a.point_token;
+        let duplicate_point_bucket = PrivateResultOramPlaintextBucket {
+            bucket_id: 3,
+            blocks: vec![
+                Some(duplicate_point_a.clone()),
+                Some(duplicate_point_b.clone()),
+            ],
+        };
+        assert_eq!(
+            encode_private_result_oram_bucket_plaintext(&duplicate_point_bucket, config),
+            Err(PrivateResultOramError::DuplicatePointToken)
+        );
+
+        let mut duplicate_point_encoded = Vec::new();
+        duplicate_point_encoded.extend_from_slice(PRIVATE_RESULT_ORAM_BUCKET_PLAINTEXT_MAGIC);
+        push_u16(
+            &mut duplicate_point_encoded,
+            PRIVATE_RESULT_ORAM_BUCKET_PLAINTEXT_VERSION,
+        );
+        push_u64(&mut duplicate_point_encoded, 3);
+        push_u32(&mut duplicate_point_encoded, config.bucket_size as u32);
+        push_u32(&mut duplicate_point_encoded, config.block_size_bytes as u32);
+        for block in [duplicate_point_a, duplicate_point_b] {
+            duplicate_point_encoded.push(1);
+            duplicate_point_encoded.extend_from_slice(
+                &encode_private_result_oram_payload_block(&block, config.block_size_bytes).unwrap(),
+            );
+        }
+        assert_eq!(
+            decode_private_result_oram_bucket_plaintext(3, &duplicate_point_encoded, config),
+            Err(PrivateResultOramError::DuplicatePointToken)
+        );
+
+        let duplicate_payload_a = payload_block(11);
+        let mut duplicate_payload_b = payload_block(12);
+        duplicate_payload_b.payload_fetch_token = duplicate_payload_a.payload_fetch_token;
+        let duplicate_payload_bucket = PrivateResultOramPlaintextBucket {
+            bucket_id: 3,
+            blocks: vec![Some(duplicate_payload_a), Some(duplicate_payload_b)],
+        };
+        assert_eq!(
+            encode_private_result_oram_bucket_plaintext(&duplicate_payload_bucket, config),
+            Err(PrivateResultOramError::DuplicatePayloadFetchToken)
         );
     }
 
