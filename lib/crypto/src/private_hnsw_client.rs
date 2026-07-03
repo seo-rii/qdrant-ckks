@@ -924,9 +924,7 @@ pub fn validate_private_hnsw_strict_search_result(
     result: &PrivateHnswSearchResult,
 ) -> Result<(), PrivateHnswClientError> {
     validate_private_hnsw_search_fixed_budget(params, result)?;
-    if result.hits.iter().any(|hit| !hit.distance.is_finite()) {
-        return Err(PrivateHnswClientError::NonFiniteDistance);
-    }
+    validate_private_hnsw_search_hits(result)?;
     validate_private_hnsw_search_result_privacy(result_privacy, result)
 }
 
@@ -939,9 +937,7 @@ pub fn plan_private_hnsw_private_result_fetch_tokens(
     match result_privacy {
         ResultPrivacyMode::IdsVisible => Ok(None),
         ResultPrivacyMode::PrivatePayloadOramRequired => {
-            if result.hits.iter().any(|hit| !hit.distance.is_finite()) {
-                return Err(PrivateHnswClientError::NonFiniteDistance);
-            }
+            validate_private_hnsw_search_hits(result)?;
             if fixed_result_k == 0 || result.hits.len() > fixed_result_k {
                 return Err(PrivateHnswClientError::InvalidSearchConfig(
                     "fixed_result_k",
@@ -1000,9 +996,7 @@ pub fn finalize_private_hnsw_private_result_fetch(
         ResultPrivacyMode::PrivatePayloadOramRequired,
         result,
     )?;
-    if result.hits.iter().any(|hit| !hit.distance.is_finite()) {
-        return Err(PrivateHnswClientError::NonFiniteDistance);
-    }
+    validate_private_hnsw_search_hits(result)?;
     if fetch_plan.fixed_result_k == 0
         || fetch_plan.real_result_count != result.hits.len()
         || fetch_plan.real_result_count > fetch_plan.fixed_result_k
@@ -1070,6 +1064,22 @@ pub fn finalize_private_hnsw_private_result_fetch(
         fixed_result_k: fetch_plan.fixed_result_k,
         fetched_token_count: token_fetch_result.accesses.len(),
     })
+}
+
+fn validate_private_hnsw_search_hits(
+    result: &PrivateHnswSearchResult,
+) -> Result<(), PrivateHnswClientError> {
+    let mut node_ids = BTreeSet::new();
+    let mut point_tokens = BTreeSet::new();
+    for hit in &result.hits {
+        if !hit.distance.is_finite() {
+            return Err(PrivateHnswClientError::NonFiniteDistance);
+        }
+        if !node_ids.insert(hit.node_id) || !point_tokens.insert(hit.point_token) {
+            return Err(PrivateHnswClientError::InvalidSearchConfig("search_hits"));
+        }
+    }
+    Ok(())
 }
 
 fn validate_private_hnsw_result_payload_block(
@@ -7641,6 +7651,58 @@ mod tests {
             Err(PrivateHnswClientError::NonFiniteDistance)
         );
 
+        let duplicate_node_result = PrivateHnswSearchResult {
+            hits: vec![
+                PrivateHnswSearchHit {
+                    node_id: [1; 32],
+                    point_token: [2; 32],
+                    payload_fetch_token: Some([3; 32]),
+                    distance: 0.0,
+                },
+                PrivateHnswSearchHit {
+                    node_id: [1; 32],
+                    point_token: [4; 32],
+                    payload_fetch_token: Some([5; 32]),
+                    distance: 1.0,
+                },
+            ],
+            ..padded_result.clone()
+        };
+        assert_eq!(
+            validate_private_hnsw_strict_search_result(
+                ResultPrivacyMode::IdsVisible,
+                &params,
+                &duplicate_node_result,
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig("search_hits"))
+        );
+
+        let duplicate_point_result = PrivateHnswSearchResult {
+            hits: vec![
+                PrivateHnswSearchHit {
+                    node_id: [1; 32],
+                    point_token: [2; 32],
+                    payload_fetch_token: Some([3; 32]),
+                    distance: 0.0,
+                },
+                PrivateHnswSearchHit {
+                    node_id: [4; 32],
+                    point_token: [2; 32],
+                    payload_fetch_token: Some([5; 32]),
+                    distance: 1.0,
+                },
+            ],
+            ..padded_result.clone()
+        };
+        assert_eq!(
+            validate_private_hnsw_strict_search_result(
+                ResultPrivacyMode::IdsVisible,
+                &params,
+                &duplicate_point_result,
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig("search_hits"))
+        );
+
         let zero_step_params = PrivateHnswSearchParams {
             fixed_steps: 0,
             ..params
@@ -8015,6 +8077,62 @@ mod tests {
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "payload_fetch_tokens"
             ))
+        );
+
+        let duplicate_node_hits = PrivateHnswSearchResult {
+            hits: vec![
+                PrivateHnswSearchHit {
+                    node_id: [1; 32],
+                    point_token: [2; 32],
+                    payload_fetch_token: Some([11; 32]),
+                    distance: 0.0,
+                },
+                PrivateHnswSearchHit {
+                    node_id: [1; 32],
+                    point_token: [4; 32],
+                    payload_fetch_token: Some([12; 32]),
+                    distance: 1.0,
+                },
+            ],
+            accessed_leaf_labels: vec![],
+            completed_steps: 2,
+        };
+        assert_eq!(
+            plan_private_hnsw_private_result_fetch_tokens(
+                ResultPrivacyMode::PrivatePayloadOramRequired,
+                &duplicate_node_hits,
+                2,
+                &[],
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig("search_hits"))
+        );
+
+        let duplicate_point_hits = PrivateHnswSearchResult {
+            hits: vec![
+                PrivateHnswSearchHit {
+                    node_id: [1; 32],
+                    point_token: [2; 32],
+                    payload_fetch_token: Some([11; 32]),
+                    distance: 0.0,
+                },
+                PrivateHnswSearchHit {
+                    node_id: [3; 32],
+                    point_token: [2; 32],
+                    payload_fetch_token: Some([12; 32]),
+                    distance: 1.0,
+                },
+            ],
+            accessed_leaf_labels: vec![],
+            completed_steps: 2,
+        };
+        assert_eq!(
+            plan_private_hnsw_private_result_fetch_tokens(
+                ResultPrivacyMode::PrivatePayloadOramRequired,
+                &duplicate_point_hits,
+                2,
+                &[],
+            ),
+            Err(PrivateHnswClientError::InvalidSearchConfig("search_hits"))
         );
 
         let too_many_hits = PrivateHnswSearchResult {
