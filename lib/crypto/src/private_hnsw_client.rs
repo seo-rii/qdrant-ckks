@@ -898,6 +898,9 @@ pub fn validate_private_hnsw_search_fixed_budget(
     if params.fixed_steps == 0 {
         return Err(PrivateHnswClientError::InvalidSearchConfig("fixed_steps"));
     }
+    for leaf_label in &result.accessed_leaf_labels {
+        decode_private_hnsw_oram_leaf_label_shape(leaf_label)?;
+    }
     if result.completed_steps == params.fixed_steps
         && result.accessed_leaf_labels.len() == params.fixed_steps
     {
@@ -7583,6 +7586,28 @@ mod tests {
             &padded_result,
         )
         .unwrap();
+
+        let malformed_label_result = PrivateHnswSearchResult {
+            accessed_leaf_labels: vec![
+                "AAAAAAAAAAA".to_string(),
+                "not-base64!".to_string(),
+                "AAAAAAAAAAI".to_string(),
+            ],
+            completed_steps: 3,
+            ..padded_result.clone()
+        };
+        assert_eq!(
+            validate_private_hnsw_search_fixed_budget(&params, &malformed_label_result),
+            Err(PrivateHnswClientError::InvalidLeafLabelEncoding)
+        );
+        assert_eq!(
+            validate_private_hnsw_strict_search_result(
+                ResultPrivacyMode::IdsVisible,
+                &params,
+                &malformed_label_result,
+            ),
+            Err(PrivateHnswClientError::InvalidLeafLabelEncoding)
+        );
 
         let zero_step_params = PrivateHnswSearchParams {
             fixed_steps: 0,
