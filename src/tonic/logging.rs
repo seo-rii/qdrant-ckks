@@ -492,6 +492,10 @@ mod tests {
              updatedBucketCommitment=updated-bucket-commitment-camel-sentinel \
              updated_buckets=updated-bucket-sentinel \
              updatedBuckets=updated-bucket-camel-sentinel \
+             ciphertext_sha256=ciphertext-sha256-snake-sentinel \
+             ciphertextSha256=ciphertext-sha256-camel-sentinel \
+             ciphertexts_sha256=ciphertexts-sha256-snake-sentinel \
+             ciphertextsSha256=ciphertexts-sha256-camel-sentinel \
              bucket_commitment=bucket-commitment-sentinel \
              bucket_commitments=bucket-commitment-snake-plural-sentinel \
              bucketCommitment=bucket-commitment-camel-singular-sentinel \
