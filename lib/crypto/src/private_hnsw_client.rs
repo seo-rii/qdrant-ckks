@@ -3947,6 +3947,7 @@ pub fn encode_private_hnsw_node_block(
 ) -> Result<Vec<u8>, PrivateHnswClientError> {
     validate_private_hnsw_node_neighbor_shape(
         block.node_id,
+        block.level_mask,
         &block.neighbors,
         &block.neighbor_levels,
     )?;
@@ -4072,7 +4073,7 @@ pub fn decode_private_hnsw_node_block(
     if encoded[cursor..].iter().any(|byte| *byte != 0) {
         return Err(PrivateHnswClientError::InvalidBlockPadding);
     }
-    validate_private_hnsw_node_neighbor_shape(node_id, &neighbors, &neighbor_levels)?;
+    validate_private_hnsw_node_neighbor_shape(node_id, level_mask, &neighbors, &neighbor_levels)?;
 
     Ok(PrivateHnswNodeBlockPlaintext {
         version,
@@ -4091,17 +4092,33 @@ pub fn decode_private_hnsw_node_block(
 
 fn validate_private_hnsw_node_neighbor_shape(
     node_id: [u8; 32],
+    level_mask: u64,
     neighbors: &[[u8; 32]],
     neighbor_levels: &[u8],
 ) -> Result<(), PrivateHnswClientError> {
     if neighbors.len() != neighbor_levels.len() {
         return Err(PrivateHnswClientError::InvalidNeighborShape);
     }
+    validate_private_hnsw_level_mask_shape(level_mask)?;
     let mut seen_neighbor_levels = BTreeSet::new();
     for (neighbor, level) in neighbors.iter().zip(neighbor_levels) {
-        if *neighbor == node_id || !seen_neighbor_levels.insert((*neighbor, *level)) {
+        if *level >= 64
+            || level_mask & (1u64 << u32::from(*level)) == 0
+            || *neighbor == node_id
+            || !seen_neighbor_levels.insert((*neighbor, *level))
+        {
             return Err(PrivateHnswClientError::InvalidNeighborShape);
         }
+    }
+    Ok(())
+}
+
+fn validate_private_hnsw_level_mask_shape(level_mask: u64) -> Result<(), PrivateHnswClientError> {
+    if level_mask == 0 {
+        return Err(PrivateHnswClientError::InvalidNeighborShape);
+    }
+    if level_mask != u64::MAX && (level_mask & level_mask.saturating_add(1)) != 0 {
+        return Err(PrivateHnswClientError::InvalidNeighborShape);
     }
     Ok(())
 }
@@ -5193,7 +5210,7 @@ mod tests {
             version: NODE_BLOCK_VERSION,
             node_id: [1; 32],
             point_token: [2; 32],
-            level_mask: 0b101,
+            level_mask: 0b111,
             vector_encoding: PrivateHnswVectorEncoding::F32Le,
             vector: vec![0, 0, 128, 63, 0, 0, 0, 64],
             neighbors: vec![[3; 32], [4; 32]],
@@ -6261,6 +6278,40 @@ mod tests {
         self_neighbor.neighbor_levels = vec![0];
         assert_eq!(
             encode_private_hnsw_node_block(&self_neighbor, 512, 4),
+            Err(PrivateHnswClientError::InvalidNeighborShape)
+        );
+    }
+
+    #[test]
+    fn node_block_codec_rejects_malformed_level_masks() {
+        let mut zero_mask = node_block();
+        zero_mask.level_mask = 0;
+        assert_eq!(
+            encode_private_hnsw_node_block(&zero_mask, 512, 4),
+            Err(PrivateHnswClientError::InvalidNeighborShape)
+        );
+
+        let mut non_contiguous_mask = node_block();
+        non_contiguous_mask.level_mask = 0b101;
+        assert_eq!(
+            encode_private_hnsw_node_block(&non_contiguous_mask, 512, 4),
+            Err(PrivateHnswClientError::InvalidNeighborShape)
+        );
+
+        let mut missing_neighbor_level = node_block();
+        missing_neighbor_level.level_mask = 0b1;
+        assert_eq!(
+            encode_private_hnsw_node_block(&missing_neighbor_level, 512, 4),
+            Err(PrivateHnswClientError::InvalidNeighborShape)
+        );
+
+        let mut encoded = encode_private_hnsw_node_block(&node_block(), 512, 4)
+            .expect("fixture block should encode");
+        let first_neighbor_level_offset =
+            4 + 2 + 32 + 32 + 8 + 1 + 1 + 8 + 1 + 32 + 4 + 4 + 4 + 8 + 32;
+        encoded[first_neighbor_level_offset] = 64;
+        assert_eq!(
+            decode_private_hnsw_node_block(&encoded),
             Err(PrivateHnswClientError::InvalidNeighborShape)
         );
     }

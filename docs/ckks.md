@@ -1512,7 +1512,8 @@ fails closed instead of silently falling back to the first block.
 The plaintext index builder rejects duplicate node ids, point tokens, and
 payload fetch tokens before bucket placement so malformed indexes cannot defer
 result-token ambiguity to search or private result fetch validation. HNSW node
-block codec validation rejects self-neighbors and duplicate same-level neighbor
+block codec validation rejects empty/non-contiguous level masks, neighbor levels
+outside the node level mask, self-neighbors, and duplicate same-level neighbor
 entries while still allowing the same neighbor id on different HNSW levels. The
 plaintext bucket codec and client Path ORAM access also reject duplicate point
 tokens and duplicate payload fetch tokens before decrypted path blocks can be
