@@ -1808,9 +1808,21 @@ pub fn build_private_hnsw_oram_plaintext_index_from_blocks(
 
     let mut state = PrivateHnswOramClientState::new();
     let mut seen_nodes = BTreeSet::new();
+    let mut seen_point_tokens = BTreeSet::new();
+    let mut seen_payload_fetch_tokens = BTreeSet::new();
     for (block, leaf) in blocks.iter().zip(leaves) {
         if !seen_nodes.insert(block.node_id) {
             return Err(PrivateHnswClientError::DuplicateBlock);
+        }
+        if !seen_point_tokens.insert(block.point_token) {
+            return Err(PrivateHnswClientError::InvalidBuildConfig("point_token"));
+        }
+        if let Some(payload_fetch_token) = block.payload_fetch_token {
+            if !seen_payload_fetch_tokens.insert(payload_fetch_token) {
+                return Err(PrivateHnswClientError::InvalidBuildConfig(
+                    "payload_fetch_token",
+                ));
+            }
         }
         validate_private_hnsw_oram_leaf(*leaf, config.tree_height)?;
         encode_private_hnsw_node_block(
@@ -8500,6 +8512,42 @@ mod tests {
             ),
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "payload_fetch_tokens"
+            ))
+        );
+    }
+
+    #[test]
+    fn plaintext_index_build_rejects_duplicate_result_tokens() {
+        let config = PrivateHnswOramClientConfig {
+            bucket_size: 2,
+            ..oram_config()
+        };
+        let first = node_block_with_vector(1, &[1.0, 0.0], vec![]);
+        let second = node_block_with_vector(2, &[2.0, 0.0], vec![]);
+
+        let mut duplicate_point = second.clone();
+        duplicate_point.point_token = first.point_token;
+        assert_eq!(
+            build_private_hnsw_oram_plaintext_index_from_blocks(
+                config,
+                &[first.clone(), duplicate_point],
+                &[0, 1],
+            ),
+            Err(PrivateHnswClientError::InvalidBuildConfig("point_token"))
+        );
+
+        let mut first_payload = first.clone();
+        first_payload.payload_fetch_token = Some([77; 32]);
+        let mut duplicate_payload = second;
+        duplicate_payload.payload_fetch_token = Some([77; 32]);
+        assert_eq!(
+            build_private_hnsw_oram_plaintext_index_from_blocks(
+                config,
+                &[first_payload, duplicate_payload],
+                &[0, 1],
+            ),
+            Err(PrivateHnswClientError::InvalidBuildConfig(
+                "payload_fetch_token"
             ))
         );
     }

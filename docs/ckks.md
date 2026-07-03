@@ -1503,6 +1503,9 @@ experiments can place entry-near neighbor chains on adjacent ORAM leaves before
 calling `build_private_hnsw_oram_plaintext_index_from_blocks`; the helper
 requires the requested entry node to be present in the build block set and
 fails closed instead of silently falling back to the first block.
+The plaintext index builder rejects duplicate node ids, point tokens, and
+payload fetch tokens before bucket placement so malformed indexes cannot defer
+result-token ambiguity to search or private result fetch validation.
 `plan_private_hnsw_oram_directional_neighbor_filter` is an experimental
 client-local helper for Compass-style directional neighbor filtering: given the
 current node block, decrypted neighbor blocks, and the query vector, it keeps
