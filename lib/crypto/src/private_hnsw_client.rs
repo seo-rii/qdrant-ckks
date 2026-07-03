@@ -1513,6 +1513,9 @@ impl PrivateHnswOramClientState {
             })
             .collect::<Result<Vec<_>, PrivateHnswClientError>>()?;
         for (node_id, block) in &self.stash {
+            if block.node_id != *node_id {
+                return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+            }
             if !self.position_map.contains_key(node_id) {
                 return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
             }
@@ -10067,6 +10070,16 @@ mod tests {
             .push(1);
         assert_eq!(
             malformed_state.to_snapshot(config.tree_height),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+        let mut mismatched_stash_key_state = state.clone();
+        mismatched_stash_key_state
+            .stash
+            .get_mut(&stash.node_id)
+            .unwrap()
+            .node_id = [99; 32];
+        assert_eq!(
+            mismatched_stash_key_state.to_snapshot(config.tree_height),
             Err(PrivateHnswClientError::InvalidClientStateSnapshot)
         );
 

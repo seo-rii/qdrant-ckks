@@ -501,6 +501,9 @@ impl PrivateResultOramClientState {
             })
             .collect::<Result<Vec<_>, PrivateResultOramError>>()?;
         for (payload_fetch_token, block) in &self.stash {
+            if block.payload_fetch_token != *payload_fetch_token {
+                return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+            }
             if !self.position_map.contains_key(payload_fetch_token) {
                 return Err(PrivateResultOramError::InvalidClientStateSnapshot);
             }
@@ -6662,6 +6665,16 @@ mod tests {
             .version = 2;
         assert_eq!(
             malformed_state.to_snapshot(config.tree_height),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
+        );
+        let mut mismatched_stash_key_state = state.clone();
+        mismatched_stash_key_state
+            .stash
+            .get_mut(&stash.payload_fetch_token)
+            .unwrap()
+            .payload_fetch_token = [99; 32];
+        assert_eq!(
+            mismatched_stash_key_state.to_snapshot(config.tree_height),
             Err(PrivateResultOramError::InvalidClientStateSnapshot)
         );
         let leaf_label = encode_private_result_oram_leaf_label(1, config.tree_height).unwrap();

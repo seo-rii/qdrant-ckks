@@ -1134,7 +1134,8 @@ exposing payload bytes to the caller. A canonical plaintext client-state
 snapshot shape now round-trips the result ORAM token position map and stash for
 client-side backup validation; snapshot import rejects duplicate stash payload
 tokens, duplicate stash point tokens, and malformed stash payload block
-versions or payload lengths before state recovery. An encrypted
+versions, payload lengths, or stash map-key/token mismatches before state
+recovery. An encrypted
 snapshot helper seals that backup under a client-derived state key with
 collection/key/epoch/root AAD plus ciphertext hash checks. New SDK code should derive
 `PrivateResultOramClientKeys` from the signed result manifest rather than the
@@ -1544,7 +1545,8 @@ opening sessions against a pinned epoch/root. For encrypted local backups,
 position-map subkey, rejects malformed position map/stash snapshots before
 producing ciphertext, rejects duplicate position/stash entries, duplicate stash
 point/payload fetch tokens, malformed leaf labels, and malformed stash node
-blocks, vector bytes, neighbor shapes, or level masks at snapshot import, and
+blocks, vector bytes, neighbor shapes, level masks, or stash map-key/node-id
+mismatches at snapshot export/import, and
 binds the ciphertext to collection id,
 vector name, RK id/epoch, index epoch, and root hash;
 `open_private_hnsw_oram_client_state_snapshot` bounds the encoded ciphertext
