@@ -939,6 +939,9 @@ pub fn plan_private_hnsw_private_result_fetch_tokens(
     match result_privacy {
         ResultPrivacyMode::IdsVisible => Ok(None),
         ResultPrivacyMode::PrivatePayloadOramRequired => {
+            if result.hits.iter().any(|hit| !hit.distance.is_finite()) {
+                return Err(PrivateHnswClientError::NonFiniteDistance);
+            }
             if fixed_result_k == 0 || result.hits.len() > fixed_result_k {
                 return Err(PrivateHnswClientError::InvalidSearchConfig(
                     "fixed_result_k",
@@ -8042,6 +8045,26 @@ mod tests {
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "fixed_result_k"
             ))
+        );
+
+        let non_finite_result = PrivateHnswSearchResult {
+            hits: vec![PrivateHnswSearchHit {
+                node_id: [1; 32],
+                point_token: [2; 32],
+                payload_fetch_token: Some([11; 32]),
+                distance: f32::NAN,
+            }],
+            accessed_leaf_labels: vec![],
+            completed_steps: 1,
+        };
+        assert_eq!(
+            plan_private_hnsw_private_result_fetch_tokens(
+                ResultPrivacyMode::PrivatePayloadOramRequired,
+                &non_finite_result,
+                1,
+                &[],
+            ),
+            Err(PrivateHnswClientError::NonFiniteDistance)
         );
     }
 
