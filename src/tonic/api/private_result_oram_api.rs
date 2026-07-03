@@ -4207,6 +4207,11 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !malformed_hash_commit
                     .message()
+                    .contains(&updated_bucket.bucket_commitment)
+            );
+            assert!(
+                !malformed_hash_commit
+                    .message()
                     .contains(&commit_signature.key_id)
             );
             assert!(
@@ -4554,6 +4559,16 @@ mod private_result_oram_grpc_tests {
                 !invalid_signature_duplicate_bucket
                     .message()
                     .contains(&updated_bucket.ciphertext)
+            );
+            assert!(
+                !invalid_signature_duplicate_bucket
+                    .message()
+                    .contains(&updated_bucket.ciphertext_sha256)
+            );
+            assert!(
+                !invalid_signature_duplicate_bucket
+                    .message()
+                    .contains(&updated_bucket.bucket_commitment)
             );
 
             let unconfigured_commit_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";

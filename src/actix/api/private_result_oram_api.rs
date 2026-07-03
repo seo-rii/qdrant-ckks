@@ -3463,6 +3463,7 @@ mod private_result_oram_rest_tests {
             assert!(!malformed_hash_commit_error.contains(&fixture.manifest.root_hash));
             assert!(!malformed_hash_commit_error.contains(&new_root_hash));
             assert!(!malformed_hash_commit_error.contains(&updated_bucket.ciphertext));
+            assert!(!malformed_hash_commit_error.contains(&updated_bucket.bucket_commitment));
             assert!(!malformed_hash_commit_error.contains(&session_id));
             assert!(!malformed_hash_commit_error.contains(&commit_signature.key_id));
             assert!(!malformed_hash_commit_error.contains(&commit_signature.sig));
@@ -3646,6 +3647,14 @@ mod private_result_oram_rest_tests {
                 !invalid_signature_duplicate_commit_error.contains(&wrong_commit_signature.sig)
             );
             assert!(!invalid_signature_duplicate_commit_error.contains(&updated_bucket.ciphertext));
+            assert!(
+                !invalid_signature_duplicate_commit_error
+                    .contains(&updated_bucket.ciphertext_sha256)
+            );
+            assert!(
+                !invalid_signature_duplicate_commit_error
+                    .contains(&updated_bucket.bucket_commitment)
+            );
 
             let unconfigured_commit_key_id_sentinel = "tenant-a/private-result-signing-v1-unknown";
             let mut unconfigured_commit_key_signature = commit_signature.clone();
