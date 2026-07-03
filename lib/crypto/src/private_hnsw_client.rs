@@ -856,6 +856,10 @@ impl PrivateHnswSearchResult {
         &self,
         params: &PrivateHnswSearchParams,
     ) -> PrivateHnswSearchAccessMetrics {
+        let has_canonical_leaf_labels = self
+            .accessed_leaf_labels
+            .iter()
+            .all(|label| decode_private_hnsw_oram_leaf_label_shape(label).is_ok());
         PrivateHnswSearchAccessMetrics {
             path_accesses: self.accessed_leaf_labels.len(),
             unique_leaf_labels: self
@@ -865,6 +869,7 @@ impl PrivateHnswSearchResult {
                 .len(),
             fixed_steps: params.fixed_steps,
             exhausted_fixed_budget: params.fixed_steps > 0
+                && has_canonical_leaf_labels
                 && self.completed_steps == params.fixed_steps
                 && self.accessed_leaf_labels.len() == params.fixed_steps,
         }
@@ -7672,6 +7677,25 @@ mod tests {
             PrivateHnswSearchAccessMetrics {
                 path_accesses: 1,
                 unique_leaf_labels: 1,
+                fixed_steps: 3,
+                exhausted_fixed_budget: false,
+            }
+        );
+
+        let malformed_label_result = PrivateHnswSearchResult {
+            hits: Vec::new(),
+            accessed_leaf_labels: vec![
+                "AAAAAAAAAAA".to_string(),
+                "not-base64!".to_string(),
+                "AAAAAAAAAAI".to_string(),
+            ],
+            completed_steps: 3,
+        };
+        assert_eq!(
+            malformed_label_result.access_metrics(&params),
+            PrivateHnswSearchAccessMetrics {
+                path_accesses: 3,
+                unique_leaf_labels: 3,
                 fixed_steps: 3,
                 exhausted_fixed_budget: false,
             }
