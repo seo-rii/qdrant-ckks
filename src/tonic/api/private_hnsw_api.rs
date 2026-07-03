@@ -4655,6 +4655,10 @@ mod private_hnsw_grpc_tests {
             let stale_current_commit_new_root_hash = search_run.commit_plan.new_root_hash.clone();
             let stale_current_commit_bucket_ciphertext =
                 search_run.updated_buckets[0].ciphertext.clone();
+            let stale_current_commit_bucket_ciphertext_sha256 =
+                search_run.updated_buckets[0].ciphertext_sha256.clone();
+            let stale_current_commit_bucket_commitment =
+                search_run.updated_buckets[0].bucket_commitment.clone();
             let stale_current_commit_signature_key_id = search_run.commit_signature.key_id.clone();
             let stale_current_commit_signature_sig = search_run.commit_signature.sig.clone();
             let unknown_commit_key_signature_sig = fixture.client_signature().sig;
@@ -4711,6 +4715,18 @@ mod private_hnsw_grpc_tests {
             assert!(
                 !err.message()
                     .contains(&stale_current_commit_bucket_ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&stale_current_commit_bucket_ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&stale_current_commit_bucket_commitment),
                 "{}",
                 err.message()
             );

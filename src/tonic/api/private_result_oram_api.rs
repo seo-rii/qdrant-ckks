@@ -2765,6 +2765,10 @@ mod private_result_oram_grpc_tests {
             let stale_current_commit_signature_sig = stale_current_commit_signature.sig.clone();
             let stale_current_commit_bucket_ciphertext =
                 stale_current_updated_bucket.ciphertext.clone();
+            let stale_current_commit_bucket_ciphertext_sha256 =
+                stale_current_updated_bucket.ciphertext_sha256.clone();
+            let stale_current_commit_bucket_commitment =
+                stale_current_updated_bucket.bucket_commitment.clone();
             let err = PrivateResultOram::commit_private_result_oram_buckets(
                 &service,
                 Request::new(grpc::CommitPrivateResultOramBucketsRequest {
@@ -2823,6 +2827,18 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !err.message()
                     .contains(&stale_current_commit_bucket_ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&stale_current_commit_bucket_ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&stale_current_commit_bucket_commitment),
                 "{}",
                 err.message()
             );

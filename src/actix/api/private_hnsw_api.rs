@@ -4362,6 +4362,10 @@ mod private_hnsw_rest_tests {
             let stale_current_commit_new_root_hash = search_run.commit_plan.new_root_hash.clone();
             let stale_current_commit_bucket_ciphertext =
                 search_run.updated_buckets[0].ciphertext.clone();
+            let stale_current_commit_bucket_ciphertext_sha256 =
+                search_run.updated_buckets[0].ciphertext_sha256.clone();
+            let stale_current_commit_bucket_commitment =
+                search_run.updated_buckets[0].bucket_commitment.clone();
             let stale_current_commit_signature_key_id = search_run.commit_signature.key_id.clone();
             let stale_current_commit_signature_sig = search_run.commit_signature.sig.clone();
             let stale_current_commit_error = post_json_error_contains!(
@@ -4405,6 +4409,15 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !stale_current_commit_error.contains(&stale_current_commit_bucket_ciphertext),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error
+                    .contains(&stale_current_commit_bucket_ciphertext_sha256),
+                "{stale_current_commit_error}"
+            );
+            assert!(
+                !stale_current_commit_error.contains(&stale_current_commit_bucket_commitment),
                 "{stale_current_commit_error}"
             );
             assert!(
