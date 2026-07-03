@@ -1542,7 +1542,8 @@ opening sessions against a pinned epoch/root. For encrypted local backups,
 `seal_private_hnsw_oram_client_state_snapshot` uses the RK-derived
 position-map subkey, rejects malformed position map/stash snapshots before
 producing ciphertext, rejects duplicate position/stash entries, duplicate stash
-point/payload fetch tokens, and malformed leaf labels at snapshot import, and
+point/payload fetch tokens, malformed leaf labels, and malformed stash node
+blocks, vector bytes, neighbor shapes, or level masks at snapshot import, and
 binds the ciphertext to collection id,
 vector name, RK id/epoch, index epoch, and root hash;
 `open_private_hnsw_oram_client_state_snapshot` bounds the encoded ciphertext

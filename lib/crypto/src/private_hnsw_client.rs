@@ -1512,10 +1512,11 @@ impl PrivateHnswOramClientState {
                 })
             })
             .collect::<Result<Vec<_>, PrivateHnswClientError>>()?;
-        for node_id in self.stash.keys() {
+        for (node_id, block) in &self.stash {
             if !self.position_map.contains_key(node_id) {
                 return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
             }
+            validate_private_hnsw_client_state_stash_block(block)?;
         }
 
         Ok(PrivateHnswOramClientStateSnapshot {
@@ -1550,6 +1551,7 @@ impl PrivateHnswOramClientState {
         let mut stash_point_tokens = BTreeSet::new();
         let mut stash_payload_fetch_tokens = BTreeSet::new();
         for block in &snapshot.stash {
+            validate_private_hnsw_client_state_stash_block(block)?;
             if !position_map.contains_key(&block.node_id) {
                 return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
             }
@@ -1579,6 +1581,23 @@ impl PrivateHnswOramClientState {
     pub fn stash_contains(&self, node_id: &[u8; 32]) -> bool {
         self.stash.contains_key(node_id)
     }
+}
+
+fn validate_private_hnsw_client_state_stash_block(
+    block: &PrivateHnswNodeBlockPlaintext,
+) -> Result<(), PrivateHnswClientError> {
+    if block.version != NODE_BLOCK_VERSION {
+        return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+    }
+    validate_private_hnsw_node_neighbor_shape(
+        block.node_id,
+        block.level_mask,
+        &block.neighbors,
+        &block.neighbor_levels,
+    )
+    .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)?;
+    validate_private_hnsw_vector_shape(block.vector_encoding, &block.vector)
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateSnapshot)
 }
 
 pub fn seal_private_hnsw_oram_client_state_snapshot(
@@ -10039,6 +10058,17 @@ mod tests {
         assert_eq!(snapshot.tree_height, config.tree_height);
         assert_eq!(snapshot.positions.len(), 2);
         assert_eq!(snapshot.stash, vec![stash.clone()]);
+        let mut malformed_state = state.clone();
+        malformed_state
+            .stash
+            .get_mut(&stash.node_id)
+            .unwrap()
+            .vector
+            .push(1);
+        assert_eq!(
+            malformed_state.to_snapshot(config.tree_height),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
 
         let encoded = serde_json::to_string(&snapshot).unwrap();
         let decoded: PrivateHnswOramClientStateSnapshot = serde_json::from_str(&encoded).unwrap();
@@ -10074,6 +10104,19 @@ mod tests {
             .push(duplicate_position.positions[0].clone());
         assert_eq!(
             PrivateHnswOramClientState::from_snapshot(&duplicate_position),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+
+        let mut bad_stash_vector = decoded.clone();
+        bad_stash_vector.stash[0].vector.push(1);
+        assert_eq!(
+            PrivateHnswOramClientState::from_snapshot(&bad_stash_vector),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+        let mut bad_stash_level_mask = decoded.clone();
+        bad_stash_level_mask.stash[0].level_mask = 0b101;
+        assert_eq!(
+            PrivateHnswOramClientState::from_snapshot(&bad_stash_level_mask),
             Err(PrivateHnswClientError::InvalidClientStateSnapshot)
         );
 
@@ -10285,7 +10328,11 @@ mod tests {
         let entry = node_block_with_vector(1, &[1.0, 0.0], vec![]);
         let mut stash = node_block_with_vector(2, &[2.0, 0.0], vec![[1; 32]]);
         stash.point_token = [66; 32];
-        stash.vector = b"HNSW-ORAM-STASH-VECTOR-RAW-V1!!!".to_vec();
+        stash.vector = [3.25_f32, 4.5_f32]
+            .into_iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        stash.level_mask = 0b11;
         stash.neighbors = vec![[88; 32], [99; 32]];
         stash.neighbor_levels = vec![1, 0];
         stash.payload_fetch_token = Some([77; 32]);
