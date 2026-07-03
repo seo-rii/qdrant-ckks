@@ -500,6 +500,7 @@ impl PrivateResultOramClientState {
                 })
             })
             .collect::<Result<Vec<_>, PrivateResultOramError>>()?;
+        let mut stash_point_tokens = BTreeSet::new();
         for (payload_fetch_token, block) in &self.stash {
             if block.payload_fetch_token != *payload_fetch_token {
                 return Err(PrivateResultOramError::InvalidClientStateSnapshot);
@@ -508,6 +509,9 @@ impl PrivateResultOramClientState {
                 return Err(PrivateResultOramError::InvalidClientStateSnapshot);
             }
             validate_private_result_oram_client_state_stash_block(block)?;
+            if !stash_point_tokens.insert(block.point_token) {
+                return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+            }
         }
 
         Ok(PrivateResultOramClientStateSnapshot {
@@ -6675,6 +6679,20 @@ mod tests {
             .payload_fetch_token = [99; 32];
         assert_eq!(
             mismatched_stash_key_state.to_snapshot(config.tree_height),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
+        );
+        let mut duplicate_stash_point_state = state.clone();
+        let mut duplicate_stash_point = payload_block(12);
+        duplicate_stash_point.point_token = stash.point_token;
+        duplicate_stash_point_state
+            .position_map
+            .insert(duplicate_stash_point.payload_fetch_token, 2);
+        duplicate_stash_point_state.stash.insert(
+            duplicate_stash_point.payload_fetch_token,
+            duplicate_stash_point,
+        );
+        assert_eq!(
+            duplicate_stash_point_state.to_snapshot(config.tree_height),
             Err(PrivateResultOramError::InvalidClientStateSnapshot)
         );
         let leaf_label = encode_private_result_oram_leaf_label(1, config.tree_height).unwrap();

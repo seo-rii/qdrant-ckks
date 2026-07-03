@@ -1132,8 +1132,8 @@ finalizer maps only real HNSW hits back to fetched payload blocks and validates
 the fetched token set, point-token binding, and deleted-payload rejection before
 exposing payload bytes to the caller. A canonical plaintext client-state
 snapshot shape now round-trips the result ORAM token position map and stash for
-client-side backup validation; snapshot import rejects duplicate stash payload
-tokens, duplicate stash point tokens, and malformed stash payload block
+client-side backup validation; snapshot export/import rejects duplicate stash
+payload tokens, duplicate stash point tokens, and malformed stash payload block
 versions, payload lengths, or stash map-key/token mismatches before state
 recovery. An encrypted
 snapshot helper seals that backup under a client-derived state key with

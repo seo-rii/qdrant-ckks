@@ -1512,6 +1512,8 @@ impl PrivateHnswOramClientState {
                 })
             })
             .collect::<Result<Vec<_>, PrivateHnswClientError>>()?;
+        let mut stash_point_tokens = BTreeSet::new();
+        let mut stash_payload_fetch_tokens = BTreeSet::new();
         for (node_id, block) in &self.stash {
             if block.node_id != *node_id {
                 return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
@@ -1520,6 +1522,14 @@ impl PrivateHnswOramClientState {
                 return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
             }
             validate_private_hnsw_client_state_stash_block(block)?;
+            if !stash_point_tokens.insert(block.point_token) {
+                return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+            }
+            if let Some(payload_fetch_token) = block.payload_fetch_token
+                && !stash_payload_fetch_tokens.insert(payload_fetch_token)
+            {
+                return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+            }
         }
 
         Ok(PrivateHnswOramClientStateSnapshot {
@@ -10080,6 +10090,37 @@ mod tests {
             .node_id = [99; 32];
         assert_eq!(
             mismatched_stash_key_state.to_snapshot(config.tree_height),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+        let mut duplicate_stash_point_state = state.clone();
+        let mut duplicate_stash_point = node_block_with_vector(3, &[3.0, 0.0], vec![]);
+        duplicate_stash_point.point_token = stash.point_token;
+        duplicate_stash_point_state
+            .position_map
+            .insert(duplicate_stash_point.node_id, 2);
+        duplicate_stash_point_state
+            .stash
+            .insert(duplicate_stash_point.node_id, duplicate_stash_point);
+        assert_eq!(
+            duplicate_stash_point_state.to_snapshot(config.tree_height),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+        let mut duplicate_stash_payload_state = state.clone();
+        duplicate_stash_payload_state
+            .stash
+            .get_mut(&stash.node_id)
+            .unwrap()
+            .payload_fetch_token = Some([77; 32]);
+        let mut duplicate_stash_payload = node_block_with_vector(4, &[4.0, 0.0], vec![]);
+        duplicate_stash_payload.payload_fetch_token = Some([77; 32]);
+        duplicate_stash_payload_state
+            .position_map
+            .insert(duplicate_stash_payload.node_id, 3);
+        duplicate_stash_payload_state
+            .stash
+            .insert(duplicate_stash_payload.node_id, duplicate_stash_payload);
+        assert_eq!(
+            duplicate_stash_payload_state.to_snapshot(config.tree_height),
             Err(PrivateHnswClientError::InvalidClientStateSnapshot)
         );
 
