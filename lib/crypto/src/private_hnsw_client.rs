@@ -124,6 +124,10 @@ pub enum PrivateHnswClientError {
     MissingBlock,
     #[error("private HNSW ORAM path contains duplicate node blocks")]
     DuplicateBlock,
+    #[error("private HNSW ORAM path contains duplicate point tokens")]
+    DuplicatePointToken,
+    #[error("private HNSW ORAM path contains duplicate payload fetch tokens")]
+    DuplicatePayloadFetchToken,
     #[error("private HNSW ORAM build config is invalid")]
     InvalidBuildConfig(&'static str),
     #[error("private HNSW ORAM initial placement overflowed path")]
@@ -2795,16 +2799,40 @@ pub fn access_private_hnsw_oram_path(
         return Err(PrivateHnswClientError::PathBucketMismatch);
     }
 
+    let mut path_node_ids = BTreeSet::new();
+    let mut path_point_tokens = state
+        .stash
+        .values()
+        .map(|block| block.point_token)
+        .collect::<BTreeSet<_>>();
+    let mut path_payload_fetch_tokens = state
+        .stash
+        .values()
+        .filter_map(|block| block.payload_fetch_token)
+        .collect::<BTreeSet<_>>();
     for bucket in path_buckets {
         if bucket.blocks.len() != config.bucket_size {
             return Err(PrivateHnswClientError::BucketPlaintextSlotCountMismatch);
         }
         for block in bucket.blocks.iter().flatten() {
-            if state.stash.contains_key(&block.node_id) {
+            if state.stash.contains_key(&block.node_id) || !path_node_ids.insert(block.node_id) {
                 return Err(PrivateHnswClientError::DuplicateBlock);
             }
-            state.stash.insert(block.node_id, block.clone());
+            if !path_point_tokens.insert(block.point_token) {
+                return Err(PrivateHnswClientError::DuplicatePointToken);
+            }
+            if let Some(payload_fetch_token) = block.payload_fetch_token {
+                if !path_payload_fetch_tokens.insert(payload_fetch_token) {
+                    return Err(PrivateHnswClientError::DuplicatePayloadFetchToken);
+                }
+            }
         }
+    }
+    for block in path_buckets
+        .iter()
+        .flat_map(|bucket| bucket.blocks.iter().flatten())
+    {
+        state.stash.insert(block.node_id, block.clone());
     }
 
     let block = state
@@ -6303,6 +6331,84 @@ mod tests {
             access_private_hnsw_oram_path(&mut state, config, node_a.node_id, &path, 0),
             Err(PrivateHnswClientError::MissingBlock)
         );
+    }
+
+    #[test]
+    fn path_oram_access_rejects_duplicate_point_and_payload_tokens() {
+        let config = oram_config();
+        let node_a = node_block_with_id(10);
+        let mut duplicate_point_node = node_block_with_id(11);
+        duplicate_point_node.point_token = node_a.point_token;
+        let mut state = PrivateHnswOramClientState::with_position_map(
+            [(node_a.node_id, 2), (duplicate_point_node.node_id, 3)],
+            config.tree_height,
+        )
+        .unwrap();
+        let duplicate_point_path = vec![
+            PrivateHnswOramPlaintextBucket {
+                bucket_id: 0,
+                blocks: vec![None],
+            },
+            PrivateHnswOramPlaintextBucket {
+                bucket_id: 2,
+                blocks: vec![Some(duplicate_point_node)],
+            },
+            PrivateHnswOramPlaintextBucket {
+                bucket_id: 5,
+                blocks: vec![Some(node_a.clone())],
+            },
+        ];
+        assert_eq!(
+            access_private_hnsw_oram_path(
+                &mut state,
+                config,
+                node_a.node_id,
+                &duplicate_point_path,
+                0
+            ),
+            Err(PrivateHnswClientError::DuplicatePointToken)
+        );
+        assert_eq!(state.stash_len(), 0);
+        assert_eq!(state.position(&node_a.node_id), Some(2));
+
+        let mut node_with_payload = node_block_with_id(12);
+        node_with_payload.payload_fetch_token = Some([77; 32]);
+        let mut duplicate_payload_node = node_block_with_id(13);
+        duplicate_payload_node.payload_fetch_token = Some([77; 32]);
+        let mut state = PrivateHnswOramClientState::with_position_map(
+            [
+                (node_with_payload.node_id, 2),
+                (duplicate_payload_node.node_id, 3),
+            ],
+            config.tree_height,
+        )
+        .unwrap();
+        let duplicate_payload_path = vec![
+            PrivateHnswOramPlaintextBucket {
+                bucket_id: 0,
+                blocks: vec![None],
+            },
+            PrivateHnswOramPlaintextBucket {
+                bucket_id: 2,
+                blocks: vec![Some(duplicate_payload_node)],
+            },
+            PrivateHnswOramPlaintextBucket {
+                bucket_id: 5,
+                blocks: vec![Some(node_with_payload.clone())],
+            },
+        ];
+        assert_eq!(
+            access_private_hnsw_oram_path(
+                &mut state,
+                config,
+                node_with_payload.node_id,
+                &duplicate_payload_path,
+                0
+            ),
+            Err(PrivateHnswClientError::DuplicatePayloadFetchToken)
+        );
+        assert_eq!(state.stash_len(), 0);
+        assert_eq!(state.position(&node_with_payload.node_id), Some(2));
     }
 
     #[test]

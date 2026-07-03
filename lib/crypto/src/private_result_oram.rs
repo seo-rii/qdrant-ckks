@@ -136,6 +136,8 @@ pub enum PrivateResultOramError {
     MissingPayloadFetchTokenPosition,
     #[error("private result ORAM fetch token appears more than once")]
     DuplicatePayloadFetchToken,
+    #[error("private result ORAM point token appears more than once")]
+    DuplicatePointToken,
     #[error("private result ORAM fetch token position appears more than once")]
     DuplicatePayloadFetchTokenPosition,
     #[error("private result ORAM client config is invalid")]
@@ -1809,16 +1811,32 @@ pub fn access_private_result_oram_path(
         return Err(PrivateResultOramError::PathBucketMismatch);
     }
 
+    let mut path_payload_fetch_tokens = BTreeSet::new();
+    let mut path_point_tokens = state
+        .stash
+        .values()
+        .map(|block| block.point_token)
+        .collect::<BTreeSet<_>>();
     for bucket in path_buckets {
         if bucket.blocks.len() != config.bucket_size {
             return Err(PrivateResultOramError::BucketPlaintextSlotCountMismatch);
         }
         for block in bucket.blocks.iter().flatten() {
-            if state.stash.contains_key(&block.payload_fetch_token) {
+            if state.stash.contains_key(&block.payload_fetch_token)
+                || !path_payload_fetch_tokens.insert(block.payload_fetch_token)
+            {
                 return Err(PrivateResultOramError::DuplicatePayloadFetchToken);
             }
-            state.stash.insert(block.payload_fetch_token, block.clone());
+            if !path_point_tokens.insert(block.point_token) {
+                return Err(PrivateResultOramError::DuplicatePointToken);
+            }
         }
+    }
+    for block in path_buckets
+        .iter()
+        .flat_map(|bucket| bucket.blocks.iter().flatten())
+    {
+        state.stash.insert(block.payload_fetch_token, block.clone());
     }
 
     let block = state
@@ -5375,6 +5393,47 @@ mod tests {
             ),
             Err(PrivateResultOramError::MissingBlock)
         );
+    }
+
+    #[test]
+    fn path_oram_access_rejects_duplicate_point_tokens() {
+        let config = result_client_config();
+        let block_a = payload_block(10);
+        let mut duplicate_point_block = payload_block(11);
+        duplicate_point_block.point_token = block_a.point_token;
+        let mut state = PrivateResultOramClientState::with_position_map(
+            [
+                (block_a.payload_fetch_token, 2),
+                (duplicate_point_block.payload_fetch_token, 3),
+            ],
+            config.tree_height,
+        )
+        .unwrap();
+        let path = vec![
+            empty_private_result_oram_plaintext_bucket(0, config).unwrap(),
+            empty_private_result_oram_plaintext_bucket(1, config).unwrap(),
+            PrivateResultOramPlaintextBucket {
+                bucket_id: 4,
+                blocks: vec![Some(duplicate_point_block), None],
+            },
+            PrivateResultOramPlaintextBucket {
+                bucket_id: 9,
+                blocks: vec![Some(block_a.clone()), None],
+            },
+        ];
+
+        assert_eq!(
+            access_private_result_oram_path(
+                &mut state,
+                config,
+                block_a.payload_fetch_token,
+                &path,
+                0,
+            ),
+            Err(PrivateResultOramError::DuplicatePointToken)
+        );
+        assert_eq!(state.stash_len(), 0);
+        assert_eq!(state.position(&block_a.payload_fetch_token), Some(2));
     }
 
     #[test]

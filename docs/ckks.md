@@ -1114,7 +1114,9 @@ AAD, context-bound bucket commitments, ciphertext hash checks, and
 Merkle-proof-before-open verification for read batches. The SDK-side result ORAM
 state/access helper can now use the client-held token position map and stash to
 access a payload fetch token on a Path ORAM path, remap it to a new leaf, and
-produce plaintext writeback buckets for the commit path. A higher-level verified
+produce plaintext writeback buckets for the commit path; it rejects duplicate
+payload fetch tokens and duplicate point tokens before absorbing decrypted path
+blocks into the stash. A higher-level verified
 token-fetch helper now rebuilds the expected bucket path sequence from the
 client position map before opening server batches, consumes only matching
 planned encrypted bucket batches, overlays local writebacks between batched Path
@@ -1508,7 +1510,10 @@ requires the requested entry node to be present in the build block set and
 fails closed instead of silently falling back to the first block.
 The plaintext index builder rejects duplicate node ids, point tokens, and
 payload fetch tokens before bucket placement so malformed indexes cannot defer
-result-token ambiguity to search or private result fetch validation.
+result-token ambiguity to search or private result fetch validation. Client
+Path ORAM access also rejects duplicate point tokens and duplicate payload fetch
+tokens before absorbing decrypted path blocks into the stash, leaving the client
+state unchanged on that malformed-path boundary.
 `plan_private_hnsw_oram_directional_neighbor_filter` is an experimental
 client-local helper for Compass-style directional neighbor filtering: given the
 current node block, decrypted neighbor blocks, and the query vector, it keeps
