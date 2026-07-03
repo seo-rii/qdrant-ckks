@@ -919,6 +919,9 @@ pub fn validate_private_hnsw_strict_search_result(
     result: &PrivateHnswSearchResult,
 ) -> Result<(), PrivateHnswClientError> {
     validate_private_hnsw_search_fixed_budget(params, result)?;
+    if result.hits.iter().any(|hit| !hit.distance.is_finite()) {
+        return Err(PrivateHnswClientError::NonFiniteDistance);
+    }
     validate_private_hnsw_search_result_privacy(result_privacy, result)
 }
 
@@ -7607,6 +7610,24 @@ mod tests {
                 &malformed_label_result,
             ),
             Err(PrivateHnswClientError::InvalidLeafLabelEncoding)
+        );
+
+        let non_finite_result = PrivateHnswSearchResult {
+            hits: vec![PrivateHnswSearchHit {
+                node_id: [1; 32],
+                point_token: [2; 32],
+                payload_fetch_token: Some([3; 32]),
+                distance: f32::NAN,
+            }],
+            ..padded_result.clone()
+        };
+        assert_eq!(
+            validate_private_hnsw_strict_search_result(
+                ResultPrivacyMode::IdsVisible,
+                &params,
+                &non_finite_result,
+            ),
+            Err(PrivateHnswClientError::NonFiniteDistance)
         );
 
         let zero_step_params = PrivateHnswSearchParams {
