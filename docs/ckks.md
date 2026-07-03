@@ -1548,7 +1548,8 @@ point/payload fetch tokens, malformed leaf labels, and malformed stash node
 blocks, vector bytes, neighbor shapes, level masks, or stash map-key/node-id
 mismatches at snapshot export/import, and
 binds the ciphertext to collection id,
-vector name, RK id/epoch, index epoch, and root hash;
+vector name, RK id/epoch, index epoch, and root hash after rejecting malformed
+collection/vector AAD context identifiers;
 `open_private_hnsw_oram_client_state_snapshot` bounds the encoded ciphertext
 length and validates the ciphertext hash shape before decode, then rejects hash
 tamper or epoch/root context mismatch before returning the snapshot. The

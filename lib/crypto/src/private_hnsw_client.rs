@@ -4359,22 +4359,28 @@ fn validate_bucket_context(
 fn validate_client_state_context(
     context: PrivateHnswClientStateAeadContext<'_>,
 ) -> Result<(), PrivateHnswClientError> {
-    if context.collection_id.is_empty() {
-        return Err(PrivateHnswClientError::InvalidClientStateContext(
-            "collection_id",
-        ));
-    }
-    if context.vector_name.is_empty() {
-        return Err(PrivateHnswClientError::InvalidClientStateContext(
-            "vector_name",
-        ));
-    }
+    validate_client_state_context_id(context.collection_id)
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("collection_id"))?;
+    validate_client_state_context_id(context.vector_name)
+        .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("vector_name"))?;
     validate_resource_key_id(context.key_id)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("key_id"))?;
     validate_resource_key_id(context.rk_id)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("rk_id"))?;
     decode_merkle_root(context.root_hash)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("root_hash"))?;
+    Ok(())
+}
+
+fn validate_client_state_context_id(value: &str) -> Result<(), ()> {
+    if value.is_empty()
+        || value.len() > 255
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-' | b'/' | b'@')
+        })
+    {
+        return Err(());
+    }
     Ok(())
 }
 
@@ -10337,6 +10343,27 @@ mod tests {
             assert_eq!(
                 open_private_hnsw_oram_client_state_snapshot(&keys, wrong_context, &encrypted),
                 Err(PrivateHnswClientError::ClientStateOpenFailed)
+            );
+        }
+        for (malformed_context, field) in [
+            (
+                PrivateHnswClientStateAeadContext {
+                    collection_id: "collection\nuuid",
+                    ..context
+                },
+                "collection_id",
+            ),
+            (
+                PrivateHnswClientStateAeadContext {
+                    vector_name: "text\nvector",
+                    ..context
+                },
+                "vector_name",
+            ),
+        ] {
+            assert_eq!(
+                seal_private_hnsw_oram_client_state_snapshot(&keys, malformed_context, &snapshot),
+                Err(PrivateHnswClientError::InvalidClientStateContext(field))
             );
         }
 
