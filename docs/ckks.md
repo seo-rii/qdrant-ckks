@@ -532,7 +532,8 @@ accepts only `key_id`, `expected_rk_id`, `min_rk_epoch`, `max_rk_epoch`,
 `oram`, `integrity`, and `signature_public_keys`; its
 `private-result-oram/v1` collection binding validation requires a matching
 payload rule backed by that provider, no server materials/backend, pinned RK
-epoch, Path ORAM shape policy, integrity policy, and signing verifiers.
+epoch, Path ORAM shape policy, integrity policy, and a non-empty signing
+verifier registry.
 Manifest/bucket upload, session open/close, signed `read_buckets`, and signed
 commit REST/gRPC APIs are open, and bucket reads/commits are session-bound with
 single-writer epoch/root CAS. Unknown options
@@ -763,7 +764,10 @@ epoch comparisons, without reflecting malformed values.
 `read_paths` and `commit` client signatures are length-checked as fixed
 64-byte Ed25519 base64url values before decode/verification.
 Runtime `signature_public_keys` verifier entries are likewise treated as fixed
-32-byte Ed25519 base64url public keys before signature verification.
+authorizer policy: the registry must be non-empty, key ids must be valid
+resource ids, entries must be 32-byte Ed25519 base64url public keys, and
+duplicate public keys under multiple ids are rejected before signature
+verification.
 Signed manifest upload and initial encrypted bucket upload are also rejected
 while an active session holds the same private index, so a bulk upload cannot
 race a client-led traversal/writeback session. The upload path also holds a
