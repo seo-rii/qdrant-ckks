@@ -1559,6 +1559,11 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !malformed_bucket_hash_before_manifest
                     .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest
+                    .message()
                     .contains("private_result_oram")
             );
             assert!(
@@ -1572,6 +1577,7 @@ mod private_result_oram_grpc_tests {
                     malformed_bucket_hash_before_manifest_sentinel,
                     fixture.manifest.root_hash.as_str(),
                     fixture.buckets[0].ciphertext.as_str(),
+                    fixture.buckets[0].bucket_commitment.as_str(),
                     "manifest",
                 ],
             );
@@ -1623,6 +1629,11 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !malformed_bucket_commitment_before_manifest
                     .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest
+                    .message()
                     .contains("private_result_oram")
             );
             assert!(
@@ -1636,6 +1647,7 @@ mod private_result_oram_grpc_tests {
                     malformed_bucket_commitment_before_manifest_sentinel,
                     fixture.manifest.root_hash.as_str(),
                     fixture.buckets[0].ciphertext.as_str(),
+                    fixture.buckets[0].ciphertext_sha256.as_str(),
                     "manifest",
                 ],
             );
@@ -1671,6 +1683,16 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !empty_upload_before_manifest
                     .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !empty_upload_before_manifest
+                    .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
+            );
+            assert!(
+                !empty_upload_before_manifest
+                    .message()
                     .contains("private_result_oram")
             );
             assert!(!empty_upload_before_manifest.message().contains("manifest"));
@@ -1679,6 +1701,8 @@ mod private_result_oram_grpc_tests {
                 &[
                     fixture.manifest.root_hash.as_str(),
                     fixture.buckets[0].ciphertext.as_str(),
+                    fixture.buckets[0].ciphertext_sha256.as_str(),
+                    fixture.buckets[0].bucket_commitment.as_str(),
                     "manifest",
                 ],
             );
@@ -1727,6 +1751,16 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !duplicate_upload_before_manifest
                     .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !duplicate_upload_before_manifest
+                    .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
+            );
+            assert!(
+                !duplicate_upload_before_manifest
+                    .message()
                     .contains("private_result_oram")
             );
             assert!(
@@ -1739,6 +1773,8 @@ mod private_result_oram_grpc_tests {
                 &[
                     fixture.manifest.root_hash.as_str(),
                     fixture.buckets[0].ciphertext.as_str(),
+                    fixture.buckets[0].ciphertext_sha256.as_str(),
+                    fixture.buckets[0].bucket_commitment.as_str(),
                     "manifest",
                 ],
             );
@@ -2134,6 +2170,16 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
             );
+            assert!(
+                !bucket_upload_wrong_root_err
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !bucket_upload_wrong_root_err
+                    .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
+            );
 
             let bucket_upload_root_sentinel = "AAAA";
             let malformed_bucket_upload_root_err =
@@ -2194,6 +2240,16 @@ mod private_result_oram_grpc_tests {
                 !empty_bucket_upload
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !empty_bucket_upload
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !empty_bucket_upload
+                    .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
             );
             assert!(
                 !empty_bucket_upload
@@ -2276,6 +2332,16 @@ mod private_result_oram_grpc_tests {
                 !duplicate_bucket_upload
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
+            );
+            assert!(
+                !duplicate_bucket_upload
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !duplicate_bucket_upload
+                    .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
             );
             assert!(
                 !duplicate_bucket_upload
