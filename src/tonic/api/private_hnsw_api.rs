@@ -3695,6 +3695,8 @@ mod private_hnsw_grpc_tests {
                 &[
                     "active-session-bucket-upload-ciphertext-sentinel",
                     &fixture.encrypted_build.root_hash,
+                    &fixture.encrypted_build.buckets[0].ciphertext_sha256,
+                    &fixture.encrypted_build.buckets[0].bucket_commitment,
                     &session.session_id,
                 ],
             );
@@ -3809,6 +3811,14 @@ mod private_hnsw_grpc_tests {
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext)
             );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment)
+            );
             let oversized_path_label_sentinel =
                 format!("{}{}", fixture.entry_leaf_label(), "A".repeat(128));
             let oversized_signature = fixture.client_signature();
@@ -3862,6 +3872,18 @@ mod private_hnsw_grpc_tests {
             assert!(
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
                 "{}",
                 err.message()
             );
@@ -3947,6 +3969,14 @@ mod private_hnsw_grpc_tests {
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext)
             );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment)
+            );
             assert!(!err.message().contains(&wrong_budget_signature_key_id));
             assert!(!err.message().contains(&wrong_budget_signature_sig));
 
@@ -3981,6 +4011,14 @@ mod private_hnsw_grpc_tests {
             assert!(
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext)
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment)
             );
             assert!(!err.message().contains(&missing_dummy_signature_key_id));
             assert!(!err.message().contains(&missing_dummy_signature_sig));
@@ -4047,6 +4085,12 @@ mod private_hnsw_grpc_tests {
                 unknown_read_key_path.as_str(),
                 unknown_read_key_signature_sig.as_str(),
                 fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
             ] {
                 assert!(!err.message().contains(sentinel), "{}", err.message());
             }
@@ -4090,6 +4134,12 @@ mod private_hnsw_grpc_tests {
                 invalid_read_key_path.as_str(),
                 invalid_read_key_sig.as_str(),
                 fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
             ] {
                 assert!(!err.message().contains(sentinel), "{}", err.message());
             }
@@ -4131,6 +4181,12 @@ mod private_hnsw_grpc_tests {
                 malformed_read_signature_path.as_str(),
                 SIGNING_KEY_ID,
                 fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
             ] {
                 assert!(!err.message().contains(sentinel), "{}", err.message());
             }
@@ -4177,6 +4233,13 @@ mod private_hnsw_grpc_tests {
                 unsupported_read_path_label.as_str(),
                 unsupported_read_key_id.as_str(),
                 unsupported_read_sig.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
             ] {
                 assert!(!err.message().contains(sentinel), "{}", err.message());
             }

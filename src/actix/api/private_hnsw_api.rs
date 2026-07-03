@@ -3375,6 +3375,8 @@ mod private_hnsw_rest_tests {
                 &[
                     "active-session-bucket-upload-ciphertext-sentinel",
                     &fixture.encrypted_build.root_hash,
+                    &fixture.encrypted_build.buckets[0].ciphertext_sha256,
+                    &fixture.encrypted_build.buckets[0].bucket_commitment,
                     &session_id,
                 ],
             );
@@ -3495,6 +3497,14 @@ mod private_hnsw_rest_tests {
                 !read_error.contains(&fixture.encrypted_build.buckets[0].ciphertext),
                 "{read_error}"
             );
+            assert!(
+                !read_error.contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{read_error}"
+            );
+            assert!(
+                !read_error.contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
+                "{read_error}"
+            );
             let oversized_path_label_sentinel =
                 format!("{}{}", fixture.entry_leaf_label(), "A".repeat(128));
             let oversized_signature = fixture.client_signature();
@@ -3542,6 +3552,16 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !oversized_path_error.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{oversized_path_error}"
+            );
+            assert!(
+                !oversized_path_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{oversized_path_error}"
+            );
+            assert!(
+                !oversized_path_error
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
                 "{oversized_path_error}"
             );
             let unauthenticated_path_label_sentinel = fixture.entry_leaf_label();
@@ -3595,6 +3615,16 @@ mod private_hnsw_rest_tests {
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext),
                 "{unauthenticated_path_error}"
             );
+            assert!(
+                !unauthenticated_path_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{unauthenticated_path_error}"
+            );
+            assert!(
+                !unauthenticated_path_error
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
+                "{unauthenticated_path_error}"
+            );
             let wrong_budget_path = fixture.entry_leaf_label();
             let wrong_budget_paths = vec![wrong_budget_path.clone()];
             let wrong_budget_signature = fixture.client_signature();
@@ -3626,6 +3656,13 @@ mod private_hnsw_rest_tests {
                 wrong_budget_path.as_str(),
                 wrong_budget_signature_key_id.as_str(),
                 wrong_budget_signature_body.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
             ] {
                 assert!(!wrong_budget_error.contains(leaked), "{wrong_budget_error}");
             }
@@ -3661,6 +3698,13 @@ mod private_hnsw_rest_tests {
                 missing_dummy_path.as_str(),
                 missing_dummy_signature_key_id.as_str(),
                 missing_dummy_signature_body.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
             ] {
                 assert!(
                     !missing_dummy_error.contains(leaked),
@@ -3723,6 +3767,12 @@ mod private_hnsw_rest_tests {
                 unknown_read_path.as_str(),
                 unknown_read_key_signature_sig.as_str(),
                 fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
             ] {
                 assert!(
                     !unknown_read_key_error.contains(sentinel),
@@ -3770,6 +3820,12 @@ mod private_hnsw_rest_tests {
                 alternate_read_path.as_str(),
                 alternate_read_signature_sig.as_str(),
                 fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
             ] {
                 assert!(
                     !alternate_read_key_error.contains(sentinel),
@@ -3811,6 +3867,12 @@ mod private_hnsw_rest_tests {
                 invalid_read_key_path.as_str(),
                 invalid_read_key_sig.as_str(),
                 fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
             ] {
                 assert!(
                     !invalid_read_key_error.contains(sentinel),
@@ -3850,6 +3912,12 @@ mod private_hnsw_rest_tests {
                 malformed_read_signature_path.as_str(),
                 SIGNING_KEY_ID,
                 fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
             ] {
                 assert!(
                     !malformed_read_signature_error.contains(sentinel),
