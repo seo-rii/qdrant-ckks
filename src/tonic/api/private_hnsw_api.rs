@@ -4850,6 +4850,8 @@ mod private_hnsw_grpc_tests {
                 search_run.commit_plan.new_root_hash.as_str(),
                 unknown_commit_key_signature_sig.as_str(),
                 search_run.updated_buckets[0].ciphertext.as_str(),
+                search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                search_run.updated_buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(!err.message().contains(sentinel), "{}", err.message());
             }
@@ -4895,6 +4897,8 @@ mod private_hnsw_grpc_tests {
                 search_run.commit_plan.new_root_hash.as_str(),
                 invalid_commit_key_sig.as_str(),
                 search_run.updated_buckets[0].ciphertext.as_str(),
+                search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                search_run.updated_buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(!err.message().contains(sentinel), "{}", err.message());
             }
@@ -4937,6 +4941,8 @@ mod private_hnsw_grpc_tests {
                 search_run.commit_plan.new_root_hash.as_str(),
                 SIGNING_KEY_ID,
                 search_run.updated_buckets[0].ciphertext.as_str(),
+                search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                search_run.updated_buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(!err.message().contains(sentinel), "{}", err.message());
             }
@@ -4984,6 +4990,8 @@ mod private_hnsw_grpc_tests {
                 unsupported_commit_key_id.as_str(),
                 unsupported_commit_sig.as_str(),
                 search_run.updated_buckets[0].ciphertext.as_str(),
+                search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                search_run.updated_buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(!err.message().contains(sentinel), "{}", err.message());
             }
@@ -5022,6 +5030,8 @@ mod private_hnsw_grpc_tests {
                 search_run.commit_plan.new_root_hash.as_str(),
                 search_run.commit_signature.sig.as_str(),
                 search_run.updated_buckets[0].ciphertext.as_str(),
+                search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                search_run.updated_buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(!err.message().contains(sentinel), "{}", err.message());
             }

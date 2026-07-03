@@ -4537,6 +4537,8 @@ mod private_hnsw_rest_tests {
                 search_run.commit_plan.new_root_hash.as_str(),
                 unknown_commit_key_signature_sig.as_str(),
                 search_run.updated_buckets[0].ciphertext.as_str(),
+                search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                search_run.updated_buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !unknown_commit_key_error.contains(sentinel),
@@ -4580,6 +4582,8 @@ mod private_hnsw_rest_tests {
                 search_run.commit_plan.new_root_hash.as_str(),
                 alternate_commit_signature_sig.as_str(),
                 search_run.updated_buckets[0].ciphertext.as_str(),
+                search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                search_run.updated_buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !alternate_commit_key_error.contains(sentinel),
@@ -4618,6 +4622,8 @@ mod private_hnsw_rest_tests {
                 search_run.commit_plan.new_root_hash.as_str(),
                 invalid_commit_key_sig.as_str(),
                 search_run.updated_buckets[0].ciphertext.as_str(),
+                search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                search_run.updated_buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !invalid_commit_key_error.contains(sentinel),
@@ -4653,6 +4659,8 @@ mod private_hnsw_rest_tests {
                 search_run.commit_plan.new_root_hash.as_str(),
                 SIGNING_KEY_ID,
                 search_run.updated_buckets[0].ciphertext.as_str(),
+                search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                search_run.updated_buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !malformed_commit_signature_error.contains(sentinel),
@@ -4694,6 +4702,8 @@ mod private_hnsw_rest_tests {
                 unsupported_commit_key_id.as_str(),
                 unsupported_commit_sig.as_str(),
                 search_run.updated_buckets[0].ciphertext.as_str(),
+                search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                search_run.updated_buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !unsupported_commit_signature_error.contains(sentinel),
@@ -4729,6 +4739,8 @@ mod private_hnsw_rest_tests {
                 search_run.commit_plan.new_root_hash.as_str(),
                 search_run.commit_signature.sig.as_str(),
                 search_run.updated_buckets[0].ciphertext.as_str(),
+                search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                search_run.updated_buckets[0].bucket_commitment.as_str(),
             ] {
                 assert!(
                     !unknown_commit_session_error.contains(sentinel),
