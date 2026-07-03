@@ -1607,7 +1607,7 @@ fn signature_public_key(
 fn signature_public_keys(
     instance: &CryptoInstanceConfig,
 ) -> StorageResult<HashMap<String, String>> {
-    instance
+    let registry = instance
         .options
         .get(SIGNATURE_PUBLIC_KEYS_OPTION)
         .and_then(Value::as_object)
@@ -1615,7 +1615,13 @@ fn signature_public_keys(
             StorageError::bad_request(
                 "private result ORAM runtime instance must configure signature_public_keys",
             )
-        })?
+        })?;
+    if registry.is_empty() {
+        return Err(StorageError::bad_request(
+            "private result ORAM runtime instance must configure signature_public_keys",
+        ));
+    }
+    registry
         .iter()
         .map(|(key_id, value)| {
             let public_key = value.as_str().ok_or_else(|| {
@@ -2354,6 +2360,20 @@ mod private_result_oram_tests {
             signature_public_key(&instance, SIGNING_KEY_ID).unwrap(),
             [7; 32]
         );
+
+        let empty_registry_instance = CryptoInstanceConfig {
+            provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+            materials: HashMap::new(),
+            backend_ref: None,
+            options: serde_json::json!({
+                SIGNATURE_PUBLIC_KEYS_OPTION: {},
+            }),
+        };
+        let rendered = signature_public_keys(&empty_registry_instance)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("must configure signature_public_keys"));
+        assert!(!rendered.contains("{}"), "{rendered}");
 
         let missing_key_id = "tenant-a/missing-key-sentinel";
         let err = signature_public_key(&instance, missing_key_id).unwrap_err();

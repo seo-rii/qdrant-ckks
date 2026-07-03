@@ -1785,6 +1785,11 @@ fn signature_public_keys(
                 "private HNSW ORAM runtime instance must configure signature_public_keys",
             )
         })?;
+    if registry.is_empty() {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM runtime instance must configure signature_public_keys",
+        ));
+    }
     registry
         .iter()
         .map(|(key_id, public_key)| {
@@ -3724,6 +3729,20 @@ mod private_hnsw_tests {
             signature_public_key(&instance, signing_key_id).unwrap(),
             [7; 32]
         );
+
+        let empty_registry_instance = CryptoInstanceConfig {
+            provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+            materials: HashMap::new(),
+            backend_ref: None,
+            options: serde_json::json!({
+                SIGNATURE_PUBLIC_KEYS_OPTION: {},
+            }),
+        };
+        let rendered = signature_public_keys(&empty_registry_instance)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("must configure signature_public_keys"));
+        assert!(!rendered.contains("{}"), "{rendered}");
 
         let missing_key_id = "tenant-a/missing-hnsw-key-sentinel";
         let err = signature_public_key(&instance, missing_key_id).unwrap_err();
