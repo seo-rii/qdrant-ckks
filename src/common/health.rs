@@ -469,6 +469,19 @@ mod tests {
              access_volume_count=access-volume-count-snake-sentinel, \
              access_volume_length=access-volume-length-snake-sentinel, \
              access_volume_lengths=access-volume-lengths-snake-sentinel, \
+             ciphertextSha256=ciphertext-sha256-camel-sentinel, \
+             ciphertext_sha256=ciphertext-sha256-snake-sentinel, \
+             ciphertext_sha256_b64=ciphertext-sha256-b64-snake-sentinel, \
+             ciphertextsSha256=ciphertexts-sha256-camel-sentinel, \
+             ciphertexts_sha256=ciphertexts-sha256-snake-sentinel, \
+             bucketCommitment=bucket-commitment-camel-sentinel, \
+             bucketCommitments=bucket-commitments-camel-sentinel, \
+             bucket_commitment=bucket-commitment-snake-sentinel, \
+             bucket_commitments=bucket-commitments-snake-sentinel, \
+             updatedBucketCommitment=updated-bucket-commitment-camel-sentinel, \
+             updatedBucketCommitments=updated-bucket-commitments-camel-sentinel, \
+             updated_bucket_commitment=updated-bucket-commitment-snake-sentinel, \
+             updated_bucket_commitments=updated-bucket-commitments-snake-sentinel, \
              proof_value=proof-value-snake-sentinel, \
              proofValue=proof-value-camel-sentinel, \
              proof_values=proof-values-snake-sentinel, \
@@ -592,6 +605,19 @@ mod tests {
         assert!(!message.contains("access-volume-snake-sentinel"));
         assert!(!message.contains("access-volume-count-snake-sentinel"));
         assert!(!message.contains("access-volume-length-snake-sentinel"));
+        assert!(!message.contains("ciphertext-sha256-camel-sentinel"));
+        assert!(!message.contains("ciphertext-sha256-snake-sentinel"));
+        assert!(!message.contains("ciphertext-sha256-b64-snake-sentinel"));
+        assert!(!message.contains("ciphertexts-sha256-camel-sentinel"));
+        assert!(!message.contains("ciphertexts-sha256-snake-sentinel"));
+        assert!(!message.contains("bucket-commitment-camel-sentinel"));
+        assert!(!message.contains("bucket-commitments-camel-sentinel"));
+        assert!(!message.contains("bucket-commitment-snake-sentinel"));
+        assert!(!message.contains("bucket-commitments-snake-sentinel"));
+        assert!(!message.contains("updated-bucket-commitment-camel-sentinel"));
+        assert!(!message.contains("updated-bucket-commitments-camel-sentinel"));
+        assert!(!message.contains("updated-bucket-commitment-snake-sentinel"));
+        assert!(!message.contains("updated-bucket-commitments-snake-sentinel"));
         assert!(!message.contains("proof-value-snake-sentinel"));
         assert!(!message.contains("proof-value-camel-sentinel"));
         assert!(!message.contains("proof-values-snake-sentinel"));
