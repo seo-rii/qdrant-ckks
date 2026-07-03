@@ -383,6 +383,12 @@ mod tests {
                     "selector": {
                         "paths": [
                             "payload_fetch_token",
+                            "bucketCommitment.json",
+                            "bucket_commitment.bin",
+                            "ciphertextSha256.json",
+                            "ciphertext_sha256.bin",
+                            "updatedBucketCommitment.json",
+                            "updated_bucket_commitment.bin",
                             "state_ciphertext_hash.bin",
                             "state_ciphertext_sha256.json",
                             "token_position_map_backups"
@@ -402,6 +408,12 @@ mod tests {
         assert!(!alias_overlap_message.contains("state_hash_private_result"));
         assert!(!alias_overlap_message.contains("state_hash_client_payload"));
         assert!(!alias_overlap_message.contains("payload_fetch_token"));
+        assert!(!alias_overlap_message.contains("bucketCommitment"));
+        assert!(!alias_overlap_message.contains("bucket_commitment"));
+        assert!(!alias_overlap_message.contains("ciphertextSha256"));
+        assert!(!alias_overlap_message.contains("ciphertext_sha256"));
+        assert!(!alias_overlap_message.contains("updatedBucketCommitment"));
+        assert!(!alias_overlap_message.contains("updated_bucket_commitment"));
         assert!(!alias_overlap_message.contains("state_ciphertext_hash"));
         assert!(!alias_overlap_message.contains("state_ciphertext_sha256"));
         assert!(!alias_overlap_message.contains("token_position_map_backups"));
@@ -720,6 +732,18 @@ mod tests {
                             "client_state_ciphertext_hash.bin",
                             "client_state_ciphertext_hashes.bin",
                             "client_state_ciphertext_sha256.bin",
+                            "bucketCommitment.bin",
+                            "bucketCommitments.bin",
+                            "bucket_commitment.bin",
+                            "bucket_commitments.bin",
+                            "ciphertextSha256.bin",
+                            "ciphertextsSha256.bin",
+                            "ciphertext_sha256.bin",
+                            "ciphertexts_sha256.bin",
+                            "updatedBucketCommitment.bin",
+                            "updatedBucketCommitments.bin",
+                            "updated_bucket_commitment.bin",
+                            "updated_bucket_commitments.bin",
                             "encrypted_client_state_ciphertext_hash.bin",
                             "encrypted_client_state_ciphertext_hashes.bin",
                             "encrypted_client_state_ciphertext_sha256.bin",
@@ -740,6 +764,18 @@ mod tests {
         assert!(!unsafe_hash_store_name_message.contains("client_state_ciphertext_hash"));
         assert!(!unsafe_hash_store_name_message.contains("client_state_ciphertext_hashes"));
         assert!(!unsafe_hash_store_name_message.contains("client_state_ciphertext_sha256"));
+        assert!(!unsafe_hash_store_name_message.contains("bucketCommitment"));
+        assert!(!unsafe_hash_store_name_message.contains("bucketCommitments"));
+        assert!(!unsafe_hash_store_name_message.contains("bucket_commitment"));
+        assert!(!unsafe_hash_store_name_message.contains("bucket_commitments"));
+        assert!(!unsafe_hash_store_name_message.contains("ciphertextSha256"));
+        assert!(!unsafe_hash_store_name_message.contains("ciphertextsSha256"));
+        assert!(!unsafe_hash_store_name_message.contains("ciphertext_sha256"));
+        assert!(!unsafe_hash_store_name_message.contains("ciphertexts_sha256"));
+        assert!(!unsafe_hash_store_name_message.contains("updatedBucketCommitment"));
+        assert!(!unsafe_hash_store_name_message.contains("updatedBucketCommitments"));
+        assert!(!unsafe_hash_store_name_message.contains("updated_bucket_commitment"));
+        assert!(!unsafe_hash_store_name_message.contains("updated_bucket_commitments"));
         assert!(!unsafe_hash_store_name_message.contains("encrypted_client_state_ciphertext_hash"));
         assert!(
             !unsafe_hash_store_name_message.contains("encrypted_client_state_ciphertext_hashes")
