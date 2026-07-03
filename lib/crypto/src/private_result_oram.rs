@@ -6853,6 +6853,16 @@ mod tests {
                 Err(PrivateResultOramError::ClientStateOpenFailed)
             );
         }
+        let malformed_context = PrivateResultOramClientStateAeadContext {
+            collection_id: "collection\nuuid",
+            ..context
+        };
+        assert_eq!(
+            seal_private_result_oram_client_state_snapshot(&keys, malformed_context, &snapshot),
+            Err(PrivateResultOramError::InvalidClientStateContext(
+                "collection_id"
+            ))
+        );
 
         let mut tampered_hash = encrypted.clone();
         tampered_hash.ciphertext_sha256 = BASE64URL_NOPAD.encode(&[9; 32]);

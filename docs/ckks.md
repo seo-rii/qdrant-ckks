@@ -1136,8 +1136,9 @@ client-side backup validation; snapshot export/import rejects duplicate stash
 payload tokens, duplicate stash point tokens, and malformed stash payload block
 versions, payload lengths, or stash map-key/token mismatches before state
 recovery. An encrypted
-snapshot helper seals that backup under a client-derived state key with
-collection/key/epoch/root AAD plus ciphertext hash checks. New SDK code should derive
+snapshot helper rejects malformed collection AAD context identifiers and seals
+that backup under a client-derived state key with collection/key/epoch/root AAD
+plus ciphertext hash checks. New SDK code should derive
 `PrivateResultOramClientKeys` from the signed result manifest rather than the
 deprecated legacy domain-only helper; the manifest-bound derivation length-prefixes
 collection id, RK id, and RK epoch into the HKDF info context before deriving
