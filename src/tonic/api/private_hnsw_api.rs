@@ -4279,6 +4279,12 @@ mod private_hnsw_grpc_tests {
                 unknown_read_path.as_str(),
                 unknown_read_signature_sig.as_str(),
                 fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
             ] {
                 assert!(!err.message().contains(sentinel), "{}", err.message());
             }
@@ -4625,6 +4631,18 @@ mod private_hnsw_grpc_tests {
             assert!(
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
                 "{}",
                 err.message()
             );
