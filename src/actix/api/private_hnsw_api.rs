@@ -6189,6 +6189,14 @@ mod private_hnsw_rest_tests {
                     !body.contains(&fixture.encrypted_build.buckets[0].ciphertext),
                     "{body}"
                 );
+                assert!(
+                    !body.contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                    "{body}"
+                );
+                assert!(
+                    !body.contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
+                    "{body}"
+                );
             };
             let response = actix_test::call_service(
                 &fixed_budget_drifted_app,

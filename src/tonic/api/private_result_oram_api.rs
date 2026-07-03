@@ -5406,6 +5406,16 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(&fixture.buckets[0].ciphertext)
             );
+            assert!(
+                !drifted_bucket_upload
+                    .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !drifted_bucket_upload
+                    .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
+            );
 
             PrivateResultOram::upload_private_result_oram_buckets(
                 &service,

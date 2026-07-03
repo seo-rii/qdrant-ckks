@@ -4255,6 +4255,14 @@ mod private_result_oram_rest_tests {
                 !drifted_bucket_upload_error.contains(&fixture.buckets[0].ciphertext),
                 "{drifted_bucket_upload_error}"
             );
+            assert!(
+                !drifted_bucket_upload_error.contains(&fixture.buckets[0].ciphertext_sha256),
+                "{drifted_bucket_upload_error}"
+            );
+            assert!(
+                !drifted_bucket_upload_error.contains(&fixture.buckets[0].bucket_commitment),
+                "{drifted_bucket_upload_error}"
+            );
 
             let _ = post_json_ok_on!(
                 &app,

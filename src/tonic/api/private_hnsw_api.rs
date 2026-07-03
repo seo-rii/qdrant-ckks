@@ -6567,6 +6567,8 @@ mod private_hnsw_grpc_tests {
             let assert_bucket_error_redacts = |message: &str| {
                 assert!(!message.contains(&fixture.encrypted_build.root_hash));
                 assert!(!message.contains(&fixture.encrypted_build.buckets[0].ciphertext));
+                assert!(!message.contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256));
+                assert!(!message.contains(&fixture.encrypted_build.buckets[0].bucket_commitment));
             };
             let err = PrivateHnswOram::upload_private_hnsw_buckets(
                 &fixed_budget_drifted_service,
