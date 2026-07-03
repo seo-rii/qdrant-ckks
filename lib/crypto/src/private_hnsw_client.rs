@@ -992,6 +992,9 @@ pub fn finalize_private_hnsw_private_result_fetch(
         ResultPrivacyMode::PrivatePayloadOramRequired,
         result,
     )?;
+    if result.hits.iter().any(|hit| !hit.distance.is_finite()) {
+        return Err(PrivateHnswClientError::NonFiniteDistance);
+    }
     if fetch_plan.fixed_result_k == 0
         || fetch_plan.real_result_count != result.hits.len()
         || fetch_plan.real_result_count > fetch_plan.fixed_result_k
@@ -8215,6 +8218,27 @@ mod tests {
             Err(PrivateHnswClientError::InvalidSearchConfig(
                 "payload_fetch_tokens"
             ))
+        );
+
+        let non_finite_result = PrivateHnswSearchResult {
+            hits: vec![PrivateHnswSearchHit {
+                node_id: [1; 32],
+                point_token: [21; 32],
+                payload_fetch_token: Some([11; 32]),
+                distance: f32::INFINITY,
+            }],
+            ..result.clone()
+        };
+        assert_eq!(
+            finalize_private_hnsw_private_result_fetch(
+                &non_finite_result,
+                &plan,
+                &PrivateResultOramTokenFetchResult {
+                    accesses: vec![result_token_access([11; 32], [21; 32], vec![1])],
+                    updated_buckets: Vec::new(),
+                },
+            ),
+            Err(PrivateHnswClientError::NonFiniteDistance)
         );
 
         let mut wrong_real_result_count = plan.clone();
