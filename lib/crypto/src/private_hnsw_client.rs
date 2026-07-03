@@ -3945,9 +3945,11 @@ pub fn encode_private_hnsw_node_block(
     block_size_bytes: usize,
     fixed_neighbor_slots: usize,
 ) -> Result<Vec<u8>, PrivateHnswClientError> {
-    if block.neighbors.len() != block.neighbor_levels.len() {
-        return Err(PrivateHnswClientError::InvalidNeighborShape);
-    }
+    validate_private_hnsw_node_neighbor_shape(
+        block.node_id,
+        &block.neighbors,
+        &block.neighbor_levels,
+    )?;
     if block.neighbors.len() > fixed_neighbor_slots {
         return Err(PrivateHnswClientError::TooManyNeighbors {
             actual: block.neighbors.len(),
@@ -4070,6 +4072,7 @@ pub fn decode_private_hnsw_node_block(
     if encoded[cursor..].iter().any(|byte| *byte != 0) {
         return Err(PrivateHnswClientError::InvalidBlockPadding);
     }
+    validate_private_hnsw_node_neighbor_shape(node_id, &neighbors, &neighbor_levels)?;
 
     Ok(PrivateHnswNodeBlockPlaintext {
         version,
@@ -4084,6 +4087,23 @@ pub fn decode_private_hnsw_node_block(
         generation,
         payload_fetch_token,
     })
+}
+
+fn validate_private_hnsw_node_neighbor_shape(
+    node_id: [u8; 32],
+    neighbors: &[[u8; 32]],
+    neighbor_levels: &[u8],
+) -> Result<(), PrivateHnswClientError> {
+    if neighbors.len() != neighbor_levels.len() {
+        return Err(PrivateHnswClientError::InvalidNeighborShape);
+    }
+    let mut seen_neighbor_levels = BTreeSet::new();
+    for (neighbor, level) in neighbors.iter().zip(neighbor_levels) {
+        if *neighbor == node_id || !seen_neighbor_levels.insert((*neighbor, *level)) {
+            return Err(PrivateHnswClientError::InvalidNeighborShape);
+        }
+    }
+    Ok(())
 }
 
 pub fn seal_private_hnsw_oram_bucket(
@@ -6204,6 +6224,44 @@ mod tests {
         assert_eq!(
             decode_private_hnsw_node_block(&encoded),
             Err(PrivateHnswClientError::InvalidBlockPadding)
+        );
+    }
+
+    #[test]
+    fn node_block_codec_rejects_duplicate_level_and_self_neighbors() {
+        let mut duplicate_level = node_block();
+        duplicate_level.neighbors = vec![[3; 32], [3; 32]];
+        duplicate_level.neighbor_levels = vec![0, 0];
+        assert_eq!(
+            encode_private_hnsw_node_block(&duplicate_level, 512, 4),
+            Err(PrivateHnswClientError::InvalidNeighborShape)
+        );
+
+        let mut duplicate_level_valid_shape = node_block();
+        duplicate_level_valid_shape.neighbors = vec![[3; 32], [3; 32]];
+        duplicate_level_valid_shape.neighbor_levels = vec![0, 1];
+        let mut valid_duplicate_level =
+            encode_private_hnsw_node_block(&duplicate_level_valid_shape, 512, 4)
+                .expect("same neighbor on different levels is valid");
+        assert_eq!(
+            decode_private_hnsw_node_block(&valid_duplicate_level)
+                .expect("same neighbor on different levels should decode"),
+            duplicate_level_valid_shape
+        );
+        let first_neighbor_offset = 4 + 2 + 32 + 32 + 8 + 1 + 1 + 8 + 1 + 32 + 4 + 4 + 4 + 8;
+        let second_neighbor_level_offset = first_neighbor_offset + 33 + 32;
+        valid_duplicate_level[second_neighbor_level_offset] = 0;
+        assert_eq!(
+            decode_private_hnsw_node_block(&valid_duplicate_level),
+            Err(PrivateHnswClientError::InvalidNeighborShape)
+        );
+
+        let mut self_neighbor = node_block();
+        self_neighbor.neighbors = vec![self_neighbor.node_id];
+        self_neighbor.neighbor_levels = vec![0];
+        assert_eq!(
+            encode_private_hnsw_node_block(&self_neighbor, 512, 4),
+            Err(PrivateHnswClientError::InvalidNeighborShape)
         );
     }
 

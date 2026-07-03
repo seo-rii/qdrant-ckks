@@ -1511,7 +1511,9 @@ requires the requested entry node to be present in the build block set and
 fails closed instead of silently falling back to the first block.
 The plaintext index builder rejects duplicate node ids, point tokens, and
 payload fetch tokens before bucket placement so malformed indexes cannot defer
-result-token ambiguity to search or private result fetch validation. The
+result-token ambiguity to search or private result fetch validation. HNSW node
+block codec validation rejects self-neighbors and duplicate same-level neighbor
+entries while still allowing the same neighbor id on different HNSW levels. The
 plaintext bucket codec and client Path ORAM access also reject duplicate point
 tokens and duplicate payload fetch tokens before decrypted path blocks can be
 absorbed into the stash, leaving the client state unchanged on that
