@@ -1514,11 +1514,12 @@ payload fetch tokens before bucket placement so malformed indexes cannot defer
 result-token ambiguity to search or private result fetch validation. HNSW node
 block codec validation rejects empty/non-contiguous level masks, neighbor levels
 outside the node level mask, self-neighbors, and duplicate same-level neighbor
-entries while still allowing the same neighbor id on different HNSW levels. The
-plaintext bucket codec and client Path ORAM access also reject duplicate point
-tokens and duplicate payload fetch tokens before decrypted path blocks can be
-absorbed into the stash, leaving the client state unchanged on that
-malformed-path boundary.
+entries while still allowing the same neighbor id on different HNSW levels; it
+also rejects malformed, empty, or non-finite `f32_le` vector bytes at codec
+decode time. The plaintext bucket codec and client Path ORAM access also reject
+duplicate point tokens and duplicate payload fetch tokens before decrypted path
+blocks can be absorbed into the stash, leaving the client state unchanged on
+that malformed-path boundary.
 `plan_private_hnsw_oram_directional_neighbor_filter` is an experimental
 client-local helper for Compass-style directional neighbor filtering: given the
 current node block, decrypted neighbor blocks, and the query vector, it keeps

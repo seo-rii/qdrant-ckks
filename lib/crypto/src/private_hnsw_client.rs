@@ -3951,6 +3951,7 @@ pub fn encode_private_hnsw_node_block(
         &block.neighbors,
         &block.neighbor_levels,
     )?;
+    validate_private_hnsw_vector_shape(block.vector_encoding, &block.vector)?;
     if block.neighbors.len() > fixed_neighbor_slots {
         return Err(PrivateHnswClientError::TooManyNeighbors {
             actual: block.neighbors.len(),
@@ -4056,6 +4057,7 @@ pub fn decode_private_hnsw_node_block(
     }
     let vector_len = read_u32_usize(encoded, &mut cursor)?;
     let vector = read_exact(encoded, &mut cursor, vector_len)?.to_vec();
+    validate_private_hnsw_vector_shape(vector_encoding, &vector)?;
 
     let mut neighbors = Vec::with_capacity(neighbor_count);
     let mut neighbor_levels = Vec::with_capacity(neighbor_count);
@@ -4119,6 +4121,31 @@ fn validate_private_hnsw_level_mask_shape(level_mask: u64) -> Result<(), Private
     }
     if level_mask != u64::MAX && (level_mask & level_mask.saturating_add(1)) != 0 {
         return Err(PrivateHnswClientError::InvalidNeighborShape);
+    }
+    Ok(())
+}
+
+fn validate_private_hnsw_vector_shape(
+    vector_encoding: PrivateHnswVectorEncoding,
+    vector_bytes: &[u8],
+) -> Result<(), PrivateHnswClientError> {
+    if vector_encoding != PrivateHnswVectorEncoding::F32Le {
+        return Ok(());
+    }
+    let chunks = vector_bytes.chunks_exact(4);
+    if !chunks.remainder().is_empty() {
+        return Err(PrivateHnswClientError::InvalidF32VectorLength);
+    }
+    let vector = chunks
+        .map(|chunk| {
+            let bytes: [u8; 4] = chunk
+                .try_into()
+                .map_err(|_| PrivateHnswClientError::InvalidF32VectorLength)?;
+            Ok(f32::from_le_bytes(bytes))
+        })
+        .collect::<Result<Vec<_>, PrivateHnswClientError>>()?;
+    if vector.is_empty() || vector.iter().any(|value| !value.is_finite()) {
+        return Err(PrivateHnswClientError::NonFiniteDistance);
     }
     Ok(())
 }
@@ -6313,6 +6340,48 @@ mod tests {
         assert_eq!(
             decode_private_hnsw_node_block(&encoded),
             Err(PrivateHnswClientError::InvalidNeighborShape)
+        );
+    }
+
+    #[test]
+    fn node_block_codec_rejects_malformed_f32_vectors() {
+        let mut bad_len = node_block();
+        bad_len.vector.push(1);
+        assert_eq!(
+            encode_private_hnsw_node_block(&bad_len, 512, 4),
+            Err(PrivateHnswClientError::InvalidF32VectorLength)
+        );
+
+        let mut non_finite = node_block();
+        non_finite.vector = f32::NAN.to_le_bytes().to_vec();
+        assert_eq!(
+            encode_private_hnsw_node_block(&non_finite, 512, 4),
+            Err(PrivateHnswClientError::NonFiniteDistance)
+        );
+
+        let mut empty = node_block();
+        empty.vector.clear();
+        assert_eq!(
+            encode_private_hnsw_node_block(&empty, 512, 4),
+            Err(PrivateHnswClientError::NonFiniteDistance)
+        );
+
+        let mut encoded = encode_private_hnsw_node_block(&node_block(), 512, 4)
+            .expect("fixture block should encode");
+        let vector_len_offset = 4 + 2 + 32 + 32 + 8 + 1 + 1 + 8 + 1 + 32 + 4 + 4;
+        encoded[vector_len_offset + 3] = 9;
+        assert_eq!(
+            decode_private_hnsw_node_block(&encoded),
+            Err(PrivateHnswClientError::InvalidF32VectorLength)
+        );
+
+        let mut encoded = encode_private_hnsw_node_block(&node_block(), 512, 4)
+            .expect("fixture block should encode");
+        let vector_offset = vector_len_offset + 4;
+        encoded[vector_offset..vector_offset + 4].copy_from_slice(&f32::INFINITY.to_le_bytes());
+        assert_eq!(
+            decode_private_hnsw_node_block(&encoded),
+            Err(PrivateHnswClientError::NonFiniteDistance)
         );
     }
 
