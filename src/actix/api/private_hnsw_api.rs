@@ -4092,6 +4092,8 @@ mod private_hnsw_rest_tests {
                 "encrypted bucket store validation failed"
             );
             assert!(!future_bucket_error.contains(&future_bucket.ciphertext));
+            assert!(!future_bucket_error.contains(&future_bucket.ciphertext_sha256));
+            assert!(!future_bucket_error.contains(&future_bucket.bucket_commitment));
             assert!(!future_bucket_error.contains("index_epoch"));
             assert!(!future_bucket_error.contains(&fixture.encrypted_build.root_hash));
             assert!(!future_bucket_error.contains(&session_id));
@@ -4100,6 +4102,8 @@ mod private_hnsw_rest_tests {
                 &future_bucket_error,
                 &[
                     future_bucket.ciphertext.as_str(),
+                    future_bucket.ciphertext_sha256.as_str(),
+                    future_bucket.bucket_commitment.as_str(),
                     "index_epoch",
                     fixture.encrypted_build.root_hash.as_str(),
                     session_id.as_str(),
@@ -4920,6 +4924,14 @@ mod private_hnsw_rest_tests {
                 "{commit_commitment_error}"
             );
             assert!(
+                !commit_commitment_error.contains(&search_run.updated_buckets[0].ciphertext_sha256),
+                "{commit_commitment_error}"
+            );
+            assert!(
+                !commit_commitment_error.contains(&search_run.updated_buckets[0].bucket_commitment),
+                "{commit_commitment_error}"
+            );
+            assert!(
                 !commit_commitment_error.contains(&fixture.client_signature().sig),
                 "{commit_commitment_error}"
             );
@@ -4929,6 +4941,10 @@ mod private_hnsw_rest_tests {
             );
             let duplicate_commit_bucket = search_run.updated_buckets[0].clone();
             let duplicate_commit_ciphertext = duplicate_commit_bucket.ciphertext.clone();
+            let duplicate_commit_ciphertext_sha256 =
+                duplicate_commit_bucket.ciphertext_sha256.clone();
+            let duplicate_commit_bucket_commitment =
+                duplicate_commit_bucket.bucket_commitment.clone();
             let duplicate_commit_buckets = vec![
                 duplicate_commit_bucket.clone(),
                 duplicate_commit_bucket.clone(),
@@ -4981,6 +4997,8 @@ mod private_hnsw_rest_tests {
             assert!(!duplicate_bucket_commit_error.contains(&duplicate_commit_signature_key_id));
             assert!(!duplicate_bucket_commit_error.contains(&duplicate_commit_signature_sig));
             assert!(!duplicate_bucket_commit_error.contains(&duplicate_commit_ciphertext));
+            assert!(!duplicate_bucket_commit_error.contains(&duplicate_commit_ciphertext_sha256));
+            assert!(!duplicate_bucket_commit_error.contains(&duplicate_commit_bucket_commitment));
             let invalid_signature_duplicate_signature = fixture.client_signature();
             let invalid_signature_duplicate_error = post_json_error_contains!(
                 "/collections/docs/private-hnsw/text/oram/commit",

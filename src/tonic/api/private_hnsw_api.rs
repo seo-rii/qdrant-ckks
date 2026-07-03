@@ -4379,6 +4379,8 @@ mod private_hnsw_grpc_tests {
                     .contains("encrypted bucket store validation failed")
             );
             assert!(!err.message().contains(&future_bucket.ciphertext));
+            assert!(!err.message().contains(&future_bucket.ciphertext_sha256));
+            assert!(!err.message().contains(&future_bucket.bucket_commitment));
             assert!(!err.message().contains("index_epoch"));
             assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
             assert!(!err.message().contains(&session.session_id));
@@ -4387,6 +4389,8 @@ mod private_hnsw_grpc_tests {
                 err.message(),
                 &[
                     future_bucket.ciphertext.as_str(),
+                    future_bucket.ciphertext_sha256.as_str(),
+                    future_bucket.bucket_commitment.as_str(),
                     "index_epoch",
                     fixture.encrypted_build.root_hash.as_str(),
                     session.session_id.as_str(),
@@ -5225,6 +5229,18 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
             assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].bucket_commitment),
+                "{}",
+                err.message()
+            );
+            assert!(
                 !err.message().contains(&fixture.client_signature().sig),
                 "{}",
                 err.message()
@@ -5298,6 +5314,10 @@ mod private_hnsw_grpc_tests {
 
             let duplicate_commit_bucket = search_run.updated_buckets[0].clone();
             let duplicate_commit_ciphertext = duplicate_commit_bucket.ciphertext.clone();
+            let duplicate_commit_ciphertext_sha256 =
+                duplicate_commit_bucket.ciphertext_sha256.clone();
+            let duplicate_commit_bucket_commitment =
+                duplicate_commit_bucket.bucket_commitment.clone();
             let duplicate_commit_buckets = vec![
                 duplicate_commit_bucket.clone(),
                 duplicate_commit_bucket.clone(),
@@ -5357,6 +5377,8 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains(&duplicate_commit_signature_key_id));
             assert!(!err.message().contains(&duplicate_commit_signature_sig));
             assert!(!err.message().contains(&duplicate_commit_ciphertext));
+            assert!(!err.message().contains(&duplicate_commit_ciphertext_sha256));
+            assert!(!err.message().contains(&duplicate_commit_bucket_commitment));
 
             let invalid_signature_duplicate_signature = fixture.client_signature();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
