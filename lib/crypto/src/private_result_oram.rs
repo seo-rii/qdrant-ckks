@@ -2299,6 +2299,7 @@ where
 
     let mut working_state = state.clone();
     let mut accesses = Vec::with_capacity(payload_fetch_tokens.len());
+    let mut fetched_point_tokens = BTreeSet::new();
     let mut writeback_by_bucket: BTreeMap<u64, PrivateResultOramPlaintextBucket> = BTreeMap::new();
     for (batch_index, token_chunk) in payload_fetch_tokens
         .chunks(read_plan.path_batch_size)
@@ -2404,6 +2405,9 @@ where
                 &path_buckets,
                 next_remap_leaf()?,
             )?;
+            if !fetched_point_tokens.insert(access.block.point_token) {
+                return Err(PrivateResultOramError::InvalidFetchPlanField("point_token"));
+            }
             for bucket in &access.writeback_buckets {
                 plaintext_by_bucket.insert(bucket.bucket_id, bucket.clone());
                 writeback_by_bucket.insert(bucket.bucket_id, bucket.clone());
@@ -5609,6 +5613,138 @@ mod tests {
         .unwrap();
         assert_eq!(commit_plan.updated_buckets.len(), 5);
         assert_ne!(commit_plan.new_root_hash, root_hash);
+    }
+
+    #[test]
+    fn encrypted_verified_token_fetch_rejects_duplicate_payload_point_tokens() {
+        let keys = result_test_keys();
+        let base_context = result_bucket_base_context();
+        let config = result_client_config();
+        let bucket_count = private_result_oram_bucket_count(config.tree_height).unwrap();
+        let block_a = payload_block(10);
+        let mut block_b = payload_block(11);
+        block_b.point_token = block_a.point_token;
+
+        let mut plaintext_store = BTreeMap::new();
+        for bucket_id in 0..bucket_count {
+            plaintext_store.insert(
+                bucket_id,
+                empty_private_result_oram_plaintext_bucket(bucket_id, config).unwrap(),
+            );
+        }
+        for (leaf, block) in [(2, block_a.clone()), (3, block_b.clone())] {
+            let leaf_bucket_id = *private_result_oram_bucket_ids_for_leaf(leaf, config.tree_height)
+                .unwrap()
+                .last()
+                .unwrap();
+            let bucket = plaintext_store.get_mut(&leaf_bucket_id).unwrap();
+            *bucket
+                .blocks
+                .iter_mut()
+                .find(|slot| slot.is_none())
+                .unwrap() = Some(block);
+        }
+
+        let encrypted_store = plaintext_store
+            .values()
+            .map(|bucket| {
+                let encrypted = seal_private_result_oram_plaintext_bucket(
+                    &keys,
+                    base_context,
+                    42,
+                    bucket,
+                    config,
+                )
+                .unwrap();
+                (bucket.bucket_id, encrypted)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let commitments = (0..bucket_count)
+            .map(|bucket_id| {
+                encrypted_store
+                    .get(&bucket_id)
+                    .unwrap()
+                    .bucket_commitment
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        let root_hash = private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
+        let manifest = PrivateResultOramManifest {
+            oram: OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: config.bucket_size as u32,
+                block_size_bytes: config.block_size_bytes as u32,
+                tree_height: config.tree_height,
+                path_batch_size: 2,
+            },
+            bucket_count,
+            root_hash: root_hash.clone(),
+            logical_result_count: 2,
+            dummy_result_count: 0,
+            ..fixture_manifest()
+        };
+        let payload_fetch_tokens = [block_a.payload_fetch_token, block_b.payload_fetch_token];
+        let token_positions = [
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: block_a.payload_fetch_token,
+                leaf: 2,
+            },
+            PrivateResultOramFetchTokenPosition {
+                payload_fetch_token: block_b.payload_fetch_token,
+                leaf: 3,
+            },
+        ];
+        let read_plan = plan_private_result_oram_read_bucket_batches_for_fetch_tokens(
+            &manifest,
+            &payload_fetch_tokens,
+            &token_positions,
+        )
+        .unwrap();
+        let bucket_ids = &read_plan.batches[0].bucket_ids;
+        let proof = result_proof_for_bucket_ids(bucket_ids, 42, root_hash.clone(), &commitments);
+        let encrypted_batch = PrivateResultOramEncryptedBucketBatch {
+            index_epoch: 42,
+            root_hash: root_hash.clone(),
+            bucket_count,
+            proof_value: serde_json::to_string(&proof).unwrap(),
+            buckets: bucket_ids
+                .iter()
+                .map(|bucket_id| encrypted_store.get(bucket_id).unwrap().clone())
+                .collect(),
+        };
+        let mut state = PrivateResultOramClientState::with_position_map(
+            [
+                (block_a.payload_fetch_token, 2),
+                (block_b.payload_fetch_token, 3),
+            ],
+            config.tree_height,
+        )
+        .unwrap();
+        let mut remaps = [0, 1].into_iter();
+
+        assert_eq!(
+            fetch_private_result_oram_tokens_encrypted_verified(
+                &keys,
+                base_context,
+                42,
+                &root_hash,
+                bucket_count,
+                43,
+                &mut state,
+                config,
+                &payload_fetch_tokens,
+                &read_plan,
+                &[encrypted_batch],
+                || {
+                    remaps
+                        .next()
+                        .ok_or(PrivateResultOramError::InvalidFetchPlanField("leaf"))
+                },
+            ),
+            Err(PrivateResultOramError::InvalidFetchPlanField("point_token"))
+        );
+        assert_eq!(state.position(&block_a.payload_fetch_token), Some(2));
+        assert_eq!(state.position(&block_b.payload_fetch_token), Some(3));
     }
 
     #[test]
