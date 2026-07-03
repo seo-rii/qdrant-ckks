@@ -4959,6 +4959,14 @@ mod private_hnsw_grpc_tests {
                 !err.message()
                     .contains(&search_run.updated_buckets[0].ciphertext)
             );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].bucket_commitment)
+            );
 
             let commit_old_root_sentinel = "AAAA";
             let commit_old_root_shape_signature = fixture.client_signature();
@@ -5008,6 +5016,14 @@ mod private_hnsw_grpc_tests {
             );
             assert!(
                 !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].bucket_commitment)
+            );
+            assert!(
+                !err.message()
                     .contains("commit old epoch/root does not match active session"),
                 "{}",
                 err.message()
@@ -5053,6 +5069,14 @@ mod private_hnsw_grpc_tests {
             assert!(
                 !err.message()
                     .contains(&search_run.updated_buckets[0].ciphertext)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].bucket_commitment)
             );
 
             let commit_new_root_sentinel = "AAAA";
@@ -5103,6 +5127,14 @@ mod private_hnsw_grpc_tests {
                 !err.message()
                     .contains(&search_run.updated_buckets[0].ciphertext)
             );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].bucket_commitment)
+            );
 
             let commit_new_root_shape_signature = fixture.client_signature();
             let err = PrivateHnswOram::commit_private_hnsw_paths(
@@ -5148,6 +5180,14 @@ mod private_hnsw_grpc_tests {
             assert!(
                 !err.message()
                     .contains(&search_run.updated_buckets[0].ciphertext)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].bucket_commitment)
             );
 
             let err = PrivateHnswOram::commit_private_hnsw_paths(
@@ -5478,6 +5518,14 @@ mod private_hnsw_grpc_tests {
             assert!(
                 !err.message()
                     .contains(&search_run.updated_buckets[0].ciphertext)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !err.message()
+                    .contains(&search_run.updated_buckets[0].bucket_commitment)
             );
             assert!(!err.message().contains(&oversized_commit_signature.key_id));
             assert!(!err.message().contains(&oversized_commit_signature.sig));

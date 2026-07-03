@@ -4644,6 +4644,14 @@ mod private_hnsw_rest_tests {
                 !commit_old_root_error.contains(&search_run.updated_buckets[0].ciphertext),
                 "{commit_old_root_error}"
             );
+            assert!(
+                !commit_old_root_error.contains(&search_run.updated_buckets[0].ciphertext_sha256),
+                "{commit_old_root_error}"
+            );
+            assert!(
+                !commit_old_root_error.contains(&search_run.updated_buckets[0].bucket_commitment),
+                "{commit_old_root_error}"
+            );
 
             let commit_old_root_sentinel = "AAAA";
             let commit_old_root_shape_signature = fixture.client_signature();
@@ -4691,6 +4699,16 @@ mod private_hnsw_rest_tests {
                 !commit_old_root_shape_error.contains(&search_run.updated_buckets[0].ciphertext),
                 "{commit_old_root_shape_error}"
             );
+            assert!(
+                !commit_old_root_shape_error
+                    .contains(&search_run.updated_buckets[0].ciphertext_sha256),
+                "{commit_old_root_shape_error}"
+            );
+            assert!(
+                !commit_old_root_shape_error
+                    .contains(&search_run.updated_buckets[0].bucket_commitment),
+                "{commit_old_root_shape_error}"
+            );
 
             let duplicate_epoch_signature = fixture.client_signature();
             let duplicate_commit_error = post_json_error_contains!(
@@ -4724,6 +4742,14 @@ mod private_hnsw_rest_tests {
             assert!(!duplicate_commit_error.contains(&duplicate_epoch_signature.sig));
             assert!(
                 !duplicate_commit_error.contains(&search_run.updated_buckets[0].ciphertext),
+                "{duplicate_commit_error}"
+            );
+            assert!(
+                !duplicate_commit_error.contains(&search_run.updated_buckets[0].ciphertext_sha256),
+                "{duplicate_commit_error}"
+            );
+            assert!(
+                !duplicate_commit_error.contains(&search_run.updated_buckets[0].bucket_commitment),
                 "{duplicate_commit_error}"
             );
             let commit_new_root_sentinel = "AAAA";
@@ -4769,6 +4795,14 @@ mod private_hnsw_rest_tests {
                 !commit_new_root_error.contains(&search_run.updated_buckets[0].ciphertext),
                 "{commit_new_root_error}"
             );
+            assert!(
+                !commit_new_root_error.contains(&search_run.updated_buckets[0].ciphertext_sha256),
+                "{commit_new_root_error}"
+            );
+            assert!(
+                !commit_new_root_error.contains(&search_run.updated_buckets[0].bucket_commitment),
+                "{commit_new_root_error}"
+            );
 
             let commit_new_root_shape_signature = fixture.client_signature();
             let commit_new_root_error = post_json_error_contains!(
@@ -4808,6 +4842,14 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !commit_new_root_error.contains(&search_run.updated_buckets[0].ciphertext),
+                "{commit_new_root_error}"
+            );
+            assert!(
+                !commit_new_root_error.contains(&search_run.updated_buckets[0].ciphertext_sha256),
+                "{commit_new_root_error}"
+            );
+            assert!(
+                !commit_new_root_error.contains(&search_run.updated_buckets[0].bucket_commitment),
                 "{commit_new_root_error}"
             );
             let empty_commit_signature = fixture.client_signature();
@@ -4875,6 +4917,10 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !commit_hash_error.contains(&search_run.updated_buckets[0].ciphertext),
+                "{commit_hash_error}"
+            );
+            assert!(
+                !commit_hash_error.contains(&search_run.updated_buckets[0].bucket_commitment),
                 "{commit_hash_error}"
             );
             assert!(
@@ -5084,6 +5130,14 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !oversized_commit_error.contains(&search_run.updated_buckets[0].ciphertext),
+                "{oversized_commit_error}"
+            );
+            assert!(
+                !oversized_commit_error.contains(&search_run.updated_buckets[0].ciphertext_sha256),
+                "{oversized_commit_error}"
+            );
+            assert!(
+                !oversized_commit_error.contains(&search_run.updated_buckets[0].bucket_commitment),
                 "{oversized_commit_error}"
             );
             assert!(!oversized_commit_error.contains(&oversized_commit_signature.key_id));
