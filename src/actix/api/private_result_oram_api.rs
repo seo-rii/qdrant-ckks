@@ -2809,6 +2809,8 @@ mod private_result_oram_rest_tests {
                 "encrypted bucket store validation failed"
             );
             assert!(!future_bucket_error.contains(&future_bucket.ciphertext));
+            assert!(!future_bucket_error.contains(&future_bucket.ciphertext_sha256));
+            assert!(!future_bucket_error.contains(&future_bucket.bucket_commitment));
             assert!(!future_bucket_error.contains("index_epoch"));
             assert!(!future_bucket_error.contains(&fixture.manifest.root_hash));
             assert!(!future_bucket_error.contains(&session_id));
@@ -2817,6 +2819,8 @@ mod private_result_oram_rest_tests {
                 &future_bucket_error,
                 &[
                     future_bucket.ciphertext.as_str(),
+                    future_bucket.ciphertext_sha256.as_str(),
+                    future_bucket.bucket_commitment.as_str(),
                     "index_epoch",
                     fixture.manifest.root_hash.as_str(),
                     session_id.as_str(),
@@ -3449,6 +3453,8 @@ mod private_result_oram_rest_tests {
             assert!(!malformed_commitment_commit_error.contains(&fixture.manifest.root_hash));
             assert!(!malformed_commitment_commit_error.contains(&new_root_hash));
             assert!(!malformed_commitment_commit_error.contains(&updated_bucket.ciphertext));
+            assert!(!malformed_commitment_commit_error.contains(&updated_bucket.ciphertext_sha256));
+            assert!(!malformed_commitment_commit_error.contains(&updated_bucket.bucket_commitment));
             assert!(!malformed_commitment_commit_error.contains(&session_id));
             assert!(!malformed_commitment_commit_error.contains(&commit_signature.key_id));
             assert!(!malformed_commitment_commit_error.contains(&commit_signature.sig));
@@ -3479,6 +3485,8 @@ mod private_result_oram_rest_tests {
                 "commit updated_buckets must contain"
             );
             assert!(!oversized_commit_error.contains(&updated_bucket.ciphertext));
+            assert!(!oversized_commit_error.contains(&updated_bucket.ciphertext_sha256));
+            assert!(!oversized_commit_error.contains(&updated_bucket.bucket_commitment));
             assert!(!oversized_commit_error.contains("1..=3"));
             assert!(!oversized_commit_error.contains("duplicate bucket id"));
             assert!(!oversized_commit_error.contains(&fixture.manifest.root_hash));
@@ -3564,6 +3572,8 @@ mod private_result_oram_rest_tests {
             assert!(!duplicate_commit_error.contains(&duplicate_commit_signature_key_id));
             assert!(!duplicate_commit_error.contains(&duplicate_commit_signature_sig));
             assert!(!duplicate_commit_error.contains(&updated_bucket.ciphertext));
+            assert!(!duplicate_commit_error.contains(&updated_bucket.ciphertext_sha256));
+            assert!(!duplicate_commit_error.contains(&updated_bucket.bucket_commitment));
 
             let invalid_signature_duplicate_commit_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/commit",

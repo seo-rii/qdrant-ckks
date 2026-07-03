@@ -3061,6 +3061,16 @@ mod private_result_oram_grpc_tests {
                     .message()
                     .contains(&future_bucket.ciphertext)
             );
+            assert!(
+                !future_bucket_read
+                    .message()
+                    .contains(&future_bucket.ciphertext_sha256)
+            );
+            assert!(
+                !future_bucket_read
+                    .message()
+                    .contains(&future_bucket.bucket_commitment)
+            );
             assert!(!future_bucket_read.message().contains("index_epoch"));
             assert!(
                 !future_bucket_read
@@ -3073,6 +3083,8 @@ mod private_result_oram_grpc_tests {
                 future_bucket_read.message(),
                 &[
                     future_bucket.ciphertext.as_str(),
+                    future_bucket.ciphertext_sha256.as_str(),
+                    future_bucket.bucket_commitment.as_str(),
                     "index_epoch",
                     fixture.manifest.root_hash.as_str(),
                     session.session_id.as_str(),
@@ -4154,6 +4166,16 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !malformed_commitment_commit
                     .message()
+                    .contains(&updated_bucket.ciphertext_sha256)
+            );
+            assert!(
+                !malformed_commitment_commit
+                    .message()
+                    .contains(&updated_bucket.bucket_commitment)
+            );
+            assert!(
+                !malformed_commitment_commit
+                    .message()
                     .contains(&session.session_id)
             );
             assert!(
@@ -4203,6 +4225,16 @@ mod private_result_oram_grpc_tests {
                 !oversized_commit
                     .message()
                     .contains(&updated_bucket.ciphertext)
+            );
+            assert!(
+                !oversized_commit
+                    .message()
+                    .contains(&updated_bucket.ciphertext_sha256)
+            );
+            assert!(
+                !oversized_commit
+                    .message()
+                    .contains(&updated_bucket.bucket_commitment)
             );
             assert!(!oversized_commit.message().contains("duplicate bucket id"));
             assert!(
@@ -4342,6 +4374,16 @@ mod private_result_oram_grpc_tests {
                 !duplicate_commit
                     .message()
                     .contains(&updated_bucket.ciphertext)
+            );
+            assert!(
+                !duplicate_commit
+                    .message()
+                    .contains(&updated_bucket.ciphertext_sha256)
+            );
+            assert!(
+                !duplicate_commit
+                    .message()
+                    .contains(&updated_bucket.bucket_commitment)
             );
 
             let invalid_signature_duplicate_bucket =
