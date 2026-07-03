@@ -1472,7 +1472,9 @@ the same Merkle proof check before bucket decryption, state remap, or writeback.
 `PrivateHnswSearchAccessMetrics` with path-access count, unique leaf count,
 fixed-step budget, and budget-exhaustion status for latency/ORAM-volume
 benchmarks without exposing plaintext vectors, distances beyond client-local
-hits, or decrypted neighbor lists. Strict SDK flows should call
+hits, or decrypted neighbor lists. The exhausted flag is set only when the path
+count, completed step count, and canonical access leaf-label shape all match the
+fixed budget. Strict SDK flows should call
 `validate_private_hnsw_strict_search_result` before result fetch or commit so a
 search that stopped before consuming `fixed_steps` is treated as a failed
 fixed-budget search, not a shortened private query. The strict validator also
