@@ -1792,6 +1792,9 @@ mod private_hnsw_rest_tests {
                     malformed_bucket_hash_before_manifest_sentinel,
                     fixture.encrypted_build.root_hash.as_str(),
                     fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .bucket_commitment
+                        .as_str(),
                     "manifest",
                 ],
             );
@@ -1841,6 +1844,9 @@ mod private_hnsw_rest_tests {
                     malformed_bucket_commitment_before_manifest_sentinel,
                     fixture.encrypted_build.root_hash.as_str(),
                     fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .ciphertext_sha256
+                        .as_str(),
                     "manifest",
                 ],
             );
@@ -2597,6 +2603,16 @@ mod private_hnsw_rest_tests {
                 "{empty_bucket_upload_error}"
             );
             assert!(
+                !empty_bucket_upload_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{empty_bucket_upload_error}"
+            );
+            assert!(
+                !empty_bucket_upload_error
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
+                "{empty_bucket_upload_error}"
+            );
+            assert!(
                 !empty_bucket_upload_error.contains("private_hnsw_oram"),
                 "{empty_bucket_upload_error}"
             );
@@ -2628,10 +2644,20 @@ mod private_hnsw_rest_tests {
                 !hash_mismatch_error.contains(&hash_mismatch_buckets[0].ciphertext_sha256),
                 "{hash_mismatch_error}"
             );
+            assert!(
+                !hash_mismatch_error.contains(&hash_mismatch_buckets[0].ciphertext),
+                "{hash_mismatch_error}"
+            );
+            assert!(
+                !hash_mismatch_error.contains(&hash_mismatch_buckets[0].bucket_commitment),
+                "{hash_mismatch_error}"
+            );
 
             let mut merkle_mismatch_buckets = fixture.encrypted_build.buckets.clone();
             merkle_mismatch_buckets[0].bucket_commitment =
                 data_encoding::BASE64URL_NOPAD.encode(&[9; 32]);
+            let merkle_mismatch_bucket_commitment =
+                merkle_mismatch_buckets[0].bucket_commitment.clone();
             let computed_mismatch_root = qdrant_sec::private_hnsw_oram_merkle_root_for_commitments(
                 &merkle_mismatch_buckets
                     .iter()
@@ -2659,6 +2685,20 @@ mod private_hnsw_rest_tests {
                 !commitment_context_mismatch_error.contains(&computed_mismatch_root),
                 "{commitment_context_mismatch_error}"
             );
+            assert!(
+                !commitment_context_mismatch_error.contains(&merkle_mismatch_bucket_commitment),
+                "{commitment_context_mismatch_error}"
+            );
+            assert!(
+                !commitment_context_mismatch_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{commitment_context_mismatch_error}"
+            );
+            assert!(
+                !commitment_context_mismatch_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{commitment_context_mismatch_error}"
+            );
 
             let upload_ciphertext_sentinel = "bucket-upload-ciphertext-sentinel";
             let mut malformed_upload_buckets = fixture.encrypted_build.buckets.clone();
@@ -2675,6 +2715,16 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !malformed_upload_error.contains(upload_ciphertext_sentinel),
+                "{malformed_upload_error}"
+            );
+            assert!(
+                !malformed_upload_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{malformed_upload_error}"
+            );
+            assert!(
+                !malformed_upload_error
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
                 "{malformed_upload_error}"
             );
 
@@ -2702,6 +2752,16 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !late_malformed_upload_error.contains(late_upload_ciphertext_sentinel),
+                "{late_malformed_upload_error}"
+            );
+            assert!(
+                !late_malformed_upload_error
+                    .contains(&fixture.encrypted_build.buckets[1].ciphertext_sha256),
+                "{late_malformed_upload_error}"
+            );
+            assert!(
+                !late_malformed_upload_error
+                    .contains(&fixture.encrypted_build.buckets[1].bucket_commitment),
                 "{late_malformed_upload_error}"
             );
             assert!(
@@ -2745,6 +2805,16 @@ mod private_hnsw_rest_tests {
             assert!(
                 !duplicate_bucket_upload_error
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{duplicate_bucket_upload_error}"
+            );
+            assert!(
+                !duplicate_bucket_upload_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{duplicate_bucket_upload_error}"
+            );
+            assert!(
+                !duplicate_bucket_upload_error
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
                 "{duplicate_bucket_upload_error}"
             );
             assert!(

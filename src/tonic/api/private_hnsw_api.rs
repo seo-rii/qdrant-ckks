@@ -1879,6 +1879,9 @@ mod private_hnsw_grpc_tests {
                     malformed_bucket_hash_before_manifest_sentinel,
                     fixture.encrypted_build.root_hash.as_str(),
                     fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .bucket_commitment
+                        .as_str(),
                     "manifest",
                 ],
             );
@@ -1935,6 +1938,9 @@ mod private_hnsw_grpc_tests {
                     malformed_bucket_commitment_before_manifest_sentinel,
                     fixture.encrypted_build.root_hash.as_str(),
                     fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .ciphertext_sha256
+                        .as_str(),
                     "manifest",
                 ],
             );
@@ -1985,6 +1991,18 @@ mod private_hnsw_grpc_tests {
             assert!(
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
                 "{}",
                 err.message()
             );
@@ -2837,10 +2855,17 @@ mod private_hnsw_grpc_tests {
                 !err.message()
                     .contains(&hash_mismatch_buckets[0].ciphertext_sha256)
             );
+            assert!(!err.message().contains(&hash_mismatch_buckets[0].ciphertext));
+            assert!(
+                !err.message()
+                    .contains(&hash_mismatch_buckets[0].bucket_commitment)
+            );
 
             let mut merkle_mismatch_buckets = fixture.encrypted_build.buckets.clone();
             merkle_mismatch_buckets[0].bucket_commitment =
                 data_encoding::BASE64URL_NOPAD.encode(&[9; 32]);
+            let merkle_mismatch_bucket_commitment =
+                merkle_mismatch_buckets[0].bucket_commitment.clone();
             let computed_mismatch_root = qdrant_sec::private_hnsw_oram_merkle_root_for_commitments(
                 &merkle_mismatch_buckets
                     .iter()
@@ -2875,6 +2900,23 @@ mod private_hnsw_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(
+                !err.message().contains(&merkle_mismatch_bucket_commitment),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{}",
+                err.message()
+            );
 
             let upload_ciphertext_sentinel = "bucket-upload-ciphertext-sentinel";
             let mut malformed_upload_buckets = fixture.encrypted_build.buckets.clone();
@@ -2901,6 +2943,18 @@ mod private_hnsw_grpc_tests {
             );
             assert!(
                 !err.message().contains(upload_ciphertext_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
                 "{}",
                 err.message()
             );
@@ -2939,6 +2993,18 @@ mod private_hnsw_grpc_tests {
             );
             assert!(
                 !err.message().contains(late_upload_ciphertext_sentinel),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[1].ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[1].bucket_commitment),
                 "{}",
                 err.message()
             );
@@ -2998,6 +3064,18 @@ mod private_hnsw_grpc_tests {
             assert!(
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
                 "{}",
                 err.message()
             );
