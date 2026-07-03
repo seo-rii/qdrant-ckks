@@ -1133,7 +1133,8 @@ the fetched token set, point-token binding, and deleted-payload rejection before
 exposing payload bytes to the caller. A canonical plaintext client-state
 snapshot shape now round-trips the result ORAM token position map and stash for
 client-side backup validation; snapshot import rejects duplicate stash payload
-tokens and duplicate stash point tokens before state recovery. An encrypted
+tokens, duplicate stash point tokens, and malformed stash payload block
+versions or payload lengths before state recovery. An encrypted
 snapshot helper seals that backup under a client-derived state key with
 collection/key/epoch/root AAD plus ciphertext hash checks. New SDK code should derive
 `PrivateResultOramClientKeys` from the signed result manifest rather than the

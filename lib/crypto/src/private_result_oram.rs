@@ -500,10 +500,11 @@ impl PrivateResultOramClientState {
                 })
             })
             .collect::<Result<Vec<_>, PrivateResultOramError>>()?;
-        for payload_fetch_token in self.stash.keys() {
+        for (payload_fetch_token, block) in &self.stash {
             if !self.position_map.contains_key(payload_fetch_token) {
                 return Err(PrivateResultOramError::InvalidClientStateSnapshot);
             }
+            validate_private_result_oram_client_state_stash_block(block)?;
         }
 
         Ok(PrivateResultOramClientStateSnapshot {
@@ -538,6 +539,7 @@ impl PrivateResultOramClientState {
         let mut stash = BTreeMap::new();
         let mut stash_point_tokens = BTreeSet::new();
         for block in &snapshot.stash {
+            validate_private_result_oram_client_state_stash_block(block)?;
             if !position_map.contains_key(&block.payload_fetch_token) {
                 return Err(PrivateResultOramError::InvalidClientStateSnapshot);
             }
@@ -1534,6 +1536,20 @@ fn validate_private_result_oram_leaf(
     if leaf >= private_result_oram_leaf_count(tree_height)? {
         return Err(PrivateResultOramError::InvalidFetchPlanField("leaf"));
     }
+    Ok(())
+}
+
+fn validate_private_result_oram_client_state_stash_block(
+    block: &PrivateResultOramPayloadBlockPlaintext,
+) -> Result<(), PrivateResultOramError> {
+    if block.version != PRIVATE_RESULT_ORAM_PAYLOAD_BLOCK_VERSION {
+        return Err(PrivateResultOramError::InvalidClientStateSnapshot);
+    }
+    let _: u32 = block
+        .payload
+        .len()
+        .try_into()
+        .map_err(|_| PrivateResultOramError::InvalidClientStateSnapshot)?;
     Ok(())
 }
 
@@ -6638,6 +6654,16 @@ mod tests {
         assert_eq!(snapshot.tree_height, config.tree_height);
         assert_eq!(snapshot.positions.len(), 2);
         assert_eq!(snapshot.stash, vec![stash.clone()]);
+        let mut malformed_state = state.clone();
+        malformed_state
+            .stash
+            .get_mut(&stash.payload_fetch_token)
+            .unwrap()
+            .version = 2;
+        assert_eq!(
+            malformed_state.to_snapshot(config.tree_height),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
+        );
         let leaf_label = encode_private_result_oram_leaf_label(1, config.tree_height).unwrap();
         assert_eq!(
             decode_private_result_oram_leaf_label(&leaf_label, config.tree_height).unwrap(),
@@ -6685,6 +6711,12 @@ mod tests {
         bad_stash.stash[0].payload_fetch_token = [99; 32];
         assert_eq!(
             PrivateResultOramClientState::from_snapshot(&bad_stash),
+            Err(PrivateResultOramError::InvalidClientStateSnapshot)
+        );
+        let mut bad_stash_version = decoded.clone();
+        bad_stash_version.stash[0].version = 2;
+        assert_eq!(
+            PrivateResultOramClientState::from_snapshot(&bad_stash_version),
             Err(PrivateResultOramError::InvalidClientStateSnapshot)
         );
         let mut duplicate_point_stash = decoded.clone();
