@@ -596,6 +596,20 @@ mod private_hnsw_rest_tests {
         "state_ciphertexts_sha256.bin",
         "state_ciphertexts_sha256.json",
     ];
+    const PRIVATE_HNSW_BUCKET_REDACTION_ALIASES: &[&str] = &[
+        "bucket_commitment",
+        "bucketCommitment",
+        "bucket_commitments",
+        "bucketCommitments",
+        "ciphertext_sha256",
+        "ciphertextSha256",
+        "ciphertexts_sha256",
+        "ciphertextsSha256",
+        "updated_bucket_commitment",
+        "updatedBucketCommitment",
+        "updated_bucket_commitments",
+        "updatedBucketCommitments",
+    ];
 
     fn json_roundtrip<T>(value: &T) -> T
     where
@@ -726,6 +740,12 @@ mod private_hnsw_rest_tests {
             );
         }
         for &forbidden in PRIVATE_HNSW_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW route error leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_HNSW_BUCKET_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "private HNSW route error leaked `{forbidden}`: {rendered}",

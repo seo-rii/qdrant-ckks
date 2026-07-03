@@ -567,6 +567,20 @@ mod private_result_oram_rest_tests {
         "state_ciphertexts_sha256.bin",
         "state_ciphertexts_sha256.json",
     ];
+    const PRIVATE_RESULT_ORAM_BUCKET_REDACTION_ALIASES: &[&str] = &[
+        "bucket_commitment",
+        "bucketCommitment",
+        "bucket_commitments",
+        "bucketCommitments",
+        "ciphertext_sha256",
+        "ciphertextSha256",
+        "ciphertexts_sha256",
+        "ciphertextsSha256",
+        "updated_bucket_commitment",
+        "updatedBucketCommitment",
+        "updated_bucket_commitments",
+        "updatedBucketCommitments",
+    ];
 
     struct PrivateResultRouteFixture {
         manifest: PrivateResultOramManifest,
@@ -952,6 +966,12 @@ mod private_result_oram_rest_tests {
             );
         }
         for &forbidden in PRIVATE_RESULT_ORAM_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "private result ORAM guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_RESULT_ORAM_BUCKET_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "private result ORAM guard leaked `{forbidden}`: {rendered}",
