@@ -326,6 +326,19 @@ mod tests {
              readBucketId=read-bucket-id-camel-singular-sentinel \
              readBucketIdCounts=read-bucket-id-counts-camel-sentinel \
              readBucketIds=read-bucket-ids-camel-sentinel \
+             ciphertextSha256=ciphertext-sha256-camel-sentinel \
+             ciphertext_sha256=ciphertext-sha256-snake-sentinel \
+             ciphertext_sha256_b64=ciphertext-sha256-b64-snake-sentinel \
+             ciphertextsSha256=ciphertexts-sha256-camel-sentinel \
+             ciphertexts_sha256=ciphertexts-sha256-snake-sentinel \
+             bucketCommitment=bucket-commitment-camel-sentinel \
+             bucketCommitments=bucket-commitments-camel-sentinel \
+             bucket_commitment=bucket-commitment-snake-sentinel \
+             bucket_commitments=bucket-commitments-snake-sentinel \
+             updatedBucketCommitment=updated-bucket-commitment-camel-sentinel \
+             updatedBucketCommitments=updated-bucket-commitments-camel-sentinel \
+             updated_bucket_commitment=updated-bucket-commitment-snake-sentinel \
+             updated_bucket_commitments=updated-bucket-commitments-snake-sentinel \
              returnedBucketCount=returned-bucket-count-camel-sentinel \
              returnedBucketCounts=returned-bucket-counts-camel-sentinel \
              updatedBucketCount=updated-bucket-count-camel-sentinel \
@@ -475,6 +488,19 @@ mod tests {
         assert!(!redacted.contains("requested-bucket-counts-camel-sentinel"));
         assert!(!redacted.contains("read-bucket-id-counts-camel-sentinel"));
         assert!(!redacted.contains("read-bucket-ids-camel-sentinel"));
+        assert!(!redacted.contains("ciphertext-sha256-camel-sentinel"));
+        assert!(!redacted.contains("ciphertext-sha256-snake-sentinel"));
+        assert!(!redacted.contains("ciphertext-sha256-b64-snake-sentinel"));
+        assert!(!redacted.contains("ciphertexts-sha256-camel-sentinel"));
+        assert!(!redacted.contains("ciphertexts-sha256-snake-sentinel"));
+        assert!(!redacted.contains("bucket-commitment-camel-sentinel"));
+        assert!(!redacted.contains("bucket-commitments-camel-sentinel"));
+        assert!(!redacted.contains("bucket-commitment-snake-sentinel"));
+        assert!(!redacted.contains("bucket-commitments-snake-sentinel"));
+        assert!(!redacted.contains("updated-bucket-commitment-camel-sentinel"));
+        assert!(!redacted.contains("updated-bucket-commitments-camel-sentinel"));
+        assert!(!redacted.contains("updated-bucket-commitment-snake-sentinel"));
+        assert!(!redacted.contains("updated-bucket-commitments-snake-sentinel"));
         assert!(!redacted.contains("returned-bucket-count-camel-sentinel"));
         assert!(!redacted.contains("returned-bucket-counts-camel-sentinel"));
         assert!(!redacted.contains("updated-bucket-count-camel-sentinel"));
