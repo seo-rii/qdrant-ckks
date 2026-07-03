@@ -1543,9 +1543,19 @@ impl PrivateHnswOramClientState {
         }
 
         let mut stash = BTreeMap::new();
+        let mut stash_point_tokens = BTreeSet::new();
+        let mut stash_payload_fetch_tokens = BTreeSet::new();
         for block in &snapshot.stash {
             if !position_map.contains_key(&block.node_id) {
                 return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+            }
+            if !stash_point_tokens.insert(block.point_token) {
+                return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+            }
+            if let Some(payload_fetch_token) = block.payload_fetch_token {
+                if !stash_payload_fetch_tokens.insert(payload_fetch_token) {
+                    return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
+                }
             }
             if stash.insert(block.node_id, block.clone()).is_some() {
                 return Err(PrivateHnswClientError::InvalidClientStateSnapshot);
@@ -9715,6 +9725,37 @@ mod tests {
             PrivateHnswOramClientState::from_snapshot(&bad_stash),
             Err(PrivateHnswClientError::InvalidClientStateSnapshot)
         );
+        let mut duplicate_point_stash = snapshot.clone();
+        let mut duplicate_point_block = node_block_with_vector(3, &[3.0, 0.0], vec![]);
+        duplicate_point_block.point_token = duplicate_point_stash.stash[0].point_token;
+        duplicate_point_stash
+            .positions
+            .push(PrivateHnswPositionMapSnapshotEntry {
+                node_id: BASE64URL_NOPAD.encode(&duplicate_point_block.node_id),
+                leaf_label: encode_private_hnsw_oram_leaf_label(2, config.tree_height).unwrap(),
+            });
+        duplicate_point_stash.stash.push(duplicate_point_block);
+        assert_eq!(
+            PrivateHnswOramClientState::from_snapshot(&duplicate_point_stash),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+
+        let mut duplicate_payload_stash = snapshot.clone();
+        duplicate_payload_stash.stash[0].payload_fetch_token = Some([77; 32]);
+        let mut duplicate_payload_block = node_block_with_vector(4, &[4.0, 0.0], vec![]);
+        duplicate_payload_block.payload_fetch_token = Some([77; 32]);
+        duplicate_payload_stash
+            .positions
+            .push(PrivateHnswPositionMapSnapshotEntry {
+                node_id: BASE64URL_NOPAD.encode(&duplicate_payload_block.node_id),
+                leaf_label: encode_private_hnsw_oram_leaf_label(2, config.tree_height).unwrap(),
+            });
+        duplicate_payload_stash.stash.push(duplicate_payload_block);
+        assert_eq!(
+            PrivateHnswOramClientState::from_snapshot(&duplicate_payload_stash),
+            Err(PrivateHnswClientError::InvalidClientStateSnapshot)
+        );
+
         let mut duplicate_stash = snapshot.clone();
         duplicate_stash.stash.push(stash);
         assert_eq!(
