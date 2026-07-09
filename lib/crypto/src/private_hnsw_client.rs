@@ -9997,41 +9997,42 @@ mod tests {
         )
         .unwrap();
         let key_pair = Ed25519KeyPair::from_seed_unchecked(&[7; 32]).unwrap();
+        let build_context = PrivateHnswManifestBuildContext {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            dim: 2,
+            distance: DistanceKind::Euclid,
+            hnsw: PrivateHnswParams {
+                m: 1,
+                ef_construction: 2,
+                max_layers: 1,
+                fixed_neighbor_slots: config.fixed_neighbor_slots as u32,
+            },
+            oram: OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: config.bucket_size as u32,
+                block_size_bytes: config.block_size_bytes as u32,
+                tree_height: config.tree_height,
+                path_batch_size: 2,
+            },
+            fixed_budget: FixedBudgetParams {
+                enabled: true,
+                upper_layer_steps: 1,
+                base_layer_steps: 2,
+                paths_per_round: 2,
+                fixed_result_k: 1,
+            },
+            result_privacy: ResultPrivacyMode::IdsVisible,
+            owner_signing_key_id: "tenant-a/private-hnsw-signing-v1",
+            created_at_unix: 1_770_000_000,
+        };
 
         let bundle = package_private_hnsw_oram_upload_bundle(
             &key_pair,
-            PrivateHnswManifestBuildContext {
-                collection_id: "collection-uuid-1",
-                vector_name: "text",
-                key_id: "tenant-a/vector-private-rk",
-                rk_id: "tenant-a/vector-private-rk",
-                rk_epoch: 7,
-                dim: 2,
-                distance: DistanceKind::Euclid,
-                hnsw: PrivateHnswParams {
-                    m: 1,
-                    ef_construction: 2,
-                    max_layers: 1,
-                    fixed_neighbor_slots: config.fixed_neighbor_slots as u32,
-                },
-                oram: OramParams {
-                    kind: OramKind::PathOram,
-                    bucket_size: config.bucket_size as u32,
-                    block_size_bytes: config.block_size_bytes as u32,
-                    tree_height: config.tree_height,
-                    path_batch_size: 2,
-                },
-                fixed_budget: FixedBudgetParams {
-                    enabled: true,
-                    upper_layer_steps: 1,
-                    base_layer_steps: 2,
-                    paths_per_round: 2,
-                    fixed_result_k: 1,
-                },
-                result_privacy: ResultPrivacyMode::IdsVisible,
-                owner_signing_key_id: "tenant-a/private-hnsw-signing-v1",
-                created_at_unix: 1_770_000_000,
-            },
+            build_context.clone(),
             &encrypted_build,
         )
         .unwrap();
@@ -10054,6 +10055,44 @@ mod tests {
             validate_private_hnsw_oram_upload_bundle(&decoded).unwrap(),
             ordered_commitments
         );
+        for malformed_context in [
+            PrivateHnswManifestBuildContext {
+                collection_id: "collection\nuuid",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                key_id: "tenant-a/vector\nprivate-rk",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                rk_id: "tenant-a/vector\nprivate-rk",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                owner_signing_key_id: "tenant-a/private\nhnsw-signing-v1",
+                ..build_context
+            },
+        ] {
+            let field = if malformed_context.collection_id.contains('\n') {
+                "collection_id"
+            } else if malformed_context.key_id.contains('\n') {
+                "key_id"
+            } else if malformed_context.rk_id.contains('\n') {
+                "rk_id"
+            } else {
+                "owner_signing_key_id"
+            };
+            assert_eq!(
+                package_private_hnsw_oram_upload_bundle(
+                    &key_pair,
+                    malformed_context,
+                    &encrypted_build,
+                ),
+                Err(PrivateHnswClientError::InvalidManifestSignatureContext(
+                    field
+                ))
+            );
+        }
 
         let mut malformed_signature = decoded.clone();
         malformed_signature.manifest_signature.alg = "ed25519-sentinel".to_string();
