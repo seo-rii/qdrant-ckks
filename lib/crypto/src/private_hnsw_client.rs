@@ -4361,7 +4361,7 @@ fn validate_client_state_context(
 ) -> Result<(), PrivateHnswClientError> {
     validate_client_state_context_id(context.collection_id)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("collection_id"))?;
-    validate_client_state_context_id(context.vector_name)
+    validate_client_state_context_vector_name(context.vector_name)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("vector_name"))?;
     validate_resource_key_id(context.key_id)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("key_id"))?;
@@ -4382,6 +4382,52 @@ fn validate_client_state_context_id(value: &str) -> Result<(), ()> {
         return Err(());
     }
     Ok(())
+}
+
+fn validate_client_state_context_vector_name(value: &str) -> Result<(), ()> {
+    if value.is_empty()
+        || value.len() > 128
+        || value == "."
+        || value == ".."
+        || client_state_context_vector_name_is_client_owned_alias(value)
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
+    {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn client_state_context_vector_name_is_client_owned_alias(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    let compact_value = value.replace(['_', '-', '.'], "");
+    if compact_client_state_context_vector_name_is_client_owned_alias(&compact_value) {
+        return true;
+    }
+    let Some((stem, _extension)) = value.rsplit_once('.') else {
+        return false;
+    };
+    compact_client_state_context_vector_name_is_client_owned_alias(
+        &stem.replace(['_', '-', '.'], ""),
+    )
+}
+
+fn compact_client_state_context_vector_name_is_client_owned_alias(value: &str) -> bool {
+    matches!(
+        value,
+        "clientstate"
+            | "clientstates"
+            | "clientstatebackup"
+            | "clientstatebackups"
+            | "clientstatesnapshot"
+            | "clientstatesnapshots"
+            | "encryptedclientstate"
+            | "encryptedclientstates"
+            | "positionmap"
+            | "orampositionmap"
+            | "stash"
+    )
 }
 
 fn validate_manifest_build_context(
@@ -10356,6 +10402,20 @@ mod tests {
             (
                 PrivateHnswClientStateAeadContext {
                     vector_name: "text\nvector",
+                    ..context
+                },
+                "vector_name",
+            ),
+            (
+                PrivateHnswClientStateAeadContext {
+                    vector_name: "text/vector",
+                    ..context
+                },
+                "vector_name",
+            ),
+            (
+                PrivateHnswClientStateAeadContext {
+                    vector_name: "client.state",
                     ..context
                 },
                 "vector_name",
