@@ -7373,6 +7373,31 @@ mod tests {
             },
         )
         .unwrap();
+        for malformed_context in [
+            PrivateHnswCommitSignatureContext {
+                vector_name: "text/vector",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "client.state",
+                ..context
+            },
+        ] {
+            assert_eq!(
+                sign_private_hnsw_oram_read_paths(
+                    &key_pair,
+                    malformed_context,
+                    42,
+                    &root_hash,
+                    &paths,
+                    1,
+                    true,
+                ),
+                Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+                    "vector_name"
+                ))
+            );
+        }
 
         let duplicate_paths = vec![paths[0].clone(), paths[0].clone()];
         assert_eq!(
