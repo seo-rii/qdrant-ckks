@@ -4430,11 +4430,8 @@ fn compact_hnsw_context_vector_name_is_client_owned_alias(value: &str) -> bool {
 fn validate_manifest_build_context(
     context: &PrivateHnswManifestBuildContext<'_>,
 ) -> Result<(), PrivateHnswClientError> {
-    if context.collection_id.is_empty() {
-        return Err(PrivateHnswClientError::InvalidManifestSignatureContext(
-            "collection_id",
-        ));
-    }
+    validate_client_state_context_id(context.collection_id)
+        .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("collection_id"))?;
     validate_hnsw_context_vector_name(context.vector_name)
         .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("vector_name"))?;
     validate_resource_key_id(context.key_id)
@@ -9861,21 +9858,61 @@ mod tests {
         .unwrap();
         for malformed_context in [
             PrivateHnswManifestBuildContext {
+                collection_id: "collection\nuuid",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
                 vector_name: "text/vector",
                 ..build_context.clone()
             },
             PrivateHnswManifestBuildContext {
                 vector_name: "client.state",
-                ..build_context
+                ..build_context.clone()
             },
         ] {
+            let field = if malformed_context.collection_id.contains('\n') {
+                "collection_id"
+            } else {
+                "vector_name"
+            };
             assert_eq!(
                 build_private_hnsw_oram_manifest_from_encrypted_index(
                     malformed_context,
                     &encrypted_build
                 ),
                 Err(PrivateHnswClientError::InvalidManifestSignatureContext(
-                    "vector_name"
+                    field
+                ))
+            );
+        }
+        for malformed_context in [
+            PrivateHnswManifestBuildContext {
+                key_id: "tenant-a/vector\nprivate-rk",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                rk_id: "tenant-a/vector\nprivate-rk",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                owner_signing_key_id: "tenant-a/private\nhnsw-signing-v1",
+                ..build_context
+            },
+        ] {
+            let field = if malformed_context.key_id.contains('\n') {
+                "key_id"
+            } else if malformed_context.rk_id.contains('\n') {
+                "rk_id"
+            } else {
+                "owner_signing_key_id"
+            };
+            assert_eq!(
+                build_private_hnsw_oram_manifest_from_encrypted_index(
+                    malformed_context,
+                    &encrypted_build
+                ),
+                Err(PrivateHnswClientError::InvalidManifestSignatureContext(
+                    field
                 ))
             );
         }
