@@ -8338,6 +8338,16 @@ mod tests {
             signing_key_id: "tenant-a/private-result-signing-v1",
         };
         let signature = sign_private_result_oram_commit(&key_pair, context, &plan).unwrap();
+        let malformed_context = PrivateResultOramCommitSignatureContext {
+            collection_id: "collection\nuuid",
+            ..context
+        };
+        assert_eq!(
+            sign_private_result_oram_commit(&key_pair, malformed_context, &plan),
+            Err(PrivateResultOramError::InvalidManifestField(
+                "collection_id"
+            ))
+        );
 
         let bucket_refs = plan.signature_bucket_refs();
         validate_private_result_oram_commit_signature(
@@ -9015,6 +9025,23 @@ mod tests {
         };
         validate_private_result_oram_read_buckets_signature(input, &signature.sig, verification)
             .unwrap();
+        let malformed_context = PrivateResultOramReadBucketsSignatureContext {
+            collection_id: "collection\nuuid",
+            ..context
+        };
+        assert_eq!(
+            sign_private_result_oram_read_buckets(
+                &key_pair,
+                malformed_context,
+                42,
+                &root_hash,
+                7,
+                &bucket_ids,
+            ),
+            Err(PrivateResultOramError::InvalidManifestField(
+                "collection_id"
+            ))
+        );
 
         assert_eq!(
             sign_private_result_oram_read_buckets(
