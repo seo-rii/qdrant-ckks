@@ -8899,6 +8899,18 @@ mod tests {
             ),
             Err(PrivateResultOramError::InvalidResourceKeyId)
         );
+        let invalid_rk_context = PrivateResultOramCommitSignatureInput {
+            rk_id: "bad rk id",
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_commit_signature(
+                invalid_rk_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidResourceKeyId)
+        );
 
         let empty_input = PrivateResultOramCommitSignatureInput {
             updated_buckets: &[],
@@ -9044,6 +9056,34 @@ mod tests {
         };
         validate_private_result_oram_read_buckets_signature(input, &signature.sig, verification)
             .unwrap();
+        for invalid_context in [
+            PrivateResultOramReadBucketsSignatureInput {
+                collection_id: "",
+                ..input
+            },
+            PrivateResultOramReadBucketsSignatureInput {
+                key_id: "bad key id",
+                ..input
+            },
+            PrivateResultOramReadBucketsSignatureInput {
+                rk_id: "bad rk id",
+                ..input
+            },
+        ] {
+            let expected = if invalid_context.collection_id.is_empty() {
+                PrivateResultOramError::InvalidManifestField("collection_id")
+            } else {
+                PrivateResultOramError::InvalidResourceKeyId
+            };
+            assert_eq!(
+                validate_private_result_oram_read_buckets_signature(
+                    invalid_context,
+                    "malformed-signature",
+                    verification,
+                ),
+                Err(expected)
+            );
+        }
         let malformed_context = PrivateResultOramReadBucketsSignatureContext {
             collection_id: "collection\nuuid",
             ..context
