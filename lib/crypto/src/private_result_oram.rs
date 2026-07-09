@@ -7707,6 +7707,21 @@ mod tests {
             try_private_result_oram_commit_signature_message(malformed_commit_key),
             Err(PrivateResultOramError::InvalidResourceKeyId)
         );
+        for malformed_commit_context in [
+            PrivateResultOramCommitSignatureInput {
+                key_id: "tenant-a/payload private-rk",
+                ..valid_commit_input
+            },
+            PrivateResultOramCommitSignatureInput {
+                rk_id: "tenant-a/payload private-rk",
+                ..valid_commit_input
+            },
+        ] {
+            assert_eq!(
+                try_private_result_oram_commit_signature_message(malformed_commit_context),
+                Err(PrivateResultOramError::InvalidResourceKeyId)
+            );
+        }
 
         let valid_read_bucket_ids = [0, 1, 3];
         let valid_read_input = PrivateResultOramReadBucketsSignatureInput {
@@ -7732,6 +7747,21 @@ mod tests {
             try_private_result_oram_read_buckets_signature_message(malformed_read_key),
             Err(PrivateResultOramError::InvalidResourceKeyId)
         );
+        for malformed_read_context in [
+            PrivateResultOramReadBucketsSignatureInput {
+                key_id: "tenant-a/payload private-rk",
+                ..valid_read_input
+            },
+            PrivateResultOramReadBucketsSignatureInput {
+                rk_id: "tenant-a/payload private-rk",
+                ..valid_read_input
+            },
+        ] {
+            assert_eq!(
+                try_private_result_oram_read_buckets_signature_message(malformed_read_context),
+                Err(PrivateResultOramError::InvalidResourceKeyId)
+            );
+        }
     }
 
     #[test]
