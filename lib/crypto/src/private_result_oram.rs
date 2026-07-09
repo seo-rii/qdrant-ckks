@@ -8676,6 +8676,38 @@ mod tests {
             validate_private_result_oram_upload_bundle(&decoded).unwrap(),
             ordered_commitments
         );
+        for malformed_manifest in [
+            PrivateResultOramManifest {
+                collection_id: "collection\nuuid".to_string(),
+                ..manifest.clone()
+            },
+            PrivateResultOramManifest {
+                key_id: "tenant-a/payload\nprivate-rk".to_string(),
+                ..manifest.clone()
+            },
+            PrivateResultOramManifest {
+                rk_id: "tenant-a/payload\nprivate-rk".to_string(),
+                ..manifest.clone()
+            },
+            PrivateResultOramManifest {
+                owner_signing_key_id: "tenant-a/private\nresult-signing-v1".to_string(),
+                ..manifest.clone()
+            },
+        ] {
+            let expected = if malformed_manifest.collection_id.contains('\n') {
+                PrivateResultOramError::InvalidManifestField("collection_id")
+            } else {
+                PrivateResultOramError::InvalidResourceKeyId
+            };
+            assert_eq!(
+                package_private_result_oram_upload_bundle(
+                    &key_pair,
+                    malformed_manifest,
+                    buckets.clone()
+                ),
+                Err(expected)
+            );
+        }
 
         let mut malformed_signature = decoded.clone();
         malformed_signature.manifest_signature.alg = "ed25519-sentinel".to_string();
