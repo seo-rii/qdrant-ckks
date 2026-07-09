@@ -1882,6 +1882,21 @@ mod tests {
             try_private_hnsw_oram_read_paths_signature_message(malformed_read_key),
             Err(PrivateHnswOramError::InvalidResourceKeyId)
         );
+        for malformed_read_context in [
+            PrivateHnswOramReadPathsSignatureInput {
+                key_id: "tenant-a/vector private-rk",
+                ..valid_read_input
+            },
+            PrivateHnswOramReadPathsSignatureInput {
+                rk_id: "tenant-a/vector private-rk",
+                ..valid_read_input
+            },
+        ] {
+            assert_eq!(
+                try_private_hnsw_oram_read_paths_signature_message(malformed_read_context),
+                Err(PrivateHnswOramError::InvalidResourceKeyId)
+            );
+        }
 
         let valid_commit_input = PrivateHnswOramCommitSignatureInput {
             collection_id: "collection-uuid-1",
@@ -1915,6 +1930,21 @@ mod tests {
             try_private_hnsw_oram_commit_signature_message(malformed_commit_key),
             Err(PrivateHnswOramError::InvalidResourceKeyId)
         );
+        for malformed_commit_context in [
+            PrivateHnswOramCommitSignatureInput {
+                key_id: "tenant-a/vector private-rk",
+                ..valid_commit_input
+            },
+            PrivateHnswOramCommitSignatureInput {
+                rk_id: "tenant-a/vector private-rk",
+                ..valid_commit_input
+            },
+        ] {
+            assert_eq!(
+                try_private_hnsw_oram_commit_signature_message(malformed_commit_context),
+                Err(PrivateHnswOramError::InvalidResourceKeyId)
+            );
+        }
     }
 
     #[test]
