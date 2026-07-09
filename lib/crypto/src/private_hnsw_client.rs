@@ -4455,11 +4455,8 @@ fn validate_manifest_build_context(
 fn validate_commit_signature_context(
     context: PrivateHnswCommitSignatureContext<'_>,
 ) -> Result<(), PrivateHnswClientError> {
-    if context.collection_id.is_empty() {
-        return Err(PrivateHnswClientError::InvalidCommitSignatureContext(
-            "collection_id",
-        ));
-    }
+    validate_client_state_context_id(context.collection_id)
+        .map_err(|_| PrivateHnswClientError::InvalidCommitSignatureContext("collection_id"))?;
     validate_hnsw_context_vector_name(context.vector_name)
         .map_err(|_| PrivateHnswClientError::InvalidCommitSignatureContext("vector_name"))?;
     validate_resource_key_id(context.key_id)
@@ -7256,6 +7253,10 @@ mod tests {
         let signature = sign_private_hnsw_oram_commit(&key_pair, context, &plan).unwrap();
         for malformed_context in [
             PrivateHnswCommitSignatureContext {
+                collection_id: "collection\nuuid",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
                 vector_name: "text/vector",
                 ..context
             },
@@ -7264,11 +7265,40 @@ mod tests {
                 ..context
             },
         ] {
+            let field = if malformed_context.collection_id.contains('\n') {
+                "collection_id"
+            } else {
+                "vector_name"
+            };
             assert_eq!(
                 sign_private_hnsw_oram_commit(&key_pair, malformed_context, &plan),
-                Err(PrivateHnswClientError::InvalidCommitSignatureContext(
-                    "vector_name"
-                ))
+                Err(PrivateHnswClientError::InvalidCommitSignatureContext(field))
+            );
+        }
+        for malformed_context in [
+            PrivateHnswCommitSignatureContext {
+                key_id: "tenant-a/vector\nprivate-rk",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                rk_id: "tenant-a/vector\nprivate-rk",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                signing_key_id: "tenant-a/private\nhnsw-signing-v1",
+                ..context
+            },
+        ] {
+            let field = if malformed_context.key_id.contains('\n') {
+                "key_id"
+            } else if malformed_context.rk_id.contains('\n') {
+                "rk_id"
+            } else {
+                "signing_key_id"
+            };
+            assert_eq!(
+                sign_private_hnsw_oram_commit(&key_pair, malformed_context, &plan),
+                Err(PrivateHnswClientError::InvalidCommitSignatureContext(field))
             );
         }
 
@@ -7375,6 +7405,10 @@ mod tests {
         .unwrap();
         for malformed_context in [
             PrivateHnswCommitSignatureContext {
+                collection_id: "collection\nuuid",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
                 vector_name: "text/vector",
                 ..context
             },
@@ -7383,6 +7417,11 @@ mod tests {
                 ..context
             },
         ] {
+            let field = if malformed_context.collection_id.contains('\n') {
+                "collection_id"
+            } else {
+                "vector_name"
+            };
             assert_eq!(
                 sign_private_hnsw_oram_read_paths(
                     &key_pair,
@@ -7393,9 +7432,41 @@ mod tests {
                     1,
                     true,
                 ),
-                Err(PrivateHnswClientError::InvalidCommitSignatureContext(
-                    "vector_name"
-                ))
+                Err(PrivateHnswClientError::InvalidCommitSignatureContext(field))
+            );
+        }
+        for malformed_context in [
+            PrivateHnswCommitSignatureContext {
+                key_id: "tenant-a/vector\nprivate-rk",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                rk_id: "tenant-a/vector\nprivate-rk",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                signing_key_id: "tenant-a/private\nhnsw-signing-v1",
+                ..context
+            },
+        ] {
+            let field = if malformed_context.key_id.contains('\n') {
+                "key_id"
+            } else if malformed_context.rk_id.contains('\n') {
+                "rk_id"
+            } else {
+                "signing_key_id"
+            };
+            assert_eq!(
+                sign_private_hnsw_oram_read_paths(
+                    &key_pair,
+                    malformed_context,
+                    42,
+                    &root_hash,
+                    &paths,
+                    1,
+                    true,
+                ),
+                Err(PrivateHnswClientError::InvalidCommitSignatureContext(field))
             );
         }
 
