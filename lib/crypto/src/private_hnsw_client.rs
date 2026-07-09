@@ -4346,9 +4346,8 @@ fn validate_bucket_context(
             "collection_id",
         ));
     }
-    if context.vector_name.is_empty() {
-        return Err(PrivateHnswClientError::InvalidBucketContext("vector_name"));
-    }
+    validate_hnsw_context_vector_name(context.vector_name)
+        .map_err(|_| PrivateHnswClientError::InvalidBucketContext("vector_name"))?;
     validate_resource_key_id(context.key_id)
         .map_err(|_| PrivateHnswClientError::InvalidBucketContext("key_id"))?;
     validate_resource_key_id(context.rk_id)
@@ -4361,7 +4360,7 @@ fn validate_client_state_context(
 ) -> Result<(), PrivateHnswClientError> {
     validate_client_state_context_id(context.collection_id)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("collection_id"))?;
-    validate_client_state_context_vector_name(context.vector_name)
+    validate_hnsw_context_vector_name(context.vector_name)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("vector_name"))?;
     validate_resource_key_id(context.key_id)
         .map_err(|_| PrivateHnswClientError::InvalidClientStateContext("key_id"))?;
@@ -4384,12 +4383,12 @@ fn validate_client_state_context_id(value: &str) -> Result<(), ()> {
     Ok(())
 }
 
-fn validate_client_state_context_vector_name(value: &str) -> Result<(), ()> {
+fn validate_hnsw_context_vector_name(value: &str) -> Result<(), ()> {
     if value.is_empty()
         || value.len() > 128
         || value == "."
         || value == ".."
-        || client_state_context_vector_name_is_client_owned_alias(value)
+        || hnsw_context_vector_name_is_client_owned_alias(value)
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'@'))
@@ -4399,21 +4398,19 @@ fn validate_client_state_context_vector_name(value: &str) -> Result<(), ()> {
     Ok(())
 }
 
-fn client_state_context_vector_name_is_client_owned_alias(value: &str) -> bool {
+fn hnsw_context_vector_name_is_client_owned_alias(value: &str) -> bool {
     let value = value.to_ascii_lowercase();
     let compact_value = value.replace(['_', '-', '.'], "");
-    if compact_client_state_context_vector_name_is_client_owned_alias(&compact_value) {
+    if compact_hnsw_context_vector_name_is_client_owned_alias(&compact_value) {
         return true;
     }
     let Some((stem, _extension)) = value.rsplit_once('.') else {
         return false;
     };
-    compact_client_state_context_vector_name_is_client_owned_alias(
-        &stem.replace(['_', '-', '.'], ""),
-    )
+    compact_hnsw_context_vector_name_is_client_owned_alias(&stem.replace(['_', '-', '.'], ""))
 }
 
-fn compact_client_state_context_vector_name_is_client_owned_alias(value: &str) -> bool {
+fn compact_hnsw_context_vector_name_is_client_owned_alias(value: &str) -> bool {
     matches!(
         value,
         "clientstate"
@@ -11755,6 +11752,21 @@ mod tests {
             assert_eq!(
                 open_private_hnsw_oram_bucket(&keys, wrong_context, &wrong_context_bucket),
                 Err(PrivateHnswClientError::BucketOpenFailed)
+            );
+        }
+        for malformed_context in [
+            PrivateHnswBucketAeadContext {
+                vector_name: "text/vector",
+                ..context
+            },
+            PrivateHnswBucketAeadContext {
+                vector_name: "client.state",
+                ..context
+            },
+        ] {
+            assert_eq!(
+                seal_private_hnsw_oram_bucket(&keys, malformed_context, &[9; 64]),
+                Err(PrivateHnswClientError::InvalidBucketContext("vector_name"))
             );
         }
 

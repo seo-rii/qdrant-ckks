@@ -1551,7 +1551,8 @@ mismatches at snapshot export/import, and
 binds the ciphertext to collection id,
 vector name, RK id/epoch, index epoch, and root hash after rejecting malformed
 collection AAD context identifiers, path-like vector names, and client-state
-alias vector names;
+alias vector names. The same vector-name shape is enforced for HNSW bucket AEAD
+contexts;
 `open_private_hnsw_oram_client_state_snapshot` bounds the encoded ciphertext
 length and validates the ciphertext hash shape before decode, then rejects hash
 tamper or epoch/root context mismatch before returning the snapshot. The
