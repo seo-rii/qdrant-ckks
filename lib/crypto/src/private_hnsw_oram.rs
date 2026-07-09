@@ -1942,6 +1942,19 @@ mod tests {
         };
         validate_private_hnsw_oram_read_paths_signature(input, &signature, verification).unwrap();
 
+        let invalid_collection_context = PrivateHnswOramReadPathsSignatureInput {
+            collection_id: "",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                invalid_collection_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidManifestField("collection_id"))
+        );
+
         let invalid_context = PrivateHnswOramReadPathsSignatureInput {
             vector_name: "",
             ..input
@@ -1980,6 +1993,26 @@ mod tests {
             ),
             Err(PrivateHnswOramError::InvalidManifestField("vector_name"))
         );
+
+        for invalid_context in [
+            PrivateHnswOramReadPathsSignatureInput {
+                key_id: "bad key id",
+                ..input
+            },
+            PrivateHnswOramReadPathsSignatureInput {
+                rk_id: "bad rk id",
+                ..input
+            },
+        ] {
+            assert_eq!(
+                validate_private_hnsw_oram_read_paths_signature(
+                    invalid_context,
+                    "malformed-signature",
+                    verification,
+                ),
+                Err(PrivateHnswOramError::InvalidResourceKeyId)
+            );
+        }
 
         let malformed_root = PrivateHnswOramReadPathsSignatureInput {
             root_hash: "AAAA",
@@ -2410,6 +2443,18 @@ mod tests {
         assert_eq!(
             validate_private_hnsw_oram_commit_signature(
                 invalid_key_context,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidResourceKeyId)
+        );
+        let invalid_rk_context = PrivateHnswOramCommitSignatureInput {
+            rk_id: "bad rk id",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_commit_signature(
+                invalid_rk_context,
                 "malformed-signature",
                 verification,
             ),
