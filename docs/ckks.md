@@ -1139,7 +1139,7 @@ recovery. An encrypted
 snapshot helper rejects malformed collection AAD context identifiers and seals
 that backup under a client-derived state key with collection/key/epoch/root AAD
 plus ciphertext hash checks. Result ORAM read/commit signature contexts also
-reject malformed collection identifiers before signing. New SDK code should derive
+reject malformed collection and key identifiers before signing. New SDK code should derive
 `PrivateResultOramClientKeys` from the signed result manifest rather than the
 deprecated legacy domain-only helper; the manifest-bound derivation length-prefixes
 collection id, RK id, and RK epoch into the HKDF info context before deriving

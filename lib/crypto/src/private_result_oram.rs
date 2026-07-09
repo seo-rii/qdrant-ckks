@@ -8348,6 +8348,25 @@ mod tests {
                 "collection_id"
             ))
         );
+        for malformed_context in [
+            PrivateResultOramCommitSignatureContext {
+                key_id: "tenant-a/payload\nprivate-rk",
+                ..context
+            },
+            PrivateResultOramCommitSignatureContext {
+                rk_id: "tenant-a/payload\nprivate-rk",
+                ..context
+            },
+            PrivateResultOramCommitSignatureContext {
+                signing_key_id: "tenant-a/private\nresult-signing-v1",
+                ..context
+            },
+        ] {
+            assert_eq!(
+                sign_private_result_oram_commit(&key_pair, malformed_context, &plan),
+                Err(PrivateResultOramError::InvalidResourceKeyId)
+            );
+        }
 
         let bucket_refs = plan.signature_bucket_refs();
         validate_private_result_oram_commit_signature(
@@ -9042,6 +9061,32 @@ mod tests {
                 "collection_id"
             ))
         );
+        for malformed_context in [
+            PrivateResultOramReadBucketsSignatureContext {
+                key_id: "tenant-a/payload\nprivate-rk",
+                ..context
+            },
+            PrivateResultOramReadBucketsSignatureContext {
+                rk_id: "tenant-a/payload\nprivate-rk",
+                ..context
+            },
+            PrivateResultOramReadBucketsSignatureContext {
+                signing_key_id: "tenant-a/private\nresult-signing-v1",
+                ..context
+            },
+        ] {
+            assert_eq!(
+                sign_private_result_oram_read_buckets(
+                    &key_pair,
+                    malformed_context,
+                    42,
+                    &root_hash,
+                    7,
+                    &bucket_ids,
+                ),
+                Err(PrivateResultOramError::InvalidResourceKeyId)
+            );
+        }
 
         assert_eq!(
             sign_private_result_oram_read_buckets(
