@@ -4435,11 +4435,8 @@ fn validate_manifest_build_context(
             "collection_id",
         ));
     }
-    if context.vector_name.is_empty() {
-        return Err(PrivateHnswClientError::InvalidManifestSignatureContext(
-            "vector_name",
-        ));
-    }
+    validate_hnsw_context_vector_name(context.vector_name)
+        .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("vector_name"))?;
     validate_resource_key_id(context.key_id)
         .map_err(|_| PrivateHnswClientError::InvalidManifestSignatureContext("key_id"))?;
     validate_resource_key_id(context.rk_id)
@@ -4463,11 +4460,8 @@ fn validate_commit_signature_context(
             "collection_id",
         ));
     }
-    if context.vector_name.is_empty() {
-        return Err(PrivateHnswClientError::InvalidCommitSignatureContext(
-            "vector_name",
-        ));
-    }
+    validate_hnsw_context_vector_name(context.vector_name)
+        .map_err(|_| PrivateHnswClientError::InvalidCommitSignatureContext("vector_name"))?;
     validate_resource_key_id(context.key_id)
         .map_err(|_| PrivateHnswClientError::InvalidCommitSignatureContext("key_id"))?;
     validate_resource_key_id(context.rk_id)
@@ -7260,6 +7254,23 @@ mod tests {
             signing_key_id: "tenant-a/private-hnsw-signing-v1",
         };
         let signature = sign_private_hnsw_oram_commit(&key_pair, context, &plan).unwrap();
+        for malformed_context in [
+            PrivateHnswCommitSignatureContext {
+                vector_name: "text/vector",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "client.state",
+                ..context
+            },
+        ] {
+            assert_eq!(
+                sign_private_hnsw_oram_commit(&key_pair, malformed_context, &plan),
+                Err(PrivateHnswClientError::InvalidCommitSignatureContext(
+                    "vector_name"
+                ))
+            );
+        }
 
         let bucket_refs = plan.signature_bucket_refs();
         validate_private_hnsw_oram_commit_signature(
@@ -9715,42 +9726,63 @@ mod tests {
         )
         .unwrap();
 
-        let manifest = build_private_hnsw_oram_manifest_from_encrypted_index(
-            PrivateHnswManifestBuildContext {
-                collection_id: "collection-uuid-1",
-                vector_name: "text",
-                key_id: "tenant-a/vector-private-rk",
-                rk_id: "tenant-a/vector-private-rk",
-                rk_epoch: 7,
-                dim: 2,
-                distance: DistanceKind::Euclid,
-                hnsw: PrivateHnswParams {
-                    m: 1,
-                    ef_construction: 2,
-                    max_layers: 1,
-                    fixed_neighbor_slots: config.fixed_neighbor_slots as u32,
-                },
-                oram: OramParams {
-                    kind: OramKind::PathOram,
-                    bucket_size: config.bucket_size as u32,
-                    block_size_bytes: config.block_size_bytes as u32,
-                    tree_height: config.tree_height,
-                    path_batch_size: 2,
-                },
-                fixed_budget: FixedBudgetParams {
-                    enabled: true,
-                    upper_layer_steps: 1,
-                    base_layer_steps: 2,
-                    paths_per_round: 2,
-                    fixed_result_k: 1,
-                },
-                result_privacy: ResultPrivacyMode::IdsVisible,
-                owner_signing_key_id: "tenant-a/private-hnsw-signing-v1",
-                created_at_unix: 1_770_000_000,
+        let build_context = PrivateHnswManifestBuildContext {
+            collection_id: "collection-uuid-1",
+            vector_name: "text",
+            key_id: "tenant-a/vector-private-rk",
+            rk_id: "tenant-a/vector-private-rk",
+            rk_epoch: 7,
+            dim: 2,
+            distance: DistanceKind::Euclid,
+            hnsw: PrivateHnswParams {
+                m: 1,
+                ef_construction: 2,
+                max_layers: 1,
+                fixed_neighbor_slots: config.fixed_neighbor_slots as u32,
             },
+            oram: OramParams {
+                kind: OramKind::PathOram,
+                bucket_size: config.bucket_size as u32,
+                block_size_bytes: config.block_size_bytes as u32,
+                tree_height: config.tree_height,
+                path_batch_size: 2,
+            },
+            fixed_budget: FixedBudgetParams {
+                enabled: true,
+                upper_layer_steps: 1,
+                base_layer_steps: 2,
+                paths_per_round: 2,
+                fixed_result_k: 1,
+            },
+            result_privacy: ResultPrivacyMode::IdsVisible,
+            owner_signing_key_id: "tenant-a/private-hnsw-signing-v1",
+            created_at_unix: 1_770_000_000,
+        };
+        let manifest = build_private_hnsw_oram_manifest_from_encrypted_index(
+            build_context.clone(),
             &encrypted_build,
         )
         .unwrap();
+        for malformed_context in [
+            PrivateHnswManifestBuildContext {
+                vector_name: "text/vector",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "client.state",
+                ..build_context
+            },
+        ] {
+            assert_eq!(
+                build_private_hnsw_oram_manifest_from_encrypted_index(
+                    malformed_context,
+                    &encrypted_build
+                ),
+                Err(PrivateHnswClientError::InvalidManifestSignatureContext(
+                    "vector_name"
+                ))
+            );
+        }
 
         assert_eq!(manifest.root_hash, encrypted_build.root_hash);
         assert_eq!(manifest.bucket_count, encrypted_build.bucket_count);
