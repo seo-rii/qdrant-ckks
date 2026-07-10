@@ -4059,6 +4059,14 @@ mod private_result_oram_tests {
         assert!(err.contains("bucket/proof consistency validation failed"));
         assert!(!err.contains(&bucket.ciphertext));
         assert!(!err.contains(&bucket.bucket_commitment));
+
+        let err = ensure_private_result_oram_read_proof_matches_buckets(&proof, &[])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("bucket/proof consistency validation failed"));
+        assert!(!err.contains(&bucket.ciphertext));
+        assert!(!err.contains(&bucket.bucket_commitment));
+        assert!(!err.contains(&root));
     }
 
     #[test]
