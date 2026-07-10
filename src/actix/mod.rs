@@ -1564,6 +1564,24 @@ mod tests {
                 "POST /collections/docs/private-result-oram/oram/read_buckets?[redacted] HTTP/1.1",
                 ["access-volumes-query-sentinel", "access_volumes"],
             ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-result-oram/oram/read_buckets?payloadFetchToken=payloadFetchToken-query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-result-oram/oram/read_buckets?[redacted] HTTP/1.1",
+                ["payloadFetchToken-query-sentinel", "payloadFetchToken"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-result-oram/session/payload_fetch_token-sentinel/read_buckets?payload_fetch_tokens=query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-result-oram/session/{session_id}/[redacted]?[redacted] HTTP/1.1",
+                ["payload_fetch_token-sentinel", "query-sentinel"],
+            ),
         ];
 
         for (request, expected, sentinels) in cases {
@@ -1777,6 +1795,10 @@ mod tests {
             "token_map_backup-sentinel",
             "token_map_backups-sentinel",
             "token.position.map-sentinel",
+            "payloadFetchToken-sentinel",
+            "payloadFetchTokens-sentinel",
+            "payload_fetch_token-sentinel",
+            "payload_fetch_tokens-sentinel",
             "tokenPositionMapBackup-sentinel",
             "token_position_map_backup.json-sentinel",
             "token_position_map_backup-sentinel",
