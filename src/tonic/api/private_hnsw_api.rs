@@ -971,14 +971,25 @@ mod private_hnsw_grpc_tests {
             version: u32::MAX,
             bucket_id: 1,
             index_epoch: 42,
-            ciphertext: "ciphertext".to_string(),
-            ciphertext_sha256: "sha".to_string(),
-            bucket_commitment: "commitment".to_string(),
+            ciphertext: "client_state_ciphertext_hash.bin".to_string(),
+            ciphertext_sha256: "encrypted_client_state_ciphertext_sha256".to_string(),
+            bucket_commitment: "stashSnapshot".to_string(),
         })
         .unwrap_err();
         assert_eq!(err.code(), Code::InvalidArgument);
         assert!(err.message().contains("bucket.version"));
         assert!(!err.message().contains(&u32::MAX.to_string()));
+        assert!(!err.message().contains("client_state"), "{}", err.message());
+        assert!(
+            !err.message().contains("encrypted_client_state"),
+            "{}",
+            err.message()
+        );
+        assert!(
+            !err.message().contains("stashSnapshot"),
+            "{}",
+            err.message()
+        );
     }
 
     #[test]
