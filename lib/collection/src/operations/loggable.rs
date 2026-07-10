@@ -1429,7 +1429,8 @@ mod tests {
                 "pointTokens": ["qdrant-sec-private-hnsw-camel-point-tokens-log-sentinel"],
                 "pointToken": "qdrant-sec-private-hnsw-camel-point-token-log-sentinel",
                 "payload_fetch_token": "qdrant-sec-private-hnsw-payload-token-log-sentinel",
-                "payloadFetchToken": "qdrant-sec-private-hnsw-camel-payload-token-log-sentinel"
+                "payloadFetchToken": "qdrant-sec-private-hnsw-camel-payload-token-log-sentinel",
+                "payloadFetchTokens": ["qdrant-sec-private-hnsw-camel-payload-tokens-log-sentinel"]
             }
         });
         let mut private_result_oram = json!({
@@ -1479,6 +1480,7 @@ mod tests {
                 },
                 "payload_fetch_tokens": ["qdrant-sec-private-result-payload-token-log-sentinel"],
                 "payloadFetchToken": "qdrant-sec-private-result-camel-payload-token-log-sentinel",
+                "payloadFetchTokens": ["qdrant-sec-private-result-camel-payload-tokens-log-sentinel"],
                 "fetch_tokens": ["qdrant-sec-private-result-fetch-token-log-sentinel"],
                 "fetchToken": "qdrant-sec-private-result-camel-fetch-token-log-sentinel",
                 "token_position_map": "qdrant-sec-private-result-token-position-map-log-sentinel",
@@ -3026,6 +3028,7 @@ mod tests {
                 "stateCiphertextHash": "private-oram-camel-state-ciphertext-hash-a",
                 "stateCiphertextHashes": ["private-oram-camel-state-ciphertext-hashes-a"],
                 "payloadFetchToken": "private-oram-camel-payload-fetch-token-a",
+                "payloadFetchTokens": ["private-oram-camel-payload-fetch-tokens-a"],
                 "positionMap": { "private-oram-camel-node-a": 31 },
                 "positionMaps": [{ "private-oram-camel-node-a": 32 }],
                 "tokenPositionMap": { "private-oram-camel-fetch-token-a": 99 },
@@ -3072,6 +3075,7 @@ mod tests {
                 "stateCiphertextHash": "private-oram-camel-state-ciphertext-hash-b",
                 "stateCiphertextHashes": ["private-oram-camel-state-ciphertext-hashes-b"],
                 "payloadFetchToken": "private-oram-camel-payload-fetch-token-b",
+                "payloadFetchTokens": ["private-oram-camel-payload-fetch-tokens-b"],
                 "positionMap": { "private-oram-camel-node-b": 41 },
                 "positionMaps": [{ "private-oram-camel-node-b": 42 }],
                 "tokenPositionMap": { "private-oram-camel-fetch-token-b": 17 },
