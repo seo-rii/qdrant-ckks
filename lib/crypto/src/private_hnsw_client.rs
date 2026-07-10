@@ -4419,13 +4419,61 @@ fn compact_hnsw_context_vector_name_is_client_owned_alias(value: &str) -> bool {
             | "clientstatebackups"
             | "clientstatesnapshot"
             | "clientstatesnapshots"
+            | "clientstateciphertext"
+            | "clientstateciphertexts"
+            | "clientstateciphertexthash"
+            | "clientstateciphertexthashes"
+            | "clientstateciphertextsha256"
+            | "clientstateciphertextssha256"
             | "encryptedclientstate"
             | "encryptedclientstates"
+            | "encryptedclientstatebackup"
+            | "encryptedclientstatebackups"
+            | "encryptedclientstatesnapshot"
+            | "encryptedclientstatesnapshots"
+            | "encryptedclientstateciphertext"
+            | "encryptedclientstateciphertexts"
+            | "encryptedclientstateciphertexthash"
+            | "encryptedclientstateciphertexthashes"
+            | "encryptedclientstateciphertextsha256"
+            | "encryptedclientstateciphertextssha256"
+            | "stateciphertext"
+            | "stateciphertexts"
+            | "stateciphertexthash"
+            | "stateciphertexthashes"
+            | "stateciphertextsha256"
+            | "stateciphertextssha256"
             | "payloadfetchtoken"
             | "payloadfetchtokens"
             | "positionmap"
+            | "positionmapbackup"
+            | "positionmapbackups"
+            | "positionmaps"
+            | "positionmapsnapshot"
+            | "positionmapsnapshots"
             | "orampositionmap"
+            | "orampositionmapbackup"
+            | "orampositionmapbackups"
+            | "orampositionmaps"
+            | "orampositionmapsnapshot"
+            | "orampositionmapsnapshots"
+            | "tokenmap"
+            | "tokenmapbackup"
+            | "tokenmapbackups"
+            | "tokenmaps"
+            | "tokenmapsnapshot"
+            | "tokenmapsnapshots"
+            | "tokenpositionmap"
+            | "tokenpositionmapbackup"
+            | "tokenpositionmapbackups"
+            | "tokenpositionmaps"
+            | "tokenpositionmapsnapshot"
+            | "tokenpositionmapsnapshots"
             | "stash"
+            | "stashbackup"
+            | "stashbackups"
+            | "stashsnapshot"
+            | "stashsnapshots"
     )
 }
 
@@ -7369,6 +7417,18 @@ mod tests {
                 ..context
             },
             PrivateHnswCommitSignatureContext {
+                vector_name: "clientStateCiphertexts.json",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "encrypted_client_state_ciphertexts.json",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "stateCiphertexts.json",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
                 vector_name: "payload_fetch_token",
                 ..context
             },
@@ -7378,6 +7438,26 @@ mod tests {
             },
             PrivateHnswCommitSignatureContext {
                 vector_name: "payload.fetch.token",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "positionMapSnapshots.json",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "oram_position_map_backups.json",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "tokenMapBackups.json",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "tokenPositionMapSnapshots.json",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "stash_snapshots.json",
                 ..context
             },
         ] {
@@ -9989,6 +10069,18 @@ mod tests {
                 ..build_context.clone()
             },
             PrivateHnswManifestBuildContext {
+                vector_name: "clientStateCiphertexts.json",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "encrypted_client_state_ciphertexts.json",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "stateCiphertexts.json",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
                 vector_name: "payload_fetch_token",
                 ..build_context.clone()
             },
@@ -9998,6 +10090,26 @@ mod tests {
             },
             PrivateHnswManifestBuildContext {
                 vector_name: "payload.fetch.token",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "positionMapSnapshots.json",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "oram_position_map_backups.json",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "tokenMapBackups.json",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "tokenPositionMapSnapshots.json",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "stash_snapshots.json",
                 ..build_context.clone()
             },
         ] {
