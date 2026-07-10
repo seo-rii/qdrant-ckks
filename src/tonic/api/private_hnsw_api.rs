@@ -6797,6 +6797,11 @@ mod private_hnsw_grpc_tests {
                     .message()
                     .contains(&invalid_duplicate_signature_sig)
             );
+            assert!(
+                !invalid_duplicate_err
+                    .message()
+                    .contains("read_paths signature verification failed")
+            );
 
             let valid_signature_paths = vec![
                 qdrant_sec::encode_private_hnsw_oram_leaf_label(0, fixture.config.tree_height)
@@ -6832,6 +6837,10 @@ mod private_hnsw_grpc_tests {
             assert!(!err.message().contains(&fixture.encrypted_build.root_hash));
             assert!(!err.message().contains(&duplicate_signature_key_id));
             assert!(!err.message().contains(&duplicate_signature_sig));
+            assert!(
+                !err.message()
+                    .contains("read_paths signature verification failed")
+            );
 
             let closed = PrivateHnswOram::close_private_hnsw_session(
                 &service,

@@ -7011,6 +7011,10 @@ mod private_hnsw_rest_tests {
                 !invalid_duplicate_body.contains(&invalid_duplicate_signature_sig),
                 "{invalid_duplicate_body}"
             );
+            assert!(
+                !invalid_duplicate_body.contains("read_paths signature verification failed"),
+                "{invalid_duplicate_body}"
+            );
 
             let valid_signature_paths = vec![
                 qdrant_sec::encode_private_hnsw_oram_leaf_label(0, fixture.config.tree_height)
@@ -7059,6 +7063,10 @@ mod private_hnsw_rest_tests {
             );
             assert!(
                 !duplicate_body.contains(&duplicate_signature_sig),
+                "{duplicate_body}"
+            );
+            assert!(
+                !duplicate_body.contains("read_paths signature verification failed"),
                 "{duplicate_body}"
             );
 
