@@ -3952,6 +3952,7 @@ mod tests {
             PrivateResultOramError::InvalidFetchPlanField("fetch-plan-field-sentinel").to_string(),
             PrivateResultOramError::InvalidFetchPlanField("payload_fetch_tokens").to_string(),
             PrivateResultOramError::InvalidFetchPlanField("payloadFetchTokens").to_string(),
+            PrivateResultOramError::InvalidFetchPlanField("payload.fetch.token").to_string(),
             PrivateResultOramError::EmptyCommit.to_string(),
             PrivateResultOramError::InvalidMerkleProof.to_string(),
             PrivateResultOramError::InvalidMerkleProofJson.to_string(),
@@ -3960,6 +3961,7 @@ mod tests {
             PrivateResultOramError::InvalidClientConfig("client-config-sentinel").to_string(),
             PrivateResultOramError::InvalidClientConfig("payload_fetch_token").to_string(),
             PrivateResultOramError::InvalidClientConfig("payloadFetchToken").to_string(),
+            PrivateResultOramError::InvalidClientConfig("payload.fetch.token").to_string(),
             PrivateResultOramError::UnsupportedPayloadBlockVersion(99).to_string(),
             PrivateResultOramError::InvalidPayloadBlock.to_string(),
             PrivateResultOramError::InvalidPayloadBlockPadding.to_string(),
@@ -3975,6 +3977,7 @@ mod tests {
                 .to_string(),
             PrivateResultOramError::InvalidClientStateContext("payload_fetch_tokens").to_string(),
             PrivateResultOramError::InvalidClientStateContext("payloadFetchTokens").to_string(),
+            PrivateResultOramError::InvalidClientStateContext("payload.fetch.token").to_string(),
             PrivateResultOramError::InvalidClientStateCiphertextEncoding.to_string(),
             PrivateResultOramError::InvalidClientStateCiphertextHash.to_string(),
             PrivateResultOramError::UnsupportedClientStateCiphertextVersion(66).to_string(),
@@ -4011,6 +4014,7 @@ mod tests {
                 "payload_fetch_tokens",
                 "payloadFetchToken",
                 "payloadFetchTokens",
+                "payload.fetch.token",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
@@ -4094,6 +4098,10 @@ mod tests {
                 "{:?}",
                 PrivateResultOramError::InvalidFetchPlanField("payloadFetchTokens")
             ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidFetchPlanField("payload.fetch.token")
+            ),
             format!("{:?}", PrivateResultOramError::EmptyCommit),
             format!("{:?}", PrivateResultOramError::InvalidMerkleProof),
             format!("{:?}", PrivateResultOramError::InvalidMerkleProofJson),
@@ -4113,6 +4121,10 @@ mod tests {
             format!(
                 "{:?}",
                 PrivateResultOramError::InvalidClientConfig("payloadFetchToken")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidClientConfig("payload.fetch.token")
             ),
             format!(
                 "{:?}",
@@ -4145,6 +4157,10 @@ mod tests {
             format!(
                 "{:?}",
                 PrivateResultOramError::InvalidClientStateContext("payloadFetchTokens")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidClientStateContext("payload.fetch.token")
             ),
             format!(
                 "{:?}",
@@ -4201,6 +4217,7 @@ mod tests {
                 "payload_fetch_tokens",
                 "payloadFetchToken",
                 "payloadFetchTokens",
+                "payload.fetch.token",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
