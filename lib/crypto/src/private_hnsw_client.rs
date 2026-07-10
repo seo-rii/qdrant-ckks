@@ -4897,6 +4897,12 @@ mod tests {
             PrivateHnswClientError::UnsupportedClientStateSnapshotVersion(44).to_string(),
             PrivateHnswClientError::UnsupportedClientStateCiphertextVersion(33).to_string(),
             PrivateHnswClientError::InvalidSearchConfig("search-config-sentinel").to_string(),
+            PrivateHnswClientError::InvalidSearchConfig("payload_fetch_tokens").to_string(),
+            PrivateHnswClientError::InvalidSearchConfig("payloadFetchTokens").to_string(),
+            PrivateHnswClientError::InvalidBuildConfig("payload_fetch_token").to_string(),
+            PrivateHnswClientError::InvalidBuildConfig("payloadFetchToken").to_string(),
+            PrivateHnswClientError::InvalidClientStateContext("payload_fetch_tokens").to_string(),
+            PrivateHnswClientError::InvalidClientStateContext("payloadFetchTokens").to_string(),
             PrivateHnswClientError::FixedBudgetNotExhausted {
                 completed_steps: 314,
                 fixed_steps: 271,
@@ -4939,6 +4945,10 @@ mod tests {
                 "search-config-sentinel",
                 "commit-signature-context-sentinel",
                 "manifest-signature-context-sentinel",
+                "payload_fetch_token",
+                "payload_fetch_tokens",
+                "payloadFetchToken",
+                "payloadFetchTokens",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
@@ -5018,6 +5028,30 @@ mod tests {
             ),
             format!(
                 "{:?}",
+                PrivateHnswClientError::InvalidSearchConfig("payload_fetch_tokens")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidSearchConfig("payloadFetchTokens")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidBuildConfig("payload_fetch_token")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidBuildConfig("payloadFetchToken")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidClientStateContext("payload_fetch_tokens")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidClientStateContext("payloadFetchTokens")
+            ),
+            format!(
+                "{:?}",
                 PrivateHnswClientError::FixedBudgetNotExhausted {
                     completed_steps: 314,
                     fixed_steps: 271,
@@ -5077,6 +5111,10 @@ mod tests {
                 "search-config-sentinel",
                 "commit-signature-context-sentinel",
                 "manifest-signature-context-sentinel",
+                "payload_fetch_token",
+                "payload_fetch_tokens",
+                "payloadFetchToken",
+                "payloadFetchTokens",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }

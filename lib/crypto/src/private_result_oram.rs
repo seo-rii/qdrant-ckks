@@ -3950,12 +3950,16 @@ mod tests {
             PrivateResultOramError::MerkleRootMismatch.to_string(),
             PrivateResultOramError::ManifestCommitMismatch.to_string(),
             PrivateResultOramError::InvalidFetchPlanField("fetch-plan-field-sentinel").to_string(),
+            PrivateResultOramError::InvalidFetchPlanField("payload_fetch_tokens").to_string(),
+            PrivateResultOramError::InvalidFetchPlanField("payloadFetchTokens").to_string(),
             PrivateResultOramError::EmptyCommit.to_string(),
             PrivateResultOramError::InvalidMerkleProof.to_string(),
             PrivateResultOramError::InvalidMerkleProofJson.to_string(),
             PrivateResultOramError::MerkleProofMismatch.to_string(),
             PrivateResultOramError::MissingPayloadFetchTokenPosition.to_string(),
             PrivateResultOramError::InvalidClientConfig("client-config-sentinel").to_string(),
+            PrivateResultOramError::InvalidClientConfig("payload_fetch_token").to_string(),
+            PrivateResultOramError::InvalidClientConfig("payloadFetchToken").to_string(),
             PrivateResultOramError::UnsupportedPayloadBlockVersion(99).to_string(),
             PrivateResultOramError::InvalidPayloadBlock.to_string(),
             PrivateResultOramError::InvalidPayloadBlockPadding.to_string(),
@@ -3969,6 +3973,8 @@ mod tests {
             PrivateResultOramError::InvalidClientStateSnapshot.to_string(),
             PrivateResultOramError::InvalidClientStateContext("client-state-context-sentinel")
                 .to_string(),
+            PrivateResultOramError::InvalidClientStateContext("payload_fetch_tokens").to_string(),
+            PrivateResultOramError::InvalidClientStateContext("payloadFetchTokens").to_string(),
             PrivateResultOramError::InvalidClientStateCiphertextEncoding.to_string(),
             PrivateResultOramError::InvalidClientStateCiphertextHash.to_string(),
             PrivateResultOramError::UnsupportedClientStateCiphertextVersion(66).to_string(),
@@ -4001,6 +4007,10 @@ mod tests {
                 "fetch-plan-field-sentinel",
                 "client-config-sentinel",
                 "client-state-context-sentinel",
+                "payload_fetch_token",
+                "payload_fetch_tokens",
+                "payloadFetchToken",
+                "payloadFetchTokens",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
@@ -4076,6 +4086,14 @@ mod tests {
                 "{:?}",
                 PrivateResultOramError::InvalidFetchPlanField("fetch-plan-field-sentinel")
             ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidFetchPlanField("payload_fetch_tokens")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidFetchPlanField("payloadFetchTokens")
+            ),
             format!("{:?}", PrivateResultOramError::EmptyCommit),
             format!("{:?}", PrivateResultOramError::InvalidMerkleProof),
             format!("{:?}", PrivateResultOramError::InvalidMerkleProofJson),
@@ -4087,6 +4105,14 @@ mod tests {
             format!(
                 "{:?}",
                 PrivateResultOramError::InvalidClientConfig("client-config-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidClientConfig("payload_fetch_token")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidClientConfig("payloadFetchToken")
             ),
             format!(
                 "{:?}",
@@ -4111,6 +4137,14 @@ mod tests {
             format!(
                 "{:?}",
                 PrivateResultOramError::InvalidClientStateContext("client-state-context-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidClientStateContext("payload_fetch_tokens")
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidClientStateContext("payloadFetchTokens")
             ),
             format!(
                 "{:?}",
@@ -4163,6 +4197,10 @@ mod tests {
                 "fetch-plan-field-sentinel",
                 "client-config-sentinel",
                 "client-state-context-sentinel",
+                "payload_fetch_token",
+                "payload_fetch_tokens",
+                "payloadFetchToken",
+                "payloadFetchTokens",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
