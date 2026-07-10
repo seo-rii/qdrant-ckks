@@ -3960,6 +3960,7 @@ mod private_hnsw_tests {
             "position_map_backup",
             "position_map_backups",
             "payload_fetch_token",
+            "payload.fetch.token",
             "stashBackup",
             "stashBackups",
             "77",
@@ -4173,6 +4174,7 @@ mod private_hnsw_tests {
             "private_hnsw_oram/text/token_position_map_backup.json",
             "private_hnsw_oram/text/token_position_map_backups.json",
             "private_hnsw_oram/text/payload_fetch_token.json",
+            "private_hnsw_oram/text/payload.fetch.token",
             "private_hnsw_oram/text/stashBackup.json",
             "private_hnsw_oram/text/stashBackups.json",
         ];
@@ -4811,6 +4813,7 @@ mod private_hnsw_tests {
             "payload_fetch_tokens",
             "payloadFetchToken",
             "payloadFetchTokens",
+            "payload.fetch.token",
             "token_map",
             "token_maps",
             "token_map_backup",

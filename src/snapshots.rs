@@ -676,11 +676,13 @@ mod tests {
             temp_dir.path(),
             collection::operations::types::CollectionError::bad_request(format!(
                 "private HNSW ORAM bucket_id {} path_label {} proof leaf_hash {} \
-                 sibling_hash {} payload_fetch_token {} manifest_signature {}",
+                 sibling_hash {} payload_fetch_token {} payload.fetch.token {} \
+                 manifest_signature {}",
                 hnsw_leaked_values[0],
                 hnsw_leaked_values[1],
                 hnsw_leaked_values[2],
                 hnsw_leaked_values[3],
+                hnsw_leaked_values[4],
                 hnsw_leaked_values[4],
                 hnsw_leaked_values[5],
             )),
@@ -707,11 +709,13 @@ mod tests {
             temp_dir.path(),
             collection::operations::types::CollectionError::bad_request(format!(
                 "private result ORAM read_bucket_id {} bucket_ids {} proof leaf_hash {} \
-                 sibling_hash {} payload_fetch_tokens {} read_signature {} commit_signature {}",
+                 sibling_hash {} payload_fetch_tokens {} payload.fetch.token {} \
+                 read_signature {} commit_signature {}",
                 result_leaked_values[0],
                 result_leaked_values[1],
                 result_leaked_values[2],
                 result_leaked_values[3],
+                result_leaked_values[4],
                 result_leaked_values[4],
                 result_leaked_values[5],
                 result_leaked_values[6],

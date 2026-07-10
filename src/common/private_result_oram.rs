@@ -2512,6 +2512,7 @@ mod private_result_oram_tests {
             "token_position_map_backup",
             "token_position_map_backups",
             "payload_fetch_token",
+            "payload.fetch.token",
             "stashBackup",
             "stashBackups",
         ] {
@@ -2730,6 +2731,7 @@ mod private_result_oram_tests {
             "private_result_oram/token_position_map_backup.json",
             "private_result_oram/token_position_map_backups.json",
             "private_result_oram/payload_fetch_token.json",
+            "private_result_oram/payload.fetch.token",
             "private_result_oram/stashBackup.json",
             "private_result_oram/stashBackups.json",
         ];
@@ -4424,6 +4426,7 @@ mod private_result_oram_tests {
             "payload_fetch_tokens",
             "payloadFetchToken",
             "payloadFetchTokens",
+            "payload.fetch.token",
             "token_map",
             "token_maps",
             "token_map_backup",
