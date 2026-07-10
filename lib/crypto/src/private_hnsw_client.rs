@@ -10103,6 +10103,13 @@ mod tests {
             validate_private_hnsw_oram_upload_bundle(&decoded).unwrap(),
             ordered_commitments
         );
+        let core_decoded: crate::private_hnsw_oram::PrivateHnswOramUploadBundle =
+            serde_json::from_str(&encoded).unwrap();
+        assert_eq!(
+            crate::private_hnsw_oram::validate_private_hnsw_oram_upload_bundle(&core_decoded)
+                .unwrap(),
+            ordered_commitments
+        );
         for malformed_context in [
             PrivateHnswManifestBuildContext {
                 collection_id: "collection\nuuid",
@@ -10192,6 +10199,14 @@ mod tests {
         assert_eq!(
             validate_private_hnsw_oram_upload_bundle_with_signature(&decoded, validation_context())
                 .unwrap(),
+            ordered_commitments
+        );
+        assert_eq!(
+            crate::private_hnsw_oram::validate_private_hnsw_oram_upload_bundle_with_signature(
+                &core_decoded,
+                validation_context()
+            )
+            .unwrap(),
             ordered_commitments
         );
         assert_eq!(
