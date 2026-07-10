@@ -1936,6 +1936,16 @@ mod private_hnsw_rest_tests {
                 "{duplicate_upload_before_manifest_error}"
             );
             assert!(
+                !duplicate_upload_before_manifest_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{duplicate_upload_before_manifest_error}"
+            );
+            assert!(
+                !duplicate_upload_before_manifest_error
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
+                "{duplicate_upload_before_manifest_error}"
+            );
+            assert!(
                 !duplicate_upload_before_manifest_error.contains("private_hnsw_oram"),
                 "{duplicate_upload_before_manifest_error}"
             );
@@ -1948,6 +1958,12 @@ mod private_hnsw_rest_tests {
                 &[
                     fixture.encrypted_build.root_hash.as_str(),
                     fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .ciphertext_sha256
+                        .as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .bucket_commitment
+                        .as_str(),
                     "manifest",
                 ],
             );

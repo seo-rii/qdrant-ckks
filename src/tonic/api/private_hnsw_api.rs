@@ -1868,11 +1868,37 @@ mod private_hnsw_grpc_tests {
                 err.message()
             );
             assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
+                "{}",
+                err.message()
+            );
+            assert!(
                 !err.message().contains("private_hnsw_oram"),
                 "{}",
                 err.message()
             );
             assert!(!err.message().contains("manifest"), "{}", err.message());
+            assert_private_hnsw_guard_message_redacts(
+                err.message(),
+                &[
+                    fixture.encrypted_build.root_hash.as_str(),
+                    fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .ciphertext_sha256
+                        .as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .bucket_commitment
+                        .as_str(),
+                    "manifest",
+                ],
+            );
             assert_private_hnsw_guard_message_redacts(
                 err.message(),
                 &[
@@ -1923,6 +1949,18 @@ mod private_hnsw_grpc_tests {
             assert!(
                 !err.message()
                     .contains(&fixture.encrypted_build.buckets[0].ciphertext),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
                 "{}",
                 err.message()
             );
@@ -2017,6 +2055,12 @@ mod private_hnsw_grpc_tests {
                 &[
                     fixture.encrypted_build.root_hash.as_str(),
                     fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .ciphertext_sha256
+                        .as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .bucket_commitment
+                        .as_str(),
                     "manifest",
                 ],
             );
