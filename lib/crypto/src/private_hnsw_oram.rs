@@ -1798,10 +1798,20 @@ mod tests {
     fn private_hnsw_oram_error_display_does_not_reflect_structured_values() {
         let cases = [
             PrivateHnswOramError::UnsupportedManifestVersion(99).to_string(),
+            PrivateHnswOramError::InvalidProvider.to_string(),
+            PrivateHnswOramError::InvalidBinding.to_string(),
             PrivateHnswOramError::InvalidManifestField("manifest-field-sentinel").to_string(),
             PrivateHnswOramError::ManifestContextMismatch("manifest-context-sentinel").to_string(),
+            PrivateHnswOramError::MissingManifestSignature.to_string(),
             PrivateHnswOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
                 .to_string(),
+            PrivateHnswOramError::SignatureKeyIdMismatch.to_string(),
+            PrivateHnswOramError::MalformedSignature.to_string(),
+            PrivateHnswOramError::InvalidManifestSignature.to_string(),
+            PrivateHnswOramError::InvalidCommitSignature.to_string(),
+            PrivateHnswOramError::EmptyCommit.to_string(),
+            PrivateHnswOramError::InvalidReadPathsSignature.to_string(),
+            PrivateHnswOramError::InvalidResourceKeyId.to_string(),
             PrivateHnswOramError::UnsupportedBucketVersion(88).to_string(),
             PrivateHnswOramError::BucketOutOfRange {
                 bucket_id: 123,
@@ -1816,8 +1826,13 @@ mod tests {
             .to_string(),
             PrivateHnswOramError::DuplicateUpdatedBucket { bucket_id: 123 }.to_string(),
             PrivateHnswOramError::InvalidBucketField("bucket-field-sentinel").to_string(),
+            PrivateHnswOramError::BucketOversized.to_string(),
+            PrivateHnswOramError::InvalidBucketHash.to_string(),
+            PrivateHnswOramError::InvalidBucketCommitment.to_string(),
             PrivateHnswOramError::InvalidBucketContext("bucket-context-sentinel").to_string(),
             PrivateHnswOramError::InvalidFetchPlanField("fetch-plan-field-sentinel").to_string(),
+            PrivateHnswOramError::EmptyMerkleTree.to_string(),
+            PrivateHnswOramError::MerkleRootMismatch.to_string(),
             PrivateHnswOramError::ManifestCommitMismatch.to_string(),
         ];
 
@@ -1846,6 +1861,8 @@ mod tests {
     fn private_hnsw_oram_error_debug_does_not_reflect_structured_values() {
         let cases = [
             format!("{:?}", PrivateHnswOramError::UnsupportedManifestVersion(99)),
+            format!("{:?}", PrivateHnswOramError::InvalidProvider),
+            format!("{:?}", PrivateHnswOramError::InvalidBinding),
             format!(
                 "{:?}",
                 PrivateHnswOramError::InvalidManifestField("manifest-field-sentinel")
@@ -1854,10 +1871,18 @@ mod tests {
                 "{:?}",
                 PrivateHnswOramError::ManifestContextMismatch("manifest-context-sentinel")
             ),
+            format!("{:?}", PrivateHnswOramError::MissingManifestSignature),
             format!(
                 "{:?}",
                 PrivateHnswOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
             ),
+            format!("{:?}", PrivateHnswOramError::SignatureKeyIdMismatch),
+            format!("{:?}", PrivateHnswOramError::MalformedSignature),
+            format!("{:?}", PrivateHnswOramError::InvalidManifestSignature),
+            format!("{:?}", PrivateHnswOramError::InvalidCommitSignature),
+            format!("{:?}", PrivateHnswOramError::EmptyCommit),
+            format!("{:?}", PrivateHnswOramError::InvalidReadPathsSignature),
+            format!("{:?}", PrivateHnswOramError::InvalidResourceKeyId),
             format!("{:?}", PrivateHnswOramError::UnsupportedBucketVersion(88)),
             format!(
                 "{:?}",
@@ -1882,6 +1907,9 @@ mod tests {
                 "{:?}",
                 PrivateHnswOramError::InvalidBucketField("bucket-field-sentinel")
             ),
+            format!("{:?}", PrivateHnswOramError::BucketOversized),
+            format!("{:?}", PrivateHnswOramError::InvalidBucketHash),
+            format!("{:?}", PrivateHnswOramError::InvalidBucketCommitment),
             format!(
                 "{:?}",
                 PrivateHnswOramError::InvalidBucketContext("bucket-context-sentinel")
@@ -1890,6 +1918,8 @@ mod tests {
                 "{:?}",
                 PrivateHnswOramError::InvalidFetchPlanField("fetch-plan-field-sentinel")
             ),
+            format!("{:?}", PrivateHnswOramError::EmptyMerkleTree),
+            format!("{:?}", PrivateHnswOramError::MerkleRootMismatch),
             format!("{:?}", PrivateHnswOramError::ManifestCommitMismatch),
         ];
 
