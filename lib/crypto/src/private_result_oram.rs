@@ -7867,6 +7867,13 @@ mod tests {
             validate_private_result_oram_manifest_signature_shape(&signature),
             Err(PrivateResultOramError::MalformedSignature)
         );
+
+        signature.sig = BASE64URL_NOPAD.encode(&[9; 64]);
+        signature.key_id = "tenant-a/private\nresult-signing-v1".to_string();
+        assert_eq!(
+            validate_private_result_oram_manifest_signature_shape(&signature),
+            Err(PrivateResultOramError::InvalidResourceKeyId)
+        );
     }
 
     #[test]

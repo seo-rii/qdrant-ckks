@@ -2402,7 +2402,7 @@ mod tests {
 
         let bad_signature = PrivateHnswOramSignature {
             sig: "not-base64url".to_string(),
-            ..signature
+            ..signature.clone()
         };
         assert_eq!(
             validate_private_hnsw_oram_manifest_signature_shape(&bad_signature),
@@ -2415,6 +2415,14 @@ mod tests {
                 fixture_context(key_pair.public_key().as_ref(), &bad_signature.key_id)
             ),
             Err(PrivateHnswOramError::MalformedSignature)
+        );
+        let malformed_key_signature = PrivateHnswOramSignature {
+            key_id: "tenant-a/private\nhnsw-signing-v1".to_string(),
+            ..signature
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_manifest_signature_shape(&malformed_key_signature),
+            Err(PrivateHnswOramError::InvalidResourceKeyId)
         );
     }
 
