@@ -2,8 +2,9 @@ use std::collections::BTreeSet;
 use std::fmt::{self, Debug, Formatter};
 
 use data_encoding::BASE64URL_NOPAD;
-use ring::signature::{ED25519, UnparsedPublicKey};
+use ring::signature::{ED25519, Ed25519KeyPair, UnparsedPublicKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::aead::validate_resource_key_id;
@@ -15,12 +16,15 @@ pub const PRIVATE_HNSW_ORAM_COMMIT_SIGNATURE_DOMAIN: &str =
     "qdrant-sec/private-hnsw-oram-commit-signature/v1";
 pub const PRIVATE_HNSW_ORAM_READ_PATHS_SIGNATURE_DOMAIN: &str =
     "qdrant-sec/private-hnsw-oram-read-paths-signature/v1";
+pub const PRIVATE_HNSW_ORAM_BUCKET_COMMITMENT_DOMAIN: &str =
+    "qdrant-sec/private-hnsw-oram-bucket-commitment/v1";
 
 const PRIVATE_HNSW_ORAM_SIGNATURE_ALGORITHM: &str = "ed25519";
 const BASE64URL_NOPAD_8_BYTE_LEN: usize = 11;
 const BASE64URL_NOPAD_32_BYTE_LEN: usize = 43;
 const BASE64URL_NOPAD_64_BYTE_LEN: usize = 86;
 const PRIVATE_HNSW_ORAM_MANIFEST_VERSION: u16 = 1;
+const PRIVATE_HNSW_ORAM_BUCKET_VERSION: u16 = 1;
 const PRIVATE_HNSW_NODE_BLOCK_FIXED_BYTES: u64 = 133;
 const PRIVATE_HNSW_NODE_BLOCK_F32_ELEMENT_BYTES: u64 = 4;
 const PRIVATE_HNSW_NODE_BLOCK_NEIGHBOR_SLOT_BYTES: u64 = 33;
@@ -57,6 +61,24 @@ pub enum PrivateHnswOramError {
     InvalidReadPathsSignature,
     #[error("private HNSW ORAM resource key id is invalid")]
     InvalidResourceKeyId,
+    #[error("private HNSW ORAM bucket uses unsupported version")]
+    UnsupportedBucketVersion(u16),
+    #[error("private HNSW ORAM bucket id is out of range")]
+    BucketOutOfRange { bucket_id: u64, bucket_count: u64 },
+    #[error("private HNSW ORAM bucket field is invalid")]
+    InvalidBucketField(&'static str),
+    #[error("private HNSW ORAM bucket ciphertext is oversized")]
+    BucketOversized,
+    #[error("private HNSW ORAM bucket ciphertext hash is invalid")]
+    InvalidBucketHash,
+    #[error("private HNSW ORAM bucket commitment is invalid")]
+    InvalidBucketCommitment,
+    #[error("private HNSW ORAM bucket context is invalid")]
+    InvalidBucketContext(&'static str),
+    #[error("private HNSW ORAM Merkle tree is empty")]
+    EmptyMerkleTree,
+    #[error("private HNSW ORAM Merkle root does not match bucket commitments")]
+    MerkleRootMismatch,
 }
 
 impl Debug for PrivateHnswOramError {
@@ -251,6 +273,58 @@ impl Debug for PrivateHnswOramBucket {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PrivateHnswOramBucketValidationContext {
+    pub bucket_count: u64,
+    pub expected_index_epoch: u64,
+    pub max_ciphertext_bytes: usize,
+}
+
+impl Debug for PrivateHnswOramBucketValidationContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramBucketValidationContext")
+            .field("bucket_count", &"[redacted]")
+            .field("expected_index_epoch", &"[redacted]")
+            .field("max_ciphertext_bytes", &self.max_ciphertext_bytes)
+            .finish()
+    }
+}
+
+impl PrivateHnswOramBucketValidationContext {
+    pub fn from_manifest(manifest: &PrivateHnswOramManifest, max_ciphertext_bytes: usize) -> Self {
+        Self {
+            bucket_count: manifest.bucket_count,
+            expected_index_epoch: manifest.index_epoch,
+            max_ciphertext_bytes,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PrivateHnswOramBucketCommitmentContext<'a> {
+    pub collection_id: &'a str,
+    pub vector_name: &'a str,
+    pub key_id: &'a str,
+    pub rk_id: &'a str,
+    pub rk_epoch: u64,
+    pub bucket_id: u64,
+    pub index_epoch: u64,
+}
+
+impl Debug for PrivateHnswOramBucketCommitmentContext<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramBucketCommitmentContext")
+            .field("collection_id", &"[redacted]")
+            .field("vector_name", &"[redacted]")
+            .field("key_id", &"[redacted]")
+            .field("rk_id", &"[redacted]")
+            .field("rk_epoch", &self.rk_epoch)
+            .field("bucket_id", &"[redacted]")
+            .field("index_epoch", &"[redacted]")
+            .finish()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PrivateHnswOramSignature {
@@ -266,6 +340,56 @@ impl Debug for PrivateHnswOramSignature {
             .field("key_id", &"[redacted]")
             .field("sig", &"[redacted]")
             .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateHnswOramUploadBundle {
+    pub manifest: PrivateHnswOramManifest,
+    pub manifest_signature: PrivateHnswOramSignature,
+    pub buckets: Vec<PrivateHnswOramBucket>,
+}
+
+impl Debug for PrivateHnswOramUploadBundle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramUploadBundle")
+            .field("manifest", &self.manifest)
+            .field("manifest_signature", &self.manifest_signature)
+            .field("bucket_count", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateHnswOramUploadBundle {
+    pub fn index_epoch(&self) -> u64 {
+        self.manifest.index_epoch
+    }
+
+    pub fn root_hash(&self) -> &str {
+        &self.manifest.root_hash
+    }
+
+    pub fn bucket_count(&self) -> u64 {
+        self.manifest.bucket_count
+    }
+
+    pub fn bucket_commitments(&self) -> Vec<String> {
+        self.buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect()
+    }
+
+    pub fn validate_initial_upload_contract(&self) -> Result<Vec<String>, PrivateHnswOramError> {
+        validate_private_hnsw_oram_upload_bundle(self)
+    }
+
+    pub fn validate_initial_upload_contract_with_signature(
+        &self,
+        validation_context: PrivateHnswManifestValidationContext<'_>,
+    ) -> Result<Vec<String>, PrivateHnswOramError> {
+        validate_private_hnsw_oram_upload_bundle_with_signature(self, validation_context)
     }
 }
 
@@ -520,6 +644,97 @@ pub fn private_hnsw_min_f32_node_block_bytes(dim: u32, fixed_neighbor_slots: u32
         .checked_add(neighbor_bytes)
 }
 
+pub fn sign_private_hnsw_oram_manifest(
+    key_pair: &Ed25519KeyPair,
+    manifest: &PrivateHnswOramManifest,
+) -> Result<PrivateHnswOramSignature, PrivateHnswOramError> {
+    let message = try_private_hnsw_oram_manifest_signature_message(manifest)?;
+    Ok(PrivateHnswOramSignature {
+        alg: PRIVATE_HNSW_ORAM_SIGNATURE_ALGORITHM.to_string(),
+        key_id: manifest.owner_signing_key_id.clone(),
+        sig: BASE64URL_NOPAD.encode(key_pair.sign(&message).as_ref()),
+    })
+}
+
+pub fn package_private_hnsw_oram_upload_bundle(
+    key_pair: &Ed25519KeyPair,
+    manifest: PrivateHnswOramManifest,
+    buckets: Vec<PrivateHnswOramBucket>,
+) -> Result<PrivateHnswOramUploadBundle, PrivateHnswOramError> {
+    let manifest_signature = sign_private_hnsw_oram_manifest(key_pair, &manifest)?;
+    let bundle = PrivateHnswOramUploadBundle {
+        manifest,
+        manifest_signature,
+        buckets,
+    };
+    validate_private_hnsw_oram_upload_bundle(&bundle)?;
+    Ok(bundle)
+}
+
+pub fn validate_private_hnsw_oram_upload_bundle(
+    bundle: &PrivateHnswOramUploadBundle,
+) -> Result<Vec<String>, PrivateHnswOramError> {
+    let manifest = &bundle.manifest;
+    validate_private_hnsw_oram_manifest_shape(manifest)?;
+    validate_private_hnsw_oram_manifest_signature_shape(&bundle.manifest_signature)?;
+    if bundle.manifest_signature.key_id != manifest.owner_signing_key_id {
+        return Err(PrivateHnswOramError::SignatureKeyIdMismatch);
+    }
+    let bucket_count = usize::try_from(manifest.bucket_count)
+        .map_err(|_| PrivateHnswOramError::InvalidManifestField("bucket_count"))?;
+    if bundle.buckets.len() != bucket_count {
+        return Err(PrivateHnswOramError::InvalidManifestField("bucket_count"));
+    }
+
+    let max_ciphertext_bytes = private_hnsw_oram_upload_max_ciphertext_bytes(manifest)?;
+    let expected_ciphertext_bytes = private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram)?;
+    let validation_context =
+        PrivateHnswOramBucketValidationContext::from_manifest(manifest, max_ciphertext_bytes);
+    let mut commitments = Vec::with_capacity(bundle.buckets.len());
+    for (expected_bucket_id, bucket) in bundle.buckets.iter().enumerate() {
+        let expected_bucket_id = u64::try_from(expected_bucket_id)
+            .map_err(|_| PrivateHnswOramError::InvalidManifestField("bucket_count"))?;
+        if bucket.bucket_id != expected_bucket_id {
+            return Err(PrivateHnswOramError::InvalidBucketField("bucket_id"));
+        }
+        validate_private_hnsw_oram_bucket_shape(bucket, validation_context)?;
+        validate_private_hnsw_oram_bucket_ciphertext_fixed_size(bucket, expected_ciphertext_bytes)?;
+        let expected_commitment = private_hnsw_oram_bucket_commitment(
+            PrivateHnswOramBucketCommitmentContext {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id: bucket.bucket_id,
+                index_epoch: manifest.index_epoch,
+            },
+            &bucket.ciphertext_sha256,
+        )?;
+        if expected_commitment != bucket.bucket_commitment {
+            return Err(PrivateHnswOramError::InvalidBucketCommitment);
+        }
+        commitments.push(bucket.bucket_commitment.clone());
+    }
+    if private_hnsw_oram_merkle_root_for_commitments(&commitments)? != manifest.root_hash {
+        return Err(PrivateHnswOramError::MerkleRootMismatch);
+    }
+    Ok(commitments)
+}
+
+pub fn validate_private_hnsw_oram_upload_bundle_with_signature(
+    bundle: &PrivateHnswOramUploadBundle,
+    validation_context: PrivateHnswManifestValidationContext<'_>,
+) -> Result<Vec<String>, PrivateHnswOramError> {
+    let commitments = validate_private_hnsw_oram_upload_bundle(bundle)?;
+    validate_private_hnsw_oram_manifest(
+        &bundle.manifest,
+        Some(&bundle.manifest_signature),
+        validation_context,
+    )?;
+    Ok(commitments)
+}
+
 pub fn try_private_hnsw_oram_manifest_signature_message(
     manifest: &PrivateHnswOramManifest,
 ) -> Result<Vec<u8>, PrivateHnswOramError> {
@@ -740,6 +955,131 @@ fn validate_private_hnsw_oram_commit_signature_shape(
         decode_base64url_32(bucket.ciphertext_sha256, "ciphertext_sha256")?;
     }
     Ok(())
+}
+
+pub fn validate_private_hnsw_oram_bucket_shape(
+    bucket: &PrivateHnswOramBucket,
+    context: PrivateHnswOramBucketValidationContext,
+) -> Result<(), PrivateHnswOramError> {
+    if bucket.version != PRIVATE_HNSW_ORAM_BUCKET_VERSION {
+        return Err(PrivateHnswOramError::UnsupportedBucketVersion(
+            bucket.version,
+        ));
+    }
+    if bucket.bucket_id >= context.bucket_count {
+        return Err(PrivateHnswOramError::BucketOutOfRange {
+            bucket_id: bucket.bucket_id,
+            bucket_count: context.bucket_count,
+        });
+    }
+    if bucket.index_epoch != context.expected_index_epoch {
+        return Err(PrivateHnswOramError::InvalidBucketField("index_epoch"));
+    }
+    let max_ciphertext_b64_len = max_base64url_nopad_encoded_len(context.max_ciphertext_bytes)
+        .ok_or(PrivateHnswOramError::InvalidBucketField(
+            "max_ciphertext_bytes",
+        ))?;
+    if bucket.ciphertext.len() > max_ciphertext_b64_len {
+        return Err(PrivateHnswOramError::BucketOversized);
+    }
+    let ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| PrivateHnswOramError::InvalidBucketField("ciphertext"))?;
+    if ciphertext.len() > context.max_ciphertext_bytes {
+        return Err(PrivateHnswOramError::BucketOversized);
+    }
+    let ciphertext_hash = decode_base64url_32(&bucket.ciphertext_sha256, "ciphertext_sha256")
+        .map_err(|_| PrivateHnswOramError::InvalidBucketField("ciphertext_sha256"))?;
+    let computed_hash: [u8; 32] = Sha256::digest(&ciphertext).into();
+    if computed_hash != ciphertext_hash {
+        return Err(PrivateHnswOramError::InvalidBucketHash);
+    }
+    decode_bucket_commitment(&bucket.bucket_commitment)?;
+    Ok(())
+}
+
+fn validate_private_hnsw_oram_bucket_ciphertext_fixed_size(
+    bucket: &PrivateHnswOramBucket,
+    expected_ciphertext_bytes: usize,
+) -> Result<(), PrivateHnswOramError> {
+    let Some(expected_encoded_len) = max_base64url_nopad_encoded_len(expected_ciphertext_bytes)
+    else {
+        return Err(PrivateHnswOramError::InvalidBucketField("ciphertext"));
+    };
+    if bucket.ciphertext.len() != expected_encoded_len {
+        return Err(PrivateHnswOramError::InvalidBucketField("ciphertext"));
+    }
+    let ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| PrivateHnswOramError::InvalidBucketField("ciphertext"))?;
+    if ciphertext.len() != expected_ciphertext_bytes {
+        return Err(PrivateHnswOramError::InvalidBucketField("ciphertext"));
+    }
+    Ok(())
+}
+
+fn private_hnsw_oram_upload_max_ciphertext_bytes(
+    manifest: &PrivateHnswOramManifest,
+) -> Result<usize, PrivateHnswOramError> {
+    let block_size = usize::try_from(manifest.oram.block_size_bytes)
+        .map_err(|_| PrivateHnswOramError::InvalidManifestField("block_size_bytes"))?;
+    let bucket_size = usize::try_from(manifest.oram.bucket_size)
+        .map_err(|_| PrivateHnswOramError::InvalidManifestField("bucket_size"))?;
+    block_size
+        .checked_mul(bucket_size)
+        .and_then(|size| size.checked_add(4096))
+        .ok_or(PrivateHnswOramError::InvalidManifestField("oram"))
+}
+
+pub fn private_hnsw_oram_bucket_commitment(
+    context: PrivateHnswOramBucketCommitmentContext<'_>,
+    ciphertext_sha256: &str,
+) -> Result<String, PrivateHnswOramError> {
+    validate_id(context.collection_id, "collection_id")
+        .map_err(|_| PrivateHnswOramError::InvalidBucketContext("collection_id"))?;
+    validate_vector_name(context.vector_name)
+        .map_err(|_| PrivateHnswOramError::InvalidBucketContext("vector_name"))?;
+    validate_resource_key_id(context.key_id)
+        .map_err(|_| PrivateHnswOramError::InvalidBucketContext("key_id"))?;
+    validate_resource_key_id(context.rk_id)
+        .map_err(|_| PrivateHnswOramError::InvalidBucketContext("rk_id"))?;
+    let ciphertext_sha256 = decode_base64url_32(ciphertext_sha256, "ciphertext_sha256")
+        .map_err(|_| PrivateHnswOramError::InvalidBucketField("ciphertext_sha256"))?;
+
+    let mut message = Vec::new();
+    try_push_domain(
+        &mut message,
+        PRIVATE_HNSW_ORAM_BUCKET_COMMITMENT_DOMAIN.as_bytes(),
+        || PrivateHnswOramError::InvalidBucketContext("context_length"),
+    )?;
+    try_push_str(&mut message, context.collection_id, || {
+        PrivateHnswOramError::InvalidBucketContext("context_length")
+    })?;
+    try_push_str(&mut message, context.vector_name, || {
+        PrivateHnswOramError::InvalidBucketContext("context_length")
+    })?;
+    try_push_str(&mut message, context.key_id, || {
+        PrivateHnswOramError::InvalidBucketContext("context_length")
+    })?;
+    try_push_str(&mut message, context.rk_id, || {
+        PrivateHnswOramError::InvalidBucketContext("context_length")
+    })?;
+    push_u64(&mut message, context.rk_epoch);
+    push_u64(&mut message, context.bucket_id);
+    push_u64(&mut message, context.index_epoch);
+    message.extend_from_slice(&ciphertext_sha256);
+    Ok(BASE64URL_NOPAD.encode(Sha256::digest(&message).as_ref()))
+}
+
+pub fn private_hnsw_oram_merkle_root_for_commitments(
+    commitments: &[String],
+) -> Result<String, PrivateHnswOramError> {
+    let levels = private_hnsw_oram_merkle_levels(commitments)?;
+    let root = levels
+        .last()
+        .and_then(|level| level.first())
+        .ok_or(PrivateHnswOramError::EmptyMerkleTree)?;
+    Ok(BASE64URL_NOPAD.encode(root))
 }
 
 fn validate_manifest_shape(manifest: &PrivateHnswOramManifest) -> Result<(), PrivateHnswOramError> {
@@ -1070,6 +1410,57 @@ fn decode_base64url_64(value: &str) -> Result<[u8; 64], PrivateHnswOramError> {
         .map_err(|_| PrivateHnswOramError::MalformedSignature)
 }
 
+fn decode_bucket_commitment(value: &str) -> Result<[u8; 32], PrivateHnswOramError> {
+    decode_base64url_32(value, "bucket_commitment")
+        .map_err(|_| PrivateHnswOramError::InvalidBucketField("bucket_commitment"))
+}
+
+fn max_base64url_nopad_encoded_len(byte_len: usize) -> Option<usize> {
+    let full_chunks = byte_len / 3;
+    let tail_len = match byte_len % 3 {
+        0 => 0,
+        1 => 2,
+        2 => 3,
+        _ => unreachable!(),
+    };
+    full_chunks.checked_mul(4)?.checked_add(tail_len)
+}
+
+fn private_hnsw_oram_merkle_levels(
+    commitments: &[String],
+) -> Result<Vec<Vec<[u8; 32]>>, PrivateHnswOramError> {
+    if commitments.is_empty() {
+        return Err(PrivateHnswOramError::EmptyMerkleTree);
+    }
+    let mut levels = vec![
+        commitments
+            .iter()
+            .map(|commitment| decode_bucket_commitment(commitment))
+            .collect::<Result<Vec<_>, _>>()?,
+    ];
+    while levels.last().is_some_and(|level| level.len() > 1) {
+        let current = levels.last().expect("level must exist");
+        let mut next = Vec::with_capacity(current.len().div_ceil(2));
+        for pair in current.chunks(2) {
+            if pair.len() == 1 {
+                next.push(pair[0]);
+            } else {
+                next.push(private_hnsw_oram_merkle_parent_hash(&pair[0], &pair[1]));
+            }
+        }
+        levels.push(next);
+    }
+    Ok(levels)
+}
+
+fn private_hnsw_oram_merkle_parent_hash(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update([1]);
+    hasher.update(left);
+    hasher.update(right);
+    hasher.finalize().into()
+}
+
 fn try_push_domain(
     message: &mut Vec<u8>,
     value: &[u8],
@@ -1125,16 +1516,29 @@ mod tests {
             PrivateHnswOramError::ManifestContextMismatch("manifest-context-sentinel").to_string(),
             PrivateHnswOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
                 .to_string(),
+            PrivateHnswOramError::UnsupportedBucketVersion(88).to_string(),
+            PrivateHnswOramError::BucketOutOfRange {
+                bucket_id: 123,
+                bucket_count: 456,
+            }
+            .to_string(),
+            PrivateHnswOramError::InvalidBucketField("bucket-field-sentinel").to_string(),
+            PrivateHnswOramError::InvalidBucketContext("bucket-context-sentinel").to_string(),
         ];
 
         for rendered in cases {
             assert!(!rendered.contains("rsa-pss-sentinel"), "{rendered}");
             assert!(!rendered.contains("manifest-field-sentinel"), "{rendered}");
+            assert!(!rendered.contains("bucket-field-sentinel"), "{rendered}");
+            assert!(!rendered.contains("bucket-context-sentinel"), "{rendered}");
             assert!(
                 !rendered.contains("manifest-context-sentinel"),
                 "{rendered}"
             );
             assert!(!rendered.contains("99"), "{rendered}");
+            assert!(!rendered.contains("88"), "{rendered}");
+            assert!(!rendered.contains("123"), "{rendered}");
+            assert!(!rendered.contains("456"), "{rendered}");
         }
     }
 
@@ -1154,16 +1558,37 @@ mod tests {
                 "{:?}",
                 PrivateHnswOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
             ),
+            format!("{:?}", PrivateHnswOramError::UnsupportedBucketVersion(88)),
+            format!(
+                "{:?}",
+                PrivateHnswOramError::BucketOutOfRange {
+                    bucket_id: 123,
+                    bucket_count: 456,
+                }
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswOramError::InvalidBucketField("bucket-field-sentinel")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswOramError::InvalidBucketContext("bucket-context-sentinel")
+            ),
         ];
 
         for rendered in cases {
             assert!(!rendered.contains("rsa-pss-sentinel"), "{rendered}");
             assert!(!rendered.contains("manifest-field-sentinel"), "{rendered}");
+            assert!(!rendered.contains("bucket-field-sentinel"), "{rendered}");
+            assert!(!rendered.contains("bucket-context-sentinel"), "{rendered}");
             assert!(
                 !rendered.contains("manifest-context-sentinel"),
                 "{rendered}"
             );
             assert!(!rendered.contains("99"), "{rendered}");
+            assert!(!rendered.contains("88"), "{rendered}");
+            assert!(!rendered.contains("123"), "{rendered}");
+            assert!(!rendered.contains("456"), "{rendered}");
         }
     }
 
@@ -1361,6 +1786,97 @@ mod tests {
         );
     }
 
+    #[test]
+    fn upload_bundle_packages_signed_manifest_and_buckets() {
+        let key_pair = deterministic_key_pair();
+        let (manifest, buckets) = small_upload_bundle_fixture();
+        let bundle =
+            package_private_hnsw_oram_upload_bundle(&key_pair, manifest.clone(), buckets.clone())
+                .unwrap();
+
+        assert_eq!(bundle.index_epoch(), manifest.index_epoch);
+        assert_eq!(bundle.root_hash(), manifest.root_hash);
+        assert_eq!(bundle.bucket_count(), manifest.bucket_count);
+        assert_eq!(bundle.bucket_commitments().len(), buckets.len());
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&bundle).unwrap(),
+            bundle.bucket_commitments()
+        );
+        validate_private_hnsw_oram_upload_bundle_with_signature(
+            &bundle,
+            fixture_context(
+                key_pair.public_key().as_ref(),
+                &bundle.manifest_signature.key_id,
+            ),
+        )
+        .unwrap();
+
+        let mut wrong_signature_key = bundle.clone();
+        wrong_signature_key.manifest_signature.key_id =
+            "tenant-a/private-hnsw-signing-v2".to_string();
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&wrong_signature_key),
+            Err(PrivateHnswOramError::SignatureKeyIdMismatch)
+        );
+
+        let mut incomplete = bundle.clone();
+        incomplete.buckets.pop();
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&incomplete),
+            Err(PrivateHnswOramError::InvalidManifestField("bucket_count"))
+        );
+
+        let mut unordered = bundle.clone();
+        unordered.buckets.swap(0, 1);
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&unordered),
+            Err(PrivateHnswOramError::InvalidBucketField("bucket_id"))
+        );
+
+        let mut wrong_hash = bundle.clone();
+        wrong_hash.buckets[0].ciphertext_sha256 = BASE64URL_NOPAD.encode(&[9; 32]);
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&wrong_hash),
+            Err(PrivateHnswOramError::InvalidBucketHash)
+        );
+
+        let mut wrong_commitment = bundle.clone();
+        wrong_commitment.buckets[0].bucket_commitment = BASE64URL_NOPAD.encode(&[99; 32]);
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&wrong_commitment),
+            Err(PrivateHnswOramError::InvalidBucketCommitment)
+        );
+
+        let mut short_ciphertext = bundle.clone();
+        short_ciphertext.buckets[0].ciphertext = BASE64URL_NOPAD.encode(&[7; 32]);
+        short_ciphertext.buckets[0].ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest([7; 32]).as_ref());
+        short_ciphertext.buckets[0].bucket_commitment = private_hnsw_oram_bucket_commitment(
+            PrivateHnswOramBucketCommitmentContext {
+                collection_id: &short_ciphertext.manifest.collection_id,
+                vector_name: &short_ciphertext.manifest.vector_name,
+                key_id: &short_ciphertext.manifest.key_id,
+                rk_id: &short_ciphertext.manifest.rk_id,
+                rk_epoch: short_ciphertext.manifest.rk_epoch,
+                bucket_id: 0,
+                index_epoch: short_ciphertext.manifest.index_epoch,
+            },
+            &short_ciphertext.buckets[0].ciphertext_sha256,
+        )
+        .unwrap();
+        assert_eq!(
+            validate_private_hnsw_oram_upload_bundle(&short_ciphertext),
+            Err(PrivateHnswOramError::InvalidBucketField("ciphertext"))
+        );
+
+        let mut wrong_root = manifest;
+        wrong_root.root_hash = BASE64URL_NOPAD.encode(&[42; 32]);
+        assert_eq!(
+            package_private_hnsw_oram_upload_bundle(&key_pair, wrong_root, buckets),
+            Err(PrivateHnswOramError::MerkleRootMismatch)
+        );
+    }
+
     fn fixture_context<'a>(
         public_key: &'a [u8],
         key_id: &'a str,
@@ -1387,6 +1903,69 @@ mod tests {
 
     fn sign_b64(key_pair: &Ed25519KeyPair, message: &[u8]) -> String {
         BASE64URL_NOPAD.encode(key_pair.sign(message).as_ref())
+    }
+
+    fn small_upload_manifest() -> PrivateHnswOramManifest {
+        PrivateHnswOramManifest {
+            oram: OramParams {
+                tree_height: 1,
+                path_batch_size: 2,
+                ..fixture_manifest().oram
+            },
+            fixed_budget: FixedBudgetParams {
+                paths_per_round: 2,
+                ..fixture_manifest().fixed_budget
+            },
+            bucket_count: 3,
+            logical_node_count: 3,
+            dummy_node_count: 0,
+            ..fixture_manifest()
+        }
+    }
+
+    fn fixture_upload_bucket(
+        manifest: &PrivateHnswOramManifest,
+        bucket_id: u64,
+        byte: u8,
+    ) -> PrivateHnswOramBucket {
+        let ciphertext_len = private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap();
+        let ciphertext = vec![byte; ciphertext_len];
+        let ciphertext_sha256 = BASE64URL_NOPAD.encode(Sha256::digest(&ciphertext).as_ref());
+        PrivateHnswOramBucket {
+            version: 1,
+            bucket_id,
+            index_epoch: manifest.index_epoch,
+            ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
+            ciphertext_sha256: ciphertext_sha256.clone(),
+            bucket_commitment: private_hnsw_oram_bucket_commitment(
+                PrivateHnswOramBucketCommitmentContext {
+                    collection_id: &manifest.collection_id,
+                    vector_name: &manifest.vector_name,
+                    key_id: &manifest.key_id,
+                    rk_id: &manifest.rk_id,
+                    rk_epoch: manifest.rk_epoch,
+                    bucket_id,
+                    index_epoch: manifest.index_epoch,
+                },
+                &ciphertext_sha256,
+            )
+            .unwrap(),
+        }
+    }
+
+    fn small_upload_bundle_fixture() -> (PrivateHnswOramManifest, Vec<PrivateHnswOramBucket>) {
+        let mut manifest = small_upload_manifest();
+        let buckets = (0..manifest.bucket_count)
+            .map(|bucket_id| fixture_upload_bucket(&manifest, bucket_id, bucket_id as u8 + 1))
+            .collect::<Vec<_>>();
+        manifest.root_hash = private_hnsw_oram_merkle_root_for_commitments(
+            &buckets
+                .iter()
+                .map(|bucket| bucket.bucket_commitment.clone())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        (manifest, buckets)
     }
 
     fn checked_manifest_signature_message(manifest: &PrivateHnswOramManifest) -> Vec<u8> {
