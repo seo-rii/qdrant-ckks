@@ -316,6 +316,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "access_count"
                         | "access_counts"
                         | "access_volume"
+                        | "access_volumes"
                         | "access_volume_count"
                         | "access_volume_counts"
                         | "access_volume_len"
@@ -548,6 +549,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "xamzsecuritytoken"
                         | "xamzcredential"
                         | "xamzsignature"
+                        | "accessvolumes"
                         | "clientid"
                         | "sessionid"
                         | "clientsecret"
@@ -1380,8 +1382,12 @@ mod tests {
             json!("qdrant-sec-private-oram-updated-single-camel-ciphertext-sha256-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["access_volume"] =
             json!("qdrant-sec-private-hnsw-access-volume-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["access_volumes"] =
+            json!(["qdrant-sec-private-hnsw-access-volumes-log-sentinel"]);
         private_hnsw_oram_access["private_hnsw"]["accessVolume"] =
             json!("qdrant-sec-private-hnsw-camel-access-volume-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["accessVolumes"] =
+            json!(["qdrant-sec-private-hnsw-camel-access-volumes-log-sentinel"]);
         private_hnsw_oram_access["private_hnsw"]["accessVolumeCount"] =
             json!("qdrant-sec-private-hnsw-camel-access-volume-count-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["access_volume_length"] =
@@ -1492,8 +1498,12 @@ mod tests {
             json!("qdrant-sec-private-result-camel-proof-value-log-sentinel");
         private_result_oram["private_result_oram"]["access_volume"] =
             json!("qdrant-sec-private-result-access-volume-log-sentinel");
+        private_result_oram["private_result_oram"]["access_volumes"] =
+            json!(["qdrant-sec-private-result-access-volumes-log-sentinel"]);
         private_result_oram["private_result_oram"]["accessVolume"] =
             json!("qdrant-sec-private-result-camel-access-volume-log-sentinel");
+        private_result_oram["private_result_oram"]["accessVolumes"] =
+            json!(["qdrant-sec-private-result-camel-access-volumes-log-sentinel"]);
         private_result_oram["private_result_oram"]["accessVolumeLength"] =
             json!("qdrant-sec-private-result-camel-access-volume-length-log-sentinel");
         for (key, field_value) in [
@@ -2115,7 +2125,9 @@ mod tests {
             "qdrant-sec-private-hnsw-access-path-log-sentinel",
             "qdrant-sec-private-hnsw-camel-access-path-log-sentinel",
             "qdrant-sec-private-hnsw-access-volume-log-sentinel",
+            "qdrant-sec-private-hnsw-access-volumes-log-sentinel",
             "qdrant-sec-private-hnsw-camel-access-volume-log-sentinel",
+            "qdrant-sec-private-hnsw-camel-access-volumes-log-sentinel",
             "qdrant-sec-private-hnsw-camel-access-volume-count-log-sentinel",
             "qdrant-sec-private-hnsw-access-volume-length-log-sentinel",
             "qdrant-sec-private-hnsw-root-hash-log-sentinel",
@@ -2315,6 +2327,8 @@ mod tests {
             "qdrant-sec-private-result-camel-proof-sibling-hash-log-sentinel",
             "qdrant-sec-private-result-proof-values-log-sentinel",
             "qdrant-sec-private-result-camel-proof-value-log-sentinel",
+            "qdrant-sec-private-result-access-volumes-log-sentinel",
+            "qdrant-sec-private-result-camel-access-volumes-log-sentinel",
             "qdrant-sec-private-result-payload-token-log-sentinel",
             "qdrant-sec-private-result-camel-payload-token-log-sentinel",
             "qdrant-sec-private-result-payload-bytes-log-sentinel",
@@ -2927,6 +2941,12 @@ mod tests {
         insert_test_json_field(
             &mut first,
             &["read_buckets"],
+            "access_volumes",
+            json!(["access-volumes-a"]),
+        );
+        insert_test_json_field(
+            &mut first,
+            &["read_buckets"],
             "proof_value",
             json!("proof-value-a"),
         );
@@ -2947,6 +2967,12 @@ mod tests {
             &["read_buckets"],
             "access_volume",
             json!("access-volume-b"),
+        );
+        insert_test_json_field(
+            &mut second,
+            &["read_buckets"],
+            "access_volumes",
+            json!(["access-volumes-b"]),
         );
         insert_test_json_field(
             &mut second,
@@ -3145,6 +3171,12 @@ mod tests {
         insert_test_json_field(
             &mut camel_first,
             &["readBuckets"],
+            "accessVolumes",
+            json!(["private-oram-camel-access-volumes-a"]),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
             "proofValue",
             json!("private-oram-camel-proof-value-a"),
         );
@@ -3165,6 +3197,12 @@ mod tests {
             &["readBuckets"],
             "accessVolume",
             json!("private-oram-camel-access-volume-b"),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "accessVolumes",
+            json!(["private-oram-camel-access-volumes-b"]),
         );
         insert_test_json_field(
             &mut camel_second,
