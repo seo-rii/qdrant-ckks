@@ -543,6 +543,10 @@ mod private_result_oram_grpc_tests {
         "token_map_backups",
         "token_map_snapshot",
         "token_map_snapshots",
+        "payloadFetchToken",
+        "payloadFetchTokens",
+        "payload_fetch_token",
+        "payload_fetch_tokens",
         "tokenPositionMap",
         "tokenPositionMaps",
         "tokenPositionMapBackup",
@@ -1407,7 +1411,7 @@ mod private_result_oram_grpc_tests {
             version: u32::MAX,
             bucket_id: 1,
             index_epoch: 42,
-            ciphertext: "token_position_map_snapshot".to_string(),
+            ciphertext: "payloadFetchToken".to_string(),
             ciphertext_sha256: "encrypted_client_state_ciphertext_sha256".to_string(),
             bucket_commitment: "stashSnapshot".to_string(),
         })
@@ -1416,7 +1420,7 @@ mod private_result_oram_grpc_tests {
         assert!(err.message().contains("bucket.version"));
         assert!(!err.message().contains(&u32::MAX.to_string()));
         assert!(
-            !err.message().contains("token_position_map_snapshot"),
+            !err.message().contains("payloadFetchToken"),
             "{}",
             err.message()
         );
