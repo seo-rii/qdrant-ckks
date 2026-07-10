@@ -667,8 +667,9 @@ are written to the archive, and validate current epoch plus canonical epoch
 commit file contents again at archive time. Client-owned state detection covers
 snake_case, camelCase, kebab-case, and dot-separated aliases for client state,
 encrypted client state snapshots, position maps, ORAM/token position maps, and
-stashes, including `ciphertext_sha256` backup variants. Empty private ORAM temp
-directories are omitted from the archive;
+stashes, including `ciphertext_sha256` backup variants and payload fetch token
+singular/plural aliases such as `payloadFetchToken` and `payloadFetchTokens`.
+Empty private ORAM temp directories are omitted from the archive;
 snapshot tests seal a plaintext sentinel into a client bucket and assert that
 the raw snapshot archive and restored bucket file do not contain the sentinel
 bytes.
@@ -2107,10 +2108,10 @@ score/distance aliases, candidate heaps, candidate and node score/distance
 aliases, request/commit/read/manifest signatures, private result ORAM bucket
 ids, session ids, bucket commitments, leaf commitments, read bucket ids, bucket
 id sequences, updated bucket writebacks, access-volume count aliases,
-client-state/client-states, ciphertext/hash/sha256 fields, and payload/result tokens; snake_case and camelCase
-singular/plural aliases are covered for private ORAM access-pattern, bucket,
-commitment, signature, query, candidate, score/distance, client-state, and token
-fields.
+client-state/client-states, ciphertext/hash/sha256 fields, and payload/result
+tokens; snake_case and camelCase singular/plural aliases are covered for private
+ORAM access-pattern, bucket, commitment, signature, query, candidate,
+score/distance, client-state, and token fields.
 REST access-log and JSON-validation sanitizers recognize private ORAM markers
 only at the route position after `/collections/{collection}`; ordinary
 collections named `private-hnsw` or `private-result-oram` keep normal access-log
