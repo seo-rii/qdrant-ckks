@@ -242,6 +242,8 @@ mod tests {
              session_ids=session-list-sentinel \
              sessionIds=session-list-camel-sentinel \
              access_count=access-count-sentinel \
+             access_counts=access-counts-snake-sentinel \
+             accessCount=access-count-camel-sentinel \
              accessCounts=access-counts-camel-sentinel \
              access_volume=access-volume-snake-sentinel \
              access_volumes=access-volumes-snake-sentinel \
@@ -536,6 +538,8 @@ mod tests {
         assert!(!rendered.contains("session-list-sentinel"));
         assert!(!rendered.contains("session-list-camel-sentinel"));
         assert!(!rendered.contains("access-count-sentinel"));
+        assert!(!rendered.contains("access-counts-snake-sentinel"));
+        assert!(!rendered.contains("access-count-camel-sentinel"));
         assert!(!rendered.contains("access-counts-camel-sentinel"));
         assert!(!rendered.contains("access-volume-snake-sentinel"));
         assert!(!rendered.contains("access-volume-camel-sentinel"));

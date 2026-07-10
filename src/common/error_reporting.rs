@@ -529,6 +529,8 @@ mod tests {
             "client_id=private-client-id-sentinel",
             "clientIds=[private-client-ids-camel-sentinel]",
             "access_count=private-access-count-sentinel",
+            "access_counts=[private-access-counts-snake-sentinel]",
+            "accessCount=private-access-count-camel-sentinel",
             "accessCounts=[private-access-counts-camel-sentinel]",
             "access_volume=private-access-volume-snake-sentinel",
             "access_volumes=[private-access-volumes-snake-sentinel]",

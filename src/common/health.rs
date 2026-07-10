@@ -462,6 +462,10 @@ mod tests {
             "health panic with session_token=session-token-sentinel, signatureB64=sig-sentinel, \
              owner_signing_key_id=owner-signing-key-sentinel, readPath=read-path-camel-sentinel, \
              readPathLabel=read-path-label-camel-sentinel, \
+             accessCount=access-count-camel-sentinel, \
+             accessCounts=access-counts-camel-sentinel, \
+             access_count=access-count-snake-sentinel, \
+             access_counts=access-counts-snake-sentinel, \
              accessVolume=access-volume-camel-sentinel, \
              accessVolumes=access-volumes-camel-sentinel, \
              accessVolumeCount=access-volume-count-camel-sentinel, \
@@ -601,6 +605,10 @@ mod tests {
         assert!(!message.contains("owner-signing-key-sentinel"));
         assert!(!message.contains("read-path-camel-sentinel"));
         assert!(!message.contains("read-path-label-camel-sentinel"));
+        assert!(!message.contains("access-count-camel-sentinel"));
+        assert!(!message.contains("access-counts-camel-sentinel"));
+        assert!(!message.contains("access-count-snake-sentinel"));
+        assert!(!message.contains("access-counts-snake-sentinel"));
         assert!(!message.contains("access-volume-camel-sentinel"));
         assert!(!message.contains("access-volume-count-camel-sentinel"));
         assert!(!message.contains("access-volume-length-camel-sentinel"));
