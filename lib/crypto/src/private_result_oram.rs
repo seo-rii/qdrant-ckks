@@ -3921,22 +3921,58 @@ mod tests {
             ))
             .to_string(),
             PrivateResultOramError::UnsupportedManifestVersion(99).to_string(),
+            PrivateResultOramError::InvalidProvider.to_string(),
+            PrivateResultOramError::InvalidBinding.to_string(),
             PrivateResultOramError::InvalidManifestField("manifest-field-sentinel").to_string(),
             PrivateResultOramError::ManifestContextMismatch("manifest-context-sentinel")
                 .to_string(),
+            PrivateResultOramError::MissingManifestSignature.to_string(),
             PrivateResultOramError::UnsupportedSignatureAlgorithm("rsa-pss-sentinel".to_string())
                 .to_string(),
+            PrivateResultOramError::SignatureKeyIdMismatch.to_string(),
+            PrivateResultOramError::MalformedSignature.to_string(),
+            PrivateResultOramError::InvalidManifestSignature.to_string(),
+            PrivateResultOramError::InvalidCommitSignature.to_string(),
+            PrivateResultOramError::InvalidReadBucketsSignature.to_string(),
+            PrivateResultOramError::InvalidResourceKeyId.to_string(),
             PrivateResultOramError::UnsupportedBucketVersion(88).to_string(),
             PrivateResultOramError::InvalidBucketField("bucket-field-sentinel").to_string(),
+            PrivateResultOramError::BucketOversized.to_string(),
+            PrivateResultOramError::InvalidBucketHash.to_string(),
+            PrivateResultOramError::InvalidBucketCiphertextEncoding.to_string(),
+            PrivateResultOramError::InvalidBucketCiphertextHash.to_string(),
             PrivateResultOramError::InvalidBucketContext("bucket-context-sentinel").to_string(),
             PrivateResultOramError::UnsupportedBucketCiphertextVersion(77).to_string(),
+            PrivateResultOramError::BucketOpenFailed.to_string(),
+            PrivateResultOramError::BucketMetadataMismatch.to_string(),
+            PrivateResultOramError::InvalidBucketCommitment.to_string(),
+            PrivateResultOramError::EmptyMerkleTree.to_string(),
+            PrivateResultOramError::MerkleRootMismatch.to_string(),
+            PrivateResultOramError::ManifestCommitMismatch.to_string(),
             PrivateResultOramError::InvalidFetchPlanField("fetch-plan-field-sentinel").to_string(),
+            PrivateResultOramError::EmptyCommit.to_string(),
+            PrivateResultOramError::InvalidMerkleProof.to_string(),
+            PrivateResultOramError::InvalidMerkleProofJson.to_string(),
+            PrivateResultOramError::MerkleProofMismatch.to_string(),
+            PrivateResultOramError::MissingPayloadFetchTokenPosition.to_string(),
             PrivateResultOramError::InvalidClientConfig("client-config-sentinel").to_string(),
             PrivateResultOramError::UnsupportedPayloadBlockVersion(99).to_string(),
+            PrivateResultOramError::InvalidPayloadBlock.to_string(),
+            PrivateResultOramError::InvalidPayloadBlockPadding.to_string(),
+            PrivateResultOramError::PayloadBlockOversized.to_string(),
+            PrivateResultOramError::InvalidBucketPlaintext.to_string(),
+            PrivateResultOramError::BucketPlaintextSlotCountMismatch.to_string(),
+            PrivateResultOramError::MissingPosition.to_string(),
+            PrivateResultOramError::MissingBlock.to_string(),
+            PrivateResultOramError::PathBucketMismatch.to_string(),
             PrivateResultOramError::UnsupportedClientStateSnapshotVersion(55).to_string(),
+            PrivateResultOramError::InvalidClientStateSnapshot.to_string(),
             PrivateResultOramError::InvalidClientStateContext("client-state-context-sentinel")
                 .to_string(),
+            PrivateResultOramError::InvalidClientStateCiphertextEncoding.to_string(),
+            PrivateResultOramError::InvalidClientStateCiphertextHash.to_string(),
             PrivateResultOramError::UnsupportedClientStateCiphertextVersion(66).to_string(),
+            PrivateResultOramError::ClientStateOpenFailed.to_string(),
             PrivateResultOramError::BucketOutOfRange {
                 bucket_id: 123,
                 bucket_count: 456,
@@ -3987,6 +4023,8 @@ mod tests {
                 "{:?}",
                 PrivateResultOramError::UnsupportedManifestVersion(99)
             ),
+            format!("{:?}", PrivateResultOramError::InvalidProvider),
+            format!("{:?}", PrivateResultOramError::InvalidBinding),
             format!(
                 "{:?}",
                 PrivateResultOramError::InvalidManifestField("manifest-field-sentinel")
@@ -3995,17 +4033,31 @@ mod tests {
                 "{:?}",
                 PrivateResultOramError::ManifestContextMismatch("manifest-context-sentinel")
             ),
+            format!("{:?}", PrivateResultOramError::MissingManifestSignature),
             format!(
                 "{:?}",
                 PrivateResultOramError::UnsupportedSignatureAlgorithm(
                     "rsa-pss-sentinel".to_string()
                 )
             ),
+            format!("{:?}", PrivateResultOramError::SignatureKeyIdMismatch),
+            format!("{:?}", PrivateResultOramError::MalformedSignature),
+            format!("{:?}", PrivateResultOramError::InvalidManifestSignature),
+            format!("{:?}", PrivateResultOramError::InvalidCommitSignature),
+            format!("{:?}", PrivateResultOramError::InvalidReadBucketsSignature),
+            format!("{:?}", PrivateResultOramError::InvalidResourceKeyId),
             format!("{:?}", PrivateResultOramError::UnsupportedBucketVersion(88)),
             format!(
                 "{:?}",
                 PrivateResultOramError::InvalidBucketField("bucket-field-sentinel")
             ),
+            format!("{:?}", PrivateResultOramError::BucketOversized),
+            format!("{:?}", PrivateResultOramError::InvalidBucketHash),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidBucketCiphertextEncoding
+            ),
+            format!("{:?}", PrivateResultOramError::InvalidBucketCiphertextHash),
             format!(
                 "{:?}",
                 PrivateResultOramError::InvalidBucketContext("bucket-context-sentinel")
@@ -4014,9 +4066,23 @@ mod tests {
                 "{:?}",
                 PrivateResultOramError::UnsupportedBucketCiphertextVersion(77)
             ),
+            format!("{:?}", PrivateResultOramError::BucketOpenFailed),
+            format!("{:?}", PrivateResultOramError::BucketMetadataMismatch),
+            format!("{:?}", PrivateResultOramError::InvalidBucketCommitment),
+            format!("{:?}", PrivateResultOramError::EmptyMerkleTree),
+            format!("{:?}", PrivateResultOramError::MerkleRootMismatch),
+            format!("{:?}", PrivateResultOramError::ManifestCommitMismatch),
             format!(
                 "{:?}",
                 PrivateResultOramError::InvalidFetchPlanField("fetch-plan-field-sentinel")
+            ),
+            format!("{:?}", PrivateResultOramError::EmptyCommit),
+            format!("{:?}", PrivateResultOramError::InvalidMerkleProof),
+            format!("{:?}", PrivateResultOramError::InvalidMerkleProofJson),
+            format!("{:?}", PrivateResultOramError::MerkleProofMismatch),
+            format!(
+                "{:?}",
+                PrivateResultOramError::MissingPayloadFetchTokenPosition
             ),
             format!(
                 "{:?}",
@@ -4026,18 +4092,39 @@ mod tests {
                 "{:?}",
                 PrivateResultOramError::UnsupportedPayloadBlockVersion(99)
             ),
+            format!("{:?}", PrivateResultOramError::InvalidPayloadBlock),
+            format!("{:?}", PrivateResultOramError::InvalidPayloadBlockPadding),
+            format!("{:?}", PrivateResultOramError::PayloadBlockOversized),
+            format!("{:?}", PrivateResultOramError::InvalidBucketPlaintext),
+            format!(
+                "{:?}",
+                PrivateResultOramError::BucketPlaintextSlotCountMismatch
+            ),
+            format!("{:?}", PrivateResultOramError::MissingPosition),
+            format!("{:?}", PrivateResultOramError::MissingBlock),
+            format!("{:?}", PrivateResultOramError::PathBucketMismatch),
             format!(
                 "{:?}",
                 PrivateResultOramError::UnsupportedClientStateSnapshotVersion(55)
             ),
+            format!("{:?}", PrivateResultOramError::InvalidClientStateSnapshot),
             format!(
                 "{:?}",
                 PrivateResultOramError::InvalidClientStateContext("client-state-context-sentinel")
             ),
             format!(
                 "{:?}",
+                PrivateResultOramError::InvalidClientStateCiphertextEncoding
+            ),
+            format!(
+                "{:?}",
+                PrivateResultOramError::InvalidClientStateCiphertextHash
+            ),
+            format!(
+                "{:?}",
                 PrivateResultOramError::UnsupportedClientStateCiphertextVersion(66)
             ),
+            format!("{:?}", PrivateResultOramError::ClientStateOpenFailed),
             format!(
                 "{:?}",
                 PrivateResultOramError::BucketOutOfRange {
