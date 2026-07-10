@@ -9,7 +9,7 @@ use rand::RngExt;
 use segment::common::reciprocal_rank_fusion::rrf_scoring;
 use segment::common::score_fusion::{ScoreFusion, score_fusion};
 use segment::data_types::vectors::VectorStructInternal;
-use segment::types::{Order, ScoredPoint, WithPayloadInterface, WithVector};
+use segment::types::{Order, ScoredPoint, VectorName, WithPayloadInterface, WithVector};
 use segment::utils::scored_point_ties::ScoredPointTies;
 use tokio::time::Instant;
 
@@ -614,26 +614,10 @@ impl Collection {
                 };
 
                 for request in requests_batch {
-                    if let Some(vector_name) = request
-                        .query
-                        .as_ref()
-                        .and_then(ScoringQuery::get_vector_name)
-                        && names.iter().any(|name| name == vector_name)
+                    if let Some(vector_name) =
+                        query_request_touches_encrypted_vector(request, names)
                     {
                         return Err(encrypted_direct_query_rule_error(rule, vector_name));
-                    }
-
-                    let mut prefetches: Vec<&ShardPrefetch> = request.prefetches.iter().collect();
-                    while let Some(prefetch) = prefetches.pop() {
-                        if let Some(vector_name) = prefetch
-                            .query
-                            .as_ref()
-                            .and_then(ScoringQuery::get_vector_name)
-                            && names.iter().any(|name| name == vector_name)
-                        {
-                            return Err(encrypted_direct_query_rule_error(rule, vector_name));
-                        }
-                        prefetches.extend(prefetch.prefetches.iter());
                     }
                 }
             }
@@ -846,6 +830,35 @@ fn encrypted_direct_query_rule_error(
     CollectionError::bad_input(message)
 }
 
+fn query_request_touches_encrypted_vector<'a>(
+    request: &'a ShardQueryRequest,
+    encrypted_names: &[String],
+) -> Option<&'a VectorName> {
+    if let Some(vector_name) = request
+        .query
+        .as_ref()
+        .and_then(ScoringQuery::get_vector_name)
+        && encrypted_names.iter().any(|name| name == vector_name)
+    {
+        return Some(vector_name);
+    }
+
+    let mut prefetches: Vec<&ShardPrefetch> = request.prefetches.iter().collect();
+    while let Some(prefetch) = prefetches.pop() {
+        if let Some(vector_name) = prefetch
+            .query
+            .as_ref()
+            .and_then(ScoringQuery::get_vector_name)
+            && encrypted_names.iter().any(|name| name == vector_name)
+        {
+            return Some(vector_name);
+        }
+        prefetches.extend(prefetch.prefetches.iter());
+    }
+
+    None
+}
+
 /// Returns a list of the query that corresponds to each of the results in each shard.
 ///
 /// Example: `[info1, info2, info3]` corresponds to `[result1, result2, result3]` of each shard
@@ -892,6 +905,9 @@ fn intermediate_query_infos(request: &ShardQueryRequest) -> Vec<IntermediateQuer
 
 #[cfg(test)]
 mod tests {
+    use segment::data_types::vectors::{NamedQuery, VectorInternal};
+    use shard::query::query_enum::QueryEnum;
+
     use super::*;
     use crate::config::{CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef};
 
@@ -929,6 +945,41 @@ mod tests {
         None
     }
 
+    fn private_vector_query(vector_name: &str) -> ScoringQuery {
+        ScoringQuery::Vector(QueryEnum::Nearest(NamedQuery::new(
+            VectorInternal::Dense(vec![1.0, 0.0]),
+            vector_name.to_string(),
+        )))
+    }
+
+    fn query_request_with_nested_prefetch(vector_name: &str) -> ShardQueryRequest {
+        ShardQueryRequest {
+            prefetches: vec![ShardPrefetch {
+                prefetches: vec![ShardPrefetch {
+                    prefetches: Vec::new(),
+                    query: Some(private_vector_query(vector_name)),
+                    limit: 10,
+                    params: None,
+                    filter: None,
+                    score_threshold: None,
+                }],
+                query: None,
+                limit: 10,
+                params: None,
+                filter: None,
+                score_threshold: None,
+            }],
+            query: None,
+            filter: None,
+            score_threshold: None,
+            limit: 10,
+            offset: 0,
+            params: None,
+            with_vector: WithVector::Bool(false),
+            with_payload: WithPayloadInterface::Bool(false),
+        }
+    }
+
     #[test]
     fn private_hnsw_direct_query_error_uses_session_api_without_vector_name() {
         let private_vector = "client_state_direct_query_private_hnsw";
@@ -943,5 +994,32 @@ mod tests {
         assert!(!message.contains(private_vector), "{message}");
         assert!(!message.contains("client_state"), "{message}");
         assert!(encrypted_direct_query_error(&encryption, "public").is_none());
+    }
+
+    #[test]
+    fn private_hnsw_nested_prefetch_query_uses_session_api_without_vector_name() {
+        let private_vector = "client_state_nested_prefetch_private_hnsw";
+        let encryption = private_hnsw_query_encryption(private_vector);
+        let request = query_request_with_nested_prefetch(private_vector);
+        let vector_name = query_request_touches_encrypted_vector(
+            &request,
+            match &encryption.rules[0].selector {
+                EncryptionSelector::VectorNames { names } => names,
+                EncryptionSelector::PayloadPaths { .. }
+                | EncryptionSelector::MetadataKeys { .. } => {
+                    panic!("private HNSW test rule must use vector names")
+                }
+            },
+        )
+        .expect("nested private HNSW prefetch must be detected");
+
+        let err = encrypted_direct_query_error(&encryption, vector_name)
+            .expect("private HNSW nested prefetch query must be rejected");
+        let message = err.to_string();
+
+        assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        assert!(message.contains("/private-hnsw/{vector}/session"));
+        assert!(!message.contains(private_vector), "{message}");
+        assert!(!message.contains("client_state"), "{message}");
     }
 }
