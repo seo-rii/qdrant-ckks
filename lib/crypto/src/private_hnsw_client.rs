@@ -6312,6 +6312,8 @@ mod tests {
             (format!("{upload_bundle:?}"), "bucket_count: 1"),
             (format!("{commit_plan:?}"), "leaf_commitment_count: 1"),
             (format!("{commit_plan:?}"), "updated_bucket_count: 1"),
+            (format!("{read_signature_input:?}"), "path_count: 2"),
+            (format!("{read_signature_input:?}"), "requested_paths: 8"),
         ] {
             assert!(
                 !debug_rendered.contains(redacted_count),

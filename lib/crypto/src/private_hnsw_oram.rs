@@ -1985,7 +1985,7 @@ mod tests {
             signature_alg: "ed25519",
             signature_key_id: "HNSW-COMMIT-SIGNATURE-KEY-SENTINEL",
         };
-        let paths = ["HNSW-PATH-LABEL-SENTINEL"];
+        let paths = ["HNSW-PATH-LABEL-SENTINEL", "HNSW-PATH-LABEL-SENTINEL-2"];
         let read_paths_signature_input = PrivateHnswOramReadPathsSignatureInput {
             collection_id: "HNSW-READ-COLLECTION-ID-SENTINEL",
             vector_name: "HNSW-READ-VECTOR-NAME-SENTINEL",
@@ -2071,6 +2071,7 @@ mod tests {
             "HNSW-NEW-ROOT-SENTINEL",
             "HNSW-ROOT-SENTINEL",
             "HNSW-PATH-LABEL-SENTINEL",
+            "HNSW-PATH-LABEL-SENTINEL-2",
         ] {
             assert!(!rendered.contains(leaked), "{rendered}");
         }
@@ -2080,7 +2081,7 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("updated_bucket_count: 1"), "{rendered}");
-        assert!(!rendered.contains("path_count: 1"), "{rendered}");
+        assert!(!rendered.contains("path_count: 2"), "{rendered}");
     }
 
     fn fixture_manifest() -> PrivateHnswOramManifest {
