@@ -3173,6 +3173,20 @@ mod private_hnsw_tests {
         assert!(err.contains("bucket/proof consistency validation failed"));
         assert!(!err.contains(&bucket.ciphertext));
 
+        let sentinel_bucket_id = 987_654_321_u64;
+        let mut wrong_bucket_id_proof = store.read_merkle_path_batch(&[0], 42, &root, 1).unwrap();
+        wrong_bucket_id_proof.leaves[0].bucket_id = sentinel_bucket_id;
+        let err = ensure_private_hnsw_read_proof_matches_buckets(
+            &wrong_bucket_id_proof,
+            &[bucket.clone()],
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("bucket/proof consistency validation failed"));
+        assert!(!err.contains(&bucket.ciphertext));
+        assert!(!err.contains(&bucket.bucket_commitment));
+        assert!(!err.contains(&sentinel_bucket_id.to_string()));
+
         let err = ensure_private_hnsw_read_proof_matches_buckets(&proof, &[])
             .unwrap_err()
             .to_string();
