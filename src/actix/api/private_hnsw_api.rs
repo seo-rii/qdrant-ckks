@@ -4039,6 +4039,56 @@ mod private_hnsw_rest_tests {
                 );
             }
 
+            let out_of_range_leaf = 1_u64 << fixture.manifest.oram.tree_height;
+            let out_of_range_path_label =
+                data_encoding::BASE64URL_NOPAD.encode(&out_of_range_leaf.to_be_bytes());
+            let out_of_range_signature = fixture.client_signature();
+            let out_of_range_signature_key_id = out_of_range_signature.key_id.clone();
+            let out_of_range_signature_sig = out_of_range_signature.sig.clone();
+            let out_of_range_read_error = post_json_error_contains!(
+                "/collections/docs/private-hnsw/text/oram/read_paths",
+                OramReadPathsRequest {
+                    session_id: session_id.clone(),
+                    index_epoch: BASE_EPOCH,
+                    root_hash: fixture.encrypted_build.root_hash.clone(),
+                    paths: vec![out_of_range_path_label.clone()],
+                    padding: OramReadPadding {
+                        requested_paths: 1,
+                        dummy_paths_included: true,
+                    },
+                    client_signature: PrivateHnswClientSignature {
+                        alg: out_of_range_signature.alg,
+                        key_id: out_of_range_signature.key_id,
+                        sig: out_of_range_signature.sig,
+                    },
+                },
+                StatusCode::BAD_REQUEST,
+                "request validation failed"
+            );
+            assert!(
+                !out_of_range_read_error.contains("leaf label"),
+                "{out_of_range_read_error}"
+            );
+            for sentinel in [
+                session_id.as_str(),
+                fixture.encrypted_build.root_hash.as_str(),
+                out_of_range_path_label.as_str(),
+                out_of_range_signature_key_id.as_str(),
+                out_of_range_signature_sig.as_str(),
+                fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .ciphertext_sha256
+                    .as_str(),
+                fixture.encrypted_build.buckets[0]
+                    .bucket_commitment
+                    .as_str(),
+            ] {
+                assert!(
+                    !out_of_range_read_error.contains(sentinel),
+                    "{out_of_range_read_error}"
+                );
+            }
+
             let unknown_read_session_sentinel = "read-session-id-sentinel";
             let unknown_read_paths = vec![fixture.entry_leaf_label()];
             let unknown_read_signature = fixture.sign_read_paths(&unknown_read_paths, 1, true);
