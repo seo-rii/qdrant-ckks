@@ -1741,6 +1741,7 @@ mod tests {
             "payload_fetch_tokens",
             "payloadFetchToken",
             "payloadFetchTokens",
+            "payload.fetch.token",
             "token_map",
             "token_maps",
             "tokenMap",
