@@ -250,6 +250,7 @@ mod tests {
              accessVolume=access-volume-camel-sentinel \
              accessVolumes=access-volumes-camel-sentinel \
              access_volume_count=access-volume-count-snake-sentinel \
+             access_volume_counts=access-volume-counts-snake-sentinel \
              accessVolumeCounts=access-volume-counts-camel-sentinel \
              access_volume_len=access-volume-len-snake-sentinel \
              accessVolumeLength=access-volume-length-camel-sentinel \

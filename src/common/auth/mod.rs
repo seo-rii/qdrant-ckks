@@ -307,10 +307,12 @@ mod tests {
              accessVolume=access-volume-camel-sentinel \
              accessVolumes=access-volumes-camel-sentinel \
              accessVolumeCount=access-volume-count-camel-sentinel \
+             accessVolumeCounts=access-volume-counts-camel-sentinel \
              accessVolumeLength=access-volume-length-camel-sentinel \
              access_volume=access-volume-snake-sentinel \
              access_volumes=access-volumes-snake-sentinel \
              access_volume_count=access-volume-count-snake-sentinel \
+             access_volume_counts=access-volume-counts-snake-sentinel \
              access_volume_length=access-volume-length-snake-sentinel \
              access_volume_lengths=access-volume-lengths-snake-sentinel \
              proof_value=proof-value-snake-sentinel \
@@ -475,9 +477,11 @@ mod tests {
         assert!(!redacted.contains("access-counts-snake-sentinel"));
         assert!(!redacted.contains("access-volume-camel-sentinel"));
         assert!(!redacted.contains("access-volume-count-camel-sentinel"));
+        assert!(!redacted.contains("access-volume-counts-camel-sentinel"));
         assert!(!redacted.contains("access-volume-length-camel-sentinel"));
         assert!(!redacted.contains("access-volume-snake-sentinel"));
         assert!(!redacted.contains("access-volume-count-snake-sentinel"));
+        assert!(!redacted.contains("access-volume-counts-snake-sentinel"));
         assert!(!redacted.contains("access-volume-length-snake-sentinel"));
         assert!(!redacted.contains("proof-value-snake-sentinel"));
         assert!(!redacted.contains("proof-value-camel-sentinel"));

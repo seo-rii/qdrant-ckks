@@ -469,10 +469,12 @@ mod tests {
              accessVolume=access-volume-camel-sentinel, \
              accessVolumes=access-volumes-camel-sentinel, \
              accessVolumeCount=access-volume-count-camel-sentinel, \
+             accessVolumeCounts=access-volume-counts-camel-sentinel, \
              accessVolumeLength=access-volume-length-camel-sentinel, \
              access_volume=access-volume-snake-sentinel, \
              access_volumes=access-volumes-snake-sentinel, \
              access_volume_count=access-volume-count-snake-sentinel, \
+             access_volume_counts=access-volume-counts-snake-sentinel, \
              access_volume_length=access-volume-length-snake-sentinel, \
              access_volume_lengths=access-volume-lengths-snake-sentinel, \
              ciphertextSha256=ciphertext-sha256-camel-sentinel, \
@@ -611,9 +613,11 @@ mod tests {
         assert!(!message.contains("access-counts-snake-sentinel"));
         assert!(!message.contains("access-volume-camel-sentinel"));
         assert!(!message.contains("access-volume-count-camel-sentinel"));
+        assert!(!message.contains("access-volume-counts-camel-sentinel"));
         assert!(!message.contains("access-volume-length-camel-sentinel"));
         assert!(!message.contains("access-volume-snake-sentinel"));
         assert!(!message.contains("access-volume-count-snake-sentinel"));
+        assert!(!message.contains("access-volume-counts-snake-sentinel"));
         assert!(!message.contains("access-volume-length-snake-sentinel"));
         assert!(!message.contains("ciphertext-sha256-camel-sentinel"));
         assert!(!message.contains("ciphertext-sha256-snake-sentinel"));

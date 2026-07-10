@@ -892,10 +892,12 @@ mod tests {
             "accessVolume-sentinel",
             "accessVolumes-sentinel",
             "accessVolumeCount-sentinel",
+            "accessVolumeCounts-sentinel",
             "accessVolumeLength-sentinel",
             "access_volume-sentinel",
             "access_volumes-sentinel",
             "access_volume_count-sentinel",
+            "access_volume_counts-sentinel",
             "access_volume_length-sentinel",
             "bucketCommitment-sentinel",
             "bucketCommitments-sentinel",
@@ -1032,10 +1034,12 @@ mod tests {
             "accessVolume-sentinel",
             "accessVolumes-sentinel",
             "accessVolumeCount-sentinel",
+            "accessVolumeCounts-sentinel",
             "accessVolumeLength-sentinel",
             "access_volume-sentinel",
             "access_volumes-sentinel",
             "access_volume_count-sentinel",
+            "access_volume_counts-sentinel",
             "access_volume_length-sentinel",
             "bucketCommitment-sentinel",
             "bucketCommitments-sentinel",
@@ -1172,6 +1176,8 @@ mod tests {
             "accessVolume=accessVolume-query-sentinel",
             "accessVolumes=accessVolumes-query-sentinel",
             "access_volume_count=access-volume-count-query-sentinel",
+            "access_volume_counts=access-volume-counts-query-sentinel",
+            "accessVolumeCounts=accessVolumeCounts-query-sentinel",
             "accessVolumeLength=accessVolumeLength-query-sentinel",
         ] {
             assert_eq!(
@@ -1236,6 +1242,8 @@ mod tests {
             "accessVolume=accessVolume-query-sentinel",
             "accessVolumes=accessVolumes-query-sentinel",
             "access_volume_count=access-volume-count-query-sentinel",
+            "access_volume_counts=access-volume-counts-query-sentinel",
+            "accessVolumeCounts=accessVolumeCounts-query-sentinel",
             "accessVolumeLength=accessVolumeLength-query-sentinel",
         ] {
             assert_eq!(

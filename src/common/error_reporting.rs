@@ -537,6 +537,7 @@ mod tests {
             "accessVolume=private-access-volume-camel-sentinel",
             "accessVolumes=[private-access-volumes-camel-sentinel]",
             "access_volume_count=private-access-volume-count-snake-sentinel",
+            "access_volume_counts=[private-access-volume-counts-snake-sentinel]",
             "accessVolumeCounts=[private-access-volume-counts-camel-sentinel]",
             "access_volume_len=private-access-volume-len-snake-sentinel",
             "accessVolumeLength=private-access-volume-length-camel-sentinel",
