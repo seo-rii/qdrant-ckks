@@ -1890,6 +1890,18 @@ mod tests {
                 private_result_oram_error(PrivateResultOramError::DuplicatePointToken),
                 vec![],
             ),
+            (
+                private_result_oram_error(PrivateResultOramError::InvalidMerkleProof),
+                vec![],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::InvalidMerkleProofJson),
+                vec![],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::MerkleProofMismatch),
+                vec![],
+            ),
         ];
 
         for (err, needles) in cases {

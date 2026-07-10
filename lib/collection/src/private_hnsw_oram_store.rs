@@ -2397,6 +2397,18 @@ mod tests {
                 )),
                 vec!["manifest-signature-context-777777", "777777"],
             ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::InvalidMerkleProof),
+                vec![],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::InvalidMerkleProofJson),
+                vec![],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::MerkleProofMismatch),
+                vec![],
+            ),
         ];
 
         for (err, needles) in cases {
