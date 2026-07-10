@@ -14,7 +14,7 @@ use segment::types::{
 
 use crate::collection::Collection;
 use crate::config::{
-    EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
+    CollectionEncryptionConfig, EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
     private_hnsw_oram_api_required_message,
 };
 use crate::operations::consistency_params::ReadConsistency;
@@ -162,18 +162,8 @@ impl Collection {
         let config = self.collection_config.read().await;
         config.params.check_vector_exists(&using)?;
         if let Some(encryption) = config.params.effective_encryption() {
-            for rule in &encryption.rules {
-                let EncryptionSelector::VectorNames { names } = &rule.selector else {
-                    continue;
-                };
-                if names.iter().any(|name| name == &using) {
-                    let message = if encryption_rule_uses_private_hnsw_oram(rule) {
-                        private_hnsw_oram_api_required_message(&using)
-                    } else {
-                        "cannot build direct collection search matrix for encrypted vector; use the runtime CKKS sidecar matrix entrypoint".to_string()
-                    };
-                    return Err(CollectionError::bad_input(message));
-                }
+            if let Some(err) = encrypted_search_matrix_error(&encryption, &using) {
+                return Err(err);
             }
         }
         drop(config);
@@ -310,11 +300,33 @@ impl Collection {
     }
 }
 
+fn encrypted_search_matrix_error(
+    encryption: &CollectionEncryptionConfig,
+    using: &str,
+) -> Option<CollectionError> {
+    for rule in &encryption.rules {
+        let EncryptionSelector::VectorNames { names } = &rule.selector else {
+            continue;
+        };
+        if names.iter().any(|name| name == using) {
+            let message = if encryption_rule_uses_private_hnsw_oram(rule) {
+                private_hnsw_oram_api_required_message(using)
+            } else {
+                "cannot build direct collection search matrix for encrypted vector; use the runtime CKKS sidecar matrix entrypoint".to_string()
+            };
+            return Some(CollectionError::bad_input(message));
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use segment::types::ScoredPoint;
 
     use super::*;
+    use crate::config::{CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef};
 
     fn make_scored_point(id: u64, score: f32) -> ScoredPoint {
         ScoredPoint {
@@ -370,5 +382,39 @@ mod tests {
 
         let actual = SearchMatrixOffsetsResponse::from(response);
         assert_eq!(actual, expected);
+    }
+
+    fn private_hnsw_matrix_encryption(vector_name: &str) -> CollectionEncryptionConfig {
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a/vector-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "docs_text_private_hnsw".to_string(),
+                selector: EncryptionSelector::VectorNames {
+                    names: vec![vector_name.to_string()],
+                },
+                instance: "docs_text_private_hnsw".to_string(),
+                binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
+            }],
+        }
+    }
+
+    #[test]
+    fn private_hnsw_search_matrix_error_uses_session_api_without_vector_name() {
+        let private_vector = "client_state_matrix_private_hnsw";
+        let encryption = private_hnsw_matrix_encryption(private_vector);
+
+        let err = encrypted_search_matrix_error(&encryption, private_vector)
+            .expect("private HNSW matrix request must be rejected");
+        let message = err.to_string();
+
+        assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        assert!(message.contains("/private-hnsw/{vector}/session"));
+        assert!(!message.contains(private_vector), "{message}");
+        assert!(!message.contains("client_state"), "{message}");
+        assert!(encrypted_search_matrix_error(&encryption, "public").is_none());
     }
 }
