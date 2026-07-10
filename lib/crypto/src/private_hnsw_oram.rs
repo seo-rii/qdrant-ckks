@@ -1609,6 +1609,8 @@ fn compact_vector_name_is_client_owned_oram_state_alias(value: &str) -> bool {
             | "stateciphertexthashes"
             | "stateciphertextsha256"
             | "stateciphertextssha256"
+            | "payloadfetchtoken"
+            | "payloadfetchtokens"
             | "positionmap"
             | "positionmaps"
             | "positionmapbackup"
@@ -2992,6 +2994,11 @@ mod tests {
             "token_map_snapshots.json",
             "tokenPositionMapSnapshots.json",
             "stash_snapshots.json",
+            "payload_fetch_token",
+            "payload_fetch_tokens",
+            "payloadFetchToken",
+            "payloadFetchTokens",
+            "payload.fetch.token",
         ] {
             let mut manifest = fixture_manifest();
             manifest.vector_name = vector_alias.to_string();
