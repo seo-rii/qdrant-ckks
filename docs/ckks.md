@@ -1406,7 +1406,13 @@ duplicate or missing bucket ids, verify bucket ciphertext SHA-256 and bucket
 commitments against the manifest context, require the manifest signature shape
 and owner key id to match the manifest, require each decoded ciphertext to match
 the manifest-derived fixed bucket ciphertext size, and recompute the manifest
-Merkle root. `validate_private_hnsw_oram_upload_bundle_with_signature` and the
+Merkle root. HNSW ORAM bucket commitments use the
+`qdrant-sec/private-hnsw-oram-bucket-commitment/v1` domain with 4-byte
+big-endian length-prefixed collection id, vector name, key id, and RK id,
+followed by RK epoch, bucket id, index epoch, and the decoded
+`ciphertext_sha256`; the manifest Merkle root is computed over the ordered
+bucket commitments after padding the leaf level to the next power of two with
+zero hashes. `validate_private_hnsw_oram_upload_bundle_with_signature` and the
 bundle's `validate_initial_upload_contract_with_signature` method add the
 runtime manifest validation context and Ed25519 verification to that preflight.
 The collection-local private HNSW ORAM store exposes matching initial upload
