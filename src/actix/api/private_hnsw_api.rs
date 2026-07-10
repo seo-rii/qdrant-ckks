@@ -1799,6 +1799,16 @@ mod private_hnsw_rest_tests {
                 "{malformed_bucket_hash_before_manifest_error}"
             );
             assert!(
+                !malformed_bucket_hash_before_manifest_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{malformed_bucket_hash_before_manifest_error}"
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest_error
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
+                "{malformed_bucket_hash_before_manifest_error}"
+            );
+            assert!(
                 !malformed_bucket_hash_before_manifest_error.contains("private_hnsw_oram"),
                 "{malformed_bucket_hash_before_manifest_error}"
             );
@@ -1812,6 +1822,9 @@ mod private_hnsw_rest_tests {
                     malformed_bucket_hash_before_manifest_sentinel,
                     fixture.encrypted_build.root_hash.as_str(),
                     fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .ciphertext_sha256
+                        .as_str(),
                     fixture.encrypted_build.buckets[0]
                         .bucket_commitment
                         .as_str(),
@@ -1851,6 +1864,16 @@ mod private_hnsw_rest_tests {
                 "{malformed_bucket_commitment_before_manifest_error}"
             );
             assert!(
+                !malformed_bucket_commitment_before_manifest_error
+                    .contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+                "{malformed_bucket_commitment_before_manifest_error}"
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest_error
+                    .contains(&fixture.encrypted_build.buckets[0].bucket_commitment),
+                "{malformed_bucket_commitment_before_manifest_error}"
+            );
+            assert!(
                 !malformed_bucket_commitment_before_manifest_error.contains("private_hnsw_oram"),
                 "{malformed_bucket_commitment_before_manifest_error}"
             );
@@ -1866,6 +1889,9 @@ mod private_hnsw_rest_tests {
                     fixture.encrypted_build.buckets[0].ciphertext.as_str(),
                     fixture.encrypted_build.buckets[0]
                         .ciphertext_sha256
+                        .as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .bucket_commitment
                         .as_str(),
                     "manifest",
                 ],
