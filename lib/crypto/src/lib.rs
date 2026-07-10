@@ -212,3 +212,35 @@ pub use vector::{
     encrypted_ckks_vector_payload_value, is_client_ckks_vector_payload_value,
     is_encrypted_ckks_vector_payload_value, validate_client_ckks_vector_payload_value_for_runtime,
 };
+
+#[cfg(test)]
+mod crate_root_reexport_tests {
+    use super::*;
+
+    #[test]
+    fn private_hnsw_root_exports_separate_client_and_server_helper_surfaces() {
+        let _client_upload_validator: fn(
+            &PrivateHnswOramUploadBundle,
+        ) -> Result<Vec<String>, PrivateHnswClientError> = validate_private_hnsw_oram_upload_bundle;
+        let _server_upload_validator: fn(
+            &ServerPrivateHnswOramUploadBundle,
+        ) -> Result<Vec<String>, PrivateHnswOramError> =
+            validate_server_private_hnsw_oram_upload_bundle;
+
+        let _client_writeback_budget: fn(&OramParams) -> Result<usize, PrivateHnswClientError> =
+            private_hnsw_oram_fixed_writeback_bucket_budget;
+        let _server_writeback_budget: fn(&OramParams) -> Result<usize, PrivateHnswOramError> =
+            server_private_hnsw_oram_fixed_writeback_bucket_budget;
+
+        let _server_commit_planner: fn(
+            u64,
+            u64,
+            &str,
+            &[String],
+            &[PrivateHnswOramBucket],
+        ) -> Result<
+            ServerPrivateHnswOramCommitPlan,
+            PrivateHnswOramError,
+        > = plan_server_private_hnsw_oram_commit;
+    }
+}
