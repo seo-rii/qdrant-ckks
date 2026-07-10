@@ -778,18 +778,12 @@ mod private_hnsw_rest_tests {
         nested_bucket_extra["buckets"][0]
             .as_object_mut()
             .unwrap()
-            .insert(
-                "extra".to_string(),
-                json!("client_state_ciphertext_hash.bin"),
-            );
+            .insert("extra".to_string(), json!("payload_fetch_token"));
         let err = serde_json::from_value::<UploadPrivateHnswBucketsRequest>(nested_bucket_extra)
             .unwrap_err();
         let rendered = err.to_string();
         assert!(rendered.contains("unknown field"), "{rendered}");
-        assert!(
-            !rendered.contains("client_state_ciphertext_hash.bin"),
-            "{rendered}"
-        );
+        assert!(!rendered.contains("payload_fetch_token"), "{rendered}");
         assert!(
             !rendered.contains(&fixture.encrypted_build.buckets[0].ciphertext),
             "{rendered}"
