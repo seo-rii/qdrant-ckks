@@ -65,6 +65,14 @@ pub enum PrivateHnswOramError {
     UnsupportedBucketVersion(u16),
     #[error("private HNSW ORAM bucket id is out of range")]
     BucketOutOfRange { bucket_id: u64, bucket_count: u64 },
+    #[error("private HNSW ORAM bucket epoch is stale")]
+    StaleBucketEpoch {
+        bucket_id: u64,
+        expected_epoch: u64,
+        actual_epoch: u64,
+    },
+    #[error("private HNSW ORAM commit updates the same bucket more than once")]
+    DuplicateUpdatedBucket { bucket_id: u64 },
     #[error("private HNSW ORAM bucket field is invalid")]
     InvalidBucketField(&'static str),
     #[error("private HNSW ORAM bucket ciphertext is oversized")]
@@ -79,6 +87,8 @@ pub enum PrivateHnswOramError {
     EmptyMerkleTree,
     #[error("private HNSW ORAM Merkle root does not match bucket commitments")]
     MerkleRootMismatch,
+    #[error("private HNSW ORAM manifest does not match commit plan")]
+    ManifestCommitMismatch,
 }
 
 impl Debug for PrivateHnswOramError {
@@ -452,6 +462,56 @@ impl Debug for PrivateHnswEpoch {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateHnswOramCommitPlan {
+    pub old_epoch: u64,
+    pub new_epoch: u64,
+    pub old_root_hash: String,
+    pub new_root_hash: String,
+    pub leaf_commitments: Vec<String>,
+    pub updated_buckets: Vec<PrivateHnswOramClientCommitBucketRef>,
+}
+
+impl Debug for PrivateHnswOramCommitPlan {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramCommitPlan")
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("leaf_commitment_count", &"[redacted]")
+            .field("updated_bucket_count", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateHnswOramCommitPlan {
+    pub fn signature_bucket_refs(&self) -> Vec<PrivateHnswOramCommitBucketRef<'_>> {
+        self.updated_buckets
+            .iter()
+            .map(|bucket| PrivateHnswOramCommitBucketRef {
+                bucket_id: bucket.bucket_id,
+                ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateHnswOramClientCommitBucketRef {
+    pub bucket_id: u64,
+    pub ciphertext_sha256: String,
+}
+
+impl Debug for PrivateHnswOramClientCommitBucketRef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramClientCommitBucketRef")
+            .field("bucket_id", &"[redacted]")
+            .field("ciphertext_sha256", &"[redacted]")
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PrivateHnswOramCommitBucketRef<'a> {
     pub bucket_id: u64,
@@ -733,6 +793,189 @@ pub fn validate_private_hnsw_oram_upload_bundle_with_signature(
         validation_context,
     )?;
     Ok(commitments)
+}
+
+pub fn plan_private_hnsw_oram_commit(
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: &str,
+    current_leaf_commitments: &[String],
+    updated_buckets: &[PrivateHnswOramBucket],
+) -> Result<PrivateHnswOramCommitPlan, PrivateHnswOramError> {
+    if new_epoch <= old_epoch {
+        return Err(PrivateHnswOramError::InvalidManifestField("new_epoch"));
+    }
+    if updated_buckets.is_empty() {
+        return Err(PrivateHnswOramError::EmptyCommit);
+    }
+    if private_hnsw_oram_merkle_root_for_commitments(current_leaf_commitments)? != old_root_hash {
+        return Err(PrivateHnswOramError::MerkleRootMismatch);
+    }
+
+    let bucket_count = u64::try_from(current_leaf_commitments.len())
+        .map_err(|_| PrivateHnswOramError::InvalidManifestField("bucket_count"))?;
+    let mut next_leaf_commitments = current_leaf_commitments.to_vec();
+    let mut seen_bucket_ids = BTreeSet::new();
+    let mut commit_bucket_refs = Vec::with_capacity(updated_buckets.len());
+
+    for bucket in updated_buckets {
+        if bucket.version != PRIVATE_HNSW_ORAM_BUCKET_VERSION {
+            return Err(PrivateHnswOramError::UnsupportedBucketVersion(
+                bucket.version,
+            ));
+        }
+        if bucket.index_epoch != new_epoch {
+            return Err(PrivateHnswOramError::StaleBucketEpoch {
+                bucket_id: bucket.bucket_id,
+                expected_epoch: new_epoch,
+                actual_epoch: bucket.index_epoch,
+            });
+        }
+        if bucket.bucket_id >= bucket_count {
+            return Err(PrivateHnswOramError::BucketOutOfRange {
+                bucket_id: bucket.bucket_id,
+                bucket_count,
+            });
+        }
+        if !seen_bucket_ids.insert(bucket.bucket_id) {
+            return Err(PrivateHnswOramError::DuplicateUpdatedBucket {
+                bucket_id: bucket.bucket_id,
+            });
+        }
+        decode_base64url_32(&bucket.ciphertext_sha256, "ciphertext_sha256")
+            .map_err(|_| PrivateHnswOramError::InvalidBucketField("ciphertext_sha256"))?;
+        let raw_ciphertext = BASE64URL_NOPAD
+            .decode(bucket.ciphertext.as_bytes())
+            .map_err(|_| PrivateHnswOramError::InvalidBucketField("ciphertext"))?;
+        if base64url_sha256(&raw_ciphertext) != bucket.ciphertext_sha256 {
+            return Err(PrivateHnswOramError::InvalidBucketHash);
+        }
+        decode_bucket_commitment(&bucket.bucket_commitment)?;
+
+        let bucket_index = usize::try_from(bucket.bucket_id)
+            .map_err(|_| PrivateHnswOramError::InvalidManifestField("bucket_count"))?;
+        next_leaf_commitments[bucket_index] = bucket.bucket_commitment.clone();
+        commit_bucket_refs.push(PrivateHnswOramClientCommitBucketRef {
+            bucket_id: bucket.bucket_id,
+            ciphertext_sha256: bucket.ciphertext_sha256.clone(),
+        });
+    }
+
+    let new_root_hash = private_hnsw_oram_merkle_root_for_commitments(&next_leaf_commitments)?;
+    Ok(PrivateHnswOramCommitPlan {
+        old_epoch,
+        new_epoch,
+        old_root_hash: old_root_hash.to_string(),
+        new_root_hash,
+        leaf_commitments: next_leaf_commitments,
+        updated_buckets: commit_bucket_refs,
+    })
+}
+
+pub fn plan_private_hnsw_oram_commit_for_manifest(
+    manifest: &PrivateHnswOramManifest,
+    new_epoch: u64,
+    current_leaf_commitments: &[String],
+    updated_buckets: &[PrivateHnswOramBucket],
+) -> Result<PrivateHnswOramCommitPlan, PrivateHnswOramError> {
+    plan_private_hnsw_oram_commit_for_manifest_context(
+        manifest,
+        manifest.index_epoch,
+        new_epoch,
+        &manifest.root_hash,
+        current_leaf_commitments,
+        updated_buckets,
+    )
+}
+
+pub fn plan_private_hnsw_oram_commit_for_manifest_context(
+    manifest: &PrivateHnswOramManifest,
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: &str,
+    current_leaf_commitments: &[String],
+    updated_buckets: &[PrivateHnswOramBucket],
+) -> Result<PrivateHnswOramCommitPlan, PrivateHnswOramError> {
+    validate_private_hnsw_oram_manifest_shape(manifest)?;
+    let manifest_bucket_count = usize::try_from(manifest.bucket_count)
+        .map_err(|_| PrivateHnswOramError::InvalidManifestField("bucket_count"))?;
+    if current_leaf_commitments.len() != manifest_bucket_count {
+        return Err(PrivateHnswOramError::InvalidManifestField("bucket_count"));
+    }
+    if new_epoch <= old_epoch {
+        return Err(PrivateHnswOramError::InvalidManifestField("new_epoch"));
+    }
+    if updated_buckets.is_empty() {
+        return Err(PrivateHnswOramError::EmptyCommit);
+    }
+    if private_hnsw_oram_merkle_root_for_commitments(current_leaf_commitments)? != old_root_hash {
+        return Err(PrivateHnswOramError::MerkleRootMismatch);
+    }
+
+    let max_ciphertext_bytes = private_hnsw_oram_upload_max_ciphertext_bytes(manifest)?;
+    let expected_ciphertext_bytes = private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram)?;
+    for bucket in updated_buckets {
+        validate_private_hnsw_oram_bucket_ciphertext_fixed_size(bucket, expected_ciphertext_bytes)?;
+        validate_private_hnsw_oram_bucket_shape(
+            bucket,
+            PrivateHnswOramBucketValidationContext {
+                expected_index_epoch: new_epoch,
+                bucket_count: manifest.bucket_count,
+                max_ciphertext_bytes,
+            },
+        )?;
+        let expected_commitment = private_hnsw_oram_bucket_commitment(
+            PrivateHnswOramBucketCommitmentContext {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id: bucket.bucket_id,
+                index_epoch: new_epoch,
+            },
+            &bucket.ciphertext_sha256,
+        )?;
+        if expected_commitment != bucket.bucket_commitment {
+            return Err(PrivateHnswOramError::InvalidBucketCommitment);
+        }
+    }
+    plan_private_hnsw_oram_commit(
+        old_epoch,
+        new_epoch,
+        old_root_hash,
+        current_leaf_commitments,
+        updated_buckets,
+    )
+}
+
+pub fn refresh_private_hnsw_oram_manifest_for_commit(
+    manifest: &PrivateHnswOramManifest,
+    plan: &PrivateHnswOramCommitPlan,
+) -> Result<PrivateHnswOramManifest, PrivateHnswOramError> {
+    validate_private_hnsw_oram_manifest_shape(manifest)?;
+    if manifest.index_epoch != plan.old_epoch || manifest.root_hash != plan.old_root_hash {
+        return Err(PrivateHnswOramError::ManifestCommitMismatch);
+    }
+    if plan.new_epoch <= plan.old_epoch {
+        return Err(PrivateHnswOramError::InvalidManifestField("new_epoch"));
+    }
+    decode_base64url_32(&plan.new_root_hash, "root_hash")?;
+
+    let mut refreshed = manifest.clone();
+    refreshed.index_epoch = plan.new_epoch;
+    refreshed.root_hash = plan.new_root_hash.clone();
+    Ok(refreshed)
+}
+
+pub fn sign_private_hnsw_oram_manifest_refresh(
+    key_pair: &Ed25519KeyPair,
+    manifest: &PrivateHnswOramManifest,
+    plan: &PrivateHnswOramCommitPlan,
+) -> Result<(PrivateHnswOramManifest, PrivateHnswOramSignature), PrivateHnswOramError> {
+    let refreshed = refresh_private_hnsw_oram_manifest_for_commit(manifest, plan)?;
+    let signature = sign_private_hnsw_oram_manifest(key_pair, &refreshed)?;
+    Ok((refreshed, signature))
 }
 
 pub fn try_private_hnsw_oram_manifest_signature_message(
@@ -1461,6 +1704,10 @@ fn private_hnsw_oram_merkle_parent_hash(left: &[u8; 32], right: &[u8; 32]) -> [u
     hasher.finalize().into()
 }
 
+fn base64url_sha256(bytes: &[u8]) -> String {
+    BASE64URL_NOPAD.encode(Sha256::digest(bytes).as_ref())
+}
+
 fn try_push_domain(
     message: &mut Vec<u8>,
     value: &[u8],
@@ -1522,8 +1769,16 @@ mod tests {
                 bucket_count: 456,
             }
             .to_string(),
+            PrivateHnswOramError::StaleBucketEpoch {
+                bucket_id: 123,
+                expected_epoch: 88,
+                actual_epoch: 77,
+            }
+            .to_string(),
+            PrivateHnswOramError::DuplicateUpdatedBucket { bucket_id: 123 }.to_string(),
             PrivateHnswOramError::InvalidBucketField("bucket-field-sentinel").to_string(),
             PrivateHnswOramError::InvalidBucketContext("bucket-context-sentinel").to_string(),
+            PrivateHnswOramError::ManifestCommitMismatch.to_string(),
         ];
 
         for rendered in cases {
@@ -1537,6 +1792,7 @@ mod tests {
             );
             assert!(!rendered.contains("99"), "{rendered}");
             assert!(!rendered.contains("88"), "{rendered}");
+            assert!(!rendered.contains("77"), "{rendered}");
             assert!(!rendered.contains("123"), "{rendered}");
             assert!(!rendered.contains("456"), "{rendered}");
         }
@@ -1568,12 +1824,25 @@ mod tests {
             ),
             format!(
                 "{:?}",
+                PrivateHnswOramError::StaleBucketEpoch {
+                    bucket_id: 123,
+                    expected_epoch: 88,
+                    actual_epoch: 77,
+                }
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswOramError::DuplicateUpdatedBucket { bucket_id: 123 }
+            ),
+            format!(
+                "{:?}",
                 PrivateHnswOramError::InvalidBucketField("bucket-field-sentinel")
             ),
             format!(
                 "{:?}",
                 PrivateHnswOramError::InvalidBucketContext("bucket-context-sentinel")
             ),
+            format!("{:?}", PrivateHnswOramError::ManifestCommitMismatch),
         ];
 
         for rendered in cases {
@@ -1587,6 +1856,7 @@ mod tests {
             );
             assert!(!rendered.contains("99"), "{rendered}");
             assert!(!rendered.contains("88"), "{rendered}");
+            assert!(!rendered.contains("77"), "{rendered}");
             assert!(!rendered.contains("123"), "{rendered}");
             assert!(!rendered.contains("456"), "{rendered}");
         }
@@ -1877,6 +2147,200 @@ mod tests {
         );
     }
 
+    #[test]
+    fn commit_plan_for_manifest_updates_root_and_resigns_manifest() {
+        let key_pair = deterministic_key_pair();
+        let (manifest, buckets) = small_upload_bundle_fixture();
+        let leaf_commitments = buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect::<Vec<_>>();
+        let updated_bucket = fixture_upload_bucket(&manifest, 2, 43, 9);
+
+        let plan = plan_private_hnsw_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &leaf_commitments,
+            std::slice::from_ref(&updated_bucket),
+        )
+        .unwrap();
+
+        assert_eq!(plan.old_epoch, manifest.index_epoch);
+        assert_eq!(plan.new_epoch, 43);
+        assert_eq!(plan.old_root_hash, manifest.root_hash);
+        assert_ne!(plan.new_root_hash, plan.old_root_hash);
+        assert_eq!(plan.leaf_commitments[2], updated_bucket.bucket_commitment);
+        assert_eq!(
+            plan.updated_buckets,
+            vec![PrivateHnswOramClientCommitBucketRef {
+                bucket_id: updated_bucket.bucket_id,
+                ciphertext_sha256: updated_bucket.ciphertext_sha256.clone(),
+            }]
+        );
+        assert_eq!(
+            plan.signature_bucket_refs(),
+            vec![PrivateHnswOramCommitBucketRef {
+                bucket_id: updated_bucket.bucket_id,
+                ciphertext_sha256: updated_bucket.ciphertext_sha256.as_str(),
+            }]
+        );
+
+        let refreshed = refresh_private_hnsw_oram_manifest_for_commit(&manifest, &plan).unwrap();
+        assert_eq!(refreshed.index_epoch, plan.new_epoch);
+        assert_eq!(refreshed.root_hash, plan.new_root_hash);
+        assert_eq!(refreshed.collection_id, manifest.collection_id);
+        assert_eq!(refreshed.vector_name, manifest.vector_name);
+        assert_eq!(refreshed.bucket_count, manifest.bucket_count);
+
+        let (signed_manifest, signature) =
+            sign_private_hnsw_oram_manifest_refresh(&key_pair, &manifest, &plan).unwrap();
+        assert_eq!(signed_manifest, refreshed);
+        assert_eq!(signature.key_id, signed_manifest.owner_signing_key_id);
+        let epoch = validate_private_hnsw_oram_manifest(
+            &signed_manifest,
+            Some(&signature),
+            PrivateHnswManifestValidationContext {
+                min_rk_epoch: 7,
+                max_rk_epoch: 7,
+                expected_dim: signed_manifest.dim,
+                expected_distance: signed_manifest.distance,
+                signature_verification: PrivateHnswSignatureVerification {
+                    expected_key_id: &signature.key_id,
+                    public_key: key_pair.public_key().as_ref(),
+                },
+                expected_collection_id: &signed_manifest.collection_id,
+                expected_vector_name: &signed_manifest.vector_name,
+                expected_key_id: &signed_manifest.key_id,
+                expected_rk_id: &signed_manifest.rk_id,
+            },
+        )
+        .unwrap();
+        assert_eq!(epoch.epoch, 43);
+        assert_eq!(
+            BASE64URL_NOPAD.encode(&epoch.root_hash),
+            signed_manifest.root_hash
+        );
+    }
+
+    #[test]
+    fn commit_plan_rejects_stale_duplicate_out_of_range_and_context_mismatch() {
+        let (manifest, buckets) = small_upload_bundle_fixture();
+        let leaf_commitments = buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect::<Vec<_>>();
+        let updated_bucket = fixture_upload_bucket(&manifest, 2, 43, 9);
+
+        assert_eq!(
+            plan_private_hnsw_oram_commit_for_manifest(&manifest, 43, &leaf_commitments, &[]),
+            Err(PrivateHnswOramError::EmptyCommit)
+        );
+
+        assert_eq!(
+            plan_private_hnsw_oram_commit_for_manifest(
+                &manifest,
+                43,
+                &[BASE64URL_NOPAD.encode(&[99; 32])],
+                std::slice::from_ref(&updated_bucket),
+            ),
+            Err(PrivateHnswOramError::InvalidManifestField("bucket_count"))
+        );
+
+        let stale_bucket = fixture_upload_bucket(&manifest, 2, 42, 9);
+        assert_eq!(
+            plan_private_hnsw_oram_commit(
+                42,
+                43,
+                &manifest.root_hash,
+                &leaf_commitments,
+                std::slice::from_ref(&stale_bucket),
+            ),
+            Err(PrivateHnswOramError::StaleBucketEpoch {
+                bucket_id: 2,
+                expected_epoch: 43,
+                actual_epoch: 42,
+            })
+        );
+
+        assert_eq!(
+            plan_private_hnsw_oram_commit(
+                42,
+                43,
+                &manifest.root_hash,
+                &leaf_commitments,
+                &[updated_bucket.clone(), updated_bucket.clone()],
+            ),
+            Err(PrivateHnswOramError::DuplicateUpdatedBucket { bucket_id: 2 })
+        );
+
+        let out_of_range = fixture_upload_bucket(&manifest, 3, 43, 9);
+        assert_eq!(
+            plan_private_hnsw_oram_commit(
+                42,
+                43,
+                &manifest.root_hash,
+                &leaf_commitments,
+                std::slice::from_ref(&out_of_range),
+            ),
+            Err(PrivateHnswOramError::BucketOutOfRange {
+                bucket_id: 3,
+                bucket_count: 3,
+            })
+        );
+
+        let mut wrong_commitment = updated_bucket.clone();
+        wrong_commitment.bucket_commitment = BASE64URL_NOPAD.encode(&[88; 32]);
+        assert_eq!(
+            plan_private_hnsw_oram_commit_for_manifest(
+                &manifest,
+                43,
+                &leaf_commitments,
+                std::slice::from_ref(&wrong_commitment),
+            ),
+            Err(PrivateHnswOramError::InvalidBucketCommitment)
+        );
+
+        let mut short_ciphertext = updated_bucket.clone();
+        short_ciphertext.ciphertext = BASE64URL_NOPAD.encode(&[7; 32]);
+        short_ciphertext.ciphertext_sha256 =
+            BASE64URL_NOPAD.encode(Sha256::digest([7; 32]).as_ref());
+        short_ciphertext.bucket_commitment = private_hnsw_oram_bucket_commitment(
+            PrivateHnswOramBucketCommitmentContext {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                bucket_id: short_ciphertext.bucket_id,
+                index_epoch: short_ciphertext.index_epoch,
+            },
+            &short_ciphertext.ciphertext_sha256,
+        )
+        .unwrap();
+        assert_eq!(
+            plan_private_hnsw_oram_commit_for_manifest(
+                &manifest,
+                43,
+                &leaf_commitments,
+                std::slice::from_ref(&short_ciphertext),
+            ),
+            Err(PrivateHnswOramError::InvalidBucketField("ciphertext"))
+        );
+
+        let mut stale_plan = plan_private_hnsw_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &leaf_commitments,
+            std::slice::from_ref(&updated_bucket),
+        )
+        .unwrap();
+        stale_plan.old_root_hash = BASE64URL_NOPAD.encode(&[77; 32]);
+        assert_eq!(
+            refresh_private_hnsw_oram_manifest_for_commit(&manifest, &stale_plan),
+            Err(PrivateHnswOramError::ManifestCommitMismatch)
+        );
+    }
+
     fn fixture_context<'a>(
         public_key: &'a [u8],
         key_id: &'a str,
@@ -1926,6 +2390,7 @@ mod tests {
     fn fixture_upload_bucket(
         manifest: &PrivateHnswOramManifest,
         bucket_id: u64,
+        index_epoch: u64,
         byte: u8,
     ) -> PrivateHnswOramBucket {
         let ciphertext_len = private_hnsw_oram_bucket_ciphertext_bytes(&manifest.oram).unwrap();
@@ -1934,7 +2399,7 @@ mod tests {
         PrivateHnswOramBucket {
             version: 1,
             bucket_id,
-            index_epoch: manifest.index_epoch,
+            index_epoch,
             ciphertext: BASE64URL_NOPAD.encode(&ciphertext),
             ciphertext_sha256: ciphertext_sha256.clone(),
             bucket_commitment: private_hnsw_oram_bucket_commitment(
@@ -1945,7 +2410,7 @@ mod tests {
                     rk_id: &manifest.rk_id,
                     rk_epoch: manifest.rk_epoch,
                     bucket_id,
-                    index_epoch: manifest.index_epoch,
+                    index_epoch,
                 },
                 &ciphertext_sha256,
             )
@@ -1956,7 +2421,14 @@ mod tests {
     fn small_upload_bundle_fixture() -> (PrivateHnswOramManifest, Vec<PrivateHnswOramBucket>) {
         let mut manifest = small_upload_manifest();
         let buckets = (0..manifest.bucket_count)
-            .map(|bucket_id| fixture_upload_bucket(&manifest, bucket_id, bucket_id as u8 + 1))
+            .map(|bucket_id| {
+                fixture_upload_bucket(
+                    &manifest,
+                    bucket_id,
+                    manifest.index_epoch,
+                    bucket_id as u8 + 1,
+                )
+            })
             .collect::<Vec<_>>();
         manifest.root_hash = private_hnsw_oram_merkle_root_for_commitments(
             &buckets
