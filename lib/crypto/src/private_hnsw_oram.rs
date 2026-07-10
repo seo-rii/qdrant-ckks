@@ -83,6 +83,8 @@ pub enum PrivateHnswOramError {
     InvalidBucketCommitment,
     #[error("private HNSW ORAM bucket context is invalid")]
     InvalidBucketContext(&'static str),
+    #[error("private HNSW ORAM fetch/commit plan field is invalid")]
+    InvalidFetchPlanField(&'static str),
     #[error("private HNSW ORAM Merkle tree is empty")]
     EmptyMerkleTree,
     #[error("private HNSW ORAM Merkle root does not match bucket commitments")]
@@ -908,6 +910,12 @@ pub fn plan_private_hnsw_oram_commit_for_manifest_context(
     if updated_buckets.is_empty() {
         return Err(PrivateHnswOramError::EmptyCommit);
     }
+    let max_updated_buckets = private_hnsw_oram_fixed_writeback_bucket_budget(&manifest.oram)?;
+    if updated_buckets.len() > max_updated_buckets {
+        return Err(PrivateHnswOramError::InvalidFetchPlanField(
+            "updated_buckets",
+        ));
+    }
     if private_hnsw_oram_merkle_root_for_commitments(current_leaf_commitments)? != old_root_hash {
         return Err(PrivateHnswOramError::MerkleRootMismatch);
     }
@@ -1314,6 +1322,24 @@ pub fn private_hnsw_oram_bucket_commitment(
     Ok(BASE64URL_NOPAD.encode(Sha256::digest(&message).as_ref()))
 }
 
+pub fn private_hnsw_oram_fixed_writeback_bucket_budget(
+    oram: &OramParams,
+) -> Result<usize, PrivateHnswOramError> {
+    let path_len = private_hnsw_oram_path_len(oram.tree_height)?;
+    let path_batch_size = usize::try_from(oram.path_batch_size)
+        .map_err(|_| PrivateHnswOramError::InvalidFetchPlanField("path_batch_size"))?;
+    if path_batch_size == 0 {
+        return Err(PrivateHnswOramError::InvalidFetchPlanField(
+            "path_batch_size",
+        ));
+    }
+    path_len
+        .checked_mul(path_batch_size)
+        .ok_or(PrivateHnswOramError::InvalidFetchPlanField(
+            "updated_buckets",
+        ))
+}
+
 pub fn private_hnsw_oram_merkle_root_for_commitments(
     commitments: &[String],
 ) -> Result<String, PrivateHnswOramError> {
@@ -1423,6 +1449,16 @@ fn path_oram_leaf_count(tree_height: u32) -> Option<u64> {
         return None;
     }
     Some(1u64 << tree_height)
+}
+
+fn private_hnsw_oram_path_len(tree_height: u32) -> Result<usize, PrivateHnswOramError> {
+    path_oram_leaf_count(tree_height)
+        .filter(|_| tree_height > 0)
+        .ok_or(PrivateHnswOramError::InvalidFetchPlanField("tree_height"))?;
+    usize::try_from(tree_height)
+        .ok()
+        .and_then(|height| height.checked_add(1))
+        .ok_or(PrivateHnswOramError::InvalidFetchPlanField("tree_height"))
 }
 
 fn validate_manifest_context(
@@ -1778,6 +1814,7 @@ mod tests {
             PrivateHnswOramError::DuplicateUpdatedBucket { bucket_id: 123 }.to_string(),
             PrivateHnswOramError::InvalidBucketField("bucket-field-sentinel").to_string(),
             PrivateHnswOramError::InvalidBucketContext("bucket-context-sentinel").to_string(),
+            PrivateHnswOramError::InvalidFetchPlanField("fetch-plan-field-sentinel").to_string(),
             PrivateHnswOramError::ManifestCommitMismatch.to_string(),
         ];
 
@@ -1786,6 +1823,10 @@ mod tests {
             assert!(!rendered.contains("manifest-field-sentinel"), "{rendered}");
             assert!(!rendered.contains("bucket-field-sentinel"), "{rendered}");
             assert!(!rendered.contains("bucket-context-sentinel"), "{rendered}");
+            assert!(
+                !rendered.contains("fetch-plan-field-sentinel"),
+                "{rendered}"
+            );
             assert!(
                 !rendered.contains("manifest-context-sentinel"),
                 "{rendered}"
@@ -1842,6 +1883,10 @@ mod tests {
                 "{:?}",
                 PrivateHnswOramError::InvalidBucketContext("bucket-context-sentinel")
             ),
+            format!(
+                "{:?}",
+                PrivateHnswOramError::InvalidFetchPlanField("fetch-plan-field-sentinel")
+            ),
             format!("{:?}", PrivateHnswOramError::ManifestCommitMismatch),
         ];
 
@@ -1850,6 +1895,10 @@ mod tests {
             assert!(!rendered.contains("manifest-field-sentinel"), "{rendered}");
             assert!(!rendered.contains("bucket-field-sentinel"), "{rendered}");
             assert!(!rendered.contains("bucket-context-sentinel"), "{rendered}");
+            assert!(
+                !rendered.contains("fetch-plan-field-sentinel"),
+                "{rendered}"
+            );
             assert!(
                 !rendered.contains("manifest-context-sentinel"),
                 "{rendered}"
@@ -2339,6 +2388,64 @@ mod tests {
             refresh_private_hnsw_oram_manifest_for_commit(&manifest, &stale_plan),
             Err(PrivateHnswOramError::ManifestCommitMismatch)
         );
+    }
+
+    #[test]
+    fn commit_plan_for_manifest_rejects_oversized_fixed_writeback() {
+        let mut manifest = small_upload_manifest();
+        manifest.oram.tree_height = 2;
+        manifest.oram.path_batch_size = 1;
+        manifest.fixed_budget.paths_per_round = 1;
+        manifest.bucket_count = 7;
+        manifest.logical_node_count = 4;
+        manifest.dummy_node_count = 0;
+        let buckets = (0..manifest.bucket_count)
+            .map(|bucket_id| {
+                fixture_upload_bucket(
+                    &manifest,
+                    bucket_id,
+                    manifest.index_epoch,
+                    bucket_id as u8 + 1,
+                )
+            })
+            .collect::<Vec<_>>();
+        let leaf_commitments = buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect::<Vec<_>>();
+        manifest.root_hash =
+            private_hnsw_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let fixed_writeback_budget =
+            private_hnsw_oram_fixed_writeback_bucket_budget(&manifest.oram).unwrap();
+        assert_eq!(fixed_writeback_budget, 3);
+
+        let updated_buckets = (0..=fixed_writeback_budget)
+            .map(|bucket_id| {
+                fixture_upload_bucket(&manifest, bucket_id as u64, 43, bucket_id as u8 + 9)
+            })
+            .collect::<Vec<_>>();
+        assert!(updated_buckets.len() <= leaf_commitments.len());
+
+        assert_eq!(
+            plan_private_hnsw_oram_commit_for_manifest(
+                &manifest,
+                43,
+                &leaf_commitments,
+                &updated_buckets,
+            ),
+            Err(PrivateHnswOramError::InvalidFetchPlanField(
+                "updated_buckets"
+            ))
+        );
+
+        let plan = plan_private_hnsw_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &leaf_commitments,
+            &updated_buckets[..fixed_writeback_budget],
+        )
+        .unwrap();
+        assert_eq!(plan.updated_buckets.len(), fixed_writeback_budget);
     }
 
     fn fixture_context<'a>(
