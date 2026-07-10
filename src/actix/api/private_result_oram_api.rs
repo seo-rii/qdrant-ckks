@@ -2576,6 +2576,14 @@ mod private_result_oram_rest_tests {
                 "{stale_current_read_error}"
             );
             assert!(
+                !stale_current_read_error.contains(&fixture.buckets[0].ciphertext_sha256),
+                "{stale_current_read_error}"
+            );
+            assert!(
+                !stale_current_read_error.contains(&fixture.buckets[0].bucket_commitment),
+                "{stale_current_read_error}"
+            );
+            assert!(
                 !stale_current_read_error.contains("private_result_oram"),
                 "{stale_current_read_error}"
             );

@@ -2762,6 +2762,18 @@ mod private_result_oram_grpc_tests {
                 "{}",
                 err.message()
             );
+            assert!(
+                !err.message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256),
+                "{}",
+                err.message()
+            );
+            assert!(
+                !err.message()
+                    .contains(&fixture.buckets[0].bucket_commitment),
+                "{}",
+                err.message()
+            );
             assert!(!err.message().contains("private_result_oram"));
             assert!(!err.message().contains("/tmp"));
 
