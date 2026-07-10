@@ -744,6 +744,7 @@ mod tests {
             "payload_fetch_tokens=[private-fetch-token-sentinel]",
             "payloadFetchTokens=[private-fetch-token-camel-sentinel]",
             "payloadFetchToken=private-fetch-token-camel-singular-sentinel",
+            "payload.fetch.token=private-fetch-token-dot-sentinel",
             "payload_bytes=private-payload-bytes-sentinel",
             "payloadBytes=private-payload-bytes-camel-sentinel",
             "payload_plaintext=private-payload-plaintext-sentinel",
