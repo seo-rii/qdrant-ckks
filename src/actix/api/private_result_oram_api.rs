@@ -3342,6 +3342,8 @@ mod private_result_oram_rest_tests {
                 oversized_read_session_id.as_str(),
                 malformed_read_session_id,
             ] {
+                let invalid_read_signature = fixture.read_signature(&read_bucket_ids);
+                let invalid_read_signature_sig = invalid_read_signature.sig.clone();
                 let error = post_json_error_contains!(
                     "/collections/docs/private-result-oram/oram/read_buckets",
                     ReadPrivateResultOramBucketsRequest {
@@ -3349,13 +3351,19 @@ mod private_result_oram_rest_tests {
                         index_epoch: fixture.manifest.index_epoch,
                         root_hash: fixture.manifest.root_hash.clone(),
                         bucket_ids: read_bucket_ids.clone(),
-                        read_signature: fixture.read_signature(&read_bucket_ids),
+                        read_signature: invalid_read_signature,
                     },
                     StatusCode::BAD_REQUEST,
                     "session_id is invalid"
                 );
                 assert!(!error.contains(invalid_session_id), "{error}");
                 assert!(!error.contains("session is missing or expired"), "{error}");
+                for sentinel in [
+                    fixture.manifest.root_hash.as_str(),
+                    invalid_read_signature_sig.as_str(),
+                ] {
+                    assert!(!error.contains(sentinel), "{error}");
+                }
             }
 
             let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
@@ -3414,6 +3422,16 @@ mod private_result_oram_rest_tests {
                 );
                 assert!(!error.contains(invalid_session_id), "{error}");
                 assert!(!error.contains("session is missing or expired"), "{error}");
+                for sentinel in [
+                    fixture.manifest.root_hash.as_str(),
+                    new_root_hash.as_str(),
+                    commit_signature.sig.as_str(),
+                    updated_bucket.ciphertext.as_str(),
+                    updated_bucket.ciphertext_sha256.as_str(),
+                    updated_bucket.bucket_commitment.as_str(),
+                ] {
+                    assert!(!error.contains(sentinel), "{error}");
+                }
             }
 
             let commit_wrong_old_root = BASE64URL_NOPAD.encode(&[10; 32]);

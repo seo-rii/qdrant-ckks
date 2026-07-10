@@ -3877,6 +3877,8 @@ mod private_result_oram_grpc_tests {
                 oversized_read_session_id.as_str(),
                 malformed_read_session_id,
             ] {
+                let invalid_read_signature = fixture.read_signature(&read_bucket_ids);
+                let invalid_read_signature_sig = invalid_read_signature.sig.clone();
                 let err = PrivateResultOram::read_private_result_oram_buckets(
                     &service,
                     Request::new(grpc::ReadPrivateResultOramBucketsRequest {
@@ -3885,9 +3887,7 @@ mod private_result_oram_grpc_tests {
                         index_epoch: BASE_EPOCH,
                         root_hash: fixture.manifest.root_hash.clone(),
                         bucket_ids: read_bucket_ids.clone(),
-                        read_signature: Some(signature_to_proto(
-                            fixture.read_signature(&read_bucket_ids),
-                        )),
+                        read_signature: Some(signature_to_proto(invalid_read_signature)),
                     }),
                 )
                 .await
@@ -3904,6 +3904,12 @@ mod private_result_oram_grpc_tests {
                     "{}",
                     err.message()
                 );
+                for sentinel in [
+                    fixture.manifest.root_hash.as_str(),
+                    invalid_read_signature_sig.as_str(),
+                ] {
+                    assert!(!err.message().contains(sentinel), "{}", err.message());
+                }
             }
 
             let (updated_bucket, commit_signature, new_root_hash) = fixture.commit_bucket();
@@ -3984,6 +3990,16 @@ mod private_result_oram_grpc_tests {
                     "{}",
                     err.message()
                 );
+                for sentinel in [
+                    fixture.manifest.root_hash.as_str(),
+                    new_root_hash.as_str(),
+                    commit_signature.sig.as_str(),
+                    updated_bucket.ciphertext.as_str(),
+                    updated_bucket.ciphertext_sha256.as_str(),
+                    updated_bucket.bucket_commitment.as_str(),
+                ] {
+                    assert!(!err.message().contains(sentinel), "{}", err.message());
+                }
             }
 
             let commit_wrong_old_root = BASE64URL_NOPAD.encode(&[10; 32]);
