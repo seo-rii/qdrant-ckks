@@ -20,7 +20,7 @@ use super::point_ops::{
     ensure_encrypted_payload_read_mode_is_supported,
 };
 use crate::config::{
-    EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
+    CollectionEncryptionConfig, EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
     private_hnsw_oram_api_required_message,
 };
 use crate::events::SlowQueryEvent;
@@ -110,20 +110,10 @@ impl Collection {
             .params
             .effective_encryption()
         {
-            for rule in &encryption.rules {
-                let EncryptionSelector::VectorNames { names } = &rule.selector else {
-                    continue;
-                };
-                for search in &request.searches {
-                    let vector_name = search.query.get_vector_name();
-                    if names.iter().any(|name| name == vector_name) {
-                        let message = if encryption_rule_uses_private_hnsw_oram(rule) {
-                            private_hnsw_oram_api_required_message(vector_name)
-                        } else {
-                            "cannot search encrypted vector through direct collection search; use the runtime CKKS sidecar search entrypoint".to_string()
-                        };
-                        return Err(CollectionError::bad_input(message));
-                    }
+            for search in &request.searches {
+                let vector_name = search.query.get_vector_name();
+                if let Some(err) = encrypted_direct_search_error(&encryption, vector_name) {
+                    return Err(err);
                 }
             }
         }
@@ -419,5 +409,66 @@ impl Collection {
                 schema,
             });
         }
+    }
+}
+
+fn encrypted_direct_search_error(
+    encryption: &CollectionEncryptionConfig,
+    vector_name: &str,
+) -> Option<CollectionError> {
+    for rule in &encryption.rules {
+        let EncryptionSelector::VectorNames { names } = &rule.selector else {
+            continue;
+        };
+        if names.iter().any(|name| name == vector_name) {
+            let message = if encryption_rule_uses_private_hnsw_oram(rule) {
+                private_hnsw_oram_api_required_message(vector_name)
+            } else {
+                "cannot search encrypted vector through direct collection search; use the runtime CKKS sidecar search entrypoint".to_string()
+            };
+            return Some(CollectionError::bad_input(message));
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{CollectionEncryptionConfig, CryptoMigrationState, EncryptionRuleRef};
+
+    fn private_hnsw_search_encryption(vector_name: &str) -> CollectionEncryptionConfig {
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a/vector-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "docs_text_private_hnsw".to_string(),
+                selector: EncryptionSelector::VectorNames {
+                    names: vec![vector_name.to_string()],
+                },
+                instance: "docs_text_private_hnsw".to_string(),
+                binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
+            }],
+        }
+    }
+
+    #[test]
+    fn private_hnsw_direct_search_error_uses_session_api_without_vector_name() {
+        let private_vector = "client_state_direct_search_private_hnsw";
+        let encryption = private_hnsw_search_encryption(private_vector);
+
+        let err = encrypted_direct_search_error(&encryption, private_vector)
+            .expect("private HNSW direct search must be rejected");
+        let message = err.to_string();
+
+        assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        assert!(message.contains("/private-hnsw/{vector}/session"));
+        assert!(!message.contains(private_vector), "{message}");
+        assert!(!message.contains("client_state"), "{message}");
+        assert!(encrypted_direct_search_error(&encryption, "public").is_none());
     }
 }
