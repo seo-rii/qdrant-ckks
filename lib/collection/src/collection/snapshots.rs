@@ -3025,6 +3025,13 @@ mod tests {
             "state_ciphertexts_sha256.bin",
             "state_ciphertexts_sha256.json",
             "stateCiphertextsSha256.json",
+            "payload_fetch_token.bin",
+            "payload_fetch_token.json",
+            "payload_fetch_tokens.bin",
+            "payload_fetch_tokens.json",
+            "payloadFetchToken.json",
+            "payloadFetchTokens.json",
+            "payload.fetch.token",
             "position_map.bin",
             "positionMap.json",
             "position.map",
@@ -3252,6 +3259,31 @@ mod tests {
                 .path()
                 .join(PRIVATE_RESULT_ORAM_DIR)
                 .join("stateCiphertextsSha256.json"),
+        )
+        .unwrap();
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("payloadFetchTokens.json"),
+            b"payload fetch token sentinel",
+        )
+        .unwrap();
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered
+                .contains("private result ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains("payloadFetchTokens"));
+        assert!(!rendered.contains("sentinel"));
+
+        fs::remove_file(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("payloadFetchTokens.json"),
         )
         .unwrap();
         fs::write(

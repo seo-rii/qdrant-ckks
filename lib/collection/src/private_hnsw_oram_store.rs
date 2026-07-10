@@ -1534,6 +1534,8 @@ fn compact_path_component_is_client_owned_oram_state_alias(value: &str) -> bool 
             | "stateciphertexthashes"
             | "stateciphertextsha256"
             | "stateciphertextssha256"
+            | "payloadfetchtoken"
+            | "payloadfetchtokens"
             | "positionmap"
             | "positionmapbackup"
             | "positionmapbackups"
@@ -2022,6 +2024,14 @@ mod tests {
             "state_ciphertexts_sha256.bin",
             "state_ciphertexts_sha256.json",
             "stateCiphertextsSha256.json",
+            "payload_fetch_token",
+            "payload_fetch_token.json",
+            "payload_fetch_tokens",
+            "payload_fetch_tokens.json",
+            "payloadFetchToken",
+            "payloadFetchToken.json",
+            "payloadFetchTokens",
+            "payloadFetchTokens.json",
             "position_map",
             "position_maps",
             "positionMaps.json",
