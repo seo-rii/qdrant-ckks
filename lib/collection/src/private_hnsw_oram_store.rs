@@ -2500,6 +2500,43 @@ mod tests {
         }
     }
 
+    #[test]
+    fn private_hnsw_oram_error_mapping_redacts_client_state_alias_fields() {
+        let sensitive_fields = [
+            "client_state_ciphertext_hash.bin",
+            "clientStateCiphertextHash",
+            "encrypted_client_state_ciphertext_sha256.json",
+            "encryptedClientStateCiphertextSha256",
+            "oram_position_map_snapshot",
+            "positionMapBackup",
+            "state_ciphertexts_sha256.json",
+            "token_position_map_backup",
+            "payloadFetchToken",
+            "stashSnapshot",
+        ];
+
+        for field in sensitive_fields {
+            let cases = [
+                private_hnsw_oram_error(PrivateHnswOramError::InvalidManifestField(field)),
+                private_hnsw_oram_error(PrivateHnswOramError::ManifestContextMismatch(field)),
+                private_hnsw_oram_error(PrivateHnswOramError::InvalidBucketField(field)),
+                private_hnsw_oram_error(PrivateHnswOramError::InvalidBucketContext(field)),
+                private_hnsw_oram_error(PrivateHnswOramError::InvalidFetchPlanField(field)),
+            ];
+
+            for err in cases {
+                let rendered = err.to_string();
+                assert!(!rendered.contains(field), "{rendered}");
+                assert!(!rendered.contains("client_state"), "{rendered}");
+                assert!(!rendered.contains("ClientState"), "{rendered}");
+                assert!(!rendered.contains("position_map"), "{rendered}");
+                assert!(!rendered.contains("PositionMap"), "{rendered}");
+                assert!(!rendered.contains("payloadFetchToken"), "{rendered}");
+                assert!(!rendered.contains("stash"), "{rendered}");
+            }
+        }
+    }
+
     fn fixture_store(temp: &TempDir) -> PrivateHnswOramStore {
         PrivateHnswOramStore::new(temp.path(), "text").unwrap()
     }
