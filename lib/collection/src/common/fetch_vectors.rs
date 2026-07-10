@@ -15,7 +15,7 @@ use crate::collection::Collection;
 use crate::common::batching::batch_requests;
 use crate::common::retrieve_request_trait::RetrieveRequest;
 use crate::config::{
-    EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
+    CollectionEncryptionConfig, EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
     private_hnsw_oram_api_required_message,
 };
 use crate::operations::consistency_params::ReadConsistency;
@@ -102,6 +102,17 @@ async fn ensure_reference_vectors_do_not_use_private_hnsw_oram(
         return Ok(());
     };
 
+    if let Some(err) = private_hnsw_reference_vector_error(&encryption, vector_names) {
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+fn private_hnsw_reference_vector_error(
+    encryption: &CollectionEncryptionConfig,
+    vector_names: &[VectorNameBuf],
+) -> Option<CollectionError> {
     for rule in &encryption.rules {
         if !encryption_rule_uses_private_hnsw_oram(rule) {
             continue;
@@ -113,13 +124,13 @@ async fn ensure_reference_vectors_do_not_use_private_hnsw_oram(
             .iter()
             .find(|vector_name| names.iter().any(|name| name == *vector_name))
         {
-            return Err(CollectionError::bad_input(
+            return Some(CollectionError::bad_input(
                 private_hnsw_oram_api_required_message(vector_name),
             ));
         }
     }
 
-    Ok(())
+    None
 }
 
 pub type CollectionName = String;
@@ -514,4 +525,49 @@ pub fn build_vector_resolver_query(
     }
 
     resolve_prefetches
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{CryptoMigrationState, EncryptionRuleRef};
+
+    fn private_hnsw_reference_encryption(vector_name: &str) -> CollectionEncryptionConfig {
+        CollectionEncryptionConfig {
+            version: 1,
+            key_id: Some("tenant-a/vector-private-rk".to_string()),
+            crypto_schema_version: 1,
+            encryption_epoch: 7,
+            migration_state: CryptoMigrationState::Active,
+            rules: vec![EncryptionRuleRef {
+                id: "docs_text_private_hnsw".to_string(),
+                selector: EncryptionSelector::VectorNames {
+                    names: vec![vector_name.to_string()],
+                },
+                instance: "docs_text_private_hnsw".to_string(),
+                binding: Some(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING.to_string()),
+            }],
+        }
+    }
+
+    #[test]
+    fn private_hnsw_reference_vector_error_uses_session_api_without_vector_name() {
+        let private_vector = "client_state_backup_private_hnsw";
+        let encryption = private_hnsw_reference_encryption(private_vector);
+
+        let err = private_hnsw_reference_vector_error(
+            &encryption,
+            &["public".to_string(), private_vector.to_string()],
+        )
+        .expect("private HNSW reference vector must be rejected");
+        let message = err.to_string();
+
+        assert!(message.contains(qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER));
+        assert!(message.contains("/private-hnsw/{vector}/session"));
+        assert!(!message.contains(private_vector), "{message}");
+        assert!(!message.contains("client_state"), "{message}");
+        assert!(
+            private_hnsw_reference_vector_error(&encryption, &["public".to_string()]).is_none()
+        );
+    }
 }
