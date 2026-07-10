@@ -3949,6 +3949,9 @@ mod tests {
             }
             .to_string(),
             PrivateResultOramError::DuplicateUpdatedBucket { bucket_id: 123 }.to_string(),
+            PrivateResultOramError::DuplicatePayloadFetchToken.to_string(),
+            PrivateResultOramError::DuplicatePointToken.to_string(),
+            PrivateResultOramError::DuplicatePayloadFetchTokenPosition.to_string(),
         ];
 
         for rendered in cases {
@@ -4053,6 +4056,12 @@ mod tests {
             format!(
                 "{:?}",
                 PrivateResultOramError::DuplicateUpdatedBucket { bucket_id: 123 }
+            ),
+            format!("{:?}", PrivateResultOramError::DuplicatePayloadFetchToken),
+            format!("{:?}", PrivateResultOramError::DuplicatePointToken),
+            format!(
+                "{:?}",
+                PrivateResultOramError::DuplicatePayloadFetchTokenPosition
             ),
         ];
 

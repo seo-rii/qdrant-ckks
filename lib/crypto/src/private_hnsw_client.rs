@@ -4902,6 +4902,8 @@ mod tests {
                 fixed_steps: 271,
             }
             .to_string(),
+            PrivateHnswClientError::DuplicatePointToken.to_string(),
+            PrivateHnswClientError::DuplicatePayloadFetchToken.to_string(),
             PrivateHnswClientError::BucketOutOfRange {
                 bucket_id: 123,
                 bucket_count: 456,
@@ -5021,6 +5023,8 @@ mod tests {
                     fixed_steps: 271,
                 }
             ),
+            format!("{:?}", PrivateHnswClientError::DuplicatePointToken),
+            format!("{:?}", PrivateHnswClientError::DuplicatePayloadFetchToken),
             format!(
                 "{:?}",
                 PrivateHnswClientError::BucketOutOfRange {
