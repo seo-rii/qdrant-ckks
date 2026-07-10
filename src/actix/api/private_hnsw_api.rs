@@ -774,6 +774,30 @@ mod private_hnsw_rest_tests {
             buckets: fixture.encrypted_build.buckets.clone(),
         };
         assert_unknown_field_rejected(&buckets_request);
+        let mut nested_bucket_extra = serde_json::to_value(&buckets_request).unwrap();
+        nested_bucket_extra["buckets"][0]
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "extra".to_string(),
+                json!("client_state_ciphertext_hash.bin"),
+            );
+        let err = serde_json::from_value::<UploadPrivateHnswBucketsRequest>(nested_bucket_extra)
+            .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("unknown field"), "{rendered}");
+        assert!(
+            !rendered.contains("client_state_ciphertext_hash.bin"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&fixture.encrypted_build.buckets[0].ciphertext),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&fixture.encrypted_build.buckets[0].ciphertext_sha256),
+            "{rendered}"
+        );
 
         let session_request = OpenPrivateHnswSessionRequest {
             client_id: "tenant-a/sdk-instance-1".to_string(),
@@ -832,6 +856,22 @@ mod private_hnsw_rest_tests {
             },
         };
         assert_unknown_field_rejected(&commit_request);
+        let mut nested_commit_bucket_extra = serde_json::to_value(&commit_request).unwrap();
+        nested_commit_bucket_extra["updated_buckets"][0]
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "extra".to_string(),
+                json!("encrypted_client_state_snapshot"),
+            );
+        let err =
+            serde_json::from_value::<OramCommitRequest>(nested_commit_bucket_extra).unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("unknown field"), "{rendered}");
+        assert!(
+            !rendered.contains("encrypted_client_state_snapshot"),
+            "{rendered}"
+        );
     }
 
     #[test]
