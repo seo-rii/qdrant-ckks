@@ -613,6 +613,13 @@ mod tests {
         .await;
 
         let sentinel = "qdrant-sec-private-oram-unknown-field-sentinel";
+        let private_oram_unknown_field_sentinels = [
+            sentinel,
+            "payloadFetchToken",
+            "payloadFetchTokens",
+            "payload_fetch_token",
+            "payload_fetch_tokens",
+        ];
         for private_oram_path in [
             "/collections/docs/private-hnsw/text/session",
             "/collections/docs/private-hnsw/text/manifest",
@@ -625,29 +632,32 @@ mod tests {
             "/collections/docs/private-result-oram/oram/read_buckets",
             "/collections/docs/private-result-oram/oram/commit",
         ] {
-            let private_oram_request = actix_test::TestRequest::post()
-                .uri(private_oram_path)
-                .set_json(body_with_unknown_field(sentinel, "must-not-reflect"))
-                .to_request();
-            let private_oram_response = actix_test::call_service(&app, private_oram_request).await;
-            assert_eq!(
-                private_oram_response.status(),
-                actix_web::http::StatusCode::BAD_REQUEST
-            );
-            let private_oram_body = actix_test::read_body(private_oram_response).await;
-            let private_oram_body = String::from_utf8_lossy(&private_oram_body);
-            assert!(
-                private_oram_body.contains("Invalid JSON body for private ORAM request"),
-                "{private_oram_path}: {private_oram_body}"
-            );
-            assert!(
-                !private_oram_body.contains(sentinel),
-                "{private_oram_path}: {private_oram_body}"
-            );
-            assert!(
-                !private_oram_body.contains("unknown field"),
-                "{private_oram_path}: {private_oram_body}"
-            );
+            for field_sentinel in private_oram_unknown_field_sentinels {
+                let private_oram_request = actix_test::TestRequest::post()
+                    .uri(private_oram_path)
+                    .set_json(body_with_unknown_field(field_sentinel, "must-not-reflect"))
+                    .to_request();
+                let private_oram_response =
+                    actix_test::call_service(&app, private_oram_request).await;
+                assert_eq!(
+                    private_oram_response.status(),
+                    actix_web::http::StatusCode::BAD_REQUEST
+                );
+                let private_oram_body = actix_test::read_body(private_oram_response).await;
+                let private_oram_body = String::from_utf8_lossy(&private_oram_body);
+                assert!(
+                    private_oram_body.contains("Invalid JSON body for private ORAM request"),
+                    "{private_oram_path}: {private_oram_body}"
+                );
+                assert!(
+                    !private_oram_body.contains(field_sentinel),
+                    "{private_oram_path}: {private_oram_body}"
+                );
+                assert!(
+                    !private_oram_body.contains("unknown field"),
+                    "{private_oram_path}: {private_oram_body}"
+                );
+            }
         }
 
         let malformed_body_sentinel = "qdrant-sec-private-oram-malformed-json-body-sentinel";
