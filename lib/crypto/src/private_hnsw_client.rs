@@ -6029,6 +6029,14 @@ mod tests {
             }],
         };
         let commit_refs = commit_plan.signature_bucket_refs();
+        let client_commit_ref = PrivateHnswClientCommitBucketRef {
+            bucket_id: 123_456,
+            ciphertext_sha256: "HNSW-CLIENT-COMMIT-REF-SHA-SENTINEL".to_string(),
+        };
+        let oram_commit_ref = PrivateHnswOramCommitBucketRef {
+            bucket_id: 123_456,
+            ciphertext_sha256: "HNSW-ORAM-COMMIT-REF-SHA-SENTINEL",
+        };
         let commit_signature_input = PrivateHnswOramCommitSignatureInput {
             collection_id: "HNSW-CLIENT-COMMIT-COLLECTION-ID-SENTINEL",
             vector_name: "HNSW-CLIENT-COMMIT-VECTOR-NAME-SENTINEL",
@@ -6153,6 +6161,8 @@ mod tests {
             format!("{manifest:?}"),
             format!("{upload_bundle:?}"),
             format!("{commit_plan:?}"),
+            format!("{client_commit_ref:?}"),
+            format!("{oram_commit_ref:?}"),
             format!("{commit_signature_input:?}"),
             format!("{read_signature_input:?}"),
             format!("{bucket_aead_context:?}"),
@@ -6192,6 +6202,8 @@ mod tests {
             "HNSW-PRIVATE-PAYLOAD-RAW".to_string(),
             "HNSW-CIPHERTEXT-SENTINEL".to_string(),
             "HNSW-SHA-SENTINEL".to_string(),
+            "HNSW-CLIENT-COMMIT-REF-SHA-SENTINEL".to_string(),
+            "HNSW-ORAM-COMMIT-REF-SHA-SENTINEL".to_string(),
             "HNSW-COMMITMENT-SENTINEL".to_string(),
             "HNSW-SIGNATURE-SENTINEL".to_string(),
             "HNSW-ROOT-SENTINEL".to_string(),
