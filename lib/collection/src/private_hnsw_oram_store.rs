@@ -4608,7 +4608,8 @@ mod tests {
         let store = fixture_store(&temp);
         store.ensure_layout().unwrap();
         let outside = temp.path().join("outside.bucket");
-        fs::write(&outside, b"{}").unwrap();
+        let bucket = fixture_bucket(3, 42, b"symlink target hnsw bucket");
+        fs::write(&outside, serde_json::to_vec_pretty(&bucket).unwrap()).unwrap();
         symlink(
             outside,
             store.root_path().join(BUCKETS_DIR).join("00000003.bucket"),
@@ -4620,6 +4621,9 @@ mod tests {
         assert!(rendered.contains("non-symlink regular file"));
         assert!(!rendered.contains("outside.bucket"), "{rendered}");
         assert!(!rendered.contains("00000003.bucket"), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext_sha256), "{rendered}");
+        assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
     }
 
     #[cfg(unix)]

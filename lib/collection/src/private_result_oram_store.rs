@@ -2390,7 +2390,8 @@ mod tests {
         let store = fixture_store(&temp);
         store.ensure_layout().unwrap();
         let outside_bucket = temp.path().join("outside.bucket");
-        std::fs::write(&outside_bucket, b"{}").unwrap();
+        let bucket = fixture_bucket(0, 42, b"symlink target result bucket");
+        std::fs::write(&outside_bucket, serde_json::to_vec_pretty(&bucket).unwrap()).unwrap();
         std::os::unix::fs::symlink(
             &outside_bucket,
             store.root_path().join(BUCKETS_DIR).join("00000000.bucket"),
@@ -2404,6 +2405,9 @@ mod tests {
         assert!(!rendered.contains("outside.bucket"), "{rendered}");
         assert!(!rendered.contains("00000000.bucket"), "{rendered}");
         assert!(!rendered.contains("private_result_oram"), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext_sha256), "{rendered}");
+        assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
     }
 
     #[cfg(unix)]
