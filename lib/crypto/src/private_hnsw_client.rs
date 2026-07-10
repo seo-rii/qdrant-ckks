@@ -4421,6 +4421,8 @@ fn compact_hnsw_context_vector_name_is_client_owned_alias(value: &str) -> bool {
             | "clientstatesnapshots"
             | "encryptedclientstate"
             | "encryptedclientstates"
+            | "payloadfetchtoken"
+            | "payloadfetchtokens"
             | "positionmap"
             | "orampositionmap"
             | "stash"
@@ -7366,6 +7368,18 @@ mod tests {
                 vector_name: "client.state",
                 ..context
             },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "payload_fetch_token",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "payloadFetchTokens",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "payload.fetch.token",
+                ..context
+            },
         ] {
             let field = if malformed_context.collection_id.contains('\n') {
                 "collection_id"
@@ -9972,6 +9986,18 @@ mod tests {
             },
             PrivateHnswManifestBuildContext {
                 vector_name: "client.state",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "payload_fetch_token",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "payloadFetchTokens",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "payload.fetch.token",
                 ..build_context.clone()
             },
         ] {
