@@ -630,11 +630,54 @@ fn private_oram_layout_error_contains_sensitive_marker(rendered: &str) -> bool {
         "visited_node_id",
         "visited_node_ids",
     ];
+    const COMPACT_SENSITIVE_MARKERS: &[&str] = &[
+        "accessvolume",
+        "accessvolumecount",
+        "accessvolumecounts",
+        "accessvolumelen",
+        "accessvolumelength",
+        "accessvolumelengths",
+        "accessedleaflabels",
+        "bucketid",
+        "bucketids",
+        "clientsignature",
+        "commitsignature",
+        "entrynodeid",
+        "leafhash",
+        "leaflabel",
+        "manifestsignature",
+        "newroothash",
+        "nodeid",
+        "oldroothash",
+        "pathlabel",
+        "payloadfetchtoken",
+        "payloadfetchtokens",
+        "pointtoken",
+        "proofvalue",
+        "proofvalues",
+        "readbucketid",
+        "readbucketids",
+        "readsignature",
+        "resultid",
+        "resultids",
+        "roothash",
+        "siblinghash",
+        "visitednodeid",
+        "visitednodeids",
+    ];
 
     let rendered = rendered.to_ascii_lowercase();
-    SENSITIVE_MARKERS
+    if SENSITIVE_MARKERS
         .iter()
         .any(|marker| rendered.contains(marker))
+    {
+        return true;
+    }
+
+    let compact_rendered = rendered.replace(['_', '-', '.', ' '], "");
+    COMPACT_SENSITIVE_MARKERS
+        .iter()
+        .any(|marker| compact_rendered.contains(marker))
 }
 
 fn looks_like_base64url_private_oram_token(token: &str) -> bool {
@@ -834,6 +877,42 @@ mod tests {
             assert!(!rendered.contains(leaked));
         }
 
+        let leaked_camel_values = [
+            "hnsw-camel-bucket-id",
+            "hnsw-camel-path-label",
+            "hnsw-camel-leaf-label",
+            "hnsw-camel-node-id",
+            "hnsw-camel-entry-node-id",
+            "hnsw-camel-point-token",
+            "hnsw-camel-payload-token",
+            "hnsw-camel-proof-value",
+            "hnsw-camel-sibling-hash",
+            "hnsw-camel-visited-node",
+        ];
+        let err = sanitize_private_hnsw_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private HNSW ORAM bucketIds {} pathLabel {} leafLabel {} nodeId {} \
+                 entryNodeId {} pointToken {} payloadFetchToken {} proofValue {} \
+                 siblingHash {} visitedNodeIds {}",
+                leaked_camel_values[0],
+                leaked_camel_values[1],
+                leaked_camel_values[2],
+                leaked_camel_values[3],
+                leaked_camel_values[4],
+                leaked_camel_values[5],
+                leaked_camel_values[6],
+                leaked_camel_values[7],
+                leaked_camel_values[8],
+                leaked_camel_values[9],
+            )),
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("private HNSW ORAM snapshot layout validation failed"));
+        for leaked in leaked_camel_values {
+            assert!(!rendered.contains(leaked));
+        }
+
         let safe = sanitize_private_hnsw_snapshot_layout_error(
             temp_dir.path(),
             CollectionError::bad_request(
@@ -920,6 +999,42 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("private result ORAM snapshot layout validation failed"));
         for leaked in leaked_short_values {
+            assert!(!rendered.contains(leaked));
+        }
+
+        let leaked_camel_values = [
+            "result-camel-read-bucket-id",
+            "result-camel-bucket-id",
+            "result-camel-proof-leaf",
+            "result-camel-proof-sibling",
+            "result-camel-payload-token",
+            "result-camel-read-signature",
+            "result-camel-commit-signature",
+            "result-camel-access-volume-length",
+            "result-camel-result-id",
+            "result-camel-visited-node",
+        ];
+        let err = sanitize_private_result_oram_snapshot_layout_error(
+            temp_dir.path(),
+            CollectionError::bad_request(format!(
+                "private result ORAM readBucketIds {} bucketIds [{}] proofValue {} \
+                 siblingHash {} payloadFetchTokens {} readSignature {} commitSignature {} \
+                 accessVolumeLength {} resultIds {} visitedNodeIds {}",
+                leaked_camel_values[0],
+                leaked_camel_values[1],
+                leaked_camel_values[2],
+                leaked_camel_values[3],
+                leaked_camel_values[4],
+                leaked_camel_values[5],
+                leaked_camel_values[6],
+                leaked_camel_values[7],
+                leaked_camel_values[8],
+                leaked_camel_values[9],
+            )),
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("private result ORAM snapshot layout validation failed"));
+        for leaked in leaked_camel_values {
             assert!(!rendered.contains(leaked));
         }
 
