@@ -4818,6 +4818,9 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("group/world accessible"));
         assert!(!rendered.contains("00000003.bucket"), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext_sha256), "{rendered}");
+        assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
     }
 
     #[test]

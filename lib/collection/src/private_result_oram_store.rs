@@ -2608,6 +2608,9 @@ mod tests {
         assert!(rendered.contains("group/world accessible"));
         assert!(!rendered.contains("00000000.bucket"), "{rendered}");
         assert!(!rendered.contains("private_result_oram"), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext), "{rendered}");
+        assert!(!rendered.contains(&bucket.ciphertext_sha256), "{rendered}");
+        assert!(!rendered.contains(&bucket.bucket_commitment), "{rendered}");
     }
 
     #[test]
