@@ -1379,6 +1379,28 @@ mod private_result_oram_rest_tests {
             buckets: fixture.buckets.clone(),
         };
         assert_unknown_field_rejected(&buckets_request);
+        let mut nested_bucket_extra = serde_json::to_value(&buckets_request).unwrap();
+        nested_bucket_extra["buckets"][0]
+            .as_object_mut()
+            .unwrap()
+            .insert("extra".to_string(), json!("token_position_map_snapshot"));
+        let err =
+            serde_json::from_value::<UploadPrivateResultOramBucketsRequest>(nested_bucket_extra)
+                .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("unknown field"), "{rendered}");
+        assert!(
+            !rendered.contains("token_position_map_snapshot"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&fixture.buckets[0].ciphertext),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&fixture.buckets[0].ciphertext_sha256),
+            "{rendered}"
+        );
 
         let session_request = OpenPrivateResultOramSessionRequest {
             client_id: "tenant-a/sdk-instance-1".to_string(),
@@ -1408,6 +1430,24 @@ mod private_result_oram_rest_tests {
             commit_signature,
         };
         assert_unknown_field_rejected(&commit_request);
+        let mut nested_commit_bucket_extra = serde_json::to_value(&commit_request).unwrap();
+        nested_commit_bucket_extra["updated_buckets"][0]
+            .as_object_mut()
+            .unwrap()
+            .insert(
+                "extra".to_string(),
+                json!("encrypted_client_state_snapshot"),
+            );
+        let err = serde_json::from_value::<CommitPrivateResultOramBucketsRequest>(
+            nested_commit_bucket_extra,
+        )
+        .unwrap_err();
+        let rendered = err.to_string();
+        assert!(rendered.contains("unknown field"), "{rendered}");
+        assert!(
+            !rendered.contains("encrypted_client_state_snapshot"),
+            "{rendered}"
+        );
     }
 
     #[test]
