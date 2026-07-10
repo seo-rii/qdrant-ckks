@@ -1706,20 +1706,28 @@ mod private_result_oram_rest_tests {
             );
             assert!(
                 !malformed_bucket_hash_before_manifest
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest
                     .contains(&fixture.buckets[0].bucket_commitment)
             );
             assert!(!malformed_bucket_hash_before_manifest.contains("private_result_oram"));
             assert!(!malformed_bucket_hash_before_manifest.contains("manifest"));
-            assert_private_result_guard_error_redacts(
-                &malformed_bucket_hash_before_manifest,
-                &[
-                    malformed_bucket_hash_before_manifest_sentinel,
-                    fixture.manifest.root_hash.as_str(),
-                    fixture.buckets[0].ciphertext.as_str(),
-                    fixture.buckets[0].bucket_commitment.as_str(),
-                    "manifest",
-                ],
-            );
+            for forbidden in [
+                malformed_bucket_hash_before_manifest_sentinel,
+                fixture.manifest.root_hash.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+                fixture.buckets[0].ciphertext_sha256.as_str(),
+                fixture.buckets[0].bucket_commitment.as_str(),
+                "manifest",
+                "private_result_oram",
+            ] {
+                assert!(
+                    !malformed_bucket_hash_before_manifest.contains(forbidden),
+                    "private result ORAM malformed bucket hash error leaked `{forbidden}`: {malformed_bucket_hash_before_manifest}",
+                );
+            }
 
             let malformed_bucket_commitment_before_manifest_sentinel =
                 "result-rest-upload-commitment-sentinel";
@@ -1751,18 +1759,26 @@ mod private_result_oram_rest_tests {
                 !malformed_bucket_commitment_before_manifest
                     .contains(&fixture.buckets[0].ciphertext_sha256)
             );
+            assert!(
+                !malformed_bucket_commitment_before_manifest
+                    .contains(&fixture.buckets[0].bucket_commitment)
+            );
             assert!(!malformed_bucket_commitment_before_manifest.contains("private_result_oram"));
             assert!(!malformed_bucket_commitment_before_manifest.contains("manifest"));
-            assert_private_result_guard_error_redacts(
-                &malformed_bucket_commitment_before_manifest,
-                &[
-                    malformed_bucket_commitment_before_manifest_sentinel,
-                    fixture.manifest.root_hash.as_str(),
-                    fixture.buckets[0].ciphertext.as_str(),
-                    fixture.buckets[0].ciphertext_sha256.as_str(),
-                    "manifest",
-                ],
-            );
+            for forbidden in [
+                malformed_bucket_commitment_before_manifest_sentinel,
+                fixture.manifest.root_hash.as_str(),
+                fixture.buckets[0].ciphertext.as_str(),
+                fixture.buckets[0].ciphertext_sha256.as_str(),
+                fixture.buckets[0].bucket_commitment.as_str(),
+                "manifest",
+                "private_result_oram",
+            ] {
+                assert!(
+                    !malformed_bucket_commitment_before_manifest.contains(forbidden),
+                    "private result ORAM malformed bucket commitment error leaked `{forbidden}`: {malformed_bucket_commitment_before_manifest}",
+                );
+            }
 
             let empty_upload_before_manifest = post_json_error_contains!(
                 "/collections/docs/private-result-oram/buckets",

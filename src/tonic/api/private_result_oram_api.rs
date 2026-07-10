@@ -1559,6 +1559,11 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !malformed_bucket_hash_before_manifest
                     .message()
+                    .contains(&fixture.buckets[0].ciphertext_sha256)
+            );
+            assert!(
+                !malformed_bucket_hash_before_manifest
+                    .message()
                     .contains(&fixture.buckets[0].bucket_commitment)
             );
             assert!(
@@ -1577,6 +1582,7 @@ mod private_result_oram_grpc_tests {
                     malformed_bucket_hash_before_manifest_sentinel,
                     fixture.manifest.root_hash.as_str(),
                     fixture.buckets[0].ciphertext.as_str(),
+                    fixture.buckets[0].ciphertext_sha256.as_str(),
                     fixture.buckets[0].bucket_commitment.as_str(),
                     "manifest",
                 ],
@@ -1634,6 +1640,11 @@ mod private_result_oram_grpc_tests {
             assert!(
                 !malformed_bucket_commitment_before_manifest
                     .message()
+                    .contains(&fixture.buckets[0].bucket_commitment)
+            );
+            assert!(
+                !malformed_bucket_commitment_before_manifest
+                    .message()
                     .contains("private_result_oram")
             );
             assert!(
@@ -1648,6 +1659,7 @@ mod private_result_oram_grpc_tests {
                     fixture.manifest.root_hash.as_str(),
                     fixture.buckets[0].ciphertext.as_str(),
                     fixture.buckets[0].ciphertext_sha256.as_str(),
+                    fixture.buckets[0].bucket_commitment.as_str(),
                     "manifest",
                 ],
             );
