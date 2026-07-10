@@ -840,22 +840,22 @@ mod private_hnsw_rest_tests {
         let client_signature = fixture.client_signature();
         let entry_leaf_label = fixture.entry_leaf_label();
         let mut manifest = fixture.manifest.clone();
-        manifest.collection_id = "HNSW-REST-MANIFEST-COLLECTION-ID-SENTINEL".to_string();
-        manifest.vector_name = "HNSW-REST-MANIFEST-VECTOR-NAME-SENTINEL".to_string();
+        manifest.collection_id = "client_state_manifest_collection".to_string();
+        manifest.vector_name = "encrypted_client_state_manifest_vector".to_string();
         let manifest_request = UploadPrivateHnswManifestRequest {
             manifest: manifest.clone(),
             signature: fixture.manifest_signature.clone(),
         };
         let open_request = OpenPrivateHnswSessionRequest {
-            client_id: "private-hnsw-rest-client-id-sentinel".to_string(),
+            client_id: "client_state_ciphertext_hash.bin".to_string(),
             desired_epoch: fixture.manifest.index_epoch,
             fixed_budget: true,
             result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
         };
         let session_response = PrivateHnswSessionResponse {
             session_id: SESSION_ID.to_string(),
-            collection_id: "HNSW-REST-SESSION-COLLECTION-ID-SENTINEL".to_string(),
-            vector_name: "HNSW-REST-SESSION-VECTOR-NAME-SENTINEL".to_string(),
+            collection_id: "client_state_snapshot_session_collection".to_string(),
+            vector_name: "encrypted_client_state_snapshot_session_vector".to_string(),
             index_epoch: fixture.manifest.index_epoch,
             root_hash: fixture.manifest.root_hash.clone(),
             manifest,
@@ -872,7 +872,7 @@ mod private_hnsw_rest_tests {
             },
             client_signature: PrivateHnswClientSignature {
                 alg: "ed25519".to_string(),
-                key_id: "HNSW-REST-READ-KEY-ID-SENTINEL".to_string(),
+                key_id: "client_state_read_key_id".to_string(),
                 sig: client_signature.sig.clone(),
             },
         };
@@ -891,7 +891,7 @@ mod private_hnsw_rest_tests {
             updated_buckets: search_run.updated_buckets,
             commit_signature: PrivateHnswClientSignature {
                 alg: commit_signature.alg,
-                key_id: "HNSW-REST-COMMIT-KEY-ID-SENTINEL".to_string(),
+                key_id: "encrypted_client_state_commit_key_id".to_string(),
                 sig: commit_signature.sig.clone(),
             },
         };
@@ -935,17 +935,23 @@ mod private_hnsw_rest_tests {
             updated_bucket.bucket_commitment,
             client_signature.sig,
             commit_signature.sig,
-            "HNSW-REST-MANIFEST-COLLECTION-ID-SENTINEL".to_string(),
-            "HNSW-REST-MANIFEST-VECTOR-NAME-SENTINEL".to_string(),
-            "HNSW-REST-SESSION-COLLECTION-ID-SENTINEL".to_string(),
-            "HNSW-REST-SESSION-VECTOR-NAME-SENTINEL".to_string(),
-            "HNSW-REST-READ-KEY-ID-SENTINEL".to_string(),
-            "HNSW-REST-COMMIT-KEY-ID-SENTINEL".to_string(),
+            "client_state_manifest_collection".to_string(),
+            "encrypted_client_state_manifest_vector".to_string(),
+            "client_state_snapshot_session_collection".to_string(),
+            "encrypted_client_state_snapshot_session_vector".to_string(),
+            "client_state_read_key_id".to_string(),
+            "encrypted_client_state_commit_key_id".to_string(),
             entry_leaf_label,
             "HNSW-REST-PROOF-SENTINEL".to_string(),
-            "private-hnsw-rest-client-id-sentinel".to_string(),
+            "client_state_ciphertext_hash.bin".to_string(),
         ] {
             assert!(!rendered.contains(&leaked), "{rendered}");
+        }
+        for &alias in PRIVATE_HNSW_CLIENT_STATE_REDACTION_ALIASES {
+            assert!(!rendered.contains(alias), "{rendered}");
+        }
+        for &alias in PRIVATE_HNSW_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
+            assert!(!rendered.contains(alias), "{rendered}");
         }
         assert!(!rendered.contains("requested_paths: 77"), "{rendered}");
         assert!(
