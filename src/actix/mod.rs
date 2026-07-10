@@ -1133,6 +1133,10 @@ mod tests {
             "token_map_backup-sentinel",
             "token_map_backups-sentinel",
             "token.position.map-sentinel",
+            "payloadFetchToken-sentinel",
+            "payloadFetchTokens-sentinel",
+            "payload_fetch_token-sentinel",
+            "payload_fetch_tokens-sentinel",
             "tokenPositionMapBackup-sentinel",
             "token_position_map_backup.json-sentinel",
             "token_position_map_backup-sentinel",
@@ -1259,6 +1263,10 @@ mod tests {
             "access_volume_lengths=access-volume-lengths-query-sentinel",
             "accessVolumeLength=accessVolumeLength-query-sentinel",
             "accessVolumeLengths=accessVolumeLengths-query-sentinel",
+            "payload_fetch_token=payload-fetch-token-query-sentinel",
+            "payload_fetch_tokens=payload-fetch-tokens-query-sentinel",
+            "payloadFetchToken=payloadFetchToken-query-sentinel",
+            "payloadFetchTokens=payloadFetchTokens-query-sentinel",
         ] {
             assert_eq!(
                 redact_private_oram_access_path(&format!(
