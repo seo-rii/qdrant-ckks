@@ -463,9 +463,11 @@ mod tests {
              owner_signing_key_id=owner-signing-key-sentinel, readPath=read-path-camel-sentinel, \
              readPathLabel=read-path-label-camel-sentinel, \
              accessVolume=access-volume-camel-sentinel, \
+             accessVolumes=access-volumes-camel-sentinel, \
              accessVolumeCount=access-volume-count-camel-sentinel, \
              accessVolumeLength=access-volume-length-camel-sentinel, \
              access_volume=access-volume-snake-sentinel, \
+             access_volumes=access-volumes-snake-sentinel, \
              access_volume_count=access-volume-count-snake-sentinel, \
              access_volume_length=access-volume-length-snake-sentinel, \
              access_volume_lengths=access-volume-lengths-snake-sentinel, \

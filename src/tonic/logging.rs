@@ -244,7 +244,9 @@ mod tests {
              access_count=access-count-sentinel \
              accessCounts=access-counts-camel-sentinel \
              access_volume=access-volume-snake-sentinel \
+             access_volumes=access-volumes-snake-sentinel \
              accessVolume=access-volume-camel-sentinel \
+             accessVolumes=access-volumes-camel-sentinel \
              access_volume_count=access-volume-count-snake-sentinel \
              accessVolumeCounts=access-volume-counts-camel-sentinel \
              access_volume_len=access-volume-len-snake-sentinel \

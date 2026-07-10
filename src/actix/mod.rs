@@ -886,9 +886,11 @@ mod tests {
             "clientStates-sentinel",
             "client_states-sentinel",
             "accessVolume-sentinel",
+            "accessVolumes-sentinel",
             "accessVolumeCount-sentinel",
             "accessVolumeLength-sentinel",
             "access_volume-sentinel",
+            "access_volumes-sentinel",
             "access_volume_count-sentinel",
             "access_volume_length-sentinel",
             "bucketCommitment-sentinel",
@@ -1020,9 +1022,11 @@ mod tests {
             "clientStates-sentinel",
             "client_states-sentinel",
             "accessVolume-sentinel",
+            "accessVolumes-sentinel",
             "accessVolumeCount-sentinel",
             "accessVolumeLength-sentinel",
             "access_volume-sentinel",
+            "access_volumes-sentinel",
             "access_volume_count-sentinel",
             "access_volume_length-sentinel",
             "bucketCommitment-sentinel",
@@ -1152,7 +1156,9 @@ mod tests {
             "proofValue=proofValue-query-sentinel",
             "proof_values=proof-values-query-sentinel",
             "access_volume=access-volume-query-sentinel",
+            "access_volumes=access-volumes-query-sentinel",
             "accessVolume=accessVolume-query-sentinel",
+            "accessVolumes=accessVolumes-query-sentinel",
             "access_volume_count=access-volume-count-query-sentinel",
             "accessVolumeLength=accessVolumeLength-query-sentinel",
         ] {
@@ -1210,7 +1216,9 @@ mod tests {
             "proofValue=proofValue-query-sentinel",
             "proof_values=proof-values-query-sentinel",
             "access_volume=access-volume-query-sentinel",
+            "access_volumes=access-volumes-query-sentinel",
             "accessVolume=accessVolume-query-sentinel",
+            "accessVolumes=accessVolumes-query-sentinel",
             "access_volume_count=access-volume-count-query-sentinel",
             "accessVolumeLength=accessVolumeLength-query-sentinel",
         ] {
@@ -1477,6 +1485,15 @@ mod tests {
             (
                 actix_test::TestRequest::post()
                     .uri(
+                        "/collections/docs/private-hnsw/text/oram/read_paths?accessVolumes=accessVolumes-query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-hnsw/text/oram/read_paths?[redacted] HTTP/1.1",
+                ["accessVolumes-query-sentinel", "accessVolumes"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
                         "/collections/docs/private-result-oram/oram/read_buckets?proof_values=proof-values-query-sentinel",
                     )
                     .to_srv_request(),
@@ -1491,6 +1508,15 @@ mod tests {
                     .to_srv_request(),
                 "POST /collections/docs/private-result-oram/oram/read_buckets?[redacted] HTTP/1.1",
                 ["accessVolumeLength-query-sentinel", "accessVolumeLength"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-result-oram/oram/read_buckets?access_volumes=access-volumes-query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-result-oram/oram/read_buckets?[redacted] HTTP/1.1",
+                ["access-volumes-query-sentinel", "access_volumes"],
             ),
         ];
 
