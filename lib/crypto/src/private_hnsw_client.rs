@@ -7169,6 +7169,54 @@ mod tests {
     }
 
     #[test]
+    fn commit_plan_matches_core_private_hnsw_oram_planner() {
+        let leaf_commitments = vec![commitment(1), commitment(2), commitment(3)];
+        let old_root = private_hnsw_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();
+        let mut manifest = fixture_manifest();
+        manifest.oram.tree_height = 1;
+        manifest.oram.path_batch_size = 2;
+        manifest.fixed_budget.paths_per_round = 2;
+        manifest.bucket_count = leaf_commitments.len() as u64;
+        manifest.logical_node_count = 2;
+        manifest.dummy_node_count = 0;
+        manifest.root_hash = old_root;
+        let updated_bucket = fixture_context_commit_bucket(2, 43, 9, &manifest);
+
+        let client_plan = plan_private_hnsw_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &leaf_commitments,
+            std::slice::from_ref(&updated_bucket),
+        )
+        .unwrap();
+        let core_plan = crate::private_hnsw_oram::plan_private_hnsw_oram_commit_for_manifest(
+            &manifest,
+            43,
+            &leaf_commitments,
+            std::slice::from_ref(&updated_bucket),
+        )
+        .unwrap();
+
+        assert_eq!(client_plan.old_epoch, core_plan.old_epoch);
+        assert_eq!(client_plan.new_epoch, core_plan.new_epoch);
+        assert_eq!(client_plan.old_root_hash, core_plan.old_root_hash);
+        assert_eq!(client_plan.new_root_hash, core_plan.new_root_hash);
+        assert_eq!(client_plan.leaf_commitments, core_plan.leaf_commitments);
+        assert_eq!(
+            client_plan
+                .signature_bucket_refs()
+                .into_iter()
+                .map(|bucket| (bucket.bucket_id, bucket.ciphertext_sha256.to_string()))
+                .collect::<Vec<_>>(),
+            core_plan
+                .signature_bucket_refs()
+                .into_iter()
+                .map(|bucket| (bucket.bucket_id, bucket.ciphertext_sha256.to_string()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
     fn commit_plan_for_manifest_rejects_oversized_fixed_writeback() {
         let leaf_commitments = (0..7).map(commitment).collect::<Vec<_>>();
         let old_root = private_hnsw_oram_merkle_root_for_commitments(&leaf_commitments).unwrap();

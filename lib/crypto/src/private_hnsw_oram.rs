@@ -1303,18 +1303,10 @@ pub fn private_hnsw_oram_bucket_commitment(
         PRIVATE_HNSW_ORAM_BUCKET_COMMITMENT_DOMAIN.as_bytes(),
         || PrivateHnswOramError::InvalidBucketContext("context_length"),
     )?;
-    try_push_str(&mut message, context.collection_id, || {
-        PrivateHnswOramError::InvalidBucketContext("context_length")
-    })?;
-    try_push_str(&mut message, context.vector_name, || {
-        PrivateHnswOramError::InvalidBucketContext("context_length")
-    })?;
-    try_push_str(&mut message, context.key_id, || {
-        PrivateHnswOramError::InvalidBucketContext("context_length")
-    })?;
-    try_push_str(&mut message, context.rk_id, || {
-        PrivateHnswOramError::InvalidBucketContext("context_length")
-    })?;
+    push_bucket_context_str(&mut message, context.collection_id)?;
+    push_bucket_context_str(&mut message, context.vector_name)?;
+    push_bucket_context_str(&mut message, context.key_id)?;
+    push_bucket_context_str(&mut message, context.rk_id)?;
     push_u64(&mut message, context.rk_epoch);
     push_u64(&mut message, context.bucket_id);
     push_u64(&mut message, context.index_epoch);
@@ -1711,21 +1703,22 @@ fn private_hnsw_oram_merkle_levels(
     if commitments.is_empty() {
         return Err(PrivateHnswOramError::EmptyMerkleTree);
     }
-    let mut levels = vec![
-        commitments
-            .iter()
-            .map(|commitment| decode_bucket_commitment(commitment))
-            .collect::<Result<Vec<_>, _>>()?,
-    ];
+    let mut leaves = commitments
+        .iter()
+        .map(|commitment| decode_bucket_commitment(commitment))
+        .collect::<Result<Vec<_>, _>>()?;
+    let padded_len = leaves
+        .len()
+        .checked_next_power_of_two()
+        .ok_or(PrivateHnswOramError::InvalidManifestField("bucket_count"))?;
+    leaves.resize(padded_len, [0; 32]);
+
+    let mut levels = vec![leaves];
     while levels.last().is_some_and(|level| level.len() > 1) {
         let current = levels.last().expect("level must exist");
-        let mut next = Vec::with_capacity(current.len().div_ceil(2));
-        for pair in current.chunks(2) {
-            if pair.len() == 1 {
-                next.push(pair[0]);
-            } else {
-                next.push(private_hnsw_oram_merkle_parent_hash(&pair[0], &pair[1]));
-            }
+        let mut next = Vec::with_capacity(current.len() / 2);
+        for pair in current.chunks_exact(2) {
+            next.push(private_hnsw_oram_merkle_parent_hash(&pair[0], &pair[1]));
         }
         levels.push(next);
     }
@@ -1742,6 +1735,16 @@ fn private_hnsw_oram_merkle_parent_hash(left: &[u8; 32], right: &[u8; 32]) -> [u
 
 fn base64url_sha256(bytes: &[u8]) -> String {
     BASE64URL_NOPAD.encode(Sha256::digest(bytes).as_ref())
+}
+
+fn push_bucket_context_str(message: &mut Vec<u8>, value: &str) -> Result<(), PrivateHnswOramError> {
+    let len: u32 = value
+        .len()
+        .try_into()
+        .map_err(|_| PrivateHnswOramError::InvalidBucketContext("context_length"))?;
+    message.extend_from_slice(&len.to_be_bytes());
+    message.extend_from_slice(value.as_bytes());
+    Ok(())
 }
 
 fn try_push_domain(
