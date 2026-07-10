@@ -4094,6 +4094,8 @@ mod private_hnsw_rest_tests {
             ] {
                 let invalid_session_read_paths = vec![fixture.entry_leaf_label()];
                 let read_signature = fixture.sign_read_paths(&invalid_session_read_paths, 1, true);
+                let invalid_session_read_path = invalid_session_read_paths[0].clone();
+                let invalid_session_read_signature_sig = read_signature.sig.clone();
                 let error = post_json_error_contains!(
                     "/collections/docs/private-hnsw/text/oram/read_paths",
                     OramReadPathsRequest {
@@ -4116,6 +4118,20 @@ mod private_hnsw_rest_tests {
                 );
                 assert!(!error.contains(invalid_session_id), "{error}");
                 assert!(!error.contains("session is missing or expired"), "{error}");
+                for sentinel in [
+                    fixture.encrypted_build.root_hash.as_str(),
+                    invalid_session_read_path.as_str(),
+                    invalid_session_read_signature_sig.as_str(),
+                    fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .ciphertext_sha256
+                        .as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .bucket_commitment
+                        .as_str(),
+                ] {
+                    assert!(!error.contains(sentinel), "{error}");
+                }
             }
 
             let ok_read_paths = vec![fixture.entry_leaf_label()];
@@ -4849,6 +4865,16 @@ mod private_hnsw_rest_tests {
                 );
                 assert!(!error.contains(invalid_session_id), "{error}");
                 assert!(!error.contains("session is missing or expired"), "{error}");
+                for sentinel in [
+                    search_run.commit_plan.old_root_hash.as_str(),
+                    search_run.commit_plan.new_root_hash.as_str(),
+                    search_run.commit_signature.sig.as_str(),
+                    search_run.updated_buckets[0].ciphertext.as_str(),
+                    search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                    search_run.updated_buckets[0].bucket_commitment.as_str(),
+                ] {
+                    assert!(!error.contains(sentinel), "{error}");
+                }
             }
 
             let commit_wrong_old_root = data_encoding::BASE64URL_NOPAD.encode(&[9; 32]);

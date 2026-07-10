@@ -4341,6 +4341,8 @@ mod private_hnsw_grpc_tests {
             ] {
                 let read_paths = vec![fixture.entry_leaf_label()];
                 let read_signature = fixture.sign_read_paths(&read_paths, 1, true);
+                let invalid_session_read_path = read_paths[0].clone();
+                let invalid_session_read_signature_sig = read_signature.sig.clone();
                 let err = PrivateHnswOram::read_private_hnsw_paths(
                     &service,
                     Request::new(grpc::OramReadPathsRequest {
@@ -4371,6 +4373,20 @@ mod private_hnsw_grpc_tests {
                     "{}",
                     err.message()
                 );
+                for sentinel in [
+                    fixture.encrypted_build.root_hash.as_str(),
+                    invalid_session_read_path.as_str(),
+                    invalid_session_read_signature_sig.as_str(),
+                    fixture.encrypted_build.buckets[0].ciphertext.as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .ciphertext_sha256
+                        .as_str(),
+                    fixture.encrypted_build.buckets[0]
+                        .bucket_commitment
+                        .as_str(),
+                ] {
+                    assert!(!err.message().contains(sentinel), "{}", err.message());
+                }
             }
 
             let read_paths = vec![fixture.entry_leaf_label()];
@@ -5137,6 +5153,16 @@ mod private_hnsw_grpc_tests {
                     "{}",
                     err.message()
                 );
+                for sentinel in [
+                    search_run.commit_plan.old_root_hash.as_str(),
+                    search_run.commit_plan.new_root_hash.as_str(),
+                    search_run.commit_signature.sig.as_str(),
+                    search_run.updated_buckets[0].ciphertext.as_str(),
+                    search_run.updated_buckets[0].ciphertext_sha256.as_str(),
+                    search_run.updated_buckets[0].bucket_commitment.as_str(),
+                ] {
+                    assert!(!err.message().contains(sentinel), "{}", err.message());
+                }
             }
 
             let commit_wrong_old_root = BASE64URL_NOPAD.encode(&[9; 32]);
