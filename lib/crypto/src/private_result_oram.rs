@@ -4778,6 +4778,10 @@ mod tests {
             }],
         };
         let commit_refs = commit_plan.signature_bucket_refs();
+        let commit_ref = PrivateResultOramCommitBucketRef {
+            bucket_id: 123_456,
+            ciphertext_sha256: "RESULT-COMMIT-REF-SHA-SENTINEL",
+        };
         let commit_signature_input = PrivateResultOramCommitSignatureInput {
             collection_id: "RESULT-COMMIT-COLLECTION-ID-SENTINEL",
             key_id: "RESULT-COMMIT-KEY-SENTINEL",
@@ -4890,6 +4894,7 @@ mod tests {
             format!("{upload_bundle:?}"),
             format!("{encrypted_batch:?}"),
             format!("{commit_plan:?}"),
+            format!("{commit_ref:?}"),
             format!("{commit_signature_input:?}"),
             format!("{read_signature_input:?}"),
             format!("{validation_context:?}"),
@@ -4935,6 +4940,7 @@ mod tests {
             "leaf-label-sentinel".to_string(),
             "RESULT-CIPHERTEXT-SENTINEL".to_string(),
             "RESULT-SHA-SENTINEL".to_string(),
+            "RESULT-COMMIT-REF-SHA-SENTINEL".to_string(),
             "RESULT-COMMITMENT-SENTINEL".to_string(),
             "RESULT-SIGNATURE-KEY-SENTINEL".to_string(),
             "RESULT-SIGNATURE-SENTINEL".to_string(),
