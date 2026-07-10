@@ -660,6 +660,7 @@ mod tests {
     fn private_result_oram_payload_index_errors_redact_client_state_aliases() {
         for private_result_path in [
             "payload_fetch_token",
+            "payload.fetch.token",
             "state_ciphertext_hash",
             "state_ciphertext_hash.bin",
             "state_ciphertext_sha256",

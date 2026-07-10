@@ -383,6 +383,7 @@ mod tests {
                     "selector": {
                         "paths": [
                             "payload_fetch_token",
+                            "payload.fetch.token",
                             "bucketCommitment.json",
                             "bucket_commitment.bin",
                             "ciphertextSha256.json",
@@ -408,6 +409,7 @@ mod tests {
         assert!(!alias_overlap_message.contains("state_hash_private_result"));
         assert!(!alias_overlap_message.contains("state_hash_client_payload"));
         assert!(!alias_overlap_message.contains("payload_fetch_token"));
+        assert!(!alias_overlap_message.contains("payload.fetch.token"));
         assert!(!alias_overlap_message.contains("bucketCommitment"));
         assert!(!alias_overlap_message.contains("bucket_commitment"));
         assert!(!alias_overlap_message.contains("ciphertextSha256"));
