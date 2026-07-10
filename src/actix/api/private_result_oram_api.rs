@@ -3018,17 +3018,25 @@ mod private_result_oram_rest_tests {
             }
             assert!(!invalid_signature_bad_path_error.contains("valid ORAM paths"));
 
+            let out_of_range_bucket_id_sentinel = fixture.manifest.bucket_count + 123_456;
             let invalid_signature_out_of_range_error = post_json_error_contains!(
                 "/collections/docs/private-result-oram/oram/read_buckets",
                 ReadPrivateResultOramBucketsRequest {
                     session_id: session_id.clone(),
                     index_epoch: fixture.manifest.index_epoch,
                     root_hash: fixture.manifest.root_hash.clone(),
-                    bucket_ids: vec![0, 1, fixture.manifest.bucket_count, 0, 1, 4],
+                    bucket_ids: vec![0, 1, out_of_range_bucket_id_sentinel, 0, 1, 4],
                     read_signature: wrong_read_signature.clone(),
                 },
                 StatusCode::BAD_REQUEST,
                 "read_buckets signature verification failed"
+            );
+            assert!(
+                !invalid_signature_out_of_range_error
+                    .contains(&out_of_range_bucket_id_sentinel.to_string())
+            );
+            assert!(
+                !invalid_signature_out_of_range_error.contains(&wrong_read_signature.key_id)
             );
             assert!(!invalid_signature_out_of_range_error.contains(&wrong_read_signature.sig));
             assert!(!invalid_signature_out_of_range_error.contains(&fixture.buckets[0].ciphertext));
