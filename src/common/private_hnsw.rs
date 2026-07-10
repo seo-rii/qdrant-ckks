@@ -76,8 +76,8 @@ pub struct PrivateHnswManifestRecord {
 impl Debug for PrivateHnswManifestRecord {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateHnswManifestRecord")
-            .field("manifest", &self.manifest)
-            .field("signature", &self.signature)
+            .field("manifest", &"[redacted]")
+            .field("signature", &"[redacted]")
             .finish()
     }
 }
@@ -3866,6 +3866,14 @@ mod private_hnsw_tests {
             key_id: "hnsw-common-client-signature-key-sentinel".to_string(),
             sig: "hnsw-common-client-signature-body-sentinel".to_string(),
         };
+        let manifest_record = PrivateHnswManifestRecord {
+            manifest: session.manifest.clone(),
+            signature: PrivateHnswOramSignature {
+                alg: "ed25519".to_string(),
+                key_id: "hnsw-common-manifest-signature-key-sentinel".to_string(),
+                sig: "hnsw-common-manifest-signature-body-sentinel".to_string(),
+            },
+        };
         let padding = PrivateHnswReadPadding {
             requested_paths: 77,
             dummy_paths_included: false,
@@ -3876,6 +3884,7 @@ mod private_hnsw_tests {
             format!("{response:?}"),
             format!("{read_response:?}"),
             format!("{client_signature:?}"),
+            format!("{manifest_record:?}"),
             format!("{padding:?}"),
         ]
         .join("\n");
@@ -3921,6 +3930,8 @@ mod private_hnsw_tests {
             "hnsw-common-proof-sentinel",
             "hnsw-common-client-signature-key-sentinel",
             "hnsw-common-client-signature-body-sentinel",
+            "hnsw-common-manifest-signature-key-sentinel",
+            "hnsw-common-manifest-signature-body-sentinel",
             "client_state_ciphertext",
             "encrypted_client_state_ciphertext_hash",
             "encrypted_client_state_ciphertext_sha256",
@@ -3939,6 +3950,21 @@ mod private_hnsw_tests {
             !read_response_debug.contains("bucket_count: 1"),
             "{read_response_debug}"
         );
+        let manifest_record_debug = format!("{manifest_record:?}");
+        for leaked_record_value in [
+            "PrivateHnswOramManifest".to_string(),
+            format!("bucket_count: {}", manifest_record.manifest.bucket_count),
+            format!("tree_height: {}", manifest_record.manifest.oram.tree_height),
+            format!(
+                "path_batch_size: {}",
+                manifest_record.manifest.oram.path_batch_size
+            ),
+        ] {
+            assert!(
+                !manifest_record_debug.contains(&leaked_record_value),
+                "{manifest_record_debug}"
+            );
+        }
     }
 
     #[test]

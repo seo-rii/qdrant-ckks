@@ -1212,6 +1212,9 @@ fn private_result_oram_error(err: qdrant_sec::PrivateResultOramError) -> Collect
         PrivateResultOramError::DuplicatePayloadFetchToken => {
             "private result ORAM fetch token appears more than once"
         }
+        PrivateResultOramError::DuplicatePointToken => {
+            "private result ORAM point token appears more than once"
+        }
         PrivateResultOramError::DuplicatePayloadFetchTokenPosition => {
             "private result ORAM fetch token position appears more than once"
         }
@@ -1882,6 +1885,10 @@ mod tests {
                     bucket_id: 777_777,
                 }),
                 vec!["777777"],
+            ),
+            (
+                private_result_oram_error(PrivateResultOramError::DuplicatePointToken),
+                vec![],
             ),
         ];
 

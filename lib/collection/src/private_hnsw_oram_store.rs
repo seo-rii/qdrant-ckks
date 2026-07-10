@@ -1243,6 +1243,12 @@ fn private_hnsw_client_error(err: qdrant_sec::PrivateHnswClientError) -> Collect
         PrivateHnswClientError::DuplicateBlock => {
             "private HNSW ORAM path contains duplicate node blocks"
         }
+        PrivateHnswClientError::DuplicatePointToken => {
+            "private HNSW ORAM path contains duplicate point tokens"
+        }
+        PrivateHnswClientError::DuplicatePayloadFetchToken => {
+            "private HNSW ORAM path contains duplicate payload fetch tokens"
+        }
         PrivateHnswClientError::InvalidBuildConfig(_) => {
             "private HNSW ORAM build config is invalid"
         }
@@ -1375,6 +1381,39 @@ fn private_hnsw_oram_error(err: qdrant_sec::PrivateHnswOramError) -> CollectionE
         }
         PrivateHnswOramError::InvalidResourceKeyId => {
             "private HNSW ORAM resource key id is invalid"
+        }
+        PrivateHnswOramError::UnsupportedBucketVersion(_) => {
+            "private HNSW ORAM bucket version is unsupported"
+        }
+        PrivateHnswOramError::BucketOutOfRange { .. } => "private HNSW ORAM bucket is out of range",
+        PrivateHnswOramError::StaleBucketEpoch { .. } => {
+            "private HNSW ORAM bucket epoch does not match expected epoch"
+        }
+        PrivateHnswOramError::DuplicateUpdatedBucket { .. } => {
+            "private HNSW ORAM commit repeats a bucket"
+        }
+        PrivateHnswOramError::InvalidBucketField(_) => "private HNSW ORAM bucket field is invalid",
+        PrivateHnswOramError::BucketOversized => {
+            "private HNSW ORAM bucket ciphertext exceeds maximum size"
+        }
+        PrivateHnswOramError::InvalidBucketHash => {
+            "private HNSW ORAM bucket ciphertext_sha256 mismatch"
+        }
+        PrivateHnswOramError::InvalidBucketCommitment => {
+            "private HNSW ORAM bucket commitment context mismatch"
+        }
+        PrivateHnswOramError::InvalidBucketContext(_) => {
+            "private HNSW ORAM bucket context is invalid"
+        }
+        PrivateHnswOramError::InvalidFetchPlanField(_) => {
+            "private HNSW ORAM fetch or commit plan field is invalid"
+        }
+        PrivateHnswOramError::EmptyMerkleTree => "private HNSW ORAM Merkle tree is empty",
+        PrivateHnswOramError::MerkleRootMismatch => {
+            "private HNSW ORAM Merkle root does not match bucket commitments"
+        }
+        PrivateHnswOramError::ManifestCommitMismatch => {
+            "private HNSW ORAM manifest epoch/root does not match commit old epoch/root"
         }
     };
     CollectionError::bad_request(message)
@@ -2335,6 +2374,14 @@ mod tests {
                 vec!["777777", "888888"],
             ),
             (
+                private_hnsw_client_error(PrivateHnswClientError::DuplicatePointToken),
+                vec![],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::DuplicatePayloadFetchToken),
+                vec![],
+            ),
+            (
                 private_hnsw_client_error(PrivateHnswClientError::UnsupportedBucketVersion(65_000)),
                 vec!["65000"],
             ),
@@ -2387,6 +2434,49 @@ mod tests {
                     "manifest-context-777777",
                 )),
                 vec!["manifest-context-777777", "777777"],
+            ),
+            (
+                private_hnsw_oram_error(PrivateHnswOramError::UnsupportedBucketVersion(65_000)),
+                vec!["65000"],
+            ),
+            (
+                private_hnsw_oram_error(PrivateHnswOramError::BucketOutOfRange {
+                    bucket_id: 777_777,
+                    bucket_count: 888_888,
+                }),
+                vec!["777777", "888888"],
+            ),
+            (
+                private_hnsw_oram_error(PrivateHnswOramError::StaleBucketEpoch {
+                    bucket_id: 777_777,
+                    expected_epoch: 888_888,
+                    actual_epoch: 999_999,
+                }),
+                vec!["777777", "888888", "999999"],
+            ),
+            (
+                private_hnsw_oram_error(PrivateHnswOramError::DuplicateUpdatedBucket {
+                    bucket_id: 777_777,
+                }),
+                vec!["777777"],
+            ),
+            (
+                private_hnsw_oram_error(PrivateHnswOramError::InvalidBucketField(
+                    "bucket-field-777777",
+                )),
+                vec!["bucket-field-777777", "777777"],
+            ),
+            (
+                private_hnsw_oram_error(PrivateHnswOramError::InvalidBucketContext(
+                    "bucket-context-777777",
+                )),
+                vec!["bucket-context-777777", "777777"],
+            ),
+            (
+                private_hnsw_oram_error(PrivateHnswOramError::InvalidFetchPlanField(
+                    "fetch-plan-field-777777",
+                )),
+                vec!["fetch-plan-field-777777", "777777"],
             ),
         ];
 
