@@ -619,6 +619,7 @@ mod tests {
             "payloadFetchTokens",
             "payload_fetch_token",
             "payload_fetch_tokens",
+            "payload.fetch.token",
         ];
         for private_oram_path in [
             "/collections/docs/private-hnsw/text/session",
@@ -1147,6 +1148,7 @@ mod tests {
             "payloadFetchTokens-sentinel",
             "payload_fetch_token-sentinel",
             "payload_fetch_tokens-sentinel",
+            "payload.fetch.token-sentinel",
             "tokenPositionMapBackup-sentinel",
             "token_position_map_backup.json-sentinel",
             "token_position_map_backup-sentinel",
@@ -1277,6 +1279,7 @@ mod tests {
             "payload_fetch_tokens=payload-fetch-tokens-query-sentinel",
             "payloadFetchToken=payloadFetchToken-query-sentinel",
             "payloadFetchTokens=payloadFetchTokens-query-sentinel",
+            "payload.fetch.token=payload-fetch-token-dot-query-sentinel",
         ] {
             assert_eq!(
                 redact_private_oram_access_path(&format!(
@@ -1582,6 +1585,15 @@ mod tests {
                     .to_srv_request(),
                 "POST /collections/docs/private-result-oram/oram/read_buckets?[redacted] HTTP/1.1",
                 ["payloadFetchToken-query-sentinel", "payloadFetchToken"],
+            ),
+            (
+                actix_test::TestRequest::post()
+                    .uri(
+                        "/collections/docs/private-result-oram/oram/read_buckets?payload.fetch.token=payload-fetch-token-dot-query-sentinel",
+                    )
+                    .to_srv_request(),
+                "POST /collections/docs/private-result-oram/oram/read_buckets?[redacted] HTTP/1.1",
+                ["payload-fetch-token-dot-query-sentinel", "payload.fetch.token"],
             ),
             (
                 actix_test::TestRequest::post()

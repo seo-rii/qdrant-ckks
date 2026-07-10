@@ -374,6 +374,7 @@ mod tests {
              payload_fetch_token=fetch-token-sentinel \
              payloadFetchToken=fetch-token-camel-singular-sentinel \
              payloadFetchTokens=fetch-token-camel-sentinel \
+             payload.fetch.token=fetch-token-dot-sentinel \
              payload_bytes=payload-bytes-sentinel \
              payloadPlaintext=payload-plaintext-camel-sentinel \
              vector_bytes=vector-bytes-sentinel \
@@ -671,6 +672,7 @@ mod tests {
         assert!(!rendered.contains("short-fetch-token-camel-sentinel"));
         assert!(!rendered.contains("fetch-token-sentinel"));
         assert!(!rendered.contains("fetch-token-camel-sentinel"));
+        assert!(!rendered.contains("fetch-token-dot-sentinel"));
         assert!(!rendered.contains("payload-bytes-sentinel"));
         assert!(!rendered.contains("payload-plaintext-camel-sentinel"));
         assert!(!rendered.contains("vector-bytes-sentinel"));
