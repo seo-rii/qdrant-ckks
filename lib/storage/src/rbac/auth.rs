@@ -597,6 +597,8 @@ mod tests {
             "private HNSW read failed requestedPathCounts=private-requested-path-counts-sentinel",
             "private result ORAM read failed payload_fetch_token=private-fetch-token-sentinel",
             "private result ORAM read failed payload_fetch_tokens=private-fetch-tokens-sentinel",
+            "private result ORAM read failed payloadFetchToken=private-fetch-token-camel-sentinel",
+            "private result ORAM read failed payloadFetchTokens=private-fetch-tokens-camel-sentinel",
             "private result ORAM read failed point_token=private-point-token-sentinel",
             "private result ORAM read failed point_tokens=private-point-tokens-sentinel",
             "private result ORAM read failed payload_plaintext=private-payload-sentinel",
