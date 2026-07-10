@@ -6051,7 +6051,7 @@ mod tests {
             signature_alg: "ed25519",
             signature_key_id: "tenant-a/private-hnsw-signing-v1",
         };
-        let read_path_labels = ["leaf-label-sentinel"];
+        let read_path_labels = ["leaf-label-sentinel", "leaf-label-sentinel-2"];
         let read_signature_input = PrivateHnswOramReadPathsSignatureInput {
             collection_id: "HNSW-CLIENT-READ-COLLECTION-ID-SENTINEL",
             vector_name: "HNSW-CLIENT-READ-VECTOR-NAME-SENTINEL",
@@ -6197,6 +6197,7 @@ mod tests {
             format!("{:?}", [47u8; 32]),
             serde_json::to_string(&block.vector).unwrap(),
             "leaf-label-sentinel".to_string(),
+            "leaf-label-sentinel-2".to_string(),
             "123456".to_string(),
             "654321".to_string(),
             "HNSW-PRIVATE-PAYLOAD-RAW".to_string(),

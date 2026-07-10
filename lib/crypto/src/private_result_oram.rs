@@ -4935,6 +4935,7 @@ mod tests {
             format!("{:?}", [64u8; 32]),
             serde_json::to_string(&vec![44_u8, 45, 46]).unwrap(),
             "123456".to_string(),
+            "123457".to_string(),
             "654321".to_string(),
             "777888".to_string(),
             "leaf-label-sentinel".to_string(),
