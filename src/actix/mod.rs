@@ -894,11 +894,14 @@ mod tests {
             "accessVolumeCount-sentinel",
             "accessVolumeCounts-sentinel",
             "accessVolumeLength-sentinel",
+            "accessVolumeLengths-sentinel",
             "access_volume-sentinel",
             "access_volumes-sentinel",
+            "access_volume_len-sentinel",
             "access_volume_count-sentinel",
             "access_volume_counts-sentinel",
             "access_volume_length-sentinel",
+            "access_volume_lengths-sentinel",
             "bucketCommitment-sentinel",
             "bucketCommitments-sentinel",
             "bucket_commitment-sentinel",
@@ -1036,11 +1039,14 @@ mod tests {
             "accessVolumeCount-sentinel",
             "accessVolumeCounts-sentinel",
             "accessVolumeLength-sentinel",
+            "accessVolumeLengths-sentinel",
             "access_volume-sentinel",
             "access_volumes-sentinel",
+            "access_volume_len-sentinel",
             "access_volume_count-sentinel",
             "access_volume_counts-sentinel",
             "access_volume_length-sentinel",
+            "access_volume_lengths-sentinel",
             "bucketCommitment-sentinel",
             "bucketCommitments-sentinel",
             "bucket_commitment-sentinel",
@@ -1178,7 +1184,11 @@ mod tests {
             "access_volume_count=access-volume-count-query-sentinel",
             "access_volume_counts=access-volume-counts-query-sentinel",
             "accessVolumeCounts=accessVolumeCounts-query-sentinel",
+            "access_volume_len=access-volume-len-query-sentinel",
+            "access_volume_length=access-volume-length-query-sentinel",
+            "access_volume_lengths=access-volume-lengths-query-sentinel",
             "accessVolumeLength=accessVolumeLength-query-sentinel",
+            "accessVolumeLengths=accessVolumeLengths-query-sentinel",
         ] {
             assert_eq!(
                 redact_private_oram_access_path(&format!(
@@ -1244,7 +1254,11 @@ mod tests {
             "access_volume_count=access-volume-count-query-sentinel",
             "access_volume_counts=access-volume-counts-query-sentinel",
             "accessVolumeCounts=accessVolumeCounts-query-sentinel",
+            "access_volume_len=access-volume-len-query-sentinel",
+            "access_volume_length=access-volume-length-query-sentinel",
+            "access_volume_lengths=access-volume-lengths-query-sentinel",
             "accessVolumeLength=accessVolumeLength-query-sentinel",
+            "accessVolumeLengths=accessVolumeLengths-query-sentinel",
         ] {
             assert_eq!(
                 redact_private_oram_access_path(&format!(
