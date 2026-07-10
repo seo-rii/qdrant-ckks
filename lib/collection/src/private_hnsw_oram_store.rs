@@ -2214,7 +2214,9 @@ mod tests {
             "state_ciphertexts_sha256.json",
             "stateCiphertextsSha256",
             "payload_fetch_token",
+            "payload_fetch_tokens",
             "payloadFetchToken",
+            "payloadFetchTokens",
             "token_map",
             "token_maps",
             "tokenMap",
@@ -2511,7 +2513,9 @@ mod tests {
             "positionMapBackup",
             "state_ciphertexts_sha256.json",
             "token_position_map_backup",
+            "payload_fetch_tokens",
             "payloadFetchToken",
+            "payloadFetchTokens",
             "stashSnapshot",
         ];
 
@@ -2531,7 +2535,9 @@ mod tests {
                 assert!(!rendered.contains("ClientState"), "{rendered}");
                 assert!(!rendered.contains("position_map"), "{rendered}");
                 assert!(!rendered.contains("PositionMap"), "{rendered}");
+                assert!(!rendered.contains("payload_fetch_tokens"), "{rendered}");
                 assert!(!rendered.contains("payloadFetchToken"), "{rendered}");
+                assert!(!rendered.contains("payloadFetchTokens"), "{rendered}");
                 assert!(!rendered.contains("stash"), "{rendered}");
             }
         }
