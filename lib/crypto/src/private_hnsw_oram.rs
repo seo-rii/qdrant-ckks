@@ -2314,6 +2314,38 @@ mod tests {
     }
 
     #[test]
+    fn manifest_shape_rejects_malformed_context_ids() {
+        for manifest in [
+            PrivateHnswOramManifest {
+                collection_id: "collection\nuuid".to_string(),
+                ..fixture_manifest()
+            },
+            PrivateHnswOramManifest {
+                key_id: "tenant-a/vector\nprivate-rk".to_string(),
+                ..fixture_manifest()
+            },
+            PrivateHnswOramManifest {
+                rk_id: "tenant-a/vector\nprivate-rk".to_string(),
+                ..fixture_manifest()
+            },
+            PrivateHnswOramManifest {
+                owner_signing_key_id: "tenant-a/private\nhnsw-signing-v1".to_string(),
+                ..fixture_manifest()
+            },
+        ] {
+            let expected = if manifest.collection_id.contains('\n') {
+                PrivateHnswOramError::InvalidManifestField("collection_id")
+            } else {
+                PrivateHnswOramError::InvalidResourceKeyId
+            };
+            assert_eq!(
+                validate_private_hnsw_oram_manifest_shape(&manifest),
+                Err(expected)
+            );
+        }
+    }
+
+    #[test]
     fn manifest_shape_rejects_impossible_path_batch_budget() {
         let mut manifest = fixture_manifest();
         manifest.oram.tree_height = 1;

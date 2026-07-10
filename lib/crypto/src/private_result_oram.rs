@@ -7775,6 +7775,35 @@ mod tests {
             Err(PrivateResultOramError::InvalidProvider)
         );
 
+        for malformed_manifest in [
+            PrivateResultOramManifest {
+                collection_id: "collection\nuuid".to_string(),
+                ..fixture_manifest()
+            },
+            PrivateResultOramManifest {
+                key_id: "tenant-a/payload\nprivate-rk".to_string(),
+                ..fixture_manifest()
+            },
+            PrivateResultOramManifest {
+                rk_id: "tenant-a/payload\nprivate-rk".to_string(),
+                ..fixture_manifest()
+            },
+            PrivateResultOramManifest {
+                owner_signing_key_id: "tenant-a/private\nresult-signing-v1".to_string(),
+                ..fixture_manifest()
+            },
+        ] {
+            let expected = if malformed_manifest.collection_id.contains('\n') {
+                PrivateResultOramError::InvalidManifestField("collection_id")
+            } else {
+                PrivateResultOramError::InvalidResourceKeyId
+            };
+            assert_eq!(
+                validate_private_result_oram_manifest_shape(&malformed_manifest),
+                Err(expected)
+            );
+        }
+
         manifest = fixture_manifest();
         manifest.root_hash = "not-base64url".to_string();
         assert_eq!(
