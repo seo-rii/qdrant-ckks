@@ -2043,6 +2043,18 @@ mod tests {
                 Err(PrivateHnswOramError::InvalidResourceKeyId)
             );
         }
+        let malformed_signature_key_input = PrivateHnswOramReadPathsSignatureInput {
+            signature_key_id: "tenant-a/private\nhnsw-signing-v1",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_read_paths_signature(
+                malformed_signature_key_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidResourceKeyId)
+        );
 
         let malformed_root = PrivateHnswOramReadPathsSignatureInput {
             root_hash: "AAAA",
@@ -2622,6 +2634,18 @@ mod tests {
                 verification,
             ),
             Err(PrivateHnswOramError::SignatureKeyIdMismatch)
+        );
+        let malformed_signature_key_input = PrivateHnswOramCommitSignatureInput {
+            signature_key_id: "tenant-a/private\nhnsw-signing-v1",
+            ..input
+        };
+        assert_eq!(
+            validate_private_hnsw_oram_commit_signature(
+                malformed_signature_key_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateHnswOramError::InvalidResourceKeyId)
         );
 
         let tampered = PrivateHnswOramCommitSignatureInput {

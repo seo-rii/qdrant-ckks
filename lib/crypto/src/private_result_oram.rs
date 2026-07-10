@@ -9104,6 +9104,18 @@ mod tests {
             ),
             Err(PrivateResultOramError::SignatureKeyIdMismatch)
         );
+        let malformed_signature_key_input = PrivateResultOramCommitSignatureInput {
+            signature_key_id: "tenant-a/private\nresult-signing-v1",
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_commit_signature(
+                malformed_signature_key_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidResourceKeyId)
+        );
 
         let tampered = PrivateResultOramCommitSignatureInput {
             new_epoch: 44,
@@ -9182,6 +9194,18 @@ mod tests {
                 Err(expected)
             );
         }
+        let malformed_signature_key_input = PrivateResultOramReadBucketsSignatureInput {
+            signature_key_id: "tenant-a/private\nresult-signing-v1",
+            ..input
+        };
+        assert_eq!(
+            validate_private_result_oram_read_buckets_signature(
+                malformed_signature_key_input,
+                "malformed-signature",
+                verification,
+            ),
+            Err(PrivateResultOramError::InvalidResourceKeyId)
+        );
         let malformed_context = PrivateResultOramReadBucketsSignatureContext {
             collection_id: "collection\nuuid",
             ..context
