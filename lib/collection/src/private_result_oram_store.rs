@@ -3886,6 +3886,7 @@ mod tests {
         assert!(rendered.contains("encrypted bucket/proof consistency validation failed"));
         assert!(!rendered.contains("private-result-read-bucket-mismatch-sentinel"));
         assert!(!rendered.contains(&replacement.ciphertext));
+        assert!(!rendered.contains(&replacement.ciphertext_sha256));
         assert!(!rendered.contains(&replacement.bucket_commitment));
 
         let rendered = store
