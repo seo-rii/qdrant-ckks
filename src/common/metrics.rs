@@ -1559,6 +1559,10 @@ mod tests {
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
             ),
             (
+                "/collections/docs/private-hnsw/text/oram/read_paths?proof.value=hnsw-query-proof-dot-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+            ),
+            (
                 "/collections/docs/private-hnsw/text/oram/read_paths?proofValue=hnsw-query-proofValue-sentinel",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
             ),
@@ -1688,6 +1692,10 @@ mod tests {
             ),
             (
                 "/collections/docs/private-result-oram/oram/read_buckets?proof_values=result-query-proof-values-sentinel",
+                "/collections/{collection_name}/private-result-oram/oram/read_buckets",
+            ),
+            (
+                "/collections/docs/private-result-oram/oram/read_buckets?proof.values=result-query-proof-values-dot-sentinel",
                 "/collections/{collection_name}/private-result-oram/oram/read_buckets",
             ),
             (
@@ -2822,6 +2830,7 @@ mod tests {
             "POST /collections/docs/private-hnsw/text/oram/read_paths/leaf-label-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths?paths=hnsw-query-leaf-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths?proof_value=hnsw-query-proof-sentinel",
+            "POST /collections/docs/private-hnsw/text/oram/read_paths?proof.value=hnsw-query-proof-dot-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths?proofValue=hnsw-query-proofValue-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths?access_count=hnsw-query-access-count-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths?access.count=hnsw-query-access-count-dot-sentinel",
@@ -2960,6 +2969,7 @@ mod tests {
             "POST /collections/docs/private-result-oram/oram/read_buckets?bucket_id=result-query-bucket-sentinel",
             "POST /collections/docs/private-result-oram/oram/read_buckets?bucket_ids=result-query-bucket-sentinel",
             "POST /collections/docs/private-result-oram/oram/read_buckets?proof_values=result-query-proof-values-sentinel",
+            "POST /collections/docs/private-result-oram/oram/read_buckets?proof.values=result-query-proof-values-dot-sentinel",
             "POST /collections/docs/private-result-oram/oram/read_buckets?proofValue=result-query-proofValue-sentinel",
             "POST /collections/docs/private-result-oram/oram/read_buckets?access_counts=result-query-access-counts-sentinel",
             "POST /collections/docs/private-result-oram/oram/read_buckets?access.counts=result-query-access-counts-dot-sentinel",

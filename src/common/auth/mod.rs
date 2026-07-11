@@ -327,8 +327,10 @@ mod tests {
              access_volume_lengths=access-volume-lengths-snake-sentinel \
              access.volume.lengths=access-volume-lengths-dot-sentinel \
              proof_value=proof-value-snake-sentinel \
+             proof.value=proof-value-dot-sentinel \
              proofValue=proof-value-camel-sentinel \
              proof_values=proof-values-snake-sentinel \
+             proof.values=proof-values-dot-sentinel \
              proofValues=proof-values-camel-sentinel \
              pathCount=path-count-camel-sentinel \
              pathCounts=path-counts-camel-sentinel \

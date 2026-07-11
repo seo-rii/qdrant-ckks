@@ -557,8 +557,10 @@ mod tests {
              proof=proof-sentinel \
              proofs=proofs-sentinel \
              proof_value=proof-value-sentinel \
+             proof.value=proof-value-dot-sentinel \
              proofValue=proof-value-camel-sentinel \
              proof_values=proof-values-sentinel \
+             proof.values=proof-values-dot-sentinel \
              proofValues=proof-values-camel-sentinel \
              sibling=sibling-sentinel \
              siblings=siblings-sentinel \

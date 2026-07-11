@@ -1243,8 +1243,10 @@ mod tests {
         );
         for query in [
             "proof_value=proof-value-query-sentinel",
+            "proof.value=proof-value-dot-query-sentinel",
             "proofValue=proofValue-query-sentinel",
             "proof_values=proof-values-query-sentinel",
+            "proof.values=proof-values-dot-query-sentinel",
             "access_count=access-count-query-sentinel",
             "access.count=access-count-dot-query-sentinel",
             "access_counts=access-counts-query-sentinel",
@@ -1322,8 +1324,10 @@ mod tests {
         );
         for query in [
             "proof_value=proof-value-query-sentinel",
+            "proof.value=proof-value-dot-query-sentinel",
             "proofValue=proofValue-query-sentinel",
             "proof_values=proof-values-query-sentinel",
+            "proof.values=proof-values-dot-query-sentinel",
             "access_count=access-count-query-sentinel",
             "access.count=access-count-dot-query-sentinel",
             "access_counts=access-counts-query-sentinel",

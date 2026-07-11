@@ -506,8 +506,10 @@ mod tests {
              updated_bucket_commitments=updated-bucket-commitments-snake-sentinel, \
              updated.bucket.commitments=updated-bucket-commitments-dot-sentinel, \
              proof_value=proof-value-snake-sentinel, \
+             proof.value=proof-value-dot-sentinel, \
              proofValue=proof-value-camel-sentinel, \
              proof_values=proof-values-snake-sentinel, \
+             proof.values=proof-values-dot-sentinel, \
              proofValues=proof-values-camel-sentinel, \
              clientStateSnapshot=client-state-snapshot-camel-sentinel, \
              clientStateSnapshots=client-state-snapshots-camel-sentinel, \

@@ -1383,6 +1383,8 @@ mod tests {
         });
         private_hnsw_oram_access["private_hnsw"]["proof_value"] =
             json!("qdrant-sec-private-oram-proof-value-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["proof.value"] =
+            json!("qdrant-sec-private-oram-dot-proof-value-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["proofValue"] =
             json!("qdrant-sec-private-oram-camel-proof-value-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["ciphertext_sha256"] =
@@ -1521,6 +1523,8 @@ mod tests {
         });
         private_result_oram["private_result_oram"]["proof_values"] =
             json!(["qdrant-sec-private-result-proof-values-log-sentinel"]);
+        private_result_oram["private_result_oram"]["proof.values"] =
+            json!(["qdrant-sec-private-result-dot-proof-values-log-sentinel"]);
         private_result_oram["private_result_oram"]["proofValue"] =
             json!("qdrant-sec-private-result-camel-proof-value-log-sentinel");
         private_result_oram["private_result_oram"]["bucket.commitments"] =
