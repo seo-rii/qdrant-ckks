@@ -389,6 +389,8 @@ mod tests {
              clientStateSnapshot=client-state-snapshot-camel-sentinel \
              clientStateSnapshots=client-state-snapshots-camel-sentinel \
              client_state_snapshot=client-state-snapshot-snake-sentinel \
+             client.state.snapshot=client-state-snapshot-dotted-sentinel \
+             client.state.snapshot.json=client-state-snapshot-json-dotted-sentinel \
              client_state_snapshots=client-state-snapshots-snake-sentinel \
              clientStateBackup=client-state-backup-camel-sentinel \
              client_state_backup=client-state-backup-snake-sentinel \
@@ -397,6 +399,7 @@ mod tests {
              encryptedClientState=encrypted-client-state-camel-sentinel \
              encrypted_client_state=encrypted-client-state-snake-sentinel \
              encrypted.client.state=encrypted-client-state-dotted-sentinel \
+             encrypted.client.state.json=encrypted-client-state-json-dotted-sentinel \
              encrypted_client_state.json=encrypted-client-state-json-sentinel \
              encryptedClientStateSnapshot=encrypted-client-state-snapshot-camel-sentinel \
              encryptedClientStateSnapshots=encrypted-client-state-snapshots-camel-sentinel \
@@ -405,6 +408,8 @@ mod tests {
              encryptedClientStateBackups=encrypted-client-state-backups-camel-sentinel \
              encrypted_client_state_backups=encrypted-client-state-backups-snake-sentinel \
              encrypted_client_state_snapshot=encrypted-client-state-snapshot-snake-sentinel \
+             encrypted.client.state.snapshot=encrypted-client-state-snapshot-dotted-sentinel \
+             encrypted.client.state.snapshot.json=encrypted-client-state-snapshot-json-dotted-sentinel \
              encrypted_client_state_snapshot.bin=encrypted-client-state-snapshot-bin-sentinel \
              encrypted_client_state_snapshot.json=encrypted-client-state-snapshot-json-sentinel \
              encrypted_client_state_snapshots=encrypted-client-state-snapshots-snake-sentinel \
@@ -482,12 +487,16 @@ mod tests {
              tokenMap=token-map-camel-sentinel \
              token_map=token-map-snake-sentinel \
              tokenMapBackup=token-map-backup-camel-sentinel \
+             token.map.backup=token-map-backup-dotted-sentinel \
+             token.map.backups=token-map-backups-dotted-sentinel \
              token_map_backup=token-map-backup-snake-sentinel \
              tokenMapBackups=token-map-backups-camel-sentinel \
              token_map_backups=token-map-backups-snake-sentinel \
              tokenPositionMap=token-position-map-camel-sentinel \
              token_position_map=token-position-map-snake-sentinel \
              tokenPositionMapBackup=token-position-map-backup-camel-sentinel \
+             token.position.map.backup=token-position-map-backup-dotted-sentinel \
+             token.position.map.backups=token-position-map-backups-dotted-sentinel \
              token_position_map_backup=token-position-map-backup-snake-sentinel \
              tokenPositionMapBackups=token-position-map-backups-camel-sentinel \
              token_position_map_backups=token-position-map-backups-snake-sentinel \
