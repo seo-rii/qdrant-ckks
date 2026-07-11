@@ -7434,7 +7434,19 @@ mod tests {
                 ..context
             },
             PrivateHnswCommitSignatureContext {
+                vector_name: "client.state.snapshot",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
                 vector_name: "clientStateCiphertexts.json",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "encrypted.client.state",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "encrypted.client.state.snapshot",
                 ..context
             },
             PrivateHnswCommitSignatureContext {
@@ -7470,7 +7482,23 @@ mod tests {
                 ..context
             },
             PrivateHnswCommitSignatureContext {
+                vector_name: "token.map.backup",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "token.map.backups",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
                 vector_name: "tokenPositionMapSnapshots.json",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "token.position.map.backup",
+                ..context
+            },
+            PrivateHnswCommitSignatureContext {
+                vector_name: "token.position.map.backups",
                 ..context
             },
             PrivateHnswCommitSignatureContext {
@@ -10086,7 +10114,19 @@ mod tests {
                 ..build_context.clone()
             },
             PrivateHnswManifestBuildContext {
+                vector_name: "client.state.snapshot",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
                 vector_name: "clientStateCiphertexts.json",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "encrypted.client.state",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "encrypted.client.state.snapshot",
                 ..build_context.clone()
             },
             PrivateHnswManifestBuildContext {
@@ -10122,7 +10162,23 @@ mod tests {
                 ..build_context.clone()
             },
             PrivateHnswManifestBuildContext {
+                vector_name: "token.map.backup",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "token.map.backups",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
                 vector_name: "tokenPositionMapSnapshots.json",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "token.position.map.backup",
+                ..build_context.clone()
+            },
+            PrivateHnswManifestBuildContext {
+                vector_name: "token.position.map.backups",
                 ..build_context.clone()
             },
             PrivateHnswManifestBuildContext {
