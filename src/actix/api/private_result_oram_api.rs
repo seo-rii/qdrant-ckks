@@ -434,6 +434,7 @@ mod private_result_oram_rest_tests {
         "client_state_backups",
         "clientStateSnapshot",
         "clientStateSnapshots",
+        "client.state.snapshot",
         "client_state_snapshot",
         "client_state_snapshots",
         "clientStateCiphertext",
@@ -450,12 +451,14 @@ mod private_result_oram_rest_tests {
         "client_state_ciphertexts_sha256",
         "encryptedClientState",
         "encryptedClientStates",
+        "encrypted.client.state",
         "encryptedClientStateBackup",
         "encryptedClientStateBackups",
         "encrypted_client_states",
         "encrypted_client_state_backups",
         "encryptedClientStateSnapshot",
         "encryptedClientStateSnapshots",
+        "encrypted.client.state.snapshot",
         "encrypted_client_state_snapshot",
         "encrypted_client_state_snapshots",
         "encryptedClientStateCiphertext",
@@ -517,6 +520,8 @@ mod private_result_oram_rest_tests {
         "tokenMaps",
         "tokenMapBackup",
         "tokenMapBackups",
+        "token.map.backup",
+        "token.map.backups",
         "tokenMapSnapshot",
         "tokenMapSnapshots",
         "token_map",
@@ -529,6 +534,8 @@ mod private_result_oram_rest_tests {
         "tokenPositionMaps",
         "tokenPositionMapBackup",
         "tokenPositionMapBackups",
+        "token.position.map.backup",
+        "token.position.map.backups",
         "tokenPositionMapSnapshot",
         "tokenPositionMapSnapshots",
         "token_position_map",
@@ -547,6 +554,9 @@ mod private_result_oram_rest_tests {
         "client_state_ciphertext_sha256.json",
         "client_state_ciphertexts_sha256.bin",
         "client_state_ciphertexts_sha256.json",
+        "client.state.snapshot.json",
+        "encrypted.client.state.json",
+        "encrypted.client.state.snapshot.json",
         "encrypted_client_state_snapshot.bin",
         "encrypted_client_state_snapshot.json",
         "encrypted_client_state_snapshots.json",
@@ -1433,7 +1443,7 @@ mod private_result_oram_rest_tests {
             .unwrap()
             .insert(
                 "extra".to_string(),
-                json!("encrypted_client_state_snapshot"),
+                json!("encrypted.client.state.snapshot"),
             );
         let err = serde_json::from_value::<CommitPrivateResultOramBucketsRequest>(
             nested_commit_bucket_extra,
@@ -1442,7 +1452,7 @@ mod private_result_oram_rest_tests {
         let rendered = err.to_string();
         assert!(rendered.contains("unknown field"), "{rendered}");
         assert!(
-            !rendered.contains("encrypted_client_state_snapshot"),
+            !rendered.contains("encrypted.client.state.snapshot"),
             "{rendered}"
         );
     }
