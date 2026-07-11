@@ -242,7 +242,9 @@ mod tests {
              session_ids=session-list-sentinel \
              sessionIds=session-list-camel-sentinel \
              access_count=access-count-sentinel \
+             access.count=access-count-dot-sentinel \
              access_counts=access-counts-snake-sentinel \
+             access.counts=access-counts-dot-sentinel \
              accessCount=access-count-camel-sentinel \
              accessCounts=access-counts-camel-sentinel \
              access_volume=access-volume-snake-sentinel \

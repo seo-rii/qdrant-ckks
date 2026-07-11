@@ -465,7 +465,9 @@ mod tests {
              accessCount=access-count-camel-sentinel, \
              accessCounts=access-counts-camel-sentinel, \
              access_count=access-count-snake-sentinel, \
+             access.count=access-count-dot-sentinel, \
              access_counts=access-counts-snake-sentinel, \
+             access.counts=access-counts-dot-sentinel, \
              accessVolume=access-volume-camel-sentinel, \
              accessVolumes=access-volumes-camel-sentinel, \
              accessVolumeCount=access-volume-count-camel-sentinel, \
