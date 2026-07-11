@@ -198,11 +198,15 @@ mod tests {
         for private_result_path in [
             "payload_fetch_token",
             "payload.fetch.token",
+            "client.state.snapshot",
+            "encrypted.client.state",
             "state_ciphertext_hash",
             "state_ciphertext_hash.bin",
             "state_ciphertext_sha256",
             "state_ciphertext_sha256.json",
+            "token.map.backup",
             "token_map_backup",
+            "token.position.map.backups",
             "token_position_map_backups",
         ] {
             let encryption = private_result_oram_encryption(private_result_path);
