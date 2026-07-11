@@ -668,7 +668,8 @@ commit file contents again at archive time. Client-owned state detection covers
 snake_case, camelCase, kebab-case, and dot-separated aliases for client state,
 encrypted client state snapshots, position maps, ORAM/token position maps, and
 stashes, including `ciphertext_sha256` backup variants and payload fetch token
-singular/plural aliases such as `payloadFetchToken` and `payloadFetchTokens`.
+singular/plural aliases such as `payloadFetchToken`, `payloadFetchTokens`, and
+`payload.fetch.token`.
 Empty private ORAM temp directories are omitted from the archive;
 snapshot tests seal a plaintext sentinel into a client bucket and assert that
 the raw snapshot archive and restored bucket file do not contain the sentinel

@@ -2032,6 +2032,7 @@ mod tests {
             "payloadFetchToken.json",
             "payloadFetchTokens",
             "payloadFetchTokens.json",
+            "payload.fetch.token",
             "position_map",
             "position_maps",
             "positionMaps.json",
@@ -2227,6 +2228,7 @@ mod tests {
             "payload_fetch_tokens",
             "payloadFetchToken",
             "payloadFetchTokens",
+            "payload.fetch.token",
             "token_map",
             "token_maps",
             "tokenMap",
@@ -2526,6 +2528,7 @@ mod tests {
             "payload_fetch_tokens",
             "payloadFetchToken",
             "payloadFetchTokens",
+            "payload.fetch.token",
             "stashSnapshot",
         ];
 
@@ -2548,6 +2551,7 @@ mod tests {
                 assert!(!rendered.contains("payload_fetch_tokens"), "{rendered}");
                 assert!(!rendered.contains("payloadFetchToken"), "{rendered}");
                 assert!(!rendered.contains("payloadFetchTokens"), "{rendered}");
+                assert!(!rendered.contains("payload.fetch.token"), "{rendered}");
                 assert!(!rendered.contains("stash"), "{rendered}");
             }
         }
