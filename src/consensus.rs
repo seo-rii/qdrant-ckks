@@ -1504,6 +1504,7 @@ fn is_heartbeat(message: &RaftMessage) -> bool {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
 
     use collection::operations::vector_params_builder::VectorParamsBuilder;
@@ -1767,7 +1768,109 @@ mod tests {
             dispatcher
                 .private_oram_consensus_epoch(&private_oram_key)
                 .unwrap(),
-            Some(initial_private_oram_epoch),
+            Some(initial_private_oram_epoch.clone()),
+        );
+
+        let next_private_oram_epoch = PrivateOramConsensusEpoch {
+            index_epoch: 43,
+            root_hash: data_encoding::BASE64URL_NOPAD.encode(&[43; 32]),
+        };
+        let writeback_operation = CompareAndSwapPrivateOramEpoch {
+            key: private_oram_key.clone(),
+            expected: Some(initial_private_oram_epoch),
+            new: next_private_oram_epoch.clone(),
+        };
+        let unexpected_finalize_count = Arc::new(AtomicUsize::new(0));
+        let unexpected_finalize_count_for_prepare_failure = unexpected_finalize_count.clone();
+        let prepare_failure = handle
+            .block_on(dispatcher.coordinate_private_oram_writeback(
+                writeback_operation.clone(),
+                None,
+                || {
+                    Err(
+                        storage::content_manager::errors::StorageError::service_error(
+                            "simulated private ORAM durable prepare failure",
+                        ),
+                    )
+                },
+                || {
+                    unexpected_finalize_count_for_prepare_failure.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            ))
+            .unwrap_err();
+        assert!(
+            prepare_failure
+                .to_string()
+                .contains("simulated private ORAM durable prepare failure"),
+        );
+        assert_eq!(unexpected_finalize_count.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            dispatcher
+                .private_oram_consensus_epoch(&private_oram_key)
+                .unwrap(),
+            writeback_operation.expected.clone(),
+        );
+
+        let prepare_count = Arc::new(AtomicUsize::new(0));
+        let finalize_count = Arc::new(AtomicUsize::new(0));
+        let prepare_count_for_failure = prepare_count.clone();
+        let finalize_count_for_failure = finalize_count.clone();
+        let finalize_failure = handle
+            .block_on(dispatcher.coordinate_private_oram_writeback(
+                writeback_operation.clone(),
+                None,
+                || {
+                    prepare_count_for_failure.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+                || {
+                    finalize_count_for_failure.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(
+                        dispatcher
+                            .private_oram_consensus_epoch(&private_oram_key)
+                            .unwrap(),
+                        Some(next_private_oram_epoch.clone()),
+                    );
+                    Err(
+                        storage::content_manager::errors::StorageError::service_error(
+                            "simulated private ORAM local finalize failure",
+                        ),
+                    )
+                },
+            ))
+            .unwrap_err();
+        assert!(
+            finalize_failure
+                .to_string()
+                .contains("simulated private ORAM local finalize failure"),
+        );
+        assert_eq!(prepare_count.load(Ordering::SeqCst), 1);
+        assert_eq!(finalize_count.load(Ordering::SeqCst), 1);
+
+        let prepare_count_for_retry = prepare_count.clone();
+        let finalize_count_for_retry = finalize_count.clone();
+        handle
+            .block_on(dispatcher.coordinate_private_oram_writeback(
+                writeback_operation,
+                None,
+                || {
+                    prepare_count_for_retry.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+                || {
+                    finalize_count_for_retry.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            ))
+            .unwrap();
+        assert_eq!(prepare_count.load(Ordering::SeqCst), 2);
+        assert_eq!(finalize_count.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            dispatcher
+                .private_oram_consensus_epoch(&private_oram_key)
+                .unwrap(),
+            Some(next_private_oram_epoch),
         );
     }
 }

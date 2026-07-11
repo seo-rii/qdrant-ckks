@@ -300,6 +300,27 @@ impl Dispatcher {
         Ok(())
     }
 
+    /// Coordinates a private ORAM writeback around the replicated epoch/root commit point.
+    ///
+    /// `prepare` must durably persist an owner-signed, idempotent local writeback journal.
+    /// `finalize` must be safe to retry after the exact consensus CAS has already applied.
+    pub async fn coordinate_private_oram_writeback<Prepare, Finalize>(
+        &self,
+        operation: CompareAndSwapPrivateOramEpoch,
+        wait_timeout: Option<Duration>,
+        prepare: Prepare,
+        finalize: Finalize,
+    ) -> Result<(), StorageError>
+    where
+        Prepare: FnOnce() -> Result<(), StorageError>,
+        Finalize: FnOnce() -> Result<(), StorageError>,
+    {
+        prepare()?;
+        self.submit_private_oram_epoch_cas(operation, wait_timeout)
+            .await?;
+        finalize()
+    }
+
     pub fn private_oram_consensus_epoch(
         &self,
         key: &PrivateOramEpochKey,
