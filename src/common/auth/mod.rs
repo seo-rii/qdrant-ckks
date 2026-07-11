@@ -373,6 +373,7 @@ mod tests {
              encrypted_client_state_snapshot.bin=encrypted-client-state-snapshot-bin-sentinel \
              encrypted_client_state_snapshot.json=encrypted-client-state-snapshot-json-sentinel \
              encrypted_client_state_snapshots.json=encrypted-client-state-snapshots-json-sentinel \
+             encrypted.client.state.snapshots.json=encrypted-client-state-snapshots-json-sentinel \
              clientStateCiphertext=client-state-ciphertext-camel-sentinel \
              clientStateCiphertextHash=client-state-ciphertext-hash-camel-sentinel \
              clientStateCiphertextHashes=client-state-ciphertext-hashes-camel-sentinel \

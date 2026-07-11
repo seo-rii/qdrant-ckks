@@ -585,6 +585,7 @@ mod private_result_oram_grpc_tests {
         "encrypted_client_state_snapshot.bin",
         "encrypted_client_state_snapshot.json",
         "encrypted_client_state_snapshots.json",
+        "encrypted.client.state.snapshots.json",
         "token.map.backup.json",
         "token.position.map.backup.json",
         "encrypted_client_state_ciphertext_hash.bin",

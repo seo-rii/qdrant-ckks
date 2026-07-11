@@ -962,6 +962,7 @@ mod tests {
         "encrypted_client_state_snapshot.json",
         "encrypted_client_state_snapshot.bin",
         "encrypted_client_state_snapshots.json",
+        "encrypted.client.state.snapshots.json",
         "encrypted_client_state_snapshots.bin",
         "stateCiphertext.json",
         "stateCiphertextHash.json",

@@ -589,6 +589,7 @@ mod private_hnsw_rest_tests {
         "encrypted_client_state_snapshot.bin",
         "encrypted_client_state_snapshot.json",
         "encrypted_client_state_snapshots.json",
+        "encrypted.client.state.snapshots.json",
         "encrypted_client_state_ciphertext_hash.bin",
         "encrypted_client_state_ciphertext_hash.json",
         "encrypted_client_state_ciphertext_hashes.bin",

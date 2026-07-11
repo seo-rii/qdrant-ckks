@@ -414,6 +414,7 @@ mod tests {
              encrypted_client_state_snapshot.json=encrypted-client-state-snapshot-json-sentinel \
              encrypted_client_state_snapshots=encrypted-client-state-snapshots-snake-sentinel \
              encrypted_client_state_snapshots.json=encrypted-client-state-snapshots-json-sentinel \
+             encrypted.client.state.snapshots.json=encrypted-client-state-snapshots-json-sentinel \
              clientStateCiphertext=client-state-ciphertext-camel-sentinel \
              client_state_ciphertext=client-state-ciphertext-snake-sentinel \
              clientStateCiphertextHash=client-state-ciphertext-hash-camel-sentinel \

@@ -830,6 +830,7 @@ mod tests {
             "encrypted_client_state_snapshot.json=private-encrypted-client-state-snapshot-json-sentinel",
             "encrypted_client_state_snapshots=[private-encrypted-client-state-snapshots-sentinel]",
             "encrypted_client_state_snapshots.json=[private-encrypted-client-state-snapshots-json-sentinel]",
+            "encrypted.client.state.snapshots.json=[private-encrypted-client-state-snapshots-json-sentinel]",
             "encryptedClientStateSnapshot=private-encrypted-client-state-snapshot-camel-sentinel",
             "encryptedClientStateSnapshots=[private-encrypted-client-state-snapshots-camel-sentinel]",
             "client_state_ciphertext=private-client-state-ciphertext-sentinel",
