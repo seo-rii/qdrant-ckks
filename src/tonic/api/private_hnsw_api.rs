@@ -696,6 +696,43 @@ mod private_hnsw_grpc_tests {
         "state_ciphertexts_sha256.bin",
         "state_ciphertexts_sha256.json",
     ];
+    const PRIVATE_HNSW_ACCESS_PATTERN_REDACTION_ALIASES: &[&str] = &[
+        "path_label",
+        "path.label",
+        "pathLabel",
+        "path_labels",
+        "path.labels",
+        "pathLabels",
+        "read_path_label",
+        "read.path.label",
+        "readPathLabel",
+        "read_path_labels",
+        "read.path.labels",
+        "readPathLabels",
+        "leaf_label",
+        "leaf.label",
+        "leafLabels",
+        "leaf_labels",
+        "leaf.labels",
+        "node_id",
+        "node.id",
+        "nodeId",
+        "node_ids",
+        "node.ids",
+        "nodeIds",
+        "entry_node_id",
+        "entry.node.id",
+        "entryNodeId",
+        "entry_node_ids",
+        "entry.node.ids",
+        "entryNodeIds",
+        "visited_node_id",
+        "visited.node.id",
+        "visitedNodeId",
+        "visited_node_ids",
+        "visited.node.ids",
+        "visitedNodeIds",
+    ];
 
     fn sample_manifest() -> PrivateHnswOramManifest {
         PrivateHnswOramManifest {
@@ -787,6 +824,12 @@ mod private_hnsw_grpc_tests {
                 "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
             );
         }
+        for &forbidden in PRIVATE_HNSW_ACCESS_PATTERN_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
+            );
+        }
     }
 
     fn assert_private_hnsw_guard_message_redacts(rendered: &str, extra_forbidden: &[&str]) {
@@ -817,6 +860,12 @@ mod private_hnsw_grpc_tests {
             );
         }
         for &forbidden in PRIVATE_HNSW_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_HNSW_ACCESS_PATTERN_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "private HNSW guard leaked `{forbidden}`: {rendered}",
@@ -857,6 +906,12 @@ mod private_hnsw_grpc_tests {
             );
         }
         for &forbidden in PRIVATE_HNSW_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW route error leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_HNSW_ACCESS_PATTERN_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "private HNSW route error leaked `{forbidden}`: {rendered}",

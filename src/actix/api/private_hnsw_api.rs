@@ -625,6 +625,43 @@ mod private_hnsw_rest_tests {
         "updated.bucket.commitments",
         "updatedBucketCommitments",
     ];
+    const PRIVATE_HNSW_ACCESS_PATTERN_REDACTION_ALIASES: &[&str] = &[
+        "path_label",
+        "path.label",
+        "pathLabel",
+        "path_labels",
+        "path.labels",
+        "pathLabels",
+        "read_path_label",
+        "read.path.label",
+        "readPathLabel",
+        "read_path_labels",
+        "read.path.labels",
+        "readPathLabels",
+        "leaf_label",
+        "leaf.label",
+        "leafLabels",
+        "leaf_labels",
+        "leaf.labels",
+        "node_id",
+        "node.id",
+        "nodeId",
+        "node_ids",
+        "node.ids",
+        "nodeIds",
+        "entry_node_id",
+        "entry.node.id",
+        "entryNodeId",
+        "entry_node_ids",
+        "entry.node.ids",
+        "entryNodeIds",
+        "visited_node_id",
+        "visited.node.id",
+        "visitedNodeId",
+        "visited_node_ids",
+        "visited.node.ids",
+        "visitedNodeIds",
+    ];
 
     fn json_roundtrip<T>(value: &T) -> T
     where
@@ -685,6 +722,12 @@ mod private_hnsw_rest_tests {
                 "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
             );
         }
+        for &forbidden in PRIVATE_HNSW_ACCESS_PATTERN_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
+            );
+        }
     }
 
     fn assert_private_hnsw_guard_error_redacts(rendered: &str, extra_forbidden: &[&str]) {
@@ -715,6 +758,12 @@ mod private_hnsw_rest_tests {
             );
         }
         for &forbidden in PRIVATE_HNSW_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_HNSW_ACCESS_PATTERN_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "private HNSW guard leaked `{forbidden}`: {rendered}",
@@ -761,6 +810,12 @@ mod private_hnsw_rest_tests {
             );
         }
         for &forbidden in PRIVATE_HNSW_BUCKET_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "private HNSW route error leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_HNSW_ACCESS_PATTERN_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "private HNSW route error leaked `{forbidden}`: {rendered}",
@@ -1000,6 +1055,9 @@ mod private_hnsw_rest_tests {
             assert!(!rendered.contains(alias), "{rendered}");
         }
         for &alias in PRIVATE_HNSW_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
+            assert!(!rendered.contains(alias), "{rendered}");
+        }
+        for &alias in PRIVATE_HNSW_ACCESS_PATTERN_REDACTION_ALIASES {
             assert!(!rendered.contains(alias), "{rendered}");
         }
         assert!(!rendered.contains("requested_paths: 77"), "{rendered}");
