@@ -598,10 +598,12 @@ mod tests {
             &serde_json::json!([
                 "client.state.snapshot",
                 "client.state.snapshot.json",
+                "client.state.snapshots.json",
                 "encrypted.client.state",
                 "encrypted.client.state.json",
                 "encrypted.client.state.snapshot",
                 "encrypted.client.state.snapshot.json",
+                "encrypted.client.state.snapshots.json",
                 "token.position.map.backup",
                 "token.position.map.backup.json",
                 "token.position.map.backups",

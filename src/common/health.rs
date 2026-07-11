@@ -500,6 +500,7 @@ mod tests {
              clientStateSnapshots=client-state-snapshots-camel-sentinel, \
              client.state.snapshot=client-state-snapshot-dot-sentinel, \
              client.state.snapshot.json=client-state-snapshot-dot-json-sentinel, \
+             client.state.snapshots.json=client-state-snapshots-dot-json-sentinel, \
              client_state_snapshot=client-state-snapshot-snake-sentinel, \
              client_state_snapshots=client-state-snapshots-snake-sentinel, \
              clientStates=client-states-camel-sentinel, \
@@ -514,6 +515,7 @@ mod tests {
              encrypted.client.state.json=encrypted-client-state-dot-json-sentinel, \
              encrypted.client.state.snapshot=encrypted-client-state-snapshot-dot-sentinel, \
              encrypted.client.state.snapshot.json=encrypted-client-state-snapshot-dot-json-sentinel, \
+             encrypted.client.state.snapshots.json=encrypted-client-state-snapshots-dot-json-sentinel, \
              encryptedClientStateBackup=encrypted-client-state-backup-camel-sentinel, \
              encryptedClientStateBackups=encrypted-client-state-backups-camel-sentinel, \
              encrypted_client_state_backups=encrypted-client-state-backups-snake-sentinel, \
