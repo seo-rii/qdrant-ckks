@@ -362,6 +362,8 @@ mod tests {
              nodeScores=node-scores-camel-sentinel \
              nodeDistances=node-distances-camel-sentinel \
              query_vector=query-vector-sentinel \
+             query.vector=query-vector-dot-sentinel \
+             query.vectors=query-vectors-dot-sentinel \
              queryVector=query-vector-camel-sentinel \
              query_embeddings=query-embeddings-sentinel \
              queryPlaintext=query-plaintext-camel-sentinel \

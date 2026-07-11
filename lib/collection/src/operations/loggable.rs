@@ -2854,6 +2854,8 @@ mod tests {
 
         let mut query_and_score_aliases = json!({
             "query_vector": ["qdrant-sec-private-oram-query-vector-alias-log-sentinel"],
+            "query.vector": ["qdrant-sec-private-oram-dot-query-vector-alias-log-sentinel"],
+            "query.vectors": ["qdrant-sec-private-oram-dot-query-vectors-alias-log-sentinel"],
             "queryVector": ["qdrant-sec-private-oram-camel-query-vector-alias-log-sentinel"],
             "query_embedding": ["qdrant-sec-private-oram-query-embedding-alias-log-sentinel"],
             "queryEmbeddings": ["qdrant-sec-private-oram-camel-query-embeddings-alias-log-sentinel"],
@@ -2879,6 +2881,8 @@ mod tests {
             serde_json::to_string(&query_and_score_aliases).unwrap();
         for leaked in [
             "qdrant-sec-private-oram-query-vector-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-query-vector-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-query-vectors-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-query-vector-alias-log-sentinel",
             "qdrant-sec-private-oram-query-embedding-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-query-embeddings-alias-log-sentinel",

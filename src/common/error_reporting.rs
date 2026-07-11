@@ -743,6 +743,8 @@ mod tests {
             "node_distance=private-node-distance-sentinel",
             "nodeDistances=[private-node-distances-camel-sentinel]",
             "query_vector=[private-query-vector-sentinel]",
+            "query.vector=[private-query-vector-dot-sentinel]",
+            "query.vectors=[private-query-vectors-dot-sentinel]",
             "queryVector=[private-query-vector-camel-sentinel]",
             "query_embedding=[private-query-embedding-sentinel]",
             "queryEmbeddings=[private-query-embeddings-camel-sentinel]",

@@ -577,6 +577,8 @@ mod tests {
             "private HNSW read failed node.id=private-node-id-dot-sentinel",
             "private HNSW read failed vector_bytes=private-vector-bytes-sentinel",
             "private HNSW read failed queryVector=private-query-vector-sentinel",
+            "private HNSW read failed query.vector=private-query-vector-dot-sentinel",
+            "private HNSW read failed query.vectors=private-query-vectors-dot-sentinel",
             "private HNSW read failed query_embedding=private-query-embedding-sentinel",
             "private HNSW read failed query_plaintext=private-query-plaintext-sentinel",
             "private HNSW read failed score=private-score-sentinel",
