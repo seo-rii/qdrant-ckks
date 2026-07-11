@@ -4949,10 +4949,13 @@ mod tests {
             PrivateHnswClientError::InvalidSearchConfig("search-config-sentinel").to_string(),
             PrivateHnswClientError::InvalidSearchConfig("payload_fetch_tokens").to_string(),
             PrivateHnswClientError::InvalidSearchConfig("payloadFetchTokens").to_string(),
+            PrivateHnswClientError::InvalidSearchConfig("payload.fetch.token").to_string(),
             PrivateHnswClientError::InvalidBuildConfig("payload_fetch_token").to_string(),
             PrivateHnswClientError::InvalidBuildConfig("payloadFetchToken").to_string(),
+            PrivateHnswClientError::InvalidBuildConfig("payload.fetch.token").to_string(),
             PrivateHnswClientError::InvalidClientStateContext("payload_fetch_tokens").to_string(),
             PrivateHnswClientError::InvalidClientStateContext("payloadFetchTokens").to_string(),
+            PrivateHnswClientError::InvalidClientStateContext("payload.fetch.token").to_string(),
             PrivateHnswClientError::FixedBudgetNotExhausted {
                 completed_steps: 314,
                 fixed_steps: 271,
@@ -4999,6 +5002,7 @@ mod tests {
                 "payload_fetch_tokens",
                 "payloadFetchToken",
                 "payloadFetchTokens",
+                "payload.fetch.token",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
@@ -5086,6 +5090,10 @@ mod tests {
             ),
             format!(
                 "{:?}",
+                PrivateHnswClientError::InvalidSearchConfig("payload.fetch.token")
+            ),
+            format!(
+                "{:?}",
                 PrivateHnswClientError::InvalidBuildConfig("payload_fetch_token")
             ),
             format!(
@@ -5094,11 +5102,19 @@ mod tests {
             ),
             format!(
                 "{:?}",
+                PrivateHnswClientError::InvalidBuildConfig("payload.fetch.token")
+            ),
+            format!(
+                "{:?}",
                 PrivateHnswClientError::InvalidClientStateContext("payload_fetch_tokens")
             ),
             format!(
                 "{:?}",
                 PrivateHnswClientError::InvalidClientStateContext("payloadFetchTokens")
+            ),
+            format!(
+                "{:?}",
+                PrivateHnswClientError::InvalidClientStateContext("payload.fetch.token")
             ),
             format!(
                 "{:?}",
@@ -5165,6 +5181,7 @@ mod tests {
                 "payload_fetch_tokens",
                 "payloadFetchToken",
                 "payloadFetchTokens",
+                "payload.fetch.token",
             ] {
                 assert!(!rendered.contains(leaked), "{rendered}");
             }
