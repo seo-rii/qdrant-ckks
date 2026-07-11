@@ -360,7 +360,11 @@ mod tests {
              distance=distance-sentinel distances=distances-sentinel \
              distanceScores=distance-scores-camel-sentinel \
              nodeScores=node-scores-camel-sentinel \
+             node.score=node-score-dot-sentinel \
+             node.scores=node-scores-dot-sentinel \
              nodeDistances=node-distances-camel-sentinel \
+             node.distance=node-distance-dot-sentinel \
+             node.distances=node-distances-dot-sentinel \
              query_vector=query-vector-sentinel \
              query.vector=query-vector-dot-sentinel \
              query.vectors=query-vectors-dot-sentinel \

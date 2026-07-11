@@ -2882,8 +2882,12 @@ mod tests {
             "distance_score": "qdrant-sec-private-oram-distance-score-alias-log-sentinel",
             "distanceScores": ["qdrant-sec-private-oram-camel-distance-scores-alias-log-sentinel"],
             "node_score": "qdrant-sec-private-oram-node-score-alias-log-sentinel",
+            "node.score": "qdrant-sec-private-oram-dot-node-score-alias-log-sentinel",
+            "node.scores": ["qdrant-sec-private-oram-dot-node-scores-alias-log-sentinel"],
             "nodeScores": ["qdrant-sec-private-oram-camel-node-scores-alias-log-sentinel"],
             "node_distance": "qdrant-sec-private-oram-node-distance-alias-log-sentinel",
+            "node.distance": "qdrant-sec-private-oram-dot-node-distance-alias-log-sentinel",
+            "node.distances": ["qdrant-sec-private-oram-dot-node-distances-alias-log-sentinel"],
             "nodeDistances": ["qdrant-sec-private-oram-camel-node-distances-alias-log-sentinel"]
         });
         redact_sensitive_log_fields(&mut query_and_score_aliases);
@@ -2909,8 +2913,12 @@ mod tests {
             "qdrant-sec-private-oram-distance-score-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-distance-scores-alias-log-sentinel",
             "qdrant-sec-private-oram-node-score-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-node-score-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-node-scores-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-node-scores-alias-log-sentinel",
             "qdrant-sec-private-oram-node-distance-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-node-distance-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-node-distances-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-node-distances-alias-log-sentinel",
         ] {
             assert!(!query_and_score_aliases_serialized.contains(leaked));
