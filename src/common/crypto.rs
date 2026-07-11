@@ -23530,6 +23530,7 @@ mod tests {
             "payloadFetchToken.json",
             "payloadFetchTokens.json",
             "payload.fetch.token",
+            "payload.fetch.tokens",
             "tokenMap.json",
             "tokenMaps.json",
             "token_map.json",

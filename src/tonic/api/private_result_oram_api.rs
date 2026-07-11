@@ -553,6 +553,7 @@ mod private_result_oram_grpc_tests {
         "payload_fetch_token",
         "payload_fetch_tokens",
         "payload.fetch.token",
+        "payload.fetch.tokens",
         "tokenPositionMap",
         "tokenPositionMaps",
         "tokenPositionMapBackup",
