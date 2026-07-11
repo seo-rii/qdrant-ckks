@@ -1442,6 +1442,11 @@ mod private_result_oram_grpc_tests {
             err.message()
         );
         assert!(
+            !err.message().contains("bucket.commitment"),
+            "{}",
+            err.message()
+        );
+        assert!(
             !err.message().contains("encrypted_client_state"),
             "{}",
             err.message()

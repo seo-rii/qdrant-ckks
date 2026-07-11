@@ -1066,6 +1066,11 @@ mod private_hnsw_grpc_tests {
             err.message()
         );
         assert!(
+            !err.message().contains("bucket.commitment"),
+            "{}",
+            err.message()
+        );
+        assert!(
             !err.message().contains("stashSnapshot"),
             "{}",
             err.message()
