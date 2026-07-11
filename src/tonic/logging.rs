@@ -385,9 +385,13 @@ mod tests {
              neighborId=neighbor-id-camel-sentinel \
              neighborLevels=neighbor-level-camel-sentinel \
              client_signature=client-signature-sentinel \
+             client.signature=client-signature-dot-sentinel \
              request_signature=request-signature-sentinel \
              readSignature=read-signature-camel-sentinel \
+             read.signature=read-signature-dot-sentinel \
              commitSignature=commit-signature-camel-sentinel \
+             commit.signature=commit-signature-dot-sentinel \
+             manifest.signature=manifest-signature-dot-sentinel \
              owner_signing_key_id=owner-signing-key-sentinel \
              ownerSigningKeyIds=owner-signing-key-ids-camel-sentinel \
              signing_key_id=signing-key-sentinel \

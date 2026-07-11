@@ -1459,6 +1459,12 @@ mod tests {
                 "payload.fetch.token": "qdrant-sec-private-hnsw-dot-payload-token-log-sentinel"
             }
         });
+        private_hnsw_graph["private_hnsw"]["client.signature"] =
+            json!("qdrant-sec-private-hnsw-client-signature-log-sentinel");
+        private_hnsw_graph["private_hnsw"]["commit.signature"] =
+            json!("qdrant-sec-private-hnsw-commit-signature-log-sentinel");
+        private_hnsw_graph["private_hnsw"]["manifest.signature"] =
+            json!("qdrant-sec-private-hnsw-manifest-signature-log-sentinel");
         let mut private_result_oram = json!({
             "private_result_oram": {
                 "client_id": "qdrant-sec-private-result-client-id-log-sentinel",
@@ -1521,6 +1527,10 @@ mod tests {
                 }
             }
         });
+        private_result_oram["private_result_oram"]["read.signature"] =
+            json!("qdrant-sec-private-result-read-signature-log-sentinel");
+        private_result_oram["private_result_oram"]["commit.signature"] =
+            json!("qdrant-sec-private-result-commit-signature-log-sentinel");
         private_result_oram["private_result_oram"]["proof_values"] =
             json!(["qdrant-sec-private-result-proof-values-log-sentinel"]);
         private_result_oram["private_result_oram"]["proof.values"] =
