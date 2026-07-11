@@ -44,6 +44,7 @@ validator = { workspace = true }
 dashmap = { workspace = true }
 semver = { workspace = true }
 sha2 = { workspace = true }
+data-encoding = { workspace = true }
 
 # Consensus related
 atomicwrites = { workspace = true }

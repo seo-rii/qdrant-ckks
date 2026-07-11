@@ -29,7 +29,9 @@ use tonic::transport::Uri;
 
 use super::CollectionContainer;
 use super::alias_mapping::AliasMapping;
-use super::consensus_ops::{ConsensusOperations, SnapshotStatus};
+use super::consensus_ops::{
+    ConsensusOperations, PrivateOramConsensusEpoch, PrivateOramEpochKey, SnapshotStatus,
+};
 use super::errors::StorageError;
 use crate::content_manager::consensus::consensus_wal::ConsensusOpWal;
 use crate::content_manager::consensus::entry_queue::EntryId;
@@ -58,6 +60,8 @@ pub struct SnapshotData {
     pub metadata_by_id: PeerMetadataById,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cluster_metadata: HashMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_oram_epochs: HashMap<String, PrivateOramConsensusEpoch>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -549,6 +553,13 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 Ok(true)
             }
 
+            ConsensusOperations::CompareAndSwapPrivateOramEpoch(operation) => {
+                self.persistent
+                    .write()
+                    .compare_and_swap_private_oram_epoch(&operation)?;
+                Ok(true)
+            }
+
             ConsensusOperations::RequestSnapshot | ConsensusOperations::ReportSnapshot { .. } => {
                 Err(StorageError::service_error(
                     "snapshot consensus operation cannot be applied as a normal Raft entry",
@@ -578,6 +589,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             address_by_id,
             metadata_by_id,
             cluster_metadata,
+            private_oram_epochs,
         } = snapshot.get_data().try_into()?;
 
         self.toc.apply_collections_snapshot(collections_data)?;
@@ -586,6 +598,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             address_by_id,
             metadata_by_id,
             cluster_metadata,
+            private_oram_epochs,
         )?;
 
         // Clear now obsolete WAL entries after persisting new Raft state
@@ -815,6 +828,13 @@ impl<C: CollectionContainer> ConsensusManager<C> {
 
     pub fn peer_address_by_id(&self) -> PeerAddressById {
         self.persistent.read().peer_address_by_id()
+    }
+
+    pub fn private_oram_epoch(
+        &self,
+        key: &PrivateOramEpochKey,
+    ) -> Option<PrivateOramConsensusEpoch> {
+        self.persistent.read().private_oram_epoch(key)
     }
 
     pub fn peer_count(&self) -> usize {
@@ -1062,6 +1082,7 @@ impl<C: CollectionContainer> Storage for ConsensusManager<C> {
             address_by_id: persistent.peer_address_by_id(),
             metadata_by_id: persistent.peer_metadata_by_id(),
             cluster_metadata: persistent.cluster_metadata.clone(),
+            private_oram_epochs: persistent.private_oram_epochs.clone(),
         };
 
         let raft_state = persistent.state();
@@ -1158,6 +1179,7 @@ mod tests {
 
     use collection::operations::types::PeerMetadata;
     use collection::shards::shard::PeerId;
+    use data_encoding::BASE64URL_NOPAD;
     use proptest::prelude::*;
     use raft::eraftpb::{
         ConfChange, ConfChangeSingle, ConfChangeType, ConfChangeV2, Entry, EntryType,
@@ -1165,12 +1187,16 @@ mod tests {
     use raft::storage::{MemStorage, Storage};
     use tempfile::Builder;
 
-    use super::ConsensusManager;
+    use super::{ConsensusManager, SnapshotData};
     use crate::content_manager::CollectionContainer;
     use crate::content_manager::consensus::consensus_wal::ConsensusOpWal;
     use crate::content_manager::consensus::entry_queue::EntryApplyProgressQueue;
     use crate::content_manager::consensus::operation_sender::OperationSender;
     use crate::content_manager::consensus::persistent::Persistent;
+    use crate::content_manager::consensus_ops::{
+        CompareAndSwapPrivateOramEpoch, ConsensusOperations, PrivateOramConsensusEpoch,
+        PrivateOramEpochKey, PrivateOramIndexKind,
+    };
 
     #[test]
     fn update_is_applied() {
@@ -1328,6 +1354,107 @@ mod tests {
         mem_storage.wl().append(entries.as_ref()).unwrap();
         consensus_state.append_entries(entries).unwrap();
         (consensus_state, mem_storage)
+    }
+
+    #[test]
+    fn private_oram_epoch_cas_replays_and_survives_raft_snapshot_restore() {
+        let source_dir = Builder::new()
+            .prefix("private_oram_raft_source")
+            .tempdir()
+            .unwrap();
+        let (source, _) = setup_storages(Vec::new(), source_dir.path());
+        let key = PrivateOramEpochKey {
+            collection_id: "collection-uuid-1".to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let initial = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+        };
+        let next = PrivateOramConsensusEpoch {
+            index_epoch: 43,
+            root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+        };
+
+        assert!(
+            source
+                .apply_normal_entry(&private_oram_epoch_entry(
+                    key.clone(),
+                    None,
+                    initial.clone(),
+                ))
+                .unwrap(),
+        );
+        assert_eq!(source.private_oram_epoch(&key), Some(initial.clone()));
+
+        let stale = source
+            .apply_normal_entry(&private_oram_epoch_entry(key.clone(), None, next.clone()))
+            .unwrap_err();
+        assert!(
+            stale
+                .to_string()
+                .contains("consensus epoch/root CAS precondition failed"),
+        );
+        assert_eq!(source.private_oram_epoch(&key), Some(initial.clone()));
+
+        assert!(
+            source
+                .apply_normal_entry(&private_oram_epoch_entry(
+                    key.clone(),
+                    Some(initial),
+                    next.clone(),
+                ))
+                .unwrap(),
+        );
+
+        let snapshot = source.snapshot(0, 0).unwrap();
+        let snapshot_data: SnapshotData = snapshot.get_data().try_into().unwrap();
+        assert_eq!(snapshot_data.private_oram_epochs.len(), 1);
+
+        let target_dir = Builder::new()
+            .prefix("private_oram_raft_target")
+            .tempdir()
+            .unwrap();
+        let (target, _) = setup_storages(Vec::new(), target_dir.path());
+        target.apply_snapshot(&snapshot).unwrap().unwrap();
+        assert_eq!(target.private_oram_epoch(&key), Some(next));
+    }
+
+    #[test]
+    fn raft_snapshot_without_private_oram_epochs_remains_compatible() {
+        let snapshot = SnapshotData {
+            collections_data: Default::default(),
+            address_by_id: Default::default(),
+            metadata_by_id: Default::default(),
+            cluster_metadata: Default::default(),
+            private_oram_epochs: Default::default(),
+        };
+        let mut legacy_value = serde_json::to_value(snapshot).unwrap();
+        legacy_value
+            .as_object_mut()
+            .unwrap()
+            .remove("private_oram_epochs");
+
+        let decoded: SnapshotData = serde_json::from_value(legacy_value).unwrap();
+        assert!(decoded.private_oram_epochs.is_empty());
+    }
+
+    fn private_oram_epoch_entry(
+        key: PrivateOramEpochKey,
+        expected: Option<PrivateOramConsensusEpoch>,
+        new: PrivateOramConsensusEpoch,
+    ) -> Entry {
+        let operation =
+            ConsensusOperations::CompareAndSwapPrivateOramEpoch(CompareAndSwapPrivateOramEpoch {
+                key,
+                expected,
+                new,
+            });
+        Entry {
+            data: serde_cbor::to_vec(&operation).unwrap(),
+            ..Default::default()
+        }
     }
 
     prop_compose! {

@@ -8,6 +8,7 @@ use std::{cmp, fmt};
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use collection::operations::types::PeerMetadata;
 use collection::shards::shard::PeerId;
+use data_encoding::BASE64URL_NOPAD;
 use fs_err as fs;
 use fs_err::File;
 use http::Uri;
@@ -15,15 +16,23 @@ use parking_lot::RwLock;
 use raft::RaftState;
 use raft::eraftpb::{ConfState, HardState, SnapshotMetadata};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::StorageError;
 use crate::content_manager::consensus::entry_queue::{EntryApplyProgressQueue, EntryId};
+use crate::content_manager::consensus_ops::{
+    CompareAndSwapPrivateOramEpoch, PrivateOramConsensusEpoch, PrivateOramEpochKey,
+    PrivateOramIndexKind,
+};
 use crate::types::{PeerAddressById, PeerMetadataById};
 
 // Deprecated, use `STATE_FILE_NAME` instead
 const STATE_FILE_NAME_CBOR: &str = "raft_state";
 
 const STATE_FILE_NAME: &str = "raft_state.json";
+const PRIVATE_ORAM_EPOCH_KEY_DOMAIN: &[u8] = b"qdrant-sec/private-oram-consensus-epoch-key/v1";
+const PRIVATE_ORAM_EPOCH_MAX_RECORDS: usize = 1_000_000;
+const PRIVATE_ORAM_SHA256_BASE64URL_LEN: usize = 43;
 
 /// State of the Raft consensus, which should be saved between restarts.
 /// State of the collections, aliases and transfers are stored as regular storage.
@@ -48,6 +57,8 @@ pub struct Persistent {
     pub peer_metadata_by_id: Arc<RwLock<PeerMetadataById>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cluster_metadata: HashMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_oram_epochs: HashMap<String, PrivateOramConsensusEpoch>,
     pub this_peer_id: PeerId,
     #[serde(skip)]
     pub path: PathBuf,
@@ -80,6 +91,7 @@ impl fmt::Debug for Persistent {
                 &peer_crypto_fingerprint_count,
             )
             .field("cluster_metadata_keys", &cluster_metadata_keys)
+            .field("private_oram_epoch_count", &self.private_oram_epochs.len())
             .field("this_peer_id", &self.this_peer_id)
             .field("path", &self.path)
             .field("dirty", &self.dirty.load(Ordering::Relaxed))
@@ -102,7 +114,9 @@ impl Persistent {
         address_by_id: PeerAddressById,
         mut metadata_by_id: PeerMetadataById,
         new_cluster_metadata: HashMap<String, serde_json::Value>,
+        new_private_oram_epochs: HashMap<String, PrivateOramConsensusEpoch>,
     ) -> Result<(), StorageError> {
+        validate_private_oram_epoch_snapshot(&new_private_oram_epochs)?;
         // IF YOU ADD NEW DATA INTO `PERSISTENT` STATE, DON'T FORGET TO ALSO ADD IT INTO RAFT SNAPSHOT!
         let Self {
             state,
@@ -112,6 +126,7 @@ impl Persistent {
             peer_address_by_id,
             peer_metadata_by_id,
             cluster_metadata,
+            private_oram_epochs,
             this_peer_id: _,
             path: _,
             dirty: _,
@@ -129,6 +144,7 @@ impl Persistent {
         *peer_address_by_id.write() = address_by_id;
         *peer_metadata_by_id.write() = metadata_by_id;
         *cluster_metadata = new_cluster_metadata;
+        *private_oram_epochs = new_private_oram_epochs;
 
         // Last Raft commit and last snapshot index must be equal and persisted in one operation
         // Our `ConsensusManager::new` function relies on this for reconciling WAL clears
@@ -311,6 +327,51 @@ impl Persistent {
         }
     }
 
+    pub fn private_oram_epoch(
+        &self,
+        key: &PrivateOramEpochKey,
+    ) -> Option<PrivateOramConsensusEpoch> {
+        self.private_oram_epochs
+            .get(&private_oram_epoch_key_digest(key))
+            .cloned()
+    }
+
+    pub fn compare_and_swap_private_oram_epoch(
+        &mut self,
+        operation: &CompareAndSwapPrivateOramEpoch,
+    ) -> Result<(), StorageError> {
+        validate_private_oram_epoch_cas(operation)?;
+        let key = private_oram_epoch_key_digest(&operation.key);
+        if self.private_oram_epochs.get(&key) != operation.expected.as_ref() {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus epoch/root CAS precondition failed",
+            ));
+        }
+        if operation.expected.is_none()
+            && self.private_oram_epochs.len() >= PRIVATE_ORAM_EPOCH_MAX_RECORDS
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus epoch capacity exceeded",
+            ));
+        }
+
+        let previous = self
+            .private_oram_epochs
+            .insert(key.clone(), operation.new.clone());
+        if let Err(err) = self.save() {
+            match previous {
+                Some(previous) => {
+                    self.private_oram_epochs.insert(key, previous);
+                }
+                None => {
+                    self.private_oram_epochs.remove(&key);
+                }
+            }
+            return Err(err);
+        }
+        Ok(())
+    }
+
     pub fn last_applied_entry(&self) -> Option<u64> {
         self.apply_progress_queue.get_last_applied()
     }
@@ -386,6 +447,7 @@ impl Persistent {
             peer_address_by_id: Default::default(),
             peer_metadata_by_id: Default::default(),
             cluster_metadata: Default::default(),
+            private_oram_epochs: Default::default(),
             this_peer_id,
             path,
             latest_snapshot_meta: Default::default(),
@@ -398,6 +460,7 @@ impl Persistent {
     fn load(path: PathBuf) -> Result<Self, StorageError> {
         let reader = BufReader::new(File::open(&path)?);
         let mut state: Self = serde_cbor::from_reader(reader)?;
+        validate_private_oram_epoch_snapshot(&state.private_oram_epochs)?;
         state.path = path;
         Ok(state)
     }
@@ -405,6 +468,7 @@ impl Persistent {
     fn load_json(path: PathBuf) -> Result<Self, StorageError> {
         let reader = BufReader::new(File::open(&path)?);
         let mut state: Self = serde_json::from_reader(reader)?;
+        validate_private_oram_epoch_snapshot(&state.private_oram_epochs)?;
         state.path = path;
         Ok(state)
     }
@@ -426,6 +490,101 @@ impl Persistent {
         }
         Ok(())
     }
+}
+
+fn private_oram_epoch_key_digest(key: &PrivateOramEpochKey) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(PRIVATE_ORAM_EPOCH_KEY_DOMAIN);
+    update_length_prefixed(&mut hasher, key.collection_id.as_bytes());
+    hasher.update([match key.index_kind {
+        PrivateOramIndexKind::Hnsw => 1,
+        PrivateOramIndexKind::ResultPayload => 2,
+    }]);
+    update_length_prefixed(&mut hasher, key.index_name.as_bytes());
+    BASE64URL_NOPAD.encode(&hasher.finalize())
+}
+
+fn update_length_prefixed(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
+}
+
+fn validate_private_oram_epoch_cas(
+    operation: &CompareAndSwapPrivateOramEpoch,
+) -> Result<(), StorageError> {
+    let valid_key = !operation.key.collection_id.is_empty()
+        && operation.key.collection_id.len() <= 1024
+        && match operation.key.index_kind {
+            PrivateOramIndexKind::Hnsw => {
+                !operation.key.index_name.is_empty() && operation.key.index_name.len() <= 128
+            }
+            PrivateOramIndexKind::ResultPayload => operation.key.index_name.is_empty(),
+        };
+    if !valid_key {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus epoch key is invalid",
+        ));
+    }
+
+    validate_private_oram_consensus_root_hash(&operation.new.root_hash)?;
+    if let Some(expected) = &operation.expected {
+        validate_private_oram_consensus_root_hash(&expected.root_hash)?;
+        if operation.new.index_epoch <= expected.index_epoch {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus epoch must increase",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_private_oram_consensus_root_hash(root_hash: &str) -> Result<(), StorageError> {
+    if root_hash.len() != PRIVATE_ORAM_SHA256_BASE64URL_LEN {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus root hash is invalid",
+        ));
+    }
+    let decoded = BASE64URL_NOPAD
+        .decode(root_hash.as_bytes())
+        .map_err(|_| StorageError::bad_request("private ORAM consensus root hash is invalid"))?;
+    if decoded.len() != 32 || BASE64URL_NOPAD.encode(&decoded) != root_hash {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus root hash is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_oram_epoch_snapshot(
+    epochs: &HashMap<String, PrivateOramConsensusEpoch>,
+) -> Result<(), StorageError> {
+    if epochs.len() > PRIVATE_ORAM_EPOCH_MAX_RECORDS {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus epoch snapshot is invalid",
+        ));
+    }
+    for (key_digest, epoch) in epochs {
+        validate_private_oram_consensus_digest(key_digest)?;
+        validate_private_oram_consensus_root_hash(&epoch.root_hash)?;
+    }
+    Ok(())
+}
+
+fn validate_private_oram_consensus_digest(digest: &str) -> Result<(), StorageError> {
+    if digest.len() != PRIVATE_ORAM_SHA256_BASE64URL_LEN {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus epoch snapshot is invalid",
+        ));
+    }
+    let decoded = BASE64URL_NOPAD.decode(digest.as_bytes()).map_err(|_| {
+        StorageError::bad_request("private ORAM consensus epoch snapshot is invalid")
+    })?;
+    if decoded.len() != 32 || BASE64URL_NOPAD.encode(&decoded) != digest {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus epoch snapshot is invalid",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -456,6 +615,20 @@ mod tests {
             serde_json::json!("qdrant-sec-cluster-metadata-sentinel"),
         );
 
+        let private_oram_key = PrivateOramEpochKey {
+            collection_id: "qdrant-sec-private-oram-collection-sentinel".to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "qdrant-sec-private-oram-vector-sentinel".to_string(),
+        };
+        let private_oram_root = BASE64URL_NOPAD.encode(b"private-oram-root-hash-sentinel");
+        let private_oram_epochs = HashMap::from([(
+            private_oram_epoch_key_digest(&private_oram_key),
+            PrivateOramConsensusEpoch {
+                index_epoch: 42,
+                root_hash: private_oram_root.clone(),
+            },
+        )]);
+
         let persistent = Persistent {
             state: RaftState::default(),
             latest_snapshot_meta: SnapshotMetadataSer::default(),
@@ -464,6 +637,7 @@ mod tests {
             peer_address_by_id: Arc::new(RwLock::new(peer_address_by_id)),
             peer_metadata_by_id: Arc::new(RwLock::new(peer_metadata_by_id)),
             cluster_metadata,
+            private_oram_epochs,
             this_peer_id: 7,
             path: PathBuf::from("/tmp/qdrant-sec-persistent-state"),
             dirty: AtomicBool::new(false),
@@ -478,6 +652,10 @@ mod tests {
         );
         assert!(rendered.contains("crypto_policy"), "{rendered}");
         assert!(
+            rendered.contains("private_oram_epoch_count: 1"),
+            "{rendered}"
+        );
+        assert!(
             !rendered.contains("qdrant-sec-peer-address-sentinel"),
             "{rendered}",
         );
@@ -489,6 +667,242 @@ mod tests {
             !rendered.contains("qdrant-sec-cluster-metadata-sentinel"),
             "{rendered}",
         );
+        assert!(!rendered.contains(&private_oram_root), "{rendered}");
+        assert!(
+            !rendered.contains("qdrant-sec-private-oram-collection-sentinel"),
+            "{rendered}",
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-private-oram-vector-sentinel"),
+            "{rendered}",
+        );
+    }
+
+    #[test]
+    fn private_oram_epoch_cas_persists_and_rejects_stale_or_invalid_updates() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = PrivateOramEpochKey {
+            collection_id: "collection-uuid-1".to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let initial = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+        };
+        let next = PrivateOramConsensusEpoch {
+            index_epoch: 43,
+            root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+        };
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: key.clone(),
+                expected: None,
+                new: initial.clone(),
+            })
+            .unwrap();
+        assert_eq!(persistent.private_oram_epoch(&key), Some(initial.clone()));
+
+        let stale = persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: key.clone(),
+                expected: None,
+                new: next.clone(),
+            })
+            .unwrap_err();
+        assert!(
+            stale
+                .to_string()
+                .contains("consensus epoch/root CAS precondition failed"),
+        );
+        assert_eq!(persistent.private_oram_epoch(&key), Some(initial.clone()));
+
+        let non_increasing = persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: key.clone(),
+                expected: Some(initial.clone()),
+                new: PrivateOramConsensusEpoch {
+                    index_epoch: initial.index_epoch,
+                    root_hash: next.root_hash.clone(),
+                },
+            })
+            .unwrap_err();
+        assert!(
+            non_increasing
+                .to_string()
+                .contains("consensus epoch must increase"),
+        );
+
+        let invalid_root_sentinel = "private-oram-invalid-root-sentinel";
+        let invalid_root = persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: key.clone(),
+                expected: Some(initial.clone()),
+                new: PrivateOramConsensusEpoch {
+                    index_epoch: 43,
+                    root_hash: invalid_root_sentinel.to_string(),
+                },
+            })
+            .unwrap_err();
+        assert!(
+            invalid_root
+                .to_string()
+                .contains("consensus root hash is invalid"),
+        );
+        assert!(!invalid_root.to_string().contains(invalid_root_sentinel));
+
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: key.clone(),
+                expected: Some(initial),
+                new: next.clone(),
+            })
+            .unwrap();
+        drop(persistent);
+
+        let reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        assert_eq!(reloaded.private_oram_epoch(&key), Some(next));
+    }
+
+    #[test]
+    fn private_oram_epoch_cas_rolls_back_memory_state_when_persist_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = PrivateOramEpochKey {
+            collection_id: "collection-uuid-1".to_string(),
+            index_kind: PrivateOramIndexKind::ResultPayload,
+            index_name: String::new(),
+        };
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        persistent.path = temp.path().join("missing-parent").join("raft_state.json");
+
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: key.clone(),
+                expected: None,
+                new: PrivateOramConsensusEpoch {
+                    index_epoch: 7,
+                    root_hash: BASE64URL_NOPAD.encode(&[7; 32]),
+                },
+            })
+            .unwrap_err();
+
+        assert_eq!(persistent.private_oram_epoch(&key), None);
+    }
+
+    #[test]
+    fn private_oram_epoch_snapshot_validation_rejects_malformed_records_before_replace() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = PrivateOramEpochKey {
+            collection_id: "collection-uuid-1".to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let initial = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+        };
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: key.clone(),
+                expected: None,
+                new: initial.clone(),
+            })
+            .unwrap();
+
+        let invalid_digest_sentinel = "private-oram-invalid-digest-sentinel";
+        let malformed_digest = HashMap::from([(
+            invalid_digest_sentinel.to_string(),
+            PrivateOramConsensusEpoch {
+                index_epoch: 43,
+                root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+            },
+        )]);
+        let digest_error = persistent
+            .update_from_snapshot(
+                &SnapshotMetadata::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                malformed_digest,
+            )
+            .unwrap_err();
+        assert!(
+            digest_error
+                .to_string()
+                .contains("consensus epoch snapshot is invalid"),
+        );
+        assert!(!digest_error.to_string().contains(invalid_digest_sentinel),);
+        assert_eq!(persistent.private_oram_epoch(&key), Some(initial.clone()));
+
+        let invalid_root_sentinel = "private-oram-invalid-snapshot-root-sentinel";
+        let malformed_root = HashMap::from([(
+            private_oram_epoch_key_digest(&key),
+            PrivateOramConsensusEpoch {
+                index_epoch: 43,
+                root_hash: invalid_root_sentinel.to_string(),
+            },
+        )]);
+        let root_error = persistent
+            .update_from_snapshot(
+                &SnapshotMetadata::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                malformed_root,
+            )
+            .unwrap_err();
+        assert!(
+            root_error
+                .to_string()
+                .contains("consensus root hash is invalid"),
+        );
+        assert!(!root_error.to_string().contains(invalid_root_sentinel));
+        assert_eq!(persistent.private_oram_epoch(&key), Some(initial));
+    }
+
+    #[test]
+    fn private_oram_epoch_load_rejects_malformed_persisted_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = PrivateOramEpochKey {
+            collection_id: "collection-uuid-1".to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key,
+                expected: None,
+                new: PrivateOramConsensusEpoch {
+                    index_epoch: 42,
+                    root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+                },
+            })
+            .unwrap();
+        drop(persistent);
+
+        let state_path = temp.path().join(STATE_FILE_NAME);
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(&state_path).unwrap()).unwrap();
+        let epochs = state["private_oram_epochs"].as_object_mut().unwrap();
+        let epoch = epochs.values_mut().next().unwrap().as_object_mut().unwrap();
+        let invalid_root_sentinel = "private-oram-persisted-root-sentinel";
+        epoch.insert(
+            "root_hash".to_string(),
+            serde_json::json!(invalid_root_sentinel),
+        );
+        fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+
+        let error = Persistent::load_or_init(temp.path(), true, false, None).unwrap_err();
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("consensus root hash is invalid"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains(invalid_root_sentinel), "{rendered}");
     }
 }
 

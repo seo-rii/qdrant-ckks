@@ -7677,6 +7677,7 @@ dependencies = [
  "collection",
  "common",
  "dashmap",
+ "data-encoding",
  "env_logger",
  "fs-err",
  "futures",

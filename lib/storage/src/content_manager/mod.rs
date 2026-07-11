@@ -37,6 +37,53 @@ pub mod consensus_ops {
         UpdateCollectionOperation,
     };
 
+    #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone, Copy)]
+    #[serde(rename_all = "snake_case")]
+    pub enum PrivateOramIndexKind {
+        Hnsw,
+        ResultPayload,
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramEpochKey {
+        pub collection_id: CollectionId,
+        pub index_kind: PrivateOramIndexKind,
+        /// Vector name for HNSW; empty for the collection-wide result payload ORAM.
+        pub index_name: String,
+    }
+
+    impl fmt::Debug for PrivateOramEpochKey {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramEpochKey")
+                .field("index_kind", &self.index_kind)
+                .field("collection_id", &"[redacted]")
+                .field("index_name", &"[redacted]")
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramConsensusEpoch {
+        pub index_epoch: u64,
+        pub root_hash: String,
+    }
+
+    impl fmt::Debug for PrivateOramConsensusEpoch {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramConsensusEpoch")
+                .field("index_epoch", &self.index_epoch)
+                .field("root_hash", &"[redacted]")
+                .finish()
+        }
+    }
+
+    #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct CompareAndSwapPrivateOramEpoch {
+        pub key: PrivateOramEpochKey,
+        pub expected: Option<PrivateOramConsensusEpoch>,
+        pub new: PrivateOramConsensusEpoch,
+    }
+
     /// Operation that should pass consensus
     #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
     pub enum ConsensusOperations {
@@ -54,6 +101,7 @@ pub mod consensus_ops {
             key: String,
             value: serde_json::Value,
         },
+        CompareAndSwapPrivateOramEpoch(CompareAndSwapPrivateOramEpoch),
         RequestSnapshot,
         ReportSnapshot {
             peer_id: PeerId,
@@ -218,6 +266,12 @@ pub mod consensus_ops {
                     .field("key", key)
                     .field("value_type", &json_value_type(value))
                     .finish(),
+                ConsensusOperations::CompareAndSwapPrivateOramEpoch(operation) => f
+                    .debug_struct("CompareAndSwapPrivateOramEpoch")
+                    .field("index_kind", &operation.key.index_kind)
+                    .field("has_expected", &operation.expected.is_some())
+                    .field("new_epoch", &operation.new.index_epoch)
+                    .finish(),
                 ConsensusOperations::RequestSnapshot => f.write_str("RequestSnapshot"),
                 ConsensusOperations::ReportSnapshot { peer_id, status } => f
                     .debug_struct("ReportSnapshot")
@@ -291,7 +345,10 @@ pub trait CollectionContainer {
 mod test {
     use serde_json::json;
 
-    use super::consensus_ops::ConsensusOperations;
+    use super::consensus_ops::{
+        CompareAndSwapPrivateOramEpoch, ConsensusOperations, PrivateOramConsensusEpoch,
+        PrivateOramEpochKey, PrivateOramIndexKind,
+    };
 
     // Consensus messages are serialized to CBOR when sent over network and written into WAL.
     //
@@ -333,6 +390,50 @@ mod test {
         let raw_debug = format!("{operation:?}");
 
         assert!(raw_debug.contains("qdrant-sec-raw-consensus-sentinel"));
+    }
+
+    #[test]
+    fn private_oram_epoch_cas_log_projection_redacts_identity_and_roots() {
+        let operation =
+            ConsensusOperations::CompareAndSwapPrivateOramEpoch(CompareAndSwapPrivateOramEpoch {
+                key: PrivateOramEpochKey {
+                    collection_id: "qdrant-sec-private-oram-collection-sentinel".to_string(),
+                    index_kind: PrivateOramIndexKind::Hnsw,
+                    index_name: "qdrant-sec-private-oram-vector-sentinel".to_string(),
+                },
+                expected: Some(PrivateOramConsensusEpoch {
+                    index_epoch: 42,
+                    root_hash: "qdrant-sec-private-oram-old-root-sentinel".to_string(),
+                }),
+                new: PrivateOramConsensusEpoch {
+                    index_epoch: 43,
+                    root_hash: "qdrant-sec-private-oram-new-root-sentinel".to_string(),
+                },
+            });
+
+        let redacted = format!("{:?}", operation.redacted_log());
+        let raw = format!("{operation:?}");
+
+        for rendered in [&redacted, &raw] {
+            assert!(
+                !rendered.contains("qdrant-sec-private-oram-collection-sentinel"),
+                "{rendered}",
+            );
+            assert!(
+                !rendered.contains("qdrant-sec-private-oram-vector-sentinel"),
+                "{rendered}",
+            );
+            assert!(
+                !rendered.contains("qdrant-sec-private-oram-old-root-sentinel"),
+                "{rendered}",
+            );
+            assert!(
+                !rendered.contains("qdrant-sec-private-oram-new-root-sentinel"),
+                "{rendered}",
+            );
+        }
+        assert!(redacted.contains("has_expected: true"), "{redacted}");
+        assert!(redacted.contains("new_epoch: 43"), "{redacted}");
     }
 
     #[test]
