@@ -4769,6 +4769,8 @@ mod private_hnsw_tests {
             "read_path_labels",
             "read.path.labels",
             "readPathLabels",
+            "path.count",
+            "path.counts",
             "leaf_label",
             "leaf.label",
             "leafLabels",

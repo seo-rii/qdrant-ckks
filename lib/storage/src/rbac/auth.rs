@@ -598,6 +598,7 @@ mod tests {
             "private HNSW read failed access.volume.len=private-access-volume-len-dot-sentinel",
             "private HNSW read failed accessVolumeLength=private-access-volume-length-sentinel",
             "private HNSW read failed path_counts=private-path-count-sentinel",
+            "private HNSW read failed path.counts=private-path-counts-dot-sentinel",
             "private HNSW read failed pathCounts=private-path-counts-sentinel",
             "private HNSW read failed requestedPathCount=private-requested-path-count-sentinel",
             "private HNSW read failed requestedPathCounts=private-requested-path-counts-sentinel",

@@ -1571,6 +1571,10 @@ mod tests {
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
             ),
             (
+                "/collections/docs/private-hnsw/text/oram/read_paths?path.count=hnsw-query-path-count-dot-sentinel",
+                "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
+            ),
+            (
                 "/collections/docs/private-hnsw/text/oram/read_paths?accessCounts=hnsw-query-accessCounts-sentinel",
                 "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
             ),
@@ -2821,6 +2825,7 @@ mod tests {
             "POST /collections/docs/private-hnsw/text/oram/read_paths?proofValue=hnsw-query-proofValue-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths?access_count=hnsw-query-access-count-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths?access.count=hnsw-query-access-count-dot-sentinel",
+            "POST /collections/docs/private-hnsw/text/oram/read_paths?path.count=hnsw-query-path-count-dot-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths?accessCounts=hnsw-query-accessCounts-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths?access_volume=hnsw-query-access-volume-sentinel",
             "POST /collections/docs/private-hnsw/text/oram/read_paths?access.volume=hnsw-query-access-volume-dot-sentinel",

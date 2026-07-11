@@ -267,12 +267,14 @@ mod tests {
              access.volume.lengths=access-volume-lengths-dot-sentinel \
              accessVolumeLengths=access-volume-lengths-camel-sentinel \
              path_count=path-count-sentinel \
+             path.count=path-count-dot-sentinel \
              pathCounts=path-counts-camel-sentinel \
              read_bucket_count=read-bucket-count-sentinel \
              readBucketCounts=read-bucket-counts-camel-sentinel \
              read_bucket_id_count=read-bucket-id-count-sentinel \
              readBucketIdCounts=read-bucket-id-counts-camel-sentinel \
              requested_path_count=requested-path-count-sentinel \
+             requested.path.count=requested-path-count-dot-sentinel \
              requestedPathCounts=requested-path-counts-camel-sentinel \
              requested_bucket_count=requested-bucket-count-sentinel \
              requestedBucketCounts=requested-bucket-counts-camel-sentinel \
@@ -304,6 +306,7 @@ mod tests {
              result_count=result-count-sentinel \
              resultCounts=result-counts-camel-sentinel \
              real_path_count=real-path-count-sentinel \
+             real.path.count=real-path-count-dot-sentinel \
              realPathCounts=real-path-counts-camel-sentinel \
              paths=raw-path-sentinel \
              accessPath=access-path-camel-sentinel \
