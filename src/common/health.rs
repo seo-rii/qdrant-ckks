@@ -498,6 +498,7 @@ mod tests {
              proofValues=proof-values-camel-sentinel, \
              clientStateSnapshot=client-state-snapshot-camel-sentinel, \
              clientStateSnapshots=client-state-snapshots-camel-sentinel, \
+             client.state.snapshot=client-state-snapshot-dot-sentinel, \
              client_state_snapshot=client-state-snapshot-snake-sentinel, \
              client_state_snapshots=client-state-snapshots-snake-sentinel, \
              clientStates=client-states-camel-sentinel, \
@@ -508,6 +509,8 @@ mod tests {
              client_state_backups=client-state-backups-snake-sentinel, \
              encryptedClientStateSnapshot=encrypted-client-state-snapshot-camel-sentinel, \
              encryptedClientStateSnapshots=encrypted-client-state-snapshots-camel-sentinel, \
+             encrypted.client.state=encrypted-client-state-dot-sentinel, \
+             encrypted.client.state.snapshot=encrypted-client-state-snapshot-dot-sentinel, \
              encryptedClientStateBackup=encrypted-client-state-backup-camel-sentinel, \
              encryptedClientStateBackups=encrypted-client-state-backups-camel-sentinel, \
              encrypted_client_state_backups=encrypted-client-state-backups-snake-sentinel, \
@@ -592,14 +595,18 @@ mod tests {
              token_maps=token-maps-snake-sentinel, \
              token_map_snapshots=token-map-snapshots-snake-sentinel, \
              tokenMapBackup=token-map-backup-camel-singular-sentinel, \
+             token.map.backup=token-map-backup-dot-singular-sentinel, \
              token_map_backup=token-map-backup-snake-singular-sentinel, \
              token_map_backups=token-map-backups-snake-sentinel, \
+             token.map.backups=token-map-backups-dot-sentinel, \
              tokenMapBackups=token-map-backups-camel-sentinel, \
              token_position_maps=token-position-maps-snake-sentinel, \
              token_position_map_snapshots=token-position-map-snapshots-snake-sentinel, \
              tokenPositionMapBackup=token-position-map-backup-camel-singular-sentinel, \
+             token.position.map.backup=token-position-map-backup-dot-singular-sentinel, \
              token_position_map_backup=token-position-map-backup-snake-singular-sentinel, \
              token_position_map_backups=token-position-map-backups-snake-sentinel, \
+             token.position.map.backups=token-position-map-backups-dot-sentinel, \
              tokenPositionMapBackups=token-position-map-backups-camel-sentinel",
         );
 
@@ -641,6 +648,7 @@ mod tests {
         assert!(!message.contains("proof-values-snake-sentinel"));
         assert!(!message.contains("client-state-snapshot-camel-sentinel"));
         assert!(!message.contains("client-state-snapshots-camel-sentinel"));
+        assert!(!message.contains("client-state-snapshot-dot-sentinel"));
         assert!(!message.contains("client-state-snapshot-snake-sentinel"));
         assert!(!message.contains("client-state-snapshots-snake-sentinel"));
         assert!(!message.contains("client-state-backup-camel-sentinel"));
@@ -649,6 +657,8 @@ mod tests {
         assert!(!message.contains("client-state-backups-snake-sentinel"));
         assert!(!message.contains("encrypted-client-state-snapshot-camel-sentinel"));
         assert!(!message.contains("encrypted-client-state-snapshots-camel-sentinel"));
+        assert!(!message.contains("encrypted-client-state-dot-sentinel"));
+        assert!(!message.contains("encrypted-client-state-snapshot-dot-sentinel"));
         assert!(!message.contains("encrypted-client-state-backup-camel-sentinel"));
         assert!(!message.contains("encrypted-client-state-backups-camel-sentinel"));
         assert!(!message.contains("encrypted-client-state-backups-snake-sentinel"));
@@ -733,14 +743,18 @@ mod tests {
         assert!(!message.contains("token-maps-snake-sentinel"));
         assert!(!message.contains("token-map-snapshots-snake-sentinel"));
         assert!(!message.contains("token-map-backup-camel-singular-sentinel"));
+        assert!(!message.contains("token-map-backup-dot-singular-sentinel"));
         assert!(!message.contains("token-map-backup-snake-singular-sentinel"));
         assert!(!message.contains("token-map-backups-snake-sentinel"));
+        assert!(!message.contains("token-map-backups-dot-sentinel"));
         assert!(!message.contains("token-map-backups-camel-sentinel"));
         assert!(!message.contains("token-position-maps-snake-sentinel"));
         assert!(!message.contains("token-position-map-snapshots-snake-sentinel"));
         assert!(!message.contains("token-position-map-backup-camel-singular-sentinel"));
+        assert!(!message.contains("token-position-map-backup-dot-singular-sentinel"));
         assert!(!message.contains("token-position-map-backup-snake-singular-sentinel"));
         assert!(!message.contains("token-position-map-backups-snake-sentinel"));
+        assert!(!message.contains("token-position-map-backups-dot-sentinel"));
         assert!(!message.contains("token-position-map-backups-camel-sentinel"));
     }
 
