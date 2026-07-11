@@ -355,7 +355,9 @@ mod tests {
              updatedBucketCommitment=updated-bucket-commitment-camel-sentinel \
              updatedBucketCommitments=updated-bucket-commitments-camel-sentinel \
              updated_bucket_commitment=updated-bucket-commitment-snake-sentinel \
+             updated.bucket.commitment=updated-bucket-commitment-dot-sentinel \
              updated_bucket_commitments=updated-bucket-commitments-snake-sentinel \
+             updated.bucket.commitments=updated-bucket-commitments-dot-sentinel \
              returnedBucketCount=returned-bucket-count-camel-sentinel \
              returnedBucketCounts=returned-bucket-counts-camel-sentinel \
              updatedBucketCount=updated-bucket-count-camel-sentinel \

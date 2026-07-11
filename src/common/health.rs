@@ -500,7 +500,9 @@ mod tests {
              updatedBucketCommitment=updated-bucket-commitment-camel-sentinel, \
              updatedBucketCommitments=updated-bucket-commitments-camel-sentinel, \
              updated_bucket_commitment=updated-bucket-commitment-snake-sentinel, \
+             updated.bucket.commitment=updated-bucket-commitment-dot-sentinel, \
              updated_bucket_commitments=updated-bucket-commitments-snake-sentinel, \
+             updated.bucket.commitments=updated-bucket-commitments-dot-sentinel, \
              proof_value=proof-value-snake-sentinel, \
              proofValue=proof-value-camel-sentinel, \
              proof_values=proof-values-snake-sentinel, \
