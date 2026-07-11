@@ -1725,11 +1725,21 @@ mod tests {
                 .unwrap(),
             Some(initial_private_oram_epoch.clone()),
         );
+        handle
+            .block_on(dispatcher.submit_private_oram_epoch_cas(
+                CompareAndSwapPrivateOramEpoch {
+                    key: private_oram_key.clone(),
+                    expected: None,
+                    new: initial_private_oram_epoch.clone(),
+                },
+                None,
+            ))
+            .unwrap();
 
         let stale = handle
             .block_on(dispatcher.submit_private_oram_epoch_cas(
                 CompareAndSwapPrivateOramEpoch {
-                    key: private_oram_key,
+                    key: private_oram_key.clone(),
                     expected: None,
                     new: PrivateOramConsensusEpoch {
                         index_epoch: 43,
@@ -1753,5 +1763,11 @@ mod tests {
             "{rendered}",
         );
         assert!(!rendered.contains(&initial_private_oram_epoch.root_hash));
+        assert_eq!(
+            dispatcher
+                .private_oram_consensus_epoch(&private_oram_key)
+                .unwrap(),
+            Some(initial_private_oram_epoch),
+        );
     }
 }

@@ -342,7 +342,11 @@ impl Persistent {
     ) -> Result<(), StorageError> {
         validate_private_oram_epoch_cas(operation)?;
         let key = private_oram_epoch_key_digest(&operation.key);
-        if self.private_oram_epochs.get(&key) != operation.expected.as_ref() {
+        let current = self.private_oram_epochs.get(&key);
+        if current == Some(&operation.new) {
+            return Ok(());
+        }
+        if current != operation.expected.as_ref() {
             return Err(StorageError::bad_request(
                 "private ORAM consensus epoch/root CAS precondition failed",
             ));
@@ -703,6 +707,13 @@ mod tests {
                 new: initial.clone(),
             })
             .unwrap();
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: key.clone(),
+                expected: None,
+                new: initial.clone(),
+            })
+            .unwrap();
         assert_eq!(persistent.private_oram_epoch(&key), Some(initial.clone()));
 
         let stale = persistent
@@ -762,7 +773,17 @@ mod tests {
             .unwrap();
         drop(persistent);
 
-        let reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        let mut reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        reloaded
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: key.clone(),
+                expected: Some(PrivateOramConsensusEpoch {
+                    index_epoch: 42,
+                    root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+                }),
+                new: next.clone(),
+            })
+            .unwrap();
         assert_eq!(reloaded.private_oram_epoch(&key), Some(next));
     }
 

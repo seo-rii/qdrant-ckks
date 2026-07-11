@@ -1385,6 +1385,15 @@ mod tests {
                 .unwrap(),
         );
         assert_eq!(source.private_oram_epoch(&key), Some(initial.clone()));
+        assert!(
+            source
+                .apply_normal_entry(&private_oram_epoch_entry(
+                    key.clone(),
+                    None,
+                    initial.clone(),
+                ))
+                .unwrap(),
+        );
 
         let stale = source
             .apply_normal_entry(&private_oram_epoch_entry(key.clone(), None, next.clone()))
@@ -1396,6 +1405,15 @@ mod tests {
         );
         assert_eq!(source.private_oram_epoch(&key), Some(initial.clone()));
 
+        assert!(
+            source
+                .apply_normal_entry(&private_oram_epoch_entry(
+                    key.clone(),
+                    Some(initial.clone()),
+                    next.clone(),
+                ))
+                .unwrap(),
+        );
         assert!(
             source
                 .apply_normal_entry(&private_oram_epoch_entry(
