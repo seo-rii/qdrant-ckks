@@ -370,7 +370,11 @@ mod tests {
              query.vectors=query-vectors-dot-sentinel \
              queryVector=query-vector-camel-sentinel \
              query_embeddings=query-embeddings-sentinel \
+             query.embedding=query-embedding-dot-sentinel \
+             query.embeddings=query-embeddings-dot-sentinel \
              queryPlaintext=query-plaintext-camel-sentinel \
+             query.plaintext=query-plaintext-dot-sentinel \
+             query.plaintexts=query-plaintexts-dot-sentinel \
              pathLabels=leaf-camel-sentinel \
              readPathLabels=read-path-labels-camel-sentinel \
              oramPaths=oram-path-camel-sentinel \
