@@ -612,6 +612,23 @@ mod private_result_oram_grpc_tests {
         "state_ciphertexts_sha256.bin",
         "state_ciphertexts_sha256.json",
     ];
+    const PRIVATE_RESULT_ORAM_READ_ACCESS_REDACTION_ALIASES: &[&str] = &[
+        "read_bucket_id",
+        "read.bucket.id",
+        "readBucketId",
+        "read_bucket_ids",
+        "read.bucket.ids",
+        "readBucketIds",
+        "read_bucket_id_sequence",
+        "read.bucket.id.sequence",
+        "readBucketIdSequence",
+        "bucket_id_sequence",
+        "bucket.id.sequence",
+        "bucketIdSequence",
+        "bucket_sequence",
+        "bucket.sequence",
+        "bucketSequence",
+    ];
 
     struct PrivateResultRouteFixture {
         manifest: PrivateResultOramManifest,
@@ -957,6 +974,12 @@ mod private_result_oram_grpc_tests {
                 "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
             );
         }
+        for &forbidden in PRIVATE_RESULT_ORAM_READ_ACCESS_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
+            );
+        }
     }
 
     fn assert_private_result_guard_message_redacts(rendered: &str, extra_forbidden: &[&str]) {
@@ -985,6 +1008,12 @@ mod private_result_oram_grpc_tests {
             );
         }
         for &forbidden in PRIVATE_RESULT_ORAM_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "private result ORAM guard leaked `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_RESULT_ORAM_READ_ACCESS_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "private result ORAM guard leaked `{forbidden}`: {rendered}",

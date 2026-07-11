@@ -667,6 +667,18 @@ mod private_hnsw_rest_tests {
         "visited_node_ids",
         "visited.node.ids",
         "visitedNodeIds",
+        "bucket_sequence",
+        "bucket.sequence",
+        "bucketSequence",
+        "bucket_sequences",
+        "bucket.sequences",
+        "bucketSequences",
+        "bucket_id_sequence",
+        "bucket.id.sequence",
+        "bucketIdSequence",
+        "bucket_id_sequences",
+        "bucket.id.sequences",
+        "bucketIdSequences",
     ];
 
     fn json_roundtrip<T>(value: &T) -> T

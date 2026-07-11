@@ -601,6 +601,21 @@ mod private_result_oram_rest_tests {
         "updated_bucket_commitments",
         "updated.bucket.commitments",
         "updatedBucketCommitments",
+        "read_bucket_id",
+        "read.bucket.id",
+        "readBucketId",
+        "read_bucket_ids",
+        "read.bucket.ids",
+        "readBucketIds",
+        "read_bucket_id_sequence",
+        "read.bucket.id.sequence",
+        "readBucketIdSequence",
+        "bucket_id_sequence",
+        "bucket.id.sequence",
+        "bucketIdSequence",
+        "bucket_sequence",
+        "bucket.sequence",
+        "bucketSequence",
     ];
 
     struct PrivateResultRouteFixture {
@@ -954,6 +969,12 @@ mod private_result_oram_rest_tests {
             );
         }
         for &forbidden in PRIVATE_RESULT_ORAM_CLIENT_STATE_FILENAME_REDACTION_ALIASES {
+            assert!(
+                !rendered.contains(forbidden),
+                "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
+            );
+        }
+        for &forbidden in PRIVATE_RESULT_ORAM_BUCKET_REDACTION_ALIASES {
             assert!(
                 !rendered.contains(forbidden),
                 "write-access denial leaked private ORAM detail `{forbidden}`: {rendered}",
