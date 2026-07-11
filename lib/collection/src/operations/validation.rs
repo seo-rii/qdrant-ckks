@@ -582,7 +582,9 @@ mod tests {
                 "tokenMapBackup.json",
                 "tokenMapBackups.json",
                 "token.map.backup",
+                "token.map.backup.json",
                 "token.map.backups",
+                "token.map.backups.json",
                 "token_map_backup.json",
                 "token_map_backups.json",
                 "tokenMapSnapshot.json",
@@ -601,7 +603,9 @@ mod tests {
                 "encrypted.client.state.snapshot",
                 "encrypted.client.state.snapshot.json",
                 "token.position.map.backup",
+                "token.position.map.backup.json",
                 "token.position.map.backups",
+                "token.position.map.backups.json",
             ]),
         );
         let unsafe_store_name_message = describe_error(&unsafe_store_name);

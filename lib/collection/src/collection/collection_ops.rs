@@ -673,6 +673,7 @@ mod tests {
         "encryptedClientStateCiphertextsSha256",
         "encrypted_client_state",
         "encrypted.client.state",
+        "encrypted.client.state.json",
         "encrypted.client.state.snapshot",
         "encrypted_client_state.json",
         "encrypted_client_states",
