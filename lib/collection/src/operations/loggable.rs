@@ -397,6 +397,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "client_state_backups"
                         | "client_state_snapshot"
                         | "client_state_snapshots"
+                        | "client.state.snapshots"
                         | "client_state_ciphertext"
                         | "client_state_ciphertexts"
                         | "client_state_ciphertext_hash"
@@ -409,6 +410,7 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "encrypted_client_state_backups"
                         | "encrypted_client_state_snapshot"
                         | "encrypted_client_state_snapshots"
+                        | "encrypted.client.state.snapshots"
                         | "encrypted_client_state_ciphertext"
                         | "encrypted_client_state_ciphertexts"
                         | "encrypted_client_state_ciphertext_hash"
@@ -2543,6 +2545,7 @@ mod tests {
             "encrypted_client_state_backups": ["qdrant-sec-private-oram-encrypted-client-state-backups-alias-log-sentinel"],
             "encrypted_client_state_snapshot": "qdrant-sec-private-oram-encrypted-client-state-snapshot-alias-log-sentinel",
             "encrypted_client_state_snapshots": ["qdrant-sec-private-oram-encrypted-client-state-snapshots-alias-log-sentinel"],
+            "encrypted.client.state.snapshots": ["qdrant-sec-private-oram-encrypted-client-state-snapshots-alias-log-sentinel"],
             "encrypted_client_state_ciphertext": "qdrant-sec-private-oram-encrypted-client-state-ciphertext-alias-log-sentinel",
             "encrypted_client_state_ciphertexts": ["qdrant-sec-private-oram-encrypted-client-state-ciphertexts-alias-log-sentinel"],
             "encryptedClientStateCiphertext": "qdrant-sec-private-oram-camel-encrypted-client-state-ciphertext-alias-log-sentinel",
