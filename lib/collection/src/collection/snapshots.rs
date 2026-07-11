@@ -2588,6 +2588,7 @@ mod tests {
         let result_camel_markers = [
             "result-camel-read-bucket-id",
             "result-camel-payload-token",
+            "result-dot-payload-token",
             "result-camel-sibling-hash",
             "result-camel-proof-value",
             "result-camel-access-volume-length",
@@ -2597,8 +2598,9 @@ mod tests {
         let result_camel = sanitize_private_result_oram_snapshot_layout_error(
             temp_dir.path(),
             CollectionError::bad_request(format!(
-                "private result ORAM readBucketIds {} payloadFetchTokens {} siblingHash {} \
-                 proofValue {} accessVolumeLength {} resultIds {} visitedNodeIds {}",
+                "private result ORAM readBucketIds {} payloadFetchTokens {} \
+                 payload.fetch.token {} siblingHash {} proofValue {} accessVolumeLength {} \
+                 resultIds {} visitedNodeIds {}",
                 result_camel_markers[0],
                 result_camel_markers[1],
                 result_camel_markers[2],
@@ -2606,6 +2608,7 @@ mod tests {
                 result_camel_markers[4],
                 result_camel_markers[5],
                 result_camel_markers[6],
+                result_camel_markers[7],
             )),
         )
         .to_string();
@@ -3285,6 +3288,31 @@ mod tests {
                 .path()
                 .join(PRIVATE_RESULT_ORAM_DIR)
                 .join("payloadFetchTokens.json"),
+        )
+        .unwrap();
+        fs::write(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("payload.fetch.token"),
+            b"payload fetch token dot sentinel",
+        )
+        .unwrap();
+        let err =
+            private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap_err();
+        let rendered = err.to_string();
+        assert!(
+            rendered
+                .contains("private result ORAM snapshot source contains client-owned ORAM state")
+        );
+        assert!(!rendered.contains("payload.fetch.token"));
+        assert!(!rendered.contains("sentinel"));
+
+        fs::remove_file(
+            temp_dir
+                .path()
+                .join(PRIVATE_RESULT_ORAM_DIR)
+                .join("payload.fetch.token"),
         )
         .unwrap();
         fs::write(
