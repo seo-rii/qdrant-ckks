@@ -1679,6 +1679,7 @@ fn private_oram_snapshot_layout_error_contains_sensitive_marker(rendered: &str) 
         "node_id",
         "old_root_hash",
         "path_label",
+        "payload.fetch.token",
         "payload_fetch_token",
         "payload_fetch_tokens",
         "point_token",
@@ -3844,6 +3845,7 @@ mod tests {
                 "payload_fetch_tokens.json".to_string(),
                 "payloadFetchToken.json".to_string(),
                 "payloadFetchTokens.json".to_string(),
+                "payload.fetch.token".to_string(),
                 "token_map_backups.json".to_string(),
                 "token_position_map_backups.json".to_string(),
             ];
@@ -3915,6 +3917,7 @@ mod tests {
             "payload_fetch_tokens",
             "payloadFetchToken",
             "payloadFetchTokens",
+            "payload.fetch.token",
             "tokenMapBackup",
             "tokenMapBackups",
             "token_map_backup",
