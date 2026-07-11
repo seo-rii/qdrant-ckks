@@ -655,9 +655,15 @@ Signed manifests must also match the runtime instance's `hnsw`, `oram`, and
 `fixed_budget` policies exactly; upload fails closed if the client signs a
 manifest for a different ORAM shape or search budget than the configured
 runtime provider.
-If a process crashes after bucket or Merkle writeback but before the epoch CAS,
-recovery continues to report the old current epoch and rejects mixed old-root /
-new-bucket reads rather than serving an inconsistent ORAM view.
+Signed private HNSW writeback persists a validated pending journal before
+changing any active bucket. Retrying the same owner-signed commit revalidates
+that journal, idempotently rewrites its encrypted buckets and Merkle tree,
+applies epoch/root CAS when still needed, verifies the final state, and removes
+the journal with a directory fsync. This resumes crashes before writeback,
+between bucket/Merkle writes and epoch CAS, or immediately after epoch CAS.
+Until retry completes, the old current epoch remains pinned and mixed old-root /
+new-bucket reads fail closed. A pending journal also keeps snapshot preflight
+closed because private ORAM temporary directories must be empty.
 Collection snapshots include private HNSW ORAM bucket files as ciphertext-only
 JSON artifacts after rejecting non-directory or symlinked private ORAM snapshot
 sources, unsupported source file types, client-owned ORAM state files, and

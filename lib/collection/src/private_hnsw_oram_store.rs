@@ -26,12 +26,14 @@ const BUCKETS_DIR: &str = "buckets";
 const EPOCHS_DIR: &str = "epochs";
 const MERKLE_DIR: &str = "merkle";
 const TEMP_DIR: &str = "temp";
+const PENDING_WRITEBACK_FILE: &str = "pending-writeback.json";
 const CURRENT_EPOCH_FILE: &str = "current.json";
 const MERKLE_NODES_FILE: &str = "nodes.dat";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
 const MAX_EPOCH_BYTES: u64 = 16 * 1024;
 const MAX_MERKLE_BYTES: u64 = 256 * 1024 * 1024;
+const MAX_PENDING_WRITEBACK_BYTES: u64 = 512 * 1024 * 1024;
 const BUCKET_JSON_OVERHEAD_BYTES: usize = 32 * 1024;
 pub const PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND: &str = "merkle_path_batch/v1";
 
@@ -168,6 +170,32 @@ impl Debug for PrivateHnswPreparedMerkleCommit {
         f.debug_struct("PrivateHnswPreparedMerkleCommit")
             .field("store", &self.store)
             .field("tree", &self.tree)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateHnswPendingWriteback {
+    version: u16,
+    old: PrivateHnswOramEpochState,
+    new: PrivateHnswOramEpochState,
+    bucket_count: u64,
+    updated_buckets: Vec<PrivateHnswOramBucket>,
+    merkle_tree: PrivateHnswOramMerkleTree,
+    commit_signature: PrivateHnswOramSignature,
+}
+
+impl Debug for PrivateHnswPendingWriteback {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswPendingWriteback")
+            .field("version", &self.version)
+            .field("old_epoch", &self.old.index_epoch)
+            .field("new_epoch", &self.new.index_epoch)
+            .field("bucket_count", &"[redacted]")
+            .field("updated_bucket_count", &"[redacted]")
+            .field("merkle_tree", &self.merkle_tree)
+            .field("commit_signature", &"[redacted]")
             .finish()
     }
 }
@@ -541,6 +569,75 @@ impl PrivateHnswOramStore {
         commit_signature: &PrivateHnswOramSignature,
         signature_verification: PrivateHnswSignatureVerification<'_>,
     ) -> CollectionResult<PrivateHnswOramEpochState> {
+        let PrivateHnswSignatureVerification {
+            expected_key_id,
+            public_key,
+        } = signature_verification;
+        self.prepare_durable_writeback_with_signature(
+            old,
+            new,
+            bucket_count,
+            updated_buckets,
+            max_ciphertext_bytes,
+            commit_signature,
+            PrivateHnswSignatureVerification {
+                expected_key_id,
+                public_key,
+            },
+        )?;
+        self.commit_prepared_writeback_with_signature(
+            max_ciphertext_bytes,
+            PrivateHnswSignatureVerification {
+                expected_key_id,
+                public_key,
+            },
+        )
+    }
+
+    pub fn prepare_durable_writeback_with_signature(
+        &self,
+        old: &PrivateHnswOramEpochState,
+        new: &PrivateHnswOramEpochState,
+        bucket_count: u64,
+        updated_buckets: &[PrivateHnswOramBucket],
+        max_ciphertext_bytes: usize,
+        commit_signature: &PrivateHnswOramSignature,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+    ) -> CollectionResult<()> {
+        self.ensure_layout()?;
+        let pending_path = self.pending_writeback_path();
+        if pending_path.exists() {
+            let pending: PrivateHnswPendingWriteback =
+                read_json_private_file(&pending_path, MAX_PENDING_WRITEBACK_BYTES)?;
+            self.validate_pending_writeback(
+                &pending,
+                max_ciphertext_bytes,
+                signature_verification,
+            )?;
+            if pending.old != *old
+                || pending.new != *new
+                || pending.bucket_count != bucket_count
+                || pending.updated_buckets.as_slice() != updated_buckets
+                || pending.commit_signature != *commit_signature
+            {
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM pending writeback does not match requested commit",
+                ));
+            }
+            return Ok(());
+        }
+
+        if updated_buckets.is_empty() {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM commit must update at least one bucket",
+            ));
+        }
+        if new.index_epoch <= old.index_epoch {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM commit new epoch must be greater than old epoch",
+            ));
+        }
+        self.ensure_current_epoch_matches(old)?;
         let (manifest, _) = self.read_manifest()?;
         let updated_bucket_refs = updated_buckets
             .iter()
@@ -568,13 +665,175 @@ impl PrivateHnswOramStore {
             signature_verification,
         )
         .map_err(private_hnsw_oram_error)?;
-        self.commit_writeback(
-            old,
-            new,
+        validate_commit_manifest_context(&manifest, old, bucket_count)?;
+        for bucket in updated_buckets {
+            validate_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
+            validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
+        }
+        validate_bucket_commitment_context(&manifest, new.index_epoch, updated_buckets)?;
+        let prepared_merkle_commit = self.prepare_merkle_commit(
+            old.index_epoch,
+            &old.root_hash,
+            new.index_epoch,
+            &new.root_hash,
             bucket_count,
             updated_buckets,
-            max_ciphertext_bytes,
+        )?;
+        let pending = PrivateHnswPendingWriteback {
+            version: 1,
+            old: old.clone(),
+            new: new.clone(),
+            bucket_count,
+            updated_buckets: updated_buckets.to_vec(),
+            merkle_tree: prepared_merkle_commit.tree,
+            commit_signature: commit_signature.clone(),
+        };
+        write_json_atomic(&self.root, &self.temp_dir(), &pending_path, &pending)
+    }
+
+    pub fn commit_prepared_writeback_with_signature(
+        &self,
+        max_ciphertext_bytes: usize,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+    ) -> CollectionResult<PrivateHnswOramEpochState> {
+        self.ensure_layout()?;
+        let pending: PrivateHnswPendingWriteback =
+            read_json_private_file(&self.pending_writeback_path(), MAX_PENDING_WRITEBACK_BYTES)?;
+        self.validate_pending_writeback(&pending, max_ciphertext_bytes, signature_verification)?;
+
+        let current = self.read_current_epoch()?;
+        if current != pending.old && current != pending.new {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM pending writeback epoch/root does not match current state",
+            ));
+        }
+        for bucket in &pending.updated_buckets {
+            self.write_bucket(
+                bucket,
+                pending.new.index_epoch,
+                pending.bucket_count,
+                max_ciphertext_bytes,
+            )?;
+        }
+        self.write_merkle_tree(&pending.merkle_tree)?;
+        if current == pending.old {
+            self.compare_and_swap_epoch(&pending.old, &pending.new)?;
+        }
+
+        if self.read_current_epoch()? != pending.new
+            || self.read_merkle_tree()? != pending.merkle_tree
+        {
+            return Err(CollectionError::service_error(
+                "private HNSW ORAM pending writeback final state validation failed",
+            ));
+        }
+        for expected_bucket in &pending.updated_buckets {
+            let stored_bucket = self.read_bucket(
+                expected_bucket.bucket_id,
+                pending.new.index_epoch,
+                pending.bucket_count,
+                max_ciphertext_bytes,
+            )?;
+            if stored_bucket != *expected_bucket {
+                return Err(CollectionError::service_error(
+                    "private HNSW ORAM pending writeback final state validation failed",
+                ));
+            }
+        }
+        remove_private_file(
+            &self.pending_writeback_path(),
+            &self.temp_dir(),
+            MAX_PENDING_WRITEBACK_BYTES,
+        )?;
+        Ok(pending.new)
+    }
+
+    fn validate_pending_writeback(
+        &self,
+        pending: &PrivateHnswPendingWriteback,
+        max_ciphertext_bytes: usize,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+    ) -> CollectionResult<()> {
+        if pending.version != 1 || pending.updated_buckets.is_empty() {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM pending writeback is invalid",
+            ));
+        }
+        validate_epoch_state(&pending.old)?;
+        validate_epoch_state(&pending.new)?;
+        if pending.new.index_epoch <= pending.old.index_epoch {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM pending writeback is invalid",
+            ));
+        }
+
+        let (manifest, _) = self.read_manifest()?;
+        validate_commit_manifest_context(&manifest, &pending.old, pending.bucket_count)?;
+        let mut seen_bucket_ids = BTreeSet::new();
+        for bucket in &pending.updated_buckets {
+            if !seen_bucket_ids.insert(bucket.bucket_id) {
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM pending writeback is invalid",
+                ));
+            }
+            validate_bucket(
+                bucket,
+                pending.new.index_epoch,
+                pending.bucket_count,
+                max_ciphertext_bytes,
+            )?;
+            validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
+        }
+        validate_bucket_commitment_context(
+            &manifest,
+            pending.new.index_epoch,
+            &pending.updated_buckets,
+        )?;
+        validate_merkle_tree_context(
+            &pending.merkle_tree,
+            pending.new.index_epoch,
+            &pending.new.root_hash,
+            pending.bucket_count,
+        )?;
+        for bucket in &pending.updated_buckets {
+            let bucket_index = usize::try_from(bucket.bucket_id).map_err(|_| {
+                CollectionError::bad_request("private HNSW ORAM pending writeback is invalid")
+            })?;
+            if pending.merkle_tree.leaf_hashes.get(bucket_index) != Some(&bucket.bucket_commitment)
+            {
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM pending writeback is invalid",
+                ));
+            }
+        }
+
+        let updated_bucket_refs = pending
+            .updated_buckets
+            .iter()
+            .map(|bucket| PrivateHnswOramCommitBucketRef {
+                bucket_id: bucket.bucket_id,
+                ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
+            })
+            .collect::<Vec<_>>();
+        validate_private_hnsw_oram_commit_signature(
+            PrivateHnswOramCommitSignatureInput {
+                collection_id: &manifest.collection_id,
+                vector_name: &manifest.vector_name,
+                key_id: &manifest.key_id,
+                rk_id: &manifest.rk_id,
+                rk_epoch: manifest.rk_epoch,
+                old_epoch: pending.old.index_epoch,
+                new_epoch: pending.new.index_epoch,
+                old_root_hash: &pending.old.root_hash,
+                new_root_hash: &pending.new.root_hash,
+                updated_buckets: &updated_bucket_refs,
+                signature_alg: &pending.commit_signature.alg,
+                signature_key_id: &pending.commit_signature.key_id,
+            },
+            &pending.commit_signature.sig,
+            signature_verification,
         )
+        .map_err(private_hnsw_oram_error)
     }
 
     pub fn merkle_root_for_commitments(commitments: &[String]) -> CollectionResult<String> {
@@ -795,6 +1054,10 @@ impl PrivateHnswOramStore {
 
     fn temp_dir(&self) -> PathBuf {
         self.root.join(TEMP_DIR)
+    }
+
+    fn pending_writeback_path(&self) -> PathBuf {
+        self.temp_dir().join(PENDING_WRITEBACK_FILE)
     }
 
     fn current_epoch_path(&self) -> PathBuf {
@@ -1684,6 +1947,15 @@ fn write_json_atomic<T: Serialize>(
         sync_dir(parent)?;
     }
     Ok(())
+}
+
+fn remove_private_file(path: &Path, parent: &Path, max_bytes: u64) -> CollectionResult<()> {
+    validate_private_dir(parent)?;
+    let file = open_private_file_for_read(path, max_bytes)?;
+    drop(file);
+    fs::remove_file(path)
+        .map_err(|_| CollectionError::service_error("failed to remove private HNSW ORAM file"))?;
+    sync_dir(parent)
 }
 
 fn validate_target_under_root(root: &Path, target: &Path) -> CollectionResult<()> {
@@ -4161,6 +4433,140 @@ mod tests {
             proof.leaves[0].leaf_hash,
             bundle.buckets[0].bucket_commitment
         );
+    }
+
+    #[test]
+    fn durable_signed_writeback_resumes_across_finalize_crash_windows() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[31; 32]).unwrap();
+        let public_key = key_pair.public_key();
+        let (bundle, updated_bucket, new, signature) = fixture_signed_commit_update(&key_pair);
+
+        for crash_window in 0..3 {
+            let temp = TempDir::new().unwrap();
+            let store = fixture_store(&temp);
+            let old = store.write_initial_upload_bundle(&bundle, 4096).unwrap();
+            let signature_verification = || PrivateHnswSignatureVerification {
+                expected_key_id: "tenant-a/private-hnsw-signing-v1",
+                public_key: public_key.as_ref(),
+            };
+
+            store
+                .prepare_durable_writeback_with_signature(
+                    &old,
+                    &new,
+                    bundle.bucket_count(),
+                    std::slice::from_ref(&updated_bucket),
+                    4096,
+                    &signature,
+                    signature_verification(),
+                )
+                .unwrap();
+            assert_eq!(store.read_current_epoch().unwrap(), old);
+            assert!(store.pending_writeback_path().exists());
+
+            let pending: PrivateHnswPendingWriteback = read_json_private_file(
+                &store.pending_writeback_path(),
+                MAX_PENDING_WRITEBACK_BYTES,
+            )
+            .unwrap();
+            if crash_window >= 1 {
+                store
+                    .write_bucket(
+                        &updated_bucket,
+                        new.index_epoch,
+                        bundle.bucket_count(),
+                        4096,
+                    )
+                    .unwrap();
+                store.write_merkle_tree(&pending.merkle_tree).unwrap();
+            }
+            if crash_window >= 2 {
+                store.compare_and_swap_epoch(&old, &new).unwrap();
+            }
+
+            let committed = store
+                .commit_prepared_writeback_with_signature(4096, signature_verification())
+                .unwrap();
+
+            assert_eq!(committed, new);
+            assert_eq!(store.read_current_epoch().unwrap(), new);
+            assert_eq!(
+                store
+                    .read_bucket(0, new.index_epoch, bundle.bucket_count(), 4096)
+                    .unwrap(),
+                updated_bucket,
+            );
+            let proof = store
+                .read_merkle_path_batch(
+                    &[0],
+                    new.index_epoch,
+                    &new.root_hash,
+                    bundle.bucket_count(),
+                )
+                .unwrap();
+            assert_eq!(proof.leaves[0].leaf_hash, updated_bucket.bucket_commitment);
+            assert!(!store.pending_writeback_path().exists());
+        }
+    }
+
+    #[test]
+    fn durable_signed_writeback_rejects_tampered_journal_before_finalize() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[37; 32]).unwrap();
+        let public_key = key_pair.public_key();
+        let (bundle, updated_bucket, new, signature) = fixture_signed_commit_update(&key_pair);
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old = store.write_initial_upload_bundle(&bundle, 4096).unwrap();
+        let signature_verification = || PrivateHnswSignatureVerification {
+            expected_key_id: "tenant-a/private-hnsw-signing-v1",
+            public_key: public_key.as_ref(),
+        };
+
+        store
+            .prepare_durable_writeback_with_signature(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                4096,
+                &signature,
+                signature_verification(),
+            )
+            .unwrap();
+        let mut pending: PrivateHnswPendingWriteback =
+            read_json_private_file(&store.pending_writeback_path(), MAX_PENDING_WRITEBACK_BYTES)
+                .unwrap();
+        pending.commit_signature.sig = BASE64URL_NOPAD.encode(&[41; 64]);
+        write_json_atomic(
+            &store.root,
+            &store.temp_dir(),
+            &store.pending_writeback_path(),
+            &pending,
+        )
+        .unwrap();
+
+        let rendered = store
+            .commit_prepared_writeback_with_signature(4096, signature_verification())
+            .unwrap_err()
+            .to_string();
+
+        assert!(rendered.contains("commit signature verification failed"));
+        for sentinel in [
+            pending.commit_signature.sig.as_str(),
+            old.root_hash.as_str(),
+            new.root_hash.as_str(),
+            updated_bucket.ciphertext.as_str(),
+        ] {
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
+        assert_eq!(store.read_current_epoch().unwrap(), old);
+        assert_eq!(
+            store
+                .read_bucket(0, old.index_epoch, bundle.bucket_count(), 4096)
+                .unwrap(),
+            bundle.buckets[0],
+        );
+        assert!(store.pending_writeback_path().exists());
     }
 
     #[test]
