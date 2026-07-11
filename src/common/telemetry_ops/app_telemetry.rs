@@ -287,11 +287,13 @@ mod tests {
         let private_hnsw_signature_public_key =
             "qdrant-sec-telemetry-private-hnsw-signature-public-key-sentinel";
         let private_hnsw_key_id = "qdrant-sec-telemetry-private-hnsw-key-id-sentinel";
+        let private_hnsw_instance_id = "qdrant-sec-telemetry-private-hnsw-instance-id-sentinel";
         let private_hnsw_signing_key_id =
             "qdrant-sec-telemetry-private-hnsw-signing-key-id-sentinel";
         let private_result_signature_public_key =
             "qdrant-sec-telemetry-private-result-signature-public-key-sentinel";
         let private_result_key_id = "qdrant-sec-telemetry-private-result-key-id-sentinel";
+        let private_result_instance_id = "qdrant-sec-telemetry-private-result-instance-id-sentinel";
         let private_result_signing_key_id =
             "qdrant-sec-telemetry-private-result-signing-key-id-sentinel";
         let mut settings = Settings {
@@ -324,7 +326,7 @@ mod tests {
                         },
                     ),
                     (
-                        "docs_private_hnsw_v1".to_string(),
+                        private_hnsw_instance_id.to_string(),
                         CryptoInstanceConfig {
                             provider: "vector/private-hnsw-oram@v1".to_string(),
                             materials: HashMap::new(),
@@ -371,7 +373,7 @@ mod tests {
                         },
                     ),
                     (
-                        "docs_private_result_oram_v1".to_string(),
+                        private_result_instance_id.to_string(),
                         CryptoInstanceConfig {
                             provider: "payload/private-result-oram@v1".to_string(),
                             materials: HashMap::new(),
@@ -437,9 +439,11 @@ mod tests {
             inline_secret,
             wrapped_secret,
             signature_public_key,
+            private_hnsw_instance_id,
             private_hnsw_signature_public_key,
             private_hnsw_key_id,
             private_hnsw_signing_key_id,
+            private_result_instance_id,
             private_result_signature_public_key,
             private_result_key_id,
             private_result_signing_key_id,
