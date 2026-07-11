@@ -609,7 +609,9 @@ mod tests {
              state_ciphertext_sha256.bin=state-ciphertext-sha256-bin-sentinel, \
              state_ciphertext_sha256.json=state-ciphertext-sha256-json-sentinel, \
              token_maps=token-maps-snake-sentinel, \
+             token.maps=token-maps-dot-sentinel, \
              token_map_snapshots=token-map-snapshots-snake-sentinel, \
+             token.map.snapshots=token-map-snapshots-dot-sentinel, \
              tokenMapBackup=token-map-backup-camel-singular-sentinel, \
              token.map.backup=token-map-backup-dot-singular-sentinel, \
              token.map.backup.json=token-map-backup-dot-json-sentinel, \
@@ -619,7 +621,9 @@ mod tests {
              token.map.backups.json=token-map-backups-dot-json-sentinel, \
              tokenMapBackups=token-map-backups-camel-sentinel, \
              token_position_maps=token-position-maps-snake-sentinel, \
+             token.position.maps=token-position-maps-dot-sentinel, \
              token_position_map_snapshots=token-position-map-snapshots-snake-sentinel, \
+             token.position.map.snapshots=token-position-map-snapshots-dot-sentinel, \
              tokenPositionMapBackup=token-position-map-backup-camel-singular-sentinel, \
              token.position.map.backup=token-position-map-backup-dot-singular-sentinel, \
              token.position.map.backup.json=token-position-map-backup-dot-json-sentinel, \

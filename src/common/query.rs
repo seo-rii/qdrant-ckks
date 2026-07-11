@@ -12761,10 +12761,13 @@ mod tests {
         "tokenMapSnapshots",
         "token_map",
         "token_maps",
+        "token.maps",
         "token_map_backup",
         "token_map_backups",
         "token_map_snapshot",
+        "token.map.snapshot",
         "token_map_snapshots",
+        "token.map.snapshots",
         "tokenPositionMap",
         "tokenPositionMaps",
         "tokenPositionMapBackup",
@@ -12777,10 +12780,13 @@ mod tests {
         "tokenPositionMapSnapshots",
         "token_position_map",
         "token_position_maps",
+        "token.position.maps",
         "token_position_map_backup",
         "token_position_map_backups",
         "token_position_map_snapshot",
+        "token.position.map.snapshot",
         "token_position_map_snapshots",
+        "token.position.map.snapshots",
     ];
 
     #[test]

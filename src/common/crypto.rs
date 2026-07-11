@@ -23535,6 +23535,7 @@ mod tests {
             "tokenMaps.json",
             "token_map.json",
             "token_maps.json",
+            "token.maps.json",
             "tokenMapBackup.json",
             "tokenMapBackups.json",
             "token.map.backup.json",
@@ -23544,11 +23545,14 @@ mod tests {
             "tokenMapSnapshot.json",
             "tokenMapSnapshots.json",
             "token_map_snapshot.json",
+            "token.map.snapshot.json",
             "token_map_snapshots.json",
+            "token.map.snapshots.json",
             "tokenPositionMap.json",
             "tokenPositionMaps.json",
             "token_position_map.json",
             "token_position_maps.json",
+            "token.position.maps.json",
             "token_position_map_backup.json",
             "token.position.map.backup.json",
             "token.position.map.backups.json",
@@ -23556,7 +23560,9 @@ mod tests {
             "tokenPositionMapSnapshot.json",
             "tokenPositionMapSnapshots.json",
             "token_position_map_snapshot.json",
+            "token.position.map.snapshot.json",
             "token_position_map_snapshots.json",
+            "token.position.map.snapshots.json",
         ];
         let settings = Settings {
             crypto: CryptoSettings {

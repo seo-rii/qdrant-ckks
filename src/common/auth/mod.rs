@@ -468,7 +468,9 @@ mod tests {
              state_ciphertext_hashes.bin=state-ciphertext-hashes-bin-sentinel \
              state_ciphertext_hashes.json=state-ciphertext-hashes-json-sentinel \
              token_maps=token-maps-snake-sentinel \
+             token.maps=token-maps-dot-sentinel \
              token_map_snapshots=token-map-snapshots-snake-sentinel \
+             token.map.snapshots=token-map-snapshots-dot-sentinel \
              tokenMapBackup=token-map-backup-camel-singular-sentinel \
              token.map.backup=token-map-backup-dotted-singular-sentinel \
              token.map.backups=token-map-backups-dotted-sentinel \
@@ -476,7 +478,9 @@ mod tests {
              token_map_backups=token-map-backups-snake-sentinel \
              tokenMapBackups=token-map-backups-camel-sentinel \
              token_position_maps=token-position-maps-snake-sentinel \
+             token.position.maps=token-position-maps-dot-sentinel \
              token_position_map_snapshots=token-position-map-snapshots-snake-sentinel \
+             token.position.map.snapshots=token-position-map-snapshots-dot-sentinel \
              tokenPositionMapBackup=token-position-map-backup-camel-singular-sentinel \
              token.position.map.backup=token-position-map-backup-dotted-singular-sentinel \
              token.position.map.backups=token-position-map-backups-dotted-sentinel \
