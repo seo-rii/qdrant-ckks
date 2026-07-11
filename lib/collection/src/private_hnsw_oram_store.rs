@@ -4485,7 +4485,15 @@ mod tests {
             }
 
             let committed = store
-                .commit_prepared_writeback_with_signature(4096, signature_verification())
+                .commit_writeback_with_signature(
+                    &old,
+                    &new,
+                    bundle.bucket_count(),
+                    std::slice::from_ref(&updated_bucket),
+                    4096,
+                    &signature,
+                    signature_verification(),
+                )
                 .unwrap();
 
             assert_eq!(committed, new);

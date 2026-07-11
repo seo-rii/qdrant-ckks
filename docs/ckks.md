@@ -655,15 +655,16 @@ Signed manifests must also match the runtime instance's `hnsw`, `oram`, and
 `fixed_budget` policies exactly; upload fails closed if the client signs a
 manifest for a different ORAM shape or search budget than the configured
 runtime provider.
-Signed private HNSW writeback persists a validated pending journal before
-changing any active bucket. Retrying the same owner-signed commit revalidates
-that journal, idempotently rewrites its encrypted buckets and Merkle tree,
-applies epoch/root CAS when still needed, verifies the final state, and removes
-the journal with a directory fsync. This resumes crashes before writeback,
-between bucket/Merkle writes and epoch CAS, or immediately after epoch CAS.
-Until retry completes, the old current epoch remains pinned and mixed old-root /
-new-bucket reads fail closed. A pending journal also keeps snapshot preflight
-closed because private ORAM temporary directories must be empty.
+Signed private HNSW and private result ORAM writebacks persist a validated
+pending journal before changing any active bucket. Retrying the same
+owner-signed commit revalidates that journal, idempotently rewrites its
+encrypted buckets and Merkle tree, applies epoch/root CAS when still needed,
+verifies the final state, and removes the journal with a directory fsync. This
+resumes crashes before writeback, between bucket/Merkle writes and epoch CAS,
+or immediately after epoch CAS. Until retry completes, the current epoch is
+either still old or atomically advanced to new, and mixed root/bucket reads
+fail closed. A pending journal also keeps snapshot preflight closed because
+private ORAM temporary directories must be empty.
 Collection snapshots include private HNSW ORAM bucket files as ciphertext-only
 JSON artifacts after rejecting non-directory or symlinked private ORAM snapshot
 sources, unsupported source file types, client-owned ORAM state files, and
@@ -1305,12 +1306,15 @@ commitments, preparing the Merkle update, writing updated encrypted buckets,
 writing Merkle metadata, then applying epoch/root CAS. The live private result ORAM
 REST/gRPC commit handlers delegate their signed writeback to
 `commit_writeback_with_signature`, so the canonical Ed25519 commit signature,
-fixed ciphertext size, context-bound bucket commitment, Merkle update, and
-epoch/root CAS share the same storage boundary. Invalid signatures, malformed
-ciphertext, stale roots, and commitment-context mismatches fail before bucket,
-Merkle, or epoch state changes; runtime error mapping preserves only safe
-failure categories such as `ciphertext` or `commit signature` without echoing
-ciphertext bodies, bucket ids, or root hashes.
+fixed ciphertext size, context-bound bucket commitment, durable pending
+journal, Merkle update, and epoch/root CAS share the same storage boundary.
+Exact commit retries resume before-write, mid-write, and post-CAS process
+failures idempotently; journal signature or shape tampering fails before active
+state changes. Invalid signatures, malformed ciphertext, stale roots, and
+commitment-context mismatches likewise fail before bucket, Merkle, or epoch
+state changes; runtime error mapping preserves only safe failure categories
+such as `ciphertext` or `commit signature` without echoing ciphertext bodies,
+bucket ids, or root hashes.
 Bucket `index_epoch` records the epoch when that encrypted bucket was last
 written. After a writeback commit, unchanged buckets may still carry an older
 bucket epoch as long as the current Merkle root commits to their existing
