@@ -499,6 +499,7 @@ mod tests {
              clientStateSnapshot=client-state-snapshot-camel-sentinel, \
              clientStateSnapshots=client-state-snapshots-camel-sentinel, \
              client.state.snapshot=client-state-snapshot-dot-sentinel, \
+             client.state.snapshot.json=client-state-snapshot-dot-json-sentinel, \
              client_state_snapshot=client-state-snapshot-snake-sentinel, \
              client_state_snapshots=client-state-snapshots-snake-sentinel, \
              clientStates=client-states-camel-sentinel, \
@@ -510,7 +511,9 @@ mod tests {
              encryptedClientStateSnapshot=encrypted-client-state-snapshot-camel-sentinel, \
              encryptedClientStateSnapshots=encrypted-client-state-snapshots-camel-sentinel, \
              encrypted.client.state=encrypted-client-state-dot-sentinel, \
+             encrypted.client.state.json=encrypted-client-state-dot-json-sentinel, \
              encrypted.client.state.snapshot=encrypted-client-state-snapshot-dot-sentinel, \
+             encrypted.client.state.snapshot.json=encrypted-client-state-snapshot-dot-json-sentinel, \
              encryptedClientStateBackup=encrypted-client-state-backup-camel-sentinel, \
              encryptedClientStateBackups=encrypted-client-state-backups-camel-sentinel, \
              encrypted_client_state_backups=encrypted-client-state-backups-snake-sentinel, \
@@ -596,17 +599,21 @@ mod tests {
              token_map_snapshots=token-map-snapshots-snake-sentinel, \
              tokenMapBackup=token-map-backup-camel-singular-sentinel, \
              token.map.backup=token-map-backup-dot-singular-sentinel, \
+             token.map.backup.json=token-map-backup-dot-json-sentinel, \
              token_map_backup=token-map-backup-snake-singular-sentinel, \
              token_map_backups=token-map-backups-snake-sentinel, \
              token.map.backups=token-map-backups-dot-sentinel, \
+             token.map.backups.json=token-map-backups-dot-json-sentinel, \
              tokenMapBackups=token-map-backups-camel-sentinel, \
              token_position_maps=token-position-maps-snake-sentinel, \
              token_position_map_snapshots=token-position-map-snapshots-snake-sentinel, \
              tokenPositionMapBackup=token-position-map-backup-camel-singular-sentinel, \
              token.position.map.backup=token-position-map-backup-dot-singular-sentinel, \
+             token.position.map.backup.json=token-position-map-backup-dot-json-sentinel, \
              token_position_map_backup=token-position-map-backup-snake-singular-sentinel, \
              token_position_map_backups=token-position-map-backups-snake-sentinel, \
              token.position.map.backups=token-position-map-backups-dot-sentinel, \
+             token.position.map.backups.json=token-position-map-backups-dot-json-sentinel, \
              tokenPositionMapBackups=token-position-map-backups-camel-sentinel",
         );
 
