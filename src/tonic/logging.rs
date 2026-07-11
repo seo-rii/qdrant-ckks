@@ -355,10 +355,16 @@ mod tests {
              candidate.heap=candidate-dot-sentinel \
              candidateNodes=candidate-node-camel-sentinel \
              candidateScores=candidate-scores-camel-sentinel \
+             candidate.score=candidate-score-dot-sentinel \
+             candidate.scores=candidate-scores-dot-sentinel \
              candidate_distance=candidate-distance-sentinel \
+             candidate.distance=candidate-distance-dot-sentinel \
+             candidate.distances=candidate-distances-dot-sentinel \
              score=score-sentinel scores=scores-sentinel \
              distance=distance-sentinel distances=distances-sentinel \
              distanceScores=distance-scores-camel-sentinel \
+             distance.score=distance-score-dot-sentinel \
+             distance.scores=distance-scores-dot-sentinel \
              nodeScores=node-scores-camel-sentinel \
              node.score=node-score-dot-sentinel \
              node.scores=node-scores-dot-sentinel \
