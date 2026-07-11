@@ -562,9 +562,11 @@ mod tests {
     fn audit_error_redaction_hides_private_oram_access_pattern_fields() {
         for error in [
             "private HNSW read failed path_label=private-path-label-sentinel",
+            "private HNSW read failed path.label=private-path-label-dot-sentinel",
             "private HNSW read failed read_path=[private-read-path-sentinel]",
             "private HNSW read failed readPath=[private-read-path-camel-sentinel]",
             "private HNSW read failed read_path_label=private-read-path-label-sentinel",
+            "private HNSW read failed read.path.label=private-read-path-label-dot-sentinel",
             "private HNSW read failed readPathLabel=private-read-path-label-camel-sentinel",
             "private HNSW read failed leafHash=private-leaf-hash-sentinel",
             "private HNSW read failed bucket_id=private-bucket-id-singular-sentinel",
@@ -572,6 +574,7 @@ mod tests {
             "private HNSW read failed bucketIdCount=private-bucket-id-count-sentinel",
             "private HNSW read failed root_hash=private-root-hash-sentinel",
             "private HNSW read failed node_id=private-node-id-sentinel",
+            "private HNSW read failed node.id=private-node-id-dot-sentinel",
             "private HNSW read failed vector_bytes=private-vector-bytes-sentinel",
             "private HNSW read failed queryVector=private-query-vector-sentinel",
             "private HNSW read failed query_embedding=private-query-embedding-sentinel",
@@ -748,6 +751,7 @@ mod tests {
 
         for marker in [
             "accessed_leaf_labels",
+            "accessed.leaf.labels",
             "access_volume_counts",
             "access.volume.counts",
             "access_volume_lengths",
@@ -765,7 +769,9 @@ mod tests {
             "candidate_nodes",
             "candidate_distances",
             "entry_node_id",
+            "entry.node.id",
             "entry_node_ids",
+            "entry.node.ids",
             "leaf_commitment",
             "leaf_commitments",
             "leaf_counts",
@@ -785,7 +791,9 @@ mod tests {
             "updated.bucket.commitments",
             "updated_buckets",
             "visited_node_id",
+            "visited.node.id",
             "visited_node_ids",
+            "visited.node.ids",
         ] {
             let redacted = redact_audit_error(&format!("{marker}=private-{marker}-sentinel"));
 

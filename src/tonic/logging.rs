@@ -308,8 +308,10 @@ mod tests {
              readPath=single-read-path-camel-sentinel \
              read_paths=read-path-sentinel \
              read_path_label=read-path-label-snake-sentinel \
+             read.path.label=read-path-label-dot-sentinel \
              readPathLabel=read-path-label-camel-sentinel \
              read_path_labels=read-path-labels-snake-sentinel \
+             read.path.labels=read-path-labels-dot-sentinel \
              read_buckets=read-bucket-sentinel \
              readBuckets=read-bucket-camel-sentinel \
              read_bucket_id=single-read-bucket-sentinel \
@@ -335,8 +337,11 @@ mod tests {
              new_root_hash=new-root-hash-sentinel \
              newRootHashes=new-root-hashes-camel-sentinel \
              path_label=leaf-sentinel pathLabel=path-label-camel-sentinel \
+             path.label=path-label-dot-sentinel \
              leaf_label=leaf-label-snake-sentinel \
+             leaf.label=leaf-label-dot-sentinel \
              candidate_heap=candidate-sentinel \
+             candidate.heap=candidate-dot-sentinel \
              candidateNodes=candidate-node-camel-sentinel \
              candidateScores=candidate-scores-camel-sentinel \
              candidate_distance=candidate-distance-sentinel \
