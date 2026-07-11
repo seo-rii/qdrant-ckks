@@ -316,16 +316,25 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "access_count"
                         | "access_counts"
                         | "access_volume"
+                        | "access.volume"
                         | "access_volumes"
+                        | "access.volumes"
                         | "access_volume_count"
+                        | "access.volume.count"
                         | "access_volume_counts"
+                        | "access.volume.counts"
                         | "access_volume_len"
+                        | "access.volume.len"
                         | "access_volume_length"
+                        | "access.volume.length"
                         | "access_volume_lengths"
+                        | "access.volume.lengths"
                         | "block_plaintext"
                         | "block_plaintexts"
                         | "bucket_commitment"
+                        | "bucket.commitment"
                         | "bucket_commitments"
+                        | "bucket.commitments"
                         | "bucket_plaintext"
                         | "bucket_plaintexts"
                         | "leaf_commitment"
@@ -498,7 +507,9 @@ fn redact_sensitive_log_fields(value: &mut Value) {
                         | "payload_len"
                         | "payload_bytes"
                         | "payload_fetch_token"
+                        | "payload.fetch.token"
                         | "payload_fetch_tokens"
+                        | "payload.fetch.tokens"
                         | "payload_oram_leaf"
                         | "payload_oram_leaves"
                         | "payload_plaintext"
@@ -1378,13 +1389,21 @@ mod tests {
             json!("qdrant-sec-private-oram-ciphertext-sha256-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["ciphertextSha256"] =
             json!("qdrant-sec-private-oram-camel-ciphertext-sha256-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["bucket.commitment"] =
+            json!("qdrant-sec-private-oram-bucket-commitment-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["bucket.commitments"] =
+            json!(["qdrant-sec-private-oram-bucket-commitments-log-sentinel"]);
         private_hnsw_oram_access["private_hnsw"]["updated_buckets"][0]["ciphertext_sha256"] =
             json!("qdrant-sec-private-oram-nested-ciphertext-sha256-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["updated_bucket"]["ciphertextSha256"] =
             json!("qdrant-sec-private-oram-updated-single-camel-ciphertext-sha256-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["access_volume"] =
             json!("qdrant-sec-private-hnsw-access-volume-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["access.volume"] =
+            json!("qdrant-sec-private-hnsw-access-volume-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["access_volumes"] =
+            json!(["qdrant-sec-private-hnsw-access-volumes-log-sentinel"]);
+        private_hnsw_oram_access["private_hnsw"]["access.volumes"] =
             json!(["qdrant-sec-private-hnsw-access-volumes-log-sentinel"]);
         private_hnsw_oram_access["private_hnsw"]["accessVolume"] =
             json!("qdrant-sec-private-hnsw-camel-access-volume-log-sentinel");
@@ -1393,6 +1412,8 @@ mod tests {
         private_hnsw_oram_access["private_hnsw"]["accessVolumeCount"] =
             json!("qdrant-sec-private-hnsw-camel-access-volume-count-log-sentinel");
         private_hnsw_oram_access["private_hnsw"]["access_volume_length"] =
+            json!("qdrant-sec-private-hnsw-access-volume-length-log-sentinel");
+        private_hnsw_oram_access["private_hnsw"]["access.volume.length"] =
             json!("qdrant-sec-private-hnsw-access-volume-length-log-sentinel");
         let mut private_hnsw_graph = json!({
             "private_hnsw": {
@@ -1502,9 +1523,17 @@ mod tests {
             json!(["qdrant-sec-private-result-proof-values-log-sentinel"]);
         private_result_oram["private_result_oram"]["proofValue"] =
             json!("qdrant-sec-private-result-camel-proof-value-log-sentinel");
+        private_result_oram["private_result_oram"]["bucket.commitments"] =
+            json!(["qdrant-sec-private-result-bucket-commitment-log-sentinel"]);
+        private_result_oram["private_result_oram"]["payload.fetch.tokens"] =
+            json!(["qdrant-sec-private-result-payload-token-log-sentinel"]);
         private_result_oram["private_result_oram"]["access_volume"] =
             json!("qdrant-sec-private-result-access-volume-log-sentinel");
+        private_result_oram["private_result_oram"]["access.volume"] =
+            json!("qdrant-sec-private-result-access-volume-log-sentinel");
         private_result_oram["private_result_oram"]["access_volumes"] =
+            json!(["qdrant-sec-private-result-access-volumes-log-sentinel"]);
+        private_result_oram["private_result_oram"]["access.volumes"] =
             json!(["qdrant-sec-private-result-access-volumes-log-sentinel"]);
         private_result_oram["private_result_oram"]["accessVolume"] =
             json!("qdrant-sec-private-result-camel-access-volume-log-sentinel");
