@@ -442,6 +442,7 @@ mod private_hnsw_rest_tests {
     use collection::private_hnsw_oram_store::{PrivateHnswOramEpochState, PrivateHnswOramStore};
     use serde::de::DeserializeOwned;
     use serde_json::{Value, json};
+    use sha2::Digest;
     use storage::rbac::{Access, AccessRequirements, Auth};
 
     use super::*;
@@ -5926,6 +5927,114 @@ mod private_hnsw_rest_tests {
                 .to_request();
             let close_response = actix_test::call_service(&app, close_request).await;
             assert_eq!(close_response.status(), StatusCode::OK);
+
+            let recovery_epoch = NEXT_EPOCH + 1;
+            let mut recovery_commitments = fixture.leaf_commitments.clone();
+            for bucket in &search_run.updated_buckets {
+                recovery_commitments[bucket.bucket_id as usize] = bucket.bucket_commitment.clone();
+            }
+            let mut recovery_bucket = search_run.updated_buckets[0].clone();
+            recovery_bucket.index_epoch = recovery_epoch;
+            let mut recovery_ciphertext = data_encoding::BASE64URL_NOPAD
+                .decode(recovery_bucket.ciphertext.as_bytes())
+                .unwrap();
+            for byte in &mut recovery_ciphertext {
+                *byte ^= 0x5a;
+            }
+            recovery_bucket.ciphertext =
+                data_encoding::BASE64URL_NOPAD.encode(&recovery_ciphertext);
+            recovery_bucket.ciphertext_sha256 =
+                data_encoding::BASE64URL_NOPAD.encode(&sha2::Sha256::digest(&recovery_ciphertext));
+            recovery_bucket.bucket_commitment =
+                qdrant_sec::private_hnsw_oram::private_hnsw_oram_bucket_commitment(
+                    qdrant_sec::private_hnsw_oram::PrivateHnswOramBucketCommitmentContext {
+                        collection_id: COLLECTION_ID,
+                        vector_name: "text",
+                        key_id: KEY_ID,
+                        rk_id: KEY_ID,
+                        rk_epoch: fixture.manifest.rk_epoch,
+                        bucket_id: recovery_bucket.bucket_id,
+                        index_epoch: recovery_epoch,
+                    },
+                    &recovery_bucket.ciphertext_sha256,
+                )
+                .unwrap();
+            recovery_commitments[recovery_bucket.bucket_id as usize] =
+                recovery_bucket.bucket_commitment.clone();
+            let recovery_root_hash =
+                PrivateHnswOramStore::merkle_root_for_commitments(&recovery_commitments).unwrap();
+            let recovery_plan = qdrant_sec::PrivateHnswClientCommitPlan {
+                old_epoch: NEXT_EPOCH,
+                new_epoch: recovery_epoch,
+                old_root_hash: search_run.commit_plan.new_root_hash.clone(),
+                new_root_hash: recovery_root_hash.clone(),
+                leaf_commitments: recovery_commitments,
+                updated_buckets: vec![qdrant_sec::PrivateHnswClientCommitBucketRef {
+                    bucket_id: recovery_bucket.bucket_id,
+                    ciphertext_sha256: recovery_bucket.ciphertext_sha256.clone(),
+                }],
+            };
+            let recovery_signature = fixture.sign_commit(&recovery_plan);
+            let internal_auth = Auth::new_internal(Access::full("private HNSW recovery test"));
+            let collection_pass = internal_auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new().write(),
+                    "private_hnsw_recovery_test",
+                )
+                .unwrap();
+            let collection = dispatcher
+                .toc(&internal_auth, &new_unchecked_verification_pass())
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let recovery_store = PrivateHnswOramStore::new(collection.path(), "text").unwrap();
+            let recovery_public_key = data_encoding::BASE64URL_NOPAD
+                .decode(fixture.signing_public_key_b64().as_bytes())
+                .unwrap();
+            recovery_store
+                .prepare_durable_writeback_with_signature(
+                    &PrivateHnswOramEpochState {
+                        index_epoch: NEXT_EPOCH,
+                        root_hash: search_run.commit_plan.new_root_hash.clone(),
+                    },
+                    &PrivateHnswOramEpochState {
+                        index_epoch: recovery_epoch,
+                        root_hash: recovery_root_hash.clone(),
+                    },
+                    fixture.manifest.bucket_count,
+                    std::slice::from_ref(&recovery_bucket),
+                    MAX_CIPHERTEXT_BYTES,
+                    &recovery_signature,
+                    qdrant_sec::PrivateHnswSignatureVerification {
+                        expected_key_id: SIGNING_KEY_ID,
+                        public_key: &recovery_public_key,
+                    },
+                )
+                .unwrap();
+            assert!(recovery_store.pending_writeback_exists().unwrap());
+
+            let recovered_session = post_json_ok!(
+                "/collections/docs/private-hnsw/text/session",
+                OpenPrivateHnswSessionRequest {
+                    client_id: "tenant-a/sdk-recovery-instance".to_string(),
+                    desired_epoch: recovery_epoch,
+                    fixed_budget: true,
+                    result_privacy: qdrant_sec::ResultPrivacyMode::IdsVisible,
+                }
+            );
+            assert_eq!(recovered_session["index_epoch"], recovery_epoch);
+            assert_eq!(recovered_session["root_hash"], recovery_root_hash);
+            assert!(!recovery_store.pending_writeback_exists().unwrap());
+            let recovered_session_id = recovered_session["session_id"].as_str().unwrap();
+            let recovered_close_request = actix_test::TestRequest::post()
+                .uri(&format!(
+                    "/collections/docs/private-hnsw/text/session/{recovered_session_id}/close"
+                ))
+                .to_request();
+            let recovered_close_response =
+                actix_test::call_service(&app, recovered_close_request).await;
+            assert_eq!(recovered_close_response.status(), StatusCode::OK);
         });
     }
 

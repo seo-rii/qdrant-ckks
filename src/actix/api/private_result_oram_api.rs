@@ -4176,6 +4176,98 @@ mod private_result_oram_rest_tests {
                 actix_test::call_service(&app, reopened_close_request).await;
             assert_eq!(reopened_close_response.status(), StatusCode::OK);
 
+            let recovery_epoch = NEXT_EPOCH + 1;
+            let recovery_bucket =
+                fixture_bucket_for_epoch(1, &fixture.manifest, recovery_epoch, &[77; 16]);
+            let mut recovery_commitments = fixture
+                .buckets
+                .iter()
+                .map(|bucket| bucket.bucket_commitment.clone())
+                .collect::<Vec<_>>();
+            recovery_commitments[0] = closed_commit_bucket.bucket_commitment.clone();
+            recovery_commitments[1] = recovery_bucket.bucket_commitment.clone();
+            let recovery_root_hash =
+                private_result_oram_merkle_root_for_commitments(&recovery_commitments).unwrap();
+            let recovery_plan = PrivateResultOramCommitPlan {
+                old_epoch: NEXT_EPOCH,
+                new_epoch: recovery_epoch,
+                old_root_hash: new_root_hash.clone(),
+                new_root_hash: recovery_root_hash.clone(),
+                leaf_commitments: recovery_commitments,
+                updated_buckets: vec![PrivateResultOramClientCommitBucketRef {
+                    bucket_id: recovery_bucket.bucket_id,
+                    ciphertext_sha256: recovery_bucket.ciphertext_sha256.clone(),
+                }],
+            };
+            let recovery_signature = sign_private_result_oram_commit(
+                &fixture.signing_key,
+                PrivateResultOramCommitSignatureContext {
+                    collection_id: &fixture.manifest.collection_id,
+                    key_id: &fixture.manifest.key_id,
+                    rk_id: &fixture.manifest.rk_id,
+                    rk_epoch: fixture.manifest.rk_epoch,
+                    signing_key_id: SIGNING_KEY_ID,
+                },
+                &recovery_plan,
+            )
+            .unwrap();
+            let internal_auth = Auth::new_internal(Access::full("private result recovery test"));
+            let collection_pass = internal_auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new().write(),
+                    "private_result_recovery_test",
+                )
+                .unwrap();
+            let collection = dispatcher
+                .toc(&internal_auth, &new_unchecked_verification_pass())
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let recovery_store = PrivateResultOramStore::new(collection.path());
+            recovery_store
+                .prepare_durable_writeback_with_signature(
+                    &PrivateResultOramEpochState {
+                        index_epoch: NEXT_EPOCH,
+                        root_hash: new_root_hash.clone(),
+                    },
+                    &PrivateResultOramEpochState {
+                        index_epoch: recovery_epoch,
+                        root_hash: recovery_root_hash.clone(),
+                    },
+                    fixture.manifest.bucket_count,
+                    std::slice::from_ref(&recovery_bucket),
+                    private_result_oram_bucket_ciphertext_bytes(&fixture.manifest.oram).unwrap(),
+                    &recovery_signature,
+                    qdrant_sec::PrivateResultOramSignatureVerification {
+                        expected_key_id: SIGNING_KEY_ID,
+                        public_key: fixture.signing_key.public_key().as_ref(),
+                    },
+                )
+                .unwrap();
+            assert!(recovery_store.pending_writeback_exists().unwrap());
+
+            let recovered_session = post_json_ok!(
+                "/collections/docs/private-result-oram/session",
+                OpenPrivateResultOramSessionRequest {
+                    client_id: "tenant-a/result-sdk-recovery-instance".to_string(),
+                    desired_epoch: recovery_epoch,
+                    fixed_budget: true,
+                }
+            );
+            assert_eq!(recovered_session["index_epoch"], recovery_epoch);
+            assert_eq!(recovered_session["root_hash"], recovery_root_hash);
+            assert!(!recovery_store.pending_writeback_exists().unwrap());
+            let recovered_session_id = recovered_session["session_id"].as_str().unwrap();
+            let recovered_close_request = actix_test::TestRequest::post()
+                .uri(&format!(
+                    "/collections/docs/private-result-oram/session/{recovered_session_id}/close"
+                ))
+                .to_request();
+            let recovered_close_response =
+                actix_test::call_service(&app, recovered_close_request).await;
+            assert_eq!(recovered_close_response.status(), StatusCode::OK);
+
             let missing_close_session_id = "close-session-id-sentinel";
             let missing_close_request = actix_test::TestRequest::post()
                 .uri(&format!(

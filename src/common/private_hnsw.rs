@@ -270,6 +270,20 @@ impl PrivateHnswSessionRegistry {
         Ok(response)
     }
 
+    fn open_after_upload_reservation(
+        &mut self,
+        session: PrivateHnswSession,
+        now_unix: u64,
+    ) -> StorageResult<PrivateHnswSessionResponse> {
+        let index_key = private_hnsw_index_key(&session.collection_id, &session.vector_name);
+        if !self.active_upload_by_index.remove(&index_key) {
+            return Err(StorageError::service_error(
+                "private HNSW ORAM recovery reservation is missing",
+            ));
+        }
+        self.open(session, now_unix)
+    }
+
     fn close(
         &mut self,
         collection_id: &str,
@@ -955,6 +969,23 @@ pub async fn do_open_private_hnsw_session(
     )
     .map_err(private_hnsw_error)?;
     resolved.validate_manifest_runtime_policy(&manifest)?;
+    let max_bucket_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest)?;
+    let recovery_guard = store
+        .pending_writeback_exists()
+        .map_err(private_hnsw_commit_writeback_store_error)?
+        .then(|| begin_private_hnsw_upload_write_window(&collection_crypto_id, vector_name))
+        .transpose()?;
+    if recovery_guard.is_some() {
+        store
+            .recover_pending_writeback_with_signature(
+                max_bucket_ciphertext_bytes,
+                PrivateHnswSignatureVerification {
+                    expected_key_id: &signature.key_id,
+                    public_key: &resolved.public_key,
+                },
+            )
+            .map_err(private_hnsw_commit_writeback_store_error)?;
+    }
     let current_epoch = store
         .read_current_epoch()
         .map_err(private_hnsw_epoch_store_error)?;
@@ -998,13 +1029,19 @@ pub async fn do_open_private_hnsw_session(
         bucket_count: manifest.bucket_count,
         tree_height: manifest.oram.tree_height,
         path_batch_size: manifest.oram.path_batch_size,
-        max_bucket_ciphertext_bytes: max_bucket_ciphertext_bytes(&manifest)?,
+        max_bucket_ciphertext_bytes,
         manifest,
     };
-    let response = session_registry()
+    let mut registry = session_registry()
         .lock()
-        .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?
-        .open(session, now_unix)?;
+        .map_err(|_| StorageError::service_error("private HNSW ORAM session registry poisoned"))?;
+    let response = if recovery_guard.is_some() {
+        registry.open_after_upload_reservation(session, now_unix)?
+    } else {
+        registry.open(session, now_unix)?
+    };
+    drop(registry);
+    drop(recovery_guard);
     if let Err(err) = ensure_private_hnsw_session_open_storage_matches(
         &store,
         &expected_open_epoch,
@@ -5177,6 +5214,24 @@ mod private_hnsw_tests {
         assert!(registry.close("collection-uuid-1", "text", "session-1", now));
         assert!(!registry.has_active_collection("collection-uuid-1", now));
         assert!(!registry.has_active_index("collection-uuid-1", "text", now));
+    }
+
+    #[test]
+    fn session_registry_atomically_converts_recovery_reservation_to_writer() {
+        let now = 10;
+        let session = fixture_session("recovered-session", 20);
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .begin_upload("collection-uuid-1", "text", now)
+            .unwrap();
+
+        let response = registry
+            .open_after_upload_reservation(session, now)
+            .unwrap();
+
+        assert_eq!(response.session_id, "recovered-session");
+        assert!(registry.active_upload_by_index.is_empty());
+        assert!(registry.has_active_index("collection-uuid-1", "text", now));
     }
 
     #[test]

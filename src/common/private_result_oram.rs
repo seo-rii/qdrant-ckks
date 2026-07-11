@@ -224,6 +224,22 @@ impl PrivateResultOramSessionRegistry {
         Ok(response)
     }
 
+    fn open_after_upload_reservation(
+        &mut self,
+        session: PrivateResultOramSession,
+        now_unix: u64,
+    ) -> StorageResult<PrivateResultOramSessionResponse> {
+        if !self
+            .active_upload_by_collection
+            .remove(&session.collection_id)
+        {
+            return Err(StorageError::service_error(
+                "private result ORAM recovery reservation is missing",
+            ));
+        }
+        self.open(session, now_unix)
+    }
+
     fn close(&mut self, collection_id: &str, session_id: &str, now_unix: u64) -> bool {
         self.expire(now_unix);
         let removed = self.sessions.remove(session_id);
@@ -671,6 +687,23 @@ pub async fn do_open_private_result_oram_session(
     )
     .map_err(private_result_oram_error)?;
     resolved.validate_manifest_runtime_policy(&manifest)?;
+    let max_bucket_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest.oram)?;
+    let recovery_guard = store
+        .pending_writeback_exists()
+        .map_err(private_result_oram_commit_writeback_store_error)?
+        .then(|| begin_private_result_oram_upload_write_window(&collection_crypto_id))
+        .transpose()?;
+    if recovery_guard.is_some() {
+        store
+            .recover_pending_writeback_with_signature(
+                max_bucket_ciphertext_bytes,
+                PrivateResultOramSignatureVerification {
+                    expected_key_id: &signature.key_id,
+                    public_key: &resolved.public_key,
+                },
+            )
+            .map_err(private_result_oram_commit_writeback_store_error)?;
+    }
     let current_epoch = store
         .read_current_epoch()
         .map_err(private_result_oram_epoch_store_error)?;
@@ -701,13 +734,19 @@ pub async fn do_open_private_result_oram_session(
         root_hash: current_epoch.root_hash.clone(),
         lease_expires_unix: session_lease_expires_unix(now_unix)?,
         bucket_count: manifest.bucket_count,
-        max_bucket_ciphertext_bytes: max_bucket_ciphertext_bytes(&manifest.oram)?,
+        max_bucket_ciphertext_bytes,
         manifest,
     };
-    let response = session_registry()
-        .lock()
-        .map_err(|_| StorageError::service_error("private result ORAM session registry poisoned"))?
-        .open(session, now_unix)?;
+    let mut registry = session_registry().lock().map_err(|_| {
+        StorageError::service_error("private result ORAM session registry poisoned")
+    })?;
+    let response = if recovery_guard.is_some() {
+        registry.open_after_upload_reservation(session, now_unix)?
+    } else {
+        registry.open(session, now_unix)?
+    };
+    drop(registry);
+    drop(recovery_guard);
     if let Err(err) = ensure_private_result_oram_session_open_storage_matches(
         &store,
         &expected_open_epoch,
@@ -3171,6 +3210,24 @@ mod private_result_oram_tests {
             .unwrap();
         assert!(registry.has_active_collection("collection-private-result-test", expired_at,));
         assert!(registry.close("collection-private-result-test", "session-2", expired_at,));
+    }
+
+    #[test]
+    fn session_registry_atomically_converts_recovery_reservation_to_writer() {
+        let now = 10;
+        let session = fixture_session("recovered-session", 20);
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .begin_upload("collection-private-result-test", now)
+            .unwrap();
+
+        let response = registry
+            .open_after_upload_reservation(session, now)
+            .unwrap();
+
+        assert_eq!(response.session_id, "recovered-session");
+        assert!(registry.active_upload_by_collection.is_empty());
+        assert!(registry.has_active_collection("collection-private-result-test", now));
     }
 
     #[test]

@@ -748,6 +748,28 @@ impl PrivateHnswOramStore {
         Ok(pending.new)
     }
 
+    pub fn pending_writeback_exists(&self) -> CollectionResult<bool> {
+        match fs::symlink_metadata(self.pending_writeback_path()) {
+            Ok(_) => Ok(true),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(CollectionError::service_error(
+                "failed to inspect private HNSW ORAM pending writeback",
+            )),
+        }
+    }
+
+    pub fn recover_pending_writeback_with_signature(
+        &self,
+        max_ciphertext_bytes: usize,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+    ) -> CollectionResult<Option<PrivateHnswOramEpochState>> {
+        if !self.pending_writeback_exists()? {
+            return Ok(None);
+        }
+        self.commit_prepared_writeback_with_signature(max_ciphertext_bytes, signature_verification)
+            .map(Some)
+    }
+
     fn validate_pending_writeback(
         &self,
         pending: &PrivateHnswPendingWriteback,
@@ -4484,17 +4506,24 @@ mod tests {
                 store.compare_and_swap_epoch(&old, &new).unwrap();
             }
 
-            let committed = store
-                .commit_writeback_with_signature(
-                    &old,
-                    &new,
-                    bundle.bucket_count(),
-                    std::slice::from_ref(&updated_bucket),
-                    4096,
-                    &signature,
-                    signature_verification(),
-                )
-                .unwrap();
+            let committed = if crash_window == 0 {
+                store
+                    .commit_writeback_with_signature(
+                        &old,
+                        &new,
+                        bundle.bucket_count(),
+                        std::slice::from_ref(&updated_bucket),
+                        4096,
+                        &signature,
+                        signature_verification(),
+                    )
+                    .unwrap()
+            } else {
+                store
+                    .recover_pending_writeback_with_signature(4096, signature_verification())
+                    .unwrap()
+                    .unwrap()
+            };
 
             assert_eq!(committed, new);
             assert_eq!(store.read_current_epoch().unwrap(), new);
@@ -4514,6 +4543,7 @@ mod tests {
                 .unwrap();
             assert_eq!(proof.leaves[0].leaf_hash, updated_bucket.bucket_commitment);
             assert!(!store.pending_writeback_path().exists());
+            assert!(!store.pending_writeback_exists().unwrap());
         }
     }
 

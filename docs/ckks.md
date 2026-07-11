@@ -664,7 +664,11 @@ resumes crashes before writeback, between bucket/Merkle writes and epoch CAS,
 or immediately after epoch CAS. Until retry completes, the current epoch is
 either still old or atomically advanced to new, and mixed root/bucket reads
 fail closed. A pending journal also keeps snapshot preflight closed because
-private ORAM temporary directories must be empty.
+private ORAM temporary directories must be empty. After a process restart,
+opening a replacement session at the signed new epoch detects the journal,
+reserves the index write window, verifies and completes the journal, then
+atomically converts that reservation into the new session writer lease. Invalid
+or tampered journals keep session open fail closed.
 Collection snapshots include private HNSW ORAM bucket files as ciphertext-only
 JSON artifacts after rejecting non-directory or symlinked private ORAM snapshot
 sources, unsupported source file types, client-owned ORAM state files, and
