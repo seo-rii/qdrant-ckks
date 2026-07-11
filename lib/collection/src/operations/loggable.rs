@@ -1694,6 +1694,10 @@ mod tests {
                 json!("qdrant-sec-private-hnsw-camel-client-state-snapshot-log-sentinel"),
             ),
             (
+                "client.state.snapshot",
+                json!("qdrant-sec-private-hnsw-dot-client-state-snapshot-log-sentinel"),
+            ),
+            (
                 "clientStateBackup",
                 json!("qdrant-sec-private-hnsw-camel-client-state-backup-log-sentinel"),
             ),
@@ -1706,12 +1710,20 @@ mod tests {
                 json!("qdrant-sec-private-hnsw-encrypted-client-state-log-sentinel"),
             ),
             (
+                "encrypted.client.state",
+                json!("qdrant-sec-private-hnsw-dot-encrypted-client-state-log-sentinel"),
+            ),
+            (
                 "encryptedClientState",
                 json!("qdrant-sec-private-hnsw-camel-encrypted-client-state-log-sentinel"),
             ),
             (
                 "encrypted_client_state_snapshot",
                 json!("qdrant-sec-private-hnsw-encrypted-client-state-snapshot-log-sentinel"),
+            ),
+            (
+                "encrypted.client.state.snapshot",
+                json!("qdrant-sec-private-hnsw-dot-encrypted-client-state-snapshot-log-sentinel"),
             ),
             (
                 "encrypted_client_state_backup",
@@ -1841,6 +1853,10 @@ mod tests {
                 json!("qdrant-sec-private-result-token-position-map-backup-log-sentinel"),
             ),
             (
+                "token.position.map.backup",
+                json!("qdrant-sec-private-result-dot-token-position-map-backup-log-sentinel"),
+            ),
+            (
                 "tokenPositionMapSnapshot",
                 json!("qdrant-sec-private-result-camel-token-position-map-snapshot-log-sentinel"),
             ),
@@ -1861,6 +1877,10 @@ mod tests {
                 json!(["qdrant-sec-private-result-camel-client-state-snapshots-log-sentinel"]),
             ),
             (
+                "client.state.snapshot",
+                json!("qdrant-sec-private-result-dot-client-state-snapshot-log-sentinel"),
+            ),
+            (
                 "encryptedClientStateBackups",
                 json!([
                     "qdrant-sec-private-result-camel-encrypted-client-state-backups-log-sentinel"
@@ -1871,10 +1891,18 @@ mod tests {
                 json!(["qdrant-sec-private-result-camel-encrypted-client-states-log-sentinel"]),
             ),
             (
+                "encrypted.client.state",
+                json!("qdrant-sec-private-result-dot-encrypted-client-state-log-sentinel"),
+            ),
+            (
                 "encryptedClientStateSnapshots",
                 json!([
                     "qdrant-sec-private-result-camel-encrypted-client-state-snapshots-log-sentinel"
                 ]),
+            ),
+            (
+                "encrypted.client.state.snapshot",
+                json!("qdrant-sec-private-result-dot-encrypted-client-state-snapshot-log-sentinel"),
             ),
             (
                 "stash_snapshots",
@@ -2496,6 +2524,7 @@ mod tests {
             "client_states": ["qdrant-sec-private-oram-client-states-alias-log-sentinel"],
             "clientState": "qdrant-sec-private-oram-camel-client-state-alias-log-sentinel",
             "clientStates": ["qdrant-sec-private-oram-camel-client-states-alias-log-sentinel"],
+            "client.state.snapshot": "qdrant-sec-private-oram-dot-client-state-snapshot-alias-log-sentinel",
             "client_state_ciphertexts": ["qdrant-sec-private-oram-client-state-ciphertexts-alias-log-sentinel"],
             "client_state_ciphertext": "qdrant-sec-private-oram-client-state-ciphertext-alias-log-sentinel",
             "client_state_ciphertext_hash": "qdrant-sec-private-oram-client-state-ciphertext-hash-alias-log-sentinel",
@@ -2506,6 +2535,8 @@ mod tests {
             "clientStateCiphertextHashes": ["qdrant-sec-private-oram-camel-client-state-ciphertext-hashes-alias-log-sentinel"],
             "encrypted_client_state": "qdrant-sec-private-oram-encrypted-client-state-alias-log-sentinel",
             "encrypted_client_states": ["qdrant-sec-private-oram-encrypted-client-states-alias-log-sentinel"],
+            "encrypted.client.state": "qdrant-sec-private-oram-dot-encrypted-client-state-alias-log-sentinel",
+            "encrypted.client.state.snapshot": "qdrant-sec-private-oram-dot-encrypted-client-state-snapshot-alias-log-sentinel",
             "encryptedClientState": "qdrant-sec-private-oram-camel-encrypted-client-state-alias-log-sentinel",
             "encryptedClientStates": ["qdrant-sec-private-oram-camel-encrypted-client-states-alias-log-sentinel"],
             "encrypted_client_state_backup": "qdrant-sec-private-oram-encrypted-client-state-backup-alias-log-sentinel",
@@ -2540,11 +2571,15 @@ mod tests {
             "token_position_map": "qdrant-sec-private-oram-token-position-map-alias-log-sentinel",
             "token_position_maps": ["qdrant-sec-private-oram-token-position-maps-alias-log-sentinel"],
             "token_position_map_backups": ["qdrant-sec-private-oram-token-position-map-backups-alias-log-sentinel"],
+            "token.position.map.backup": "qdrant-sec-private-oram-dot-token-position-map-backup-alias-log-sentinel",
+            "token.position.map.backups": ["qdrant-sec-private-oram-dot-token-position-map-backups-alias-log-sentinel"],
             "token_position_map_snapshot": "qdrant-sec-private-oram-token-position-map-snapshot-alias-log-sentinel",
             "token_position_map_snapshots": ["qdrant-sec-private-oram-token-position-map-snapshots-alias-log-sentinel"],
             "token_map": "qdrant-sec-private-oram-token-map-alias-log-sentinel",
             "token_maps": ["qdrant-sec-private-oram-token-maps-alias-log-sentinel"],
             "token_map_backups": ["qdrant-sec-private-oram-token-map-backups-alias-log-sentinel"],
+            "token.map.backup": "qdrant-sec-private-oram-dot-token-map-backup-alias-log-sentinel",
+            "token.map.backups": ["qdrant-sec-private-oram-dot-token-map-backups-alias-log-sentinel"],
             "token_map_snapshot": "qdrant-sec-private-oram-token-map-snapshot-alias-log-sentinel",
             "token_map_snapshots": ["qdrant-sec-private-oram-token-map-snapshots-alias-log-sentinel"],
             "tokenPositionMap": "qdrant-sec-private-oram-camel-token-position-map-alias-log-sentinel",
@@ -2590,6 +2625,7 @@ mod tests {
             "qdrant-sec-private-oram-client-states-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-client-state-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-client-states-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-client-state-snapshot-alias-log-sentinel",
             "qdrant-sec-private-oram-client-state-ciphertexts-alias-log-sentinel",
             "qdrant-sec-private-oram-client-state-ciphertext-alias-log-sentinel",
             "qdrant-sec-private-oram-client-state-ciphertext-hash-alias-log-sentinel",
@@ -2601,6 +2637,8 @@ mod tests {
             "qdrant-sec-private-oram-camel-client-state-ciphertext-hashes-alias-log-sentinel",
             "qdrant-sec-private-oram-encrypted-client-state-alias-log-sentinel",
             "qdrant-sec-private-oram-encrypted-client-state-dotted-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-encrypted-client-state-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-encrypted-client-state-snapshot-alias-log-sentinel",
             "qdrant-sec-private-oram-encrypted-client-state-json-alias-log-sentinel",
             "qdrant-sec-private-oram-encrypted-client-states-alias-log-sentinel",
             "qdrant-sec-private-oram-camel-encrypted-client-state-alias-log-sentinel",
@@ -2638,12 +2676,16 @@ mod tests {
             "qdrant-sec-private-oram-token-position-map-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-map-dotted-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-token-position-map-backup-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-token-position-map-backups-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-map-backup-json-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-map-backups-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-map-snapshot-alias-log-sentinel",
             "qdrant-sec-private-oram-token-position-map-snapshots-alias-log-sentinel",
             "qdrant-sec-private-oram-token-map-alias-log-sentinel",
             "qdrant-sec-private-oram-token-maps-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-token-map-backup-alias-log-sentinel",
+            "qdrant-sec-private-oram-dot-token-map-backups-alias-log-sentinel",
             "qdrant-sec-private-oram-token-map-backups-alias-log-sentinel",
             "qdrant-sec-private-oram-token-map-snapshot-alias-log-sentinel",
             "qdrant-sec-private-oram-token-map-snapshots-alias-log-sentinel",
@@ -3086,6 +3128,66 @@ mod tests {
                 "payloadOramLeaf": "private-oram-camel-payload-leaf-b"
             }
         });
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "client.state.snapshot",
+            json!("private-oram-dot-client-state-snapshot-a"),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "encrypted.client.state",
+            json!("private-oram-dot-encrypted-client-state-a"),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "encrypted.client.state.snapshot",
+            json!("private-oram-dot-encrypted-client-state-snapshot-a"),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "token.map.backup",
+            json!({ "private-oram-dot-fetch-token-a": 88 }),
+        );
+        insert_test_json_field(
+            &mut camel_first,
+            &["readBuckets"],
+            "token.position.map.backup",
+            json!({ "private-oram-dot-fetch-token-a": 77 }),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "client.state.snapshot",
+            json!("private-oram-dot-client-state-snapshot-b"),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "encrypted.client.state",
+            json!("private-oram-dot-encrypted-client-state-b"),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "encrypted.client.state.snapshot",
+            json!("private-oram-dot-encrypted-client-state-snapshot-b"),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "token.map.backup",
+            json!({ "private-oram-dot-fetch-token-b": 66 }),
+        );
+        insert_test_json_field(
+            &mut camel_second,
+            &["readBuckets"],
+            "token.position.map.backup",
+            json!({ "private-oram-dot-fetch-token-b": 55 }),
+        );
         insert_test_json_field(
             &mut camel_first,
             &["readBuckets"],
