@@ -581,12 +581,27 @@ mod tests {
                 "token_maps.json",
                 "tokenMapBackup.json",
                 "tokenMapBackups.json",
+                "token.map.backup",
+                "token.map.backups",
                 "token_map_backup.json",
                 "token_map_backups.json",
                 "tokenMapSnapshot.json",
                 "tokenMapSnapshots.json",
                 "token_map_snapshot.json",
                 "token_map_snapshots.json",
+            ]),
+        );
+        unsafe_store_name.add_param(
+            std::borrow::Cow::from("dotted_client_state_aliases"),
+            &serde_json::json!([
+                "client.state.snapshot",
+                "client.state.snapshot.json",
+                "encrypted.client.state",
+                "encrypted.client.state.json",
+                "encrypted.client.state.snapshot",
+                "encrypted.client.state.snapshot.json",
+                "token.position.map.backup",
+                "token.position.map.backups",
             ]),
         );
         let unsafe_store_name_message = describe_error(&unsafe_store_name);
@@ -609,6 +624,7 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("client_state_backup"));
         assert!(!unsafe_store_name_message.contains("clientStateSnapshot"));
         assert!(!unsafe_store_name_message.contains("clientStateSnapshots"));
+        assert!(!unsafe_store_name_message.contains("client.state.snapshot"));
         assert!(!unsafe_store_name_message.contains("client_state_snapshot"));
         assert!(!unsafe_store_name_message.contains("client_state_snapshots"));
         assert!(!unsafe_store_name_message.contains("clientStateCiphertext"));
@@ -628,6 +644,8 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("client_state_ciphertexts_sha256"));
         assert!(!unsafe_store_name_message.contains("encryptedClientState"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStates"));
+        assert!(!unsafe_store_name_message.contains("encrypted.client.state"));
+        assert!(!unsafe_store_name_message.contains("encrypted.client.state.snapshot"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStateBackup"));
         assert!(!unsafe_store_name_message.contains("encryptedClientStateBackups"));
         assert!(!unsafe_store_name_message.contains("encrypted_client_states"));
@@ -703,6 +721,8 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("token_maps"));
         assert!(!unsafe_store_name_message.contains("tokenMapBackup"));
         assert!(!unsafe_store_name_message.contains("tokenMapBackups"));
+        assert!(!unsafe_store_name_message.contains("token.map.backup"));
+        assert!(!unsafe_store_name_message.contains("token.map.backups"));
         assert!(!unsafe_store_name_message.contains("token_map_backup"));
         assert!(!unsafe_store_name_message.contains("token_map_backups"));
         assert!(!unsafe_store_name_message.contains("tokenMapSnapshot"));
@@ -715,6 +735,8 @@ mod tests {
         assert!(!unsafe_store_name_message.contains("token_position_maps"));
         assert!(!unsafe_store_name_message.contains("tokenPositionMapBackup"));
         assert!(!unsafe_store_name_message.contains("tokenPositionMapBackups"));
+        assert!(!unsafe_store_name_message.contains("token.position.map.backup"));
+        assert!(!unsafe_store_name_message.contains("token.position.map.backups"));
         assert!(!unsafe_store_name_message.contains("token_position_map_backup"));
         assert!(!unsafe_store_name_message.contains("token_position_map_backups"));
         assert!(!unsafe_store_name_message.contains("tokenPositionMapSnapshot"));
