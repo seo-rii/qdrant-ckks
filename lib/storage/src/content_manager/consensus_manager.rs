@@ -539,12 +539,11 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 Ok(false)
             }
 
-            ConsensusOperations::UpdatePeerMetadata { peer_id, metadata } => {
-                self.persistent
-                    .write()
-                    .update_peer_metadata(peer_id, metadata)?;
-                Ok(true)
-            }
+            ConsensusOperations::UpdatePeerMetadata { peer_id, metadata } => self
+                .persistent
+                .write()
+                .update_peer_metadata(peer_id, metadata)
+                .map(|()| true),
 
             ConsensusOperations::UpdateClusterMetadata { key, value } => {
                 self.persistent
@@ -553,12 +552,11 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 Ok(true)
             }
 
-            ConsensusOperations::CompareAndSwapPrivateOramEpoch(operation) => {
-                self.persistent
-                    .write()
-                    .compare_and_swap_private_oram_epoch(&operation)?;
-                Ok(true)
-            }
+            ConsensusOperations::CompareAndSwapPrivateOramEpoch(operation) => self
+                .persistent
+                .write()
+                .compare_and_swap_private_oram_epoch(&operation)
+                .map(|()| true),
 
             ConsensusOperations::RequestSnapshot | ConsensusOperations::ReportSnapshot { .. } => {
                 Err(StorageError::service_error(

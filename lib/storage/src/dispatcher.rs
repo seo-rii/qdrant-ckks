@@ -14,6 +14,9 @@ use futures::stream::FuturesUnordered;
 use segment::types::ShardKey;
 
 use crate::content_manager::collection_meta_ops::AliasOperations;
+use crate::content_manager::consensus_ops::{
+    CompareAndSwapPrivateOramEpoch, PrivateOramConsensusEpoch, PrivateOramEpochKey,
+};
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
 use crate::rbac::{Auth, CollectionMultipass};
 use crate::{
@@ -271,6 +274,42 @@ impl Dispatcher {
             Some(state) => state.cluster_status(),
             None => ClusterStatus::Disabled,
         }
+    }
+
+    pub async fn submit_private_oram_epoch_cas(
+        &self,
+        operation: CompareAndSwapPrivateOramEpoch,
+        wait_timeout: Option<Duration>,
+    ) -> Result<(), StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM consensus epoch/root CAS requires distributed mode",
+            )
+        })?;
+        let applied = consensus_state
+            .propose_consensus_op_with_await(
+                ConsensusOperations::CompareAndSwapPrivateOramEpoch(operation),
+                wait_timeout,
+            )
+            .await?;
+        if !applied {
+            return Err(StorageError::service_error(
+                "private ORAM consensus epoch/root CAS was not applied",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn private_oram_consensus_epoch(
+        &self,
+        key: &PrivateOramEpochKey,
+    ) -> Result<Option<PrivateOramConsensusEpoch>, StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM consensus epoch/root state requires distributed mode",
+            )
+        })?;
+        Ok(consensus_state.private_oram_epoch(key))
     }
 
     pub async fn await_consensus_sync(

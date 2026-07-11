@@ -1517,6 +1517,10 @@ mod tests {
     use storage::content_manager::consensus::operation_sender::OperationSender;
     use storage::content_manager::consensus::persistent::Persistent;
     use storage::content_manager::consensus_manager::{ConsensusManager, ConsensusStateRef};
+    use storage::content_manager::consensus_ops::{
+        CompareAndSwapPrivateOramEpoch, PrivateOramConsensusEpoch, PrivateOramEpochKey,
+        PrivateOramIndexKind,
+    };
     use storage::content_manager::toc::TableOfContent;
     use storage::dispatcher::Dispatcher;
     use storage::rbac::{Access, Auth};
@@ -1565,7 +1569,7 @@ mod tests {
     }
 
     #[test]
-    fn collection_creation_passes_consensus() {
+    fn collection_creation_and_private_oram_epoch_cas_pass_consensus() {
         // Given
         let storage_dir = Builder::new().prefix("storage").tempdir().unwrap();
         let mut settings = crate::Settings::new(None).expect("Can't read config.");
@@ -1695,5 +1699,59 @@ mod tests {
         // Then
         assert_eq!(consensus_state.hard_state().commit, 5); // first peer self-election + add first peer + create collection + activate shard x2
         assert_eq!(toc_arc.all_collections_sync(), vec!["test"]);
+
+        let private_oram_key = PrivateOramEpochKey {
+            collection_id: "qdrant-sec-consensus-collection-sentinel".to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "qdrant-sec-consensus-vector-sentinel".to_string(),
+        };
+        let initial_private_oram_epoch = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: data_encoding::BASE64URL_NOPAD.encode(&[42; 32]),
+        };
+        handle
+            .block_on(dispatcher.submit_private_oram_epoch_cas(
+                CompareAndSwapPrivateOramEpoch {
+                    key: private_oram_key.clone(),
+                    expected: None,
+                    new: initial_private_oram_epoch.clone(),
+                },
+                None,
+            ))
+            .unwrap();
+        assert_eq!(
+            dispatcher
+                .private_oram_consensus_epoch(&private_oram_key)
+                .unwrap(),
+            Some(initial_private_oram_epoch.clone()),
+        );
+
+        let stale = handle
+            .block_on(dispatcher.submit_private_oram_epoch_cas(
+                CompareAndSwapPrivateOramEpoch {
+                    key: private_oram_key,
+                    expected: None,
+                    new: PrivateOramConsensusEpoch {
+                        index_epoch: 43,
+                        root_hash: data_encoding::BASE64URL_NOPAD.encode(&[43; 32]),
+                    },
+                },
+                None,
+            ))
+            .unwrap_err();
+        let rendered = stale.to_string();
+        assert!(
+            rendered.contains("consensus epoch/root CAS precondition failed"),
+            "{rendered}",
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-consensus-collection-sentinel"),
+            "{rendered}",
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-consensus-vector-sentinel"),
+            "{rendered}",
+        );
+        assert!(!rendered.contains(&initial_private_oram_epoch.root_hash));
     }
 }
