@@ -111,7 +111,12 @@ mod tests {
 
     #[test]
     fn telemetry_failure_log_message_omits_response_body() {
-        let response_body = "$qdrant_client_aead ciphertext signature wrapped_key_b64";
+        let response_body = concat!(
+            "$qdrant_client_aead ciphertext signature wrapped_key_b64 ",
+            "private_hnsw_oram/session/private-hnsw-session-id-sentinel ",
+            "private-result-oram encrypted.client.state.snapshot ",
+            "private-result-bucket-ciphertext-sentinel"
+        );
         let log_message = telemetry_failure_log_message(
             StatusCode::BAD_GATEWAY,
             Some(response_body.len() as u64),
@@ -123,5 +128,8 @@ mod tests {
         assert!(!log_message.contains(response_body));
         assert!(!log_message.contains("$qdrant_client_aead"));
         assert!(!log_message.contains("wrapped_key_b64"));
+        assert!(!log_message.contains("private-hnsw-session-id-sentinel"));
+        assert!(!log_message.contains("encrypted.client.state.snapshot"));
+        assert!(!log_message.contains("private-result-bucket-ciphertext-sentinel"));
     }
 }
