@@ -116,6 +116,17 @@ primitives, not a replication transport: distributed routes remain closed
 until peer fan-out, acknowledgement, ownership, and recovery orchestration use
 them end to end.
 
+The internal replicated-writeback coordinator now requires canonical
+digest-matching prepare acknowledgements from exactly the caller-supplied
+replica peer set before it submits the Raft CAS. Replica prepare failure,
+missing/duplicate/extra acknowledgements, digest mismatch, or CAS rejection
+attempt remote and local journal aborts. After Raft apply it finalizes remote
+replicas before the local owner, preserving the owner's durable journal while a
+remote finalize still needs retry. The peer set is not yet derived from a
+consensus-backed private-ORAM ownership record, and no internal network RPC
+implements these callbacks yet, so this coordinator does not open distributed
+private ORAM routes.
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:

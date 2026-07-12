@@ -1503,8 +1503,9 @@ fn is_heartbeat(message: &RaftMessage) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
     use collection::operations::vector_params_builder::VectorParamsBuilder;
@@ -1526,7 +1527,7 @@ mod tests {
         PrivateOramIndexKind,
     };
     use storage::content_manager::toc::TableOfContent;
-    use storage::dispatcher::Dispatcher;
+    use storage::dispatcher::{Dispatcher, PrivateOramReplicaPrepareAck};
     use storage::rbac::{Access, Auth};
     use tempfile::Builder;
 
@@ -1971,6 +1972,164 @@ mod tests {
         assert_eq!(
             follow_up_operation.new.writeback_digest.as_deref(),
             Some(follow_up_writeback.writeback_digest.as_str()),
+        );
+
+        let required_replica_peers = BTreeSet::from([8, 9]);
+        let failed_events = Arc::new(Mutex::new(Vec::new()));
+        let prepare_local_events = failed_events.clone();
+        let prepare_replicas_events = failed_events.clone();
+        let abort_local_events = failed_events.clone();
+        let abort_replicas_events = failed_events.clone();
+        let unexpected_finalize_local_events = failed_events.clone();
+        let unexpected_finalize_replicas_events = failed_events.clone();
+        let incomplete = handle
+            .block_on(dispatcher.coordinate_replicated_private_oram_writeback(
+                follow_up_operation.clone(),
+                &required_replica_peers,
+                None,
+                move || {
+                    prepare_local_events.lock().unwrap().push("prepare_local");
+                    Ok(())
+                },
+                {
+                    let digest = follow_up_writeback.writeback_digest.clone();
+                    move || {
+                        prepare_replicas_events
+                            .lock()
+                            .unwrap()
+                            .push("prepare_replicas");
+                        async move {
+                            Ok(vec![PrivateOramReplicaPrepareAck {
+                                peer_id: 8,
+                                writeback_digest: digest,
+                            }])
+                        }
+                    }
+                },
+                move || {
+                    abort_local_events.lock().unwrap().push("abort_local");
+                    Ok(())
+                },
+                move || async move {
+                    abort_replicas_events.lock().unwrap().push("abort_replicas");
+                    Ok(())
+                },
+                move || {
+                    unexpected_finalize_local_events
+                        .lock()
+                        .unwrap()
+                        .push("finalize_local");
+                    Ok(())
+                },
+                move || async move {
+                    unexpected_finalize_replicas_events
+                        .lock()
+                        .unwrap()
+                        .push("finalize_replicas");
+                    Ok(())
+                },
+            ))
+            .unwrap_err();
+        assert!(
+            incomplete
+                .to_string()
+                .contains("replica prepare acknowledgements are incomplete"),
+        );
+        assert_eq!(
+            *failed_events.lock().unwrap(),
+            vec![
+                "prepare_local",
+                "prepare_replicas",
+                "abort_replicas",
+                "abort_local",
+            ],
+        );
+        assert_eq!(
+            dispatcher
+                .private_oram_consensus_epoch(&private_oram_key)
+                .unwrap(),
+            follow_up_operation.expected.clone(),
+        );
+
+        let successful_events = Arc::new(Mutex::new(Vec::new()));
+        let prepare_local_events = successful_events.clone();
+        let prepare_replicas_events = successful_events.clone();
+        let unexpected_abort_local_events = successful_events.clone();
+        let unexpected_abort_replicas_events = successful_events.clone();
+        let finalize_local_events = successful_events.clone();
+        let finalize_replicas_events = successful_events.clone();
+        let follow_up_consensus_epoch = follow_up_operation.new.clone();
+        handle
+            .block_on(dispatcher.coordinate_replicated_private_oram_writeback(
+                follow_up_operation,
+                &required_replica_peers,
+                None,
+                move || {
+                    prepare_local_events.lock().unwrap().push("prepare_local");
+                    Ok(())
+                },
+                {
+                    let digest = follow_up_writeback.writeback_digest.clone();
+                    move || {
+                        prepare_replicas_events
+                            .lock()
+                            .unwrap()
+                            .push("prepare_replicas");
+                        async move {
+                            Ok(vec![
+                                PrivateOramReplicaPrepareAck {
+                                    peer_id: 8,
+                                    writeback_digest: digest.clone(),
+                                },
+                                PrivateOramReplicaPrepareAck {
+                                    peer_id: 9,
+                                    writeback_digest: digest,
+                                },
+                            ])
+                        }
+                    }
+                },
+                move || {
+                    unexpected_abort_local_events
+                        .lock()
+                        .unwrap()
+                        .push("abort_local");
+                    Ok(())
+                },
+                move || async move {
+                    unexpected_abort_replicas_events
+                        .lock()
+                        .unwrap()
+                        .push("abort_replicas");
+                    Ok(())
+                },
+                move || {
+                    finalize_local_events.lock().unwrap().push("finalize_local");
+                    Ok(())
+                },
+                move || async move {
+                    finalize_replicas_events
+                        .lock()
+                        .unwrap()
+                        .push("finalize_replicas");
+                    Ok(())
+                },
+            ))
+            .unwrap();
+        assert_eq!(
+            *successful_events.lock().unwrap(),
+            vec![
+                "prepare_local",
+                "prepare_replicas",
+                "finalize_replicas",
+                "finalize_local",
+            ],
+        );
+        assert_eq!(
+            dispatcher
+                .private_oram_consensus_epoch(&private_oram_key)
+                .unwrap(),
+            Some(follow_up_consensus_epoch),
         );
     }
 }

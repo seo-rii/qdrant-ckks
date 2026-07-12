@@ -1,4 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::fmt::{self, Debug, Formatter};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,8 +11,10 @@ use collection::operations::verification::VerificationPass;
 use collection::private_hnsw_oram_store::PrivateHnswOramConsensusWriteback;
 use collection::private_result_oram_store::PrivateResultOramConsensusWriteback;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
+use collection::shards::shard::PeerId;
 use common::counter::hardware_accumulator::HwSharedDrain;
 use common::defaults::CONSENSUS_META_OP_WAIT;
+use data_encoding::BASE64URL_NOPAD;
 use futures::StreamExt as _;
 use futures::stream::FuturesUnordered;
 use segment::types::ShardKey;
@@ -32,6 +36,21 @@ pub struct Dispatcher {
     toc: Arc<TableOfContent>,
     consensus_state: Option<ConsensusStateRef>,
     resharding_enabled: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramReplicaPrepareAck {
+    pub peer_id: PeerId,
+    pub writeback_digest: String,
+}
+
+impl Debug for PrivateOramReplicaPrepareAck {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramReplicaPrepareAck")
+            .field("peer_id", &self.peer_id)
+            .field("writeback_digest", &"[redacted]")
+            .finish()
+    }
 }
 
 impl Dispatcher {
@@ -401,6 +420,86 @@ impl Dispatcher {
         finalize()
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn coordinate_replicated_private_oram_writeback<
+        PrepareLocal,
+        PrepareReplicas,
+        PrepareReplicasFuture,
+        AbortLocal,
+        AbortReplicas,
+        AbortReplicasFuture,
+        FinalizeLocal,
+        FinalizeReplicas,
+        FinalizeReplicasFuture,
+    >(
+        &self,
+        operation: CompareAndSwapPrivateOramEpoch,
+        required_replica_peers: &BTreeSet<PeerId>,
+        wait_timeout: Option<Duration>,
+        prepare_local: PrepareLocal,
+        prepare_replicas: PrepareReplicas,
+        abort_local: AbortLocal,
+        abort_replicas: AbortReplicas,
+        finalize_local: FinalizeLocal,
+        finalize_replicas: FinalizeReplicas,
+    ) -> Result<(), StorageError>
+    where
+        PrepareLocal: FnOnce() -> Result<(), StorageError>,
+        PrepareReplicas: FnOnce() -> PrepareReplicasFuture,
+        PrepareReplicasFuture:
+            Future<Output = Result<Vec<PrivateOramReplicaPrepareAck>, StorageError>>,
+        AbortLocal: FnOnce() -> Result<(), StorageError>,
+        AbortReplicas: FnOnce() -> AbortReplicasFuture,
+        AbortReplicasFuture: Future<Output = Result<(), StorageError>>,
+        FinalizeLocal: FnOnce() -> Result<(), StorageError>,
+        FinalizeReplicas: FnOnce() -> FinalizeReplicasFuture,
+        FinalizeReplicasFuture: Future<Output = Result<(), StorageError>>,
+    {
+        let expected_digest = operation.new.writeback_digest.as_deref().ok_or_else(|| {
+            StorageError::bad_request(
+                "replicated private ORAM writeback requires a consensus digest",
+            )
+        })?;
+        validate_private_oram_writeback_digest(expected_digest)?;
+        prepare_local()?;
+
+        let replica_acks = match prepare_replicas().await {
+            Ok(replica_acks) => replica_acks,
+            Err(prepare_error) => {
+                let remote_abort = abort_replicas().await;
+                let local_abort = abort_local();
+                remote_abort?;
+                local_abort?;
+                return Err(prepare_error);
+            }
+        };
+        if let Err(ack_error) = validate_private_oram_replica_prepare_acks(
+            required_replica_peers,
+            &replica_acks,
+            expected_digest,
+        ) {
+            let remote_abort = abort_replicas().await;
+            let local_abort = abort_local();
+            remote_abort?;
+            local_abort?;
+            return Err(ack_error);
+        }
+
+        if let Err(consensus_error) = self
+            .submit_private_oram_epoch_cas(operation, wait_timeout)
+            .await
+        {
+            let remote_abort = abort_replicas().await;
+            let local_abort = abort_local();
+            remote_abort?;
+            local_abort?;
+            return Err(consensus_error);
+        }
+
+        finalize_replicas().await?;
+        finalize_local()
+    }
+
     pub fn private_oram_consensus_epoch(
         &self,
         key: &PrivateOramEpochKey,
@@ -491,5 +590,102 @@ impl Dispatcher {
     #[must_use]
     pub fn get_collection_hw_metrics(&self, collection: String) -> Arc<HwSharedDrain> {
         self.toc.get_collection_hw_metrics(collection)
+    }
+}
+
+fn validate_private_oram_replica_prepare_acks(
+    required_replica_peers: &BTreeSet<PeerId>,
+    replica_acks: &[PrivateOramReplicaPrepareAck],
+    expected_digest: &str,
+) -> Result<(), StorageError> {
+    validate_private_oram_writeback_digest(expected_digest)?;
+    let mut acknowledged_peers = BTreeSet::new();
+    for ack in replica_acks {
+        if ack.writeback_digest != expected_digest || !acknowledged_peers.insert(ack.peer_id) {
+            return Err(StorageError::bad_request(
+                "private ORAM replica prepare acknowledgements are invalid",
+            ));
+        }
+    }
+    if &acknowledged_peers != required_replica_peers {
+        return Err(StorageError::bad_request(
+            "private ORAM replica prepare acknowledgements are incomplete",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_oram_writeback_digest(digest: &str) -> Result<(), StorageError> {
+    let decoded = BASE64URL_NOPAD.decode(digest.as_bytes()).map_err(|_| {
+        StorageError::bad_request("private ORAM replicated writeback digest is invalid")
+    })?;
+    if decoded.len() != 32 || BASE64URL_NOPAD.encode(&decoded) != digest {
+        return Err(StorageError::bad_request(
+            "private ORAM replicated writeback digest is invalid",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_oram_replica_prepare_acks_require_exact_peers_and_digest() {
+        let digest = BASE64URL_NOPAD.encode(&[42; 32]);
+        let required = BTreeSet::from([7, 9]);
+        let valid = vec![
+            PrivateOramReplicaPrepareAck {
+                peer_id: 9,
+                writeback_digest: digest.clone(),
+            },
+            PrivateOramReplicaPrepareAck {
+                peer_id: 7,
+                writeback_digest: digest.clone(),
+            },
+        ];
+        validate_private_oram_replica_prepare_acks(&required, &valid, &digest).unwrap();
+
+        let rendered = format!("{:?}", valid[0]);
+        assert!(rendered.contains("peer_id: 9"), "{rendered}");
+        assert!(!rendered.contains(&digest), "{rendered}");
+
+        let missing = validate_private_oram_replica_prepare_acks(&required, &valid[..1], &digest)
+            .unwrap_err()
+            .to_string();
+        assert!(missing.contains("acknowledgements are incomplete"));
+
+        let duplicate = validate_private_oram_replica_prepare_acks(
+            &required,
+            &[valid[0].clone(), valid[0].clone()],
+            &digest,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(duplicate.contains("acknowledgements are invalid"));
+
+        let mismatched_digest = BASE64URL_NOPAD.encode(&[43; 32]);
+        let mismatch = validate_private_oram_replica_prepare_acks(
+            &required,
+            &[PrivateOramReplicaPrepareAck {
+                peer_id: 7,
+                writeback_digest: mismatched_digest.clone(),
+            }],
+            &digest,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(mismatch.contains("acknowledgements are invalid"));
+        assert!(!mismatch.contains(&digest));
+        assert!(!mismatch.contains(&mismatched_digest));
+
+        let malformed_digest = "private-oram-replica-digest-sentinel";
+        let malformed =
+            validate_private_oram_replica_prepare_acks(&BTreeSet::new(), &[], malformed_digest)
+                .unwrap_err()
+                .to_string();
+        assert!(malformed.contains("replicated writeback digest is invalid"));
+        assert!(!malformed.contains(malformed_digest));
     }
 }
