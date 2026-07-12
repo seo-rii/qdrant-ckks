@@ -123,9 +123,15 @@ missing/duplicate/extra acknowledgements, digest mismatch, or CAS rejection
 attempt remote and local journal aborts. After Raft apply it finalizes remote
 replicas before the local owner, preserving the owner's durable journal while a
 remote finalize still needs retry. The peer set is not yet derived from a
-consensus-backed private-ORAM ownership record, and no internal network RPC
-implements these callbacks yet, so this coordinator does not open distributed
-private ORAM routes.
+consensus-backed private-ORAM ownership record. The Dispatcher can now derive a
+safe v1 peer set from the collection layout, but only when every shard has the
+same non-empty set of fully `Active` replicas, the current peer belongs to that
+set, and every remote peer has a known internal address. Any transitional state
+or shard membership mismatch fails before fan-out. This is deliberately stricter
+than ordinary shard routing because the ORAM store is collection-local rather
+than shard-local. No internal network RPC implements the prepare/finalize/abort
+callbacks yet, so this coordinator still does not open distributed private ORAM
+routes.
 
 ## Payload text
 

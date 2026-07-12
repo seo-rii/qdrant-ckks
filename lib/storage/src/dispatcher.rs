@@ -500,6 +500,36 @@ impl Dispatcher {
         finalize_local()
     }
 
+    /// Resolve the exact peers that must durably prepare a collection-local private ORAM
+    /// writeback. Private ORAM storage is not shard-local, so v1 only permits collections whose
+    /// shards all have the same fully-active replica membership.
+    pub async fn private_oram_replication_peers(
+        &self,
+        collection_name: &CollectionName,
+    ) -> Result<BTreeSet<PeerId>, StorageError> {
+        let collection = self
+            .toc
+            .get_collection(&CollectionMultipass.issue_pass(collection_name))
+            .await?;
+        let shard_holder = collection.shards_holder().read_owned().await;
+        let shard_peer_states = shard_holder
+            .all_shards()
+            .map(|replica_set| replica_set.peers())
+            .collect::<Vec<_>>();
+        let peers =
+            derive_private_oram_replication_peers(&shard_peer_states, self.toc.this_peer_id)?;
+
+        let known_addresses = self.toc.get_channel_service().id_to_address.read();
+        if peers.iter().any(|peer_id| {
+            *peer_id != self.toc.this_peer_id && !known_addresses.contains_key(peer_id)
+        }) {
+            return Err(StorageError::service_error(
+                "private ORAM replication peer address is unavailable",
+            ));
+        }
+        Ok(peers)
+    }
+
     pub fn private_oram_consensus_epoch(
         &self,
         key: &PrivateOramEpochKey,
@@ -615,6 +645,38 @@ fn validate_private_oram_replica_prepare_acks(
     Ok(())
 }
 
+fn derive_private_oram_replication_peers(
+    shard_peer_states: &[HashMap<PeerId, ReplicaState>],
+    this_peer_id: PeerId,
+) -> Result<BTreeSet<PeerId>, StorageError> {
+    let Some(first_shard) = shard_peer_states.first() else {
+        return Err(StorageError::service_error(
+            "private ORAM replication requires at least one shard",
+        ));
+    };
+    if shard_peer_states
+        .iter()
+        .any(|peers| peers.is_empty() || peers.values().any(|state| *state != ReplicaState::Active))
+    {
+        return Err(StorageError::service_error(
+            "private ORAM replication requires fully active shard replicas",
+        ));
+    }
+
+    let expected = first_shard.keys().copied().collect::<BTreeSet<_>>();
+    if !expected.contains(&this_peer_id)
+        || shard_peer_states
+            .iter()
+            .skip(1)
+            .any(|peers| peers.keys().copied().collect::<BTreeSet<_>>() != expected)
+    {
+        return Err(StorageError::service_error(
+            "private ORAM replication requires identical shard replica membership",
+        ));
+    }
+    Ok(expected)
+}
+
 fn validate_private_oram_writeback_digest(digest: &str) -> Result<(), StorageError> {
     let decoded = BASE64URL_NOPAD.decode(digest.as_bytes()).map_err(|_| {
         StorageError::bad_request("private ORAM replicated writeback digest is invalid")
@@ -687,5 +749,42 @@ mod tests {
                 .to_string();
         assert!(malformed.contains("replicated writeback digest is invalid"));
         assert!(!malformed.contains(malformed_digest));
+    }
+
+    #[test]
+    fn private_oram_replication_peers_require_identical_fully_active_membership() {
+        let active = HashMap::from([(7, ReplicaState::Active), (9, ReplicaState::Active)]);
+        let reversed = HashMap::from([(9, ReplicaState::Active), (7, ReplicaState::Active)]);
+        assert_eq!(
+            derive_private_oram_replication_peers(&[active.clone(), reversed], 7).unwrap(),
+            BTreeSet::from([7, 9]),
+        );
+
+        let no_shards = derive_private_oram_replication_peers(&[], 7)
+            .unwrap_err()
+            .to_string();
+        assert!(no_shards.contains("at least one shard"));
+
+        let mut transitioning = active.clone();
+        transitioning.insert(9, ReplicaState::ActiveRead);
+        let transitioning =
+            derive_private_oram_replication_peers(&[active.clone(), transitioning], 7)
+                .unwrap_err()
+                .to_string();
+        assert!(transitioning.contains("fully active shard replicas"));
+
+        let mismatched = derive_private_oram_replication_peers(
+            &[active.clone(), HashMap::from([(7, ReplicaState::Active)])],
+            7,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(mismatched.contains("identical shard replica membership"));
+
+        let local_missing = derive_private_oram_replication_peers(&[active], 11)
+            .unwrap_err()
+            .to_string();
+        assert!(local_missing.contains("identical shard replica membership"));
+        assert!(!local_missing.contains("11"));
     }
 }
