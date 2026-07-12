@@ -86,11 +86,14 @@ contract:
 | Cluster mode | Manifest upload, bucket upload, session open, `read_paths`, and commit remain fail closed in distributed mode. Raft now persists an internal private-ORAM epoch/root CAS record, and the internal dispatcher bridge waits for local Raft apply with exact-replay idempotence, conflicting-stale rejection, and snapshot-restore coverage. The API guard remains until encrypted bucket ownership and movement are coupled to that record; layout movement operations and consensus snapshot state-apply changes are blocked before shard transfer, resharding, or shard-info mutation proceeds. | Manifest upload, bucket upload, session open, `read_buckets`, and commit remain fail closed in distributed mode. The same internal Raft epoch/root CAS record and awaited dispatcher bridge cover result ORAM identity with exact-replay idempotence, but result bucket replication and API commit integration are still required before the guard can open; result ORAM bucket movement and consensus snapshot state-apply changes follow the same cluster guard policy. |
 
 The internal Dispatcher writeback coordinator enforces durable local prepare,
-awaited Raft epoch/root CAS, then idempotent local finalize. If finalize fails
-after Raft apply, retrying the same operation reuses exact-CAS idempotence before
-running finalize again. This is an internal recovery boundary only; distributed
-private ORAM routes remain closed until encrypted bucket replication and
-ownership are coupled to the same operation.
+awaited Raft epoch/root CAS, then idempotent local finalize. If Raft rejects the
+CAS, the coordinator invokes a signed-journal abort that removes the journal
+only when the local epoch, Merkle tree, and every target bucket still match the
+old view; any partial local mutation preserves the journal and fails closed. If
+finalize fails after Raft apply, retrying the same operation reuses exact-CAS
+idempotence before running finalize again. This is an internal recovery boundary
+only; distributed private ORAM routes remain closed until encrypted bucket
+replication and ownership are coupled to the same operation.
 
 ## Payload text
 

@@ -1771,6 +1771,46 @@ mod tests {
             Some(initial_private_oram_epoch.clone()),
         );
 
+        let stale_prepare_count = Arc::new(AtomicUsize::new(0));
+        let stale_abort_count = Arc::new(AtomicUsize::new(0));
+        let stale_finalize_count = Arc::new(AtomicUsize::new(0));
+        let stale_prepare_count_for_call = stale_prepare_count.clone();
+        let stale_abort_count_for_call = stale_abort_count.clone();
+        let stale_finalize_count_for_call = stale_finalize_count.clone();
+        let stale_coordinator = handle
+            .block_on(dispatcher.coordinate_private_oram_writeback(
+                CompareAndSwapPrivateOramEpoch {
+                    key: private_oram_key.clone(),
+                    expected: None,
+                    new: PrivateOramConsensusEpoch {
+                        index_epoch: 44,
+                        root_hash: data_encoding::BASE64URL_NOPAD.encode(&[44; 32]),
+                    },
+                },
+                None,
+                || {
+                    stale_prepare_count_for_call.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+                || {
+                    stale_abort_count_for_call.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+                || {
+                    stale_finalize_count_for_call.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+            ))
+            .unwrap_err();
+        assert!(
+            stale_coordinator
+                .to_string()
+                .contains("consensus epoch/root CAS precondition failed"),
+        );
+        assert_eq!(stale_prepare_count.load(Ordering::SeqCst), 1);
+        assert_eq!(stale_abort_count.load(Ordering::SeqCst), 1);
+        assert_eq!(stale_finalize_count.load(Ordering::SeqCst), 0);
+
         let next_private_oram_epoch = PrivateOramConsensusEpoch {
             index_epoch: 43,
             root_hash: data_encoding::BASE64URL_NOPAD.encode(&[43; 32]),
@@ -1780,8 +1820,9 @@ mod tests {
             expected: Some(initial_private_oram_epoch),
             new: next_private_oram_epoch.clone(),
         };
-        let unexpected_finalize_count = Arc::new(AtomicUsize::new(0));
-        let unexpected_finalize_count_for_prepare_failure = unexpected_finalize_count.clone();
+        let unexpected_post_prepare_count = Arc::new(AtomicUsize::new(0));
+        let unexpected_abort_count_for_prepare_failure = unexpected_post_prepare_count.clone();
+        let unexpected_finalize_count_for_prepare_failure = unexpected_post_prepare_count.clone();
         let prepare_failure = handle
             .block_on(dispatcher.coordinate_private_oram_writeback(
                 writeback_operation.clone(),
@@ -1794,6 +1835,10 @@ mod tests {
                     )
                 },
                 || {
+                    unexpected_abort_count_for_prepare_failure.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                },
+                || {
                     unexpected_finalize_count_for_prepare_failure.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 },
@@ -1804,7 +1849,7 @@ mod tests {
                 .to_string()
                 .contains("simulated private ORAM durable prepare failure"),
         );
-        assert_eq!(unexpected_finalize_count.load(Ordering::SeqCst), 0);
+        assert_eq!(unexpected_post_prepare_count.load(Ordering::SeqCst), 0);
         assert_eq!(
             dispatcher
                 .private_oram_consensus_epoch(&private_oram_key)
@@ -1824,6 +1869,7 @@ mod tests {
                     prepare_count_for_failure.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 },
+                || Ok(()),
                 || {
                     finalize_count_for_failure.fetch_add(1, Ordering::SeqCst);
                     assert_eq!(
@@ -1858,6 +1904,7 @@ mod tests {
                     prepare_count_for_retry.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 },
+                || Ok(()),
                 || {
                     finalize_count_for_retry.fetch_add(1, Ordering::SeqCst);
                     Ok(())

@@ -770,6 +770,49 @@ impl PrivateHnswOramStore {
             .map(Some)
     }
 
+    pub fn abort_pending_writeback_with_signature(
+        &self,
+        max_ciphertext_bytes: usize,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+    ) -> CollectionResult<bool> {
+        if !self.pending_writeback_exists()? {
+            return Ok(false);
+        }
+        let pending: PrivateHnswPendingWriteback =
+            read_json_private_file(&self.pending_writeback_path(), MAX_PENDING_WRITEBACK_BYTES)?;
+        self.validate_pending_writeback(&pending, max_ciphertext_bytes, signature_verification)?;
+        self.ensure_current_epoch_matches(&pending.old)?;
+        let old_tree = self.read_merkle_tree()?;
+        validate_merkle_tree_context(
+            &old_tree,
+            pending.old.index_epoch,
+            &pending.old.root_hash,
+            pending.bucket_count,
+        )?;
+        for updated_bucket in &pending.updated_buckets {
+            let stored_bucket = self.read_bucket(
+                updated_bucket.bucket_id,
+                pending.old.index_epoch,
+                pending.bucket_count,
+                max_ciphertext_bytes,
+            )?;
+            let bucket_index = usize::try_from(updated_bucket.bucket_id).map_err(|_| {
+                CollectionError::bad_request("private HNSW ORAM pending writeback is invalid")
+            })?;
+            if old_tree.leaf_hashes.get(bucket_index) != Some(&stored_bucket.bucket_commitment) {
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM pending writeback abort state is invalid",
+                ));
+            }
+        }
+        remove_private_file(
+            &self.pending_writeback_path(),
+            &self.temp_dir(),
+            MAX_PENDING_WRITEBACK_BYTES,
+        )?;
+        Ok(true)
+    }
+
     fn validate_pending_writeback(
         &self,
         pending: &PrivateHnswPendingWriteback,
@@ -4605,6 +4648,72 @@ mod tests {
             bundle.buckets[0],
         );
         assert!(store.pending_writeback_path().exists());
+    }
+
+    #[test]
+    fn durable_signed_writeback_abort_requires_unmodified_old_view() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[43; 32]).unwrap();
+        let public_key = key_pair.public_key();
+        let (bundle, updated_bucket, new, signature) = fixture_signed_commit_update(&key_pair);
+        let signature_verification = || PrivateHnswSignatureVerification {
+            expected_key_id: "tenant-a/private-hnsw-signing-v1",
+            public_key: public_key.as_ref(),
+        };
+
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let old = store.write_initial_upload_bundle(&bundle, 4096).unwrap();
+        store
+            .prepare_durable_writeback_with_signature(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                4096,
+                &signature,
+                signature_verification(),
+            )
+            .unwrap();
+        assert!(
+            store
+                .abort_pending_writeback_with_signature(4096, signature_verification())
+                .unwrap()
+        );
+        assert!(!store.pending_writeback_exists().unwrap());
+        assert_eq!(store.read_current_epoch().unwrap(), old);
+
+        let temp = TempDir::new().unwrap();
+        let partially_written_store = fixture_store(&temp);
+        let old = partially_written_store
+            .write_initial_upload_bundle(&bundle, 4096)
+            .unwrap();
+        partially_written_store
+            .prepare_durable_writeback_with_signature(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                4096,
+                &signature,
+                signature_verification(),
+            )
+            .unwrap();
+        partially_written_store
+            .write_bucket(
+                &updated_bucket,
+                new.index_epoch,
+                bundle.bucket_count(),
+                4096,
+            )
+            .unwrap();
+        let rendered = partially_written_store
+            .abort_pending_writeback_with_signature(4096, signature_verification())
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("newer than requested epoch"));
+        assert!(!rendered.contains(&updated_bucket.ciphertext));
+        assert!(partially_written_store.pending_writeback_exists().unwrap());
+        assert_eq!(partially_written_store.read_current_epoch().unwrap(), old);
     }
 
     #[test]
