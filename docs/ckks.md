@@ -129,7 +129,10 @@ same non-empty set of fully `Active` replicas, the current peer belongs to that
 set, and every remote peer has a known internal address. Any transitional state
 or shard membership mismatch fails before fan-out. This is deliberately stricter
 than ordinary shard routing because the ORAM store is collection-local rather
-than shard-local. No internal network RPC implements the prepare/finalize/abort
+than shard-local. Replica finalize and abort also require the exact expected
+old/new epoch, root, and canonical writeback digest to match the owner-signed
+pending journal; a stale internal request cannot act on a different pending
+transition. No internal network RPC implements the prepare/finalize/abort
 callbacks yet, so this coordinator still does not open distributed private ORAM
 routes.
 

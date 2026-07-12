@@ -787,10 +787,45 @@ impl PrivateHnswOramStore {
         max_ciphertext_bytes: usize,
         signature_verification: PrivateHnswSignatureVerification<'_>,
     ) -> CollectionResult<PrivateHnswOramEpochState> {
+        self.commit_prepared_writeback_with_signature_and_consensus(
+            max_ciphertext_bytes,
+            signature_verification,
+            None,
+        )
+    }
+
+    pub fn commit_replica_writeback_with_signature(
+        &self,
+        expected_consensus_writeback: &PrivateHnswOramConsensusWriteback,
+        max_ciphertext_bytes: usize,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+    ) -> CollectionResult<PrivateHnswOramEpochState> {
+        self.commit_prepared_writeback_with_signature_and_consensus(
+            max_ciphertext_bytes,
+            signature_verification,
+            Some(expected_consensus_writeback),
+        )
+    }
+
+    fn commit_prepared_writeback_with_signature_and_consensus(
+        &self,
+        max_ciphertext_bytes: usize,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+        expected_consensus_writeback: Option<&PrivateHnswOramConsensusWriteback>,
+    ) -> CollectionResult<PrivateHnswOramEpochState> {
         self.ensure_layout()?;
         let pending: PrivateHnswPendingWriteback =
             read_json_private_file(&self.pending_writeback_path(), MAX_PENDING_WRITEBACK_BYTES)?;
-        self.validate_pending_writeback(&pending, max_ciphertext_bytes, signature_verification)?;
+        let consensus_writeback = self.validate_pending_writeback(
+            &pending,
+            max_ciphertext_bytes,
+            signature_verification,
+        )?;
+        if expected_consensus_writeback.is_some_and(|expected| expected != &consensus_writeback) {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM pending writeback consensus transition does not match",
+            ));
+        }
 
         let current = self.read_current_epoch()?;
         if current != pending.old && current != pending.new {
@@ -937,12 +972,47 @@ impl PrivateHnswOramStore {
         max_ciphertext_bytes: usize,
         signature_verification: PrivateHnswSignatureVerification<'_>,
     ) -> CollectionResult<bool> {
+        self.abort_pending_writeback_with_signature_and_consensus(
+            max_ciphertext_bytes,
+            signature_verification,
+            None,
+        )
+    }
+
+    pub fn abort_replica_writeback_with_signature(
+        &self,
+        expected_consensus_writeback: &PrivateHnswOramConsensusWriteback,
+        max_ciphertext_bytes: usize,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+    ) -> CollectionResult<bool> {
+        self.abort_pending_writeback_with_signature_and_consensus(
+            max_ciphertext_bytes,
+            signature_verification,
+            Some(expected_consensus_writeback),
+        )
+    }
+
+    fn abort_pending_writeback_with_signature_and_consensus(
+        &self,
+        max_ciphertext_bytes: usize,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+        expected_consensus_writeback: Option<&PrivateHnswOramConsensusWriteback>,
+    ) -> CollectionResult<bool> {
         if !self.pending_writeback_exists()? {
             return Ok(false);
         }
         let pending: PrivateHnswPendingWriteback =
             read_json_private_file(&self.pending_writeback_path(), MAX_PENDING_WRITEBACK_BYTES)?;
-        self.validate_pending_writeback(&pending, max_ciphertext_bytes, signature_verification)?;
+        let consensus_writeback = self.validate_pending_writeback(
+            &pending,
+            max_ciphertext_bytes,
+            signature_verification,
+        )?;
+        if expected_consensus_writeback.is_some_and(|expected| expected != &consensus_writeback) {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM pending writeback consensus transition does not match",
+            ));
+        }
         self.ensure_current_epoch_matches(&pending.old)?;
         let old_tree = self.read_merkle_tree()?;
         validate_merkle_tree_context(
@@ -4918,9 +4988,32 @@ mod tests {
         assert_eq!(replica.read_current_epoch().unwrap(), old);
         assert!(replica.pending_writeback_exists().unwrap());
 
+        for mismatch in [
+            replica
+                .commit_replica_writeback_with_signature(
+                    &conflicting_consensus,
+                    4096,
+                    signature_verification(),
+                )
+                .unwrap_err(),
+            replica
+                .abort_replica_writeback_with_signature(
+                    &conflicting_consensus,
+                    4096,
+                    signature_verification(),
+                )
+                .unwrap_err(),
+        ] {
+            let mismatch = mismatch.to_string();
+            assert!(mismatch.contains("consensus transition does not match"));
+            assert!(!mismatch.contains(&conflicting_consensus.writeback_digest));
+        }
+        assert_eq!(replica.read_current_epoch().unwrap(), old);
+        assert!(replica.pending_writeback_exists().unwrap());
+
         assert_eq!(
             replica
-                .commit_prepared_writeback_with_signature(4096, signature_verification())
+                .commit_replica_writeback_with_signature(&exported, 4096, signature_verification(),)
                 .unwrap(),
             new,
         );
