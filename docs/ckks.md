@@ -166,6 +166,16 @@ errors include only the peer id and never reflect collection identity,
 ciphertext, root, or digest. The client commit route is not yet switched to this
 owner-side coordinator, so distributed private ORAM APIs remain closed.
 
+For initial replica installation, both collection stores can export a complete
+signed upload bundle only while the persisted current epoch/root still equals
+the manifest epoch/root. Export first validates the manifest's canonical tree
+bucket count, enforces a caller-provided aggregate memory budget before
+allocating the bucket vector, reads every encrypted bucket, revalidates the full
+upload bundle, and requires persisted Merkle leaves to match. Once any writeback
+advances the store, it cannot be mislabeled and exported as an initial bundle.
+The internal install RPC and initial consensus ownership registration remain the
+next cluster-mode step.
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:

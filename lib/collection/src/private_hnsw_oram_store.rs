@@ -11,7 +11,8 @@ use qdrant_sec::{
     PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
     PrivateHnswOramSignature, PrivateHnswOramUploadBundle, PrivateHnswSignatureVerification,
     private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
-    private_hnsw_oram_writeback_digest, server_private_hnsw_oram_fixed_writeback_bucket_budget,
+    private_hnsw_oram_bucket_count, private_hnsw_oram_writeback_digest,
+    server_private_hnsw_oram_fixed_writeback_bucket_budget,
     validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_upload_bundle,
     validate_private_hnsw_oram_upload_bundle_with_signature,
 };
@@ -353,6 +354,79 @@ impl PrivateHnswOramStore {
     ) -> CollectionResult<PrivateHnswOramEpochState> {
         validate_upload_bundle_with_signature(bundle, max_ciphertext_bytes, validation_context)?;
         self.write_initial_upload_bundle(bundle, max_ciphertext_bytes)
+    }
+
+    pub fn read_initial_upload_bundle(
+        &self,
+        max_ciphertext_bytes: usize,
+        max_bundle_bytes: usize,
+    ) -> CollectionResult<PrivateHnswOramUploadBundle> {
+        let (manifest, manifest_signature) = self.read_manifest()?;
+        let expected_bucket_count = private_hnsw_oram_bucket_count(manifest.oram.tree_height)
+            .map_err(private_hnsw_client_error)?;
+        if manifest.bucket_count != expected_bucket_count || expected_bucket_count == 0 {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM initial replication manifest bucket_count is invalid",
+            ));
+        }
+        let expected_epoch = PrivateHnswOramEpochState {
+            index_epoch: manifest.index_epoch,
+            root_hash: manifest.root_hash.clone(),
+        };
+        if self.read_current_epoch()? != expected_epoch {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM initial replication requires the manifest epoch",
+            ));
+        }
+        let first = self.read_bucket(
+            0,
+            manifest.index_epoch,
+            manifest.bucket_count,
+            max_ciphertext_bytes,
+        )?;
+        validate_initial_replication_bundle_budget(
+            manifest.bucket_count,
+            initial_replication_bucket_estimated_bytes(
+                first.ciphertext.len(),
+                first.ciphertext_sha256.len(),
+                first.bucket_commitment.len(),
+            )?,
+            max_bundle_bytes,
+            "private HNSW ORAM initial replication bundle is oversized",
+        )?;
+        let capacity = usize::try_from(manifest.bucket_count).map_err(|_| {
+            CollectionError::bad_request(
+                "private HNSW ORAM initial replication bucket_count is invalid",
+            )
+        })?;
+        let mut buckets = Vec::new();
+        buckets.try_reserve_exact(capacity).map_err(|_| {
+            CollectionError::service_error(
+                "private HNSW ORAM initial replication allocation failed",
+            )
+        })?;
+        buckets.push(first);
+        for bucket_id in 1..manifest.bucket_count {
+            buckets.push(self.read_bucket(
+                bucket_id,
+                manifest.index_epoch,
+                manifest.bucket_count,
+                max_ciphertext_bytes,
+            )?);
+        }
+        let bundle = PrivateHnswOramUploadBundle {
+            manifest,
+            manifest_signature,
+            buckets,
+        };
+        let commitments = validate_upload_bundle(&bundle, max_ciphertext_bytes)?;
+        let tree = self.read_merkle_tree()?;
+        if tree.leaf_hashes != commitments {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM initial replication Merkle state does not match",
+            ));
+        }
+        Ok(bundle)
     }
 
     fn initial_epoch_status(
@@ -1600,6 +1674,39 @@ fn validate_commit_manifest_context(
         return Err(CollectionError::bad_request(
             "private HNSW ORAM manifest bucket_count does not match commit bucket_count",
         ));
+    }
+    Ok(())
+}
+
+fn initial_replication_bucket_estimated_bytes(
+    ciphertext_bytes: usize,
+    ciphertext_hash_bytes: usize,
+    commitment_bytes: usize,
+) -> CollectionResult<usize> {
+    std::mem::size_of::<PrivateHnswOramBucket>()
+        .checked_add(ciphertext_bytes)
+        .and_then(|size| size.checked_add(ciphertext_hash_bytes))
+        .and_then(|size| size.checked_add(commitment_bytes))
+        .ok_or_else(|| {
+            CollectionError::bad_request(
+                "private HNSW ORAM initial replication bundle size is invalid",
+            )
+        })
+}
+
+fn validate_initial_replication_bundle_budget(
+    bucket_count: u64,
+    estimated_bucket_bytes: usize,
+    max_bundle_bytes: usize,
+    error_message: &'static str,
+) -> CollectionResult<()> {
+    let bucket_count =
+        usize::try_from(bucket_count).map_err(|_| CollectionError::bad_request(error_message))?;
+    let estimated_total = estimated_bucket_bytes
+        .checked_mul(bucket_count)
+        .ok_or_else(|| CollectionError::bad_request(error_message))?;
+    if max_bundle_bytes == 0 || estimated_total > max_bundle_bytes {
+        return Err(CollectionError::bad_request(error_message));
     }
     Ok(())
 }
@@ -3559,6 +3666,18 @@ mod tests {
             store.write_initial_upload_bundle(&bundle, 4096).unwrap(),
             epoch
         );
+        assert_eq!(
+            store
+                .read_initial_upload_bundle(4096, 16 * 1024 * 1024)
+                .unwrap(),
+            bundle,
+        );
+        let oversized = store
+            .read_initial_upload_bundle(4096, 1)
+            .unwrap_err()
+            .to_string();
+        assert!(oversized.contains("initial replication bundle is oversized"));
+        assert!(!oversized.contains(&epoch.root_hash));
 
         let mut mismatched_signature = bundle.clone();
         mismatched_signature.manifest_signature.sig = BASE64URL_NOPAD.encode(&[9; 64]);
@@ -5063,6 +5182,12 @@ mod tests {
                 .unwrap(),
             updated_bucket,
         );
+        let advanced = replica
+            .read_initial_upload_bundle(4096, 16 * 1024 * 1024)
+            .unwrap_err()
+            .to_string();
+        assert!(advanced.contains("requires the manifest epoch"));
+        assert!(!advanced.contains(&new.root_hash));
     }
 
     #[test]
