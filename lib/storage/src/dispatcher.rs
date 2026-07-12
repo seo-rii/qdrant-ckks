@@ -6,6 +6,8 @@ use api::rest::models::HardwareUsage;
 use collection::common::fetch_vectors::CollectionName;
 use collection::config::ShardingMethod;
 use collection::operations::verification::VerificationPass;
+use collection::private_hnsw_oram_store::PrivateHnswOramConsensusWriteback;
+use collection::private_result_oram_store::PrivateResultOramConsensusWriteback;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use common::counter::hardware_accumulator::HwSharedDrain;
 use common::defaults::CONSENSUS_META_OP_WAIT;
@@ -16,6 +18,7 @@ use segment::types::ShardKey;
 use crate::content_manager::collection_meta_ops::AliasOperations;
 use crate::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramEpoch, PrivateOramConsensusEpoch, PrivateOramEpochKey,
+    PrivateOramIndexKind,
 };
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
 use crate::rbac::{Auth, CollectionMultipass};
@@ -298,6 +301,75 @@ impl Dispatcher {
             ));
         }
         Ok(())
+    }
+
+    pub fn private_hnsw_oram_writeback_cas(
+        &self,
+        collection_id: String,
+        vector_name: String,
+        writeback: &PrivateHnswOramConsensusWriteback,
+    ) -> Result<CompareAndSwapPrivateOramEpoch, StorageError> {
+        self.private_oram_writeback_cas(
+            PrivateOramEpochKey {
+                collection_id,
+                index_kind: PrivateOramIndexKind::Hnsw,
+                index_name: vector_name,
+            },
+            writeback.old.index_epoch,
+            &writeback.old.root_hash,
+            writeback.new.index_epoch,
+            &writeback.new.root_hash,
+            &writeback.writeback_digest,
+        )
+    }
+
+    pub fn private_result_oram_writeback_cas(
+        &self,
+        collection_id: String,
+        writeback: &PrivateResultOramConsensusWriteback,
+    ) -> Result<CompareAndSwapPrivateOramEpoch, StorageError> {
+        self.private_oram_writeback_cas(
+            PrivateOramEpochKey {
+                collection_id,
+                index_kind: PrivateOramIndexKind::ResultPayload,
+                index_name: String::new(),
+            },
+            writeback.old.index_epoch,
+            &writeback.old.root_hash,
+            writeback.new.index_epoch,
+            &writeback.new.root_hash,
+            &writeback.writeback_digest,
+        )
+    }
+
+    fn private_oram_writeback_cas(
+        &self,
+        key: PrivateOramEpochKey,
+        old_epoch: u64,
+        old_root_hash: &str,
+        new_epoch: u64,
+        new_root_hash: &str,
+        writeback_digest: &str,
+    ) -> Result<CompareAndSwapPrivateOramEpoch, StorageError> {
+        let expected = self.private_oram_consensus_epoch(&key)?.ok_or_else(|| {
+            StorageError::bad_request(
+                "private ORAM consensus writeback ownership is not initialized",
+            )
+        })?;
+        if expected.index_epoch != old_epoch || expected.root_hash != old_root_hash {
+            return Err(StorageError::bad_request(
+                "private ORAM local writeback does not match consensus epoch/root",
+            ));
+        }
+        Ok(CompareAndSwapPrivateOramEpoch {
+            key,
+            expected: Some(expected),
+            new: PrivateOramConsensusEpoch {
+                index_epoch: new_epoch,
+                root_hash: new_root_hash.to_string(),
+                writeback_digest: Some(writeback_digest.to_string()),
+            },
+        })
     }
 
     /// Coordinates a private ORAM writeback around the replicated epoch/root commit point.

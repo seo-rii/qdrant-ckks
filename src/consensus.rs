@@ -1508,6 +1508,9 @@ mod tests {
     use std::thread;
 
     use collection::operations::vector_params_builder::VectorParamsBuilder;
+    use collection::private_hnsw_oram_store::{
+        PrivateHnswOramConsensusWriteback, PrivateHnswOramEpochState,
+    };
     use collection::shards::channel_service::ChannelService;
     use common::budget::ResourceBudget;
     use segment::types::Distance;
@@ -1814,16 +1817,41 @@ mod tests {
         assert_eq!(stale_abort_count.load(Ordering::SeqCst), 1);
         assert_eq!(stale_finalize_count.load(Ordering::SeqCst), 0);
 
-        let next_private_oram_epoch = PrivateOramConsensusEpoch {
-            index_epoch: 43,
-            root_hash: data_encoding::BASE64URL_NOPAD.encode(&[43; 32]),
-            writeback_digest: Some(data_encoding::BASE64URL_NOPAD.encode(&[11; 32])),
+        let local_writeback = PrivateHnswOramConsensusWriteback {
+            old: PrivateHnswOramEpochState {
+                index_epoch: initial_private_oram_epoch.index_epoch,
+                root_hash: initial_private_oram_epoch.root_hash.clone(),
+            },
+            new: PrivateHnswOramEpochState {
+                index_epoch: 43,
+                root_hash: data_encoding::BASE64URL_NOPAD.encode(&[43; 32]),
+            },
+            writeback_digest: data_encoding::BASE64URL_NOPAD.encode(&[11; 32]),
         };
-        let writeback_operation = CompareAndSwapPrivateOramEpoch {
-            key: private_oram_key.clone(),
-            expected: Some(initial_private_oram_epoch),
-            new: next_private_oram_epoch.clone(),
-        };
+        let writeback_operation = dispatcher
+            .private_hnsw_oram_writeback_cas(
+                private_oram_key.collection_id.clone(),
+                private_oram_key.index_name.clone(),
+                &local_writeback,
+            )
+            .unwrap();
+        assert_eq!(
+            writeback_operation.expected,
+            Some(initial_private_oram_epoch.clone()),
+        );
+        let next_private_oram_epoch = writeback_operation.new.clone();
+        assert_eq!(
+            next_private_oram_epoch.index_epoch,
+            local_writeback.new.index_epoch
+        );
+        assert_eq!(
+            next_private_oram_epoch.root_hash,
+            local_writeback.new.root_hash
+        );
+        assert_eq!(
+            next_private_oram_epoch.writeback_digest.as_deref(),
+            Some(local_writeback.writeback_digest.as_str()),
+        );
         let unexpected_post_prepare_count = Arc::new(AtomicUsize::new(0));
         let unexpected_abort_count_for_prepare_failure = unexpected_post_prepare_count.clone();
         let unexpected_finalize_count_for_prepare_failure = unexpected_post_prepare_count.clone();
@@ -1921,7 +1949,28 @@ mod tests {
             dispatcher
                 .private_oram_consensus_epoch(&private_oram_key)
                 .unwrap(),
-            Some(next_private_oram_epoch),
+            Some(next_private_oram_epoch.clone()),
+        );
+
+        let follow_up_writeback = PrivateHnswOramConsensusWriteback {
+            old: local_writeback.new,
+            new: PrivateHnswOramEpochState {
+                index_epoch: 44,
+                root_hash: data_encoding::BASE64URL_NOPAD.encode(&[44; 32]),
+            },
+            writeback_digest: data_encoding::BASE64URL_NOPAD.encode(&[12; 32]),
+        };
+        let follow_up_operation = dispatcher
+            .private_hnsw_oram_writeback_cas(
+                private_oram_key.collection_id.clone(),
+                private_oram_key.index_name.clone(),
+                &follow_up_writeback,
+            )
+            .unwrap();
+        assert_eq!(follow_up_operation.expected, Some(next_private_oram_epoch),);
+        assert_eq!(
+            follow_up_operation.new.writeback_digest.as_deref(),
+            Some(follow_up_writeback.writeback_digest.as_str()),
         );
     }
 }

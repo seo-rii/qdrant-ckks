@@ -11,6 +11,7 @@ use qdrant_sec::{
     PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
     PrivateHnswOramSignature, PrivateHnswOramUploadBundle, PrivateHnswSignatureVerification,
     private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
+    private_hnsw_oram_writeback_digest, server_private_hnsw_oram_fixed_writeback_bucket_budget,
     validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_upload_bundle,
     validate_private_hnsw_oram_upload_bundle_with_signature,
 };
@@ -55,6 +56,51 @@ impl Debug for PrivateHnswOramStore {
 pub struct PrivateHnswOramEpochState {
     pub index_epoch: u64,
     pub root_hash: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateHnswOramConsensusWriteback {
+    pub old: PrivateHnswOramEpochState,
+    pub new: PrivateHnswOramEpochState,
+    pub writeback_digest: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateHnswOramWritebackBatch {
+    pub version: u16,
+    pub old: PrivateHnswOramEpochState,
+    pub new: PrivateHnswOramEpochState,
+    pub bucket_count: u64,
+    pub updated_buckets: Vec<PrivateHnswOramBucket>,
+    pub commit_signature: PrivateHnswOramSignature,
+}
+
+impl Debug for PrivateHnswOramWritebackBatch {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramWritebackBatch")
+            .field("version", &self.version)
+            .field("old_epoch", &self.old.index_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_epoch", &self.new.index_epoch)
+            .field("new_root_hash", &"[redacted]")
+            .field("bucket_count", &"[redacted]")
+            .field("updated_bucket_count", &"[redacted]")
+            .field("commit_signature", &"[redacted]")
+            .finish()
+    }
+}
+
+impl Debug for PrivateHnswOramConsensusWriteback {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramConsensusWriteback")
+            .field("old_epoch", &self.old.index_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_epoch", &self.new.index_epoch)
+            .field("new_root_hash", &"[redacted]")
+            .field("writeback_digest", &"[redacted]")
+            .finish()
+    }
 }
 
 impl Debug for PrivateHnswOramEpochState {
@@ -538,6 +584,7 @@ impl PrivateHnswOramStore {
         self.ensure_current_epoch_matches(old)?;
         let (manifest, _) = self.read_manifest()?;
         validate_commit_manifest_context(&manifest, old, bucket_count)?;
+        validate_fixed_writeback_budget(&manifest, updated_buckets.len())?;
         for bucket in updated_buckets {
             validate_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
             validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
@@ -603,13 +650,36 @@ impl PrivateHnswOramStore {
         max_ciphertext_bytes: usize,
         commit_signature: &PrivateHnswOramSignature,
         signature_verification: PrivateHnswSignatureVerification<'_>,
-    ) -> CollectionResult<()> {
+    ) -> CollectionResult<PrivateHnswOramConsensusWriteback> {
+        self.prepare_durable_writeback_with_signature_and_consensus(
+            old,
+            new,
+            bucket_count,
+            updated_buckets,
+            max_ciphertext_bytes,
+            commit_signature,
+            signature_verification,
+            None,
+        )
+    }
+
+    fn prepare_durable_writeback_with_signature_and_consensus(
+        &self,
+        old: &PrivateHnswOramEpochState,
+        new: &PrivateHnswOramEpochState,
+        bucket_count: u64,
+        updated_buckets: &[PrivateHnswOramBucket],
+        max_ciphertext_bytes: usize,
+        commit_signature: &PrivateHnswOramSignature,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+        expected_consensus_writeback: Option<&PrivateHnswOramConsensusWriteback>,
+    ) -> CollectionResult<PrivateHnswOramConsensusWriteback> {
         self.ensure_layout()?;
         let pending_path = self.pending_writeback_path();
         if pending_path.exists() {
             let pending: PrivateHnswPendingWriteback =
                 read_json_private_file(&pending_path, MAX_PENDING_WRITEBACK_BYTES)?;
-            self.validate_pending_writeback(
+            let consensus_writeback = self.validate_pending_writeback(
                 &pending,
                 max_ciphertext_bytes,
                 signature_verification,
@@ -624,7 +694,13 @@ impl PrivateHnswOramStore {
                     "private HNSW ORAM pending writeback does not match requested commit",
                 ));
             }
-            return Ok(());
+            if expected_consensus_writeback.is_some_and(|expected| expected != &consensus_writeback)
+            {
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM replicated writeback does not match consensus",
+                ));
+            }
+            return Ok(consensus_writeback);
         }
 
         if updated_buckets.is_empty() {
@@ -639,6 +715,7 @@ impl PrivateHnswOramStore {
         }
         self.ensure_current_epoch_matches(old)?;
         let (manifest, _) = self.read_manifest()?;
+        validate_fixed_writeback_budget(&manifest, updated_buckets.len())?;
         let updated_bucket_refs = updated_buckets
             .iter()
             .map(|bucket| PrivateHnswOramCommitBucketRef {
@@ -646,25 +723,38 @@ impl PrivateHnswOramStore {
                 ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
             })
             .collect::<Vec<_>>();
+        let signature_input = PrivateHnswOramCommitSignatureInput {
+            collection_id: &manifest.collection_id,
+            vector_name: &manifest.vector_name,
+            key_id: &manifest.key_id,
+            rk_id: &manifest.rk_id,
+            rk_epoch: manifest.rk_epoch,
+            old_epoch: old.index_epoch,
+            new_epoch: new.index_epoch,
+            old_root_hash: &old.root_hash,
+            new_root_hash: &new.root_hash,
+            updated_buckets: &updated_bucket_refs,
+            signature_alg: &commit_signature.alg,
+            signature_key_id: &commit_signature.key_id,
+        };
         validate_private_hnsw_oram_commit_signature(
-            PrivateHnswOramCommitSignatureInput {
-                collection_id: &manifest.collection_id,
-                vector_name: &manifest.vector_name,
-                key_id: &manifest.key_id,
-                rk_id: &manifest.rk_id,
-                rk_epoch: manifest.rk_epoch,
-                old_epoch: old.index_epoch,
-                new_epoch: new.index_epoch,
-                old_root_hash: &old.root_hash,
-                new_root_hash: &new.root_hash,
-                updated_buckets: &updated_bucket_refs,
-                signature_alg: &commit_signature.alg,
-                signature_key_id: &commit_signature.key_id,
-            },
+            signature_input,
             &commit_signature.sig,
             signature_verification,
         )
         .map_err(private_hnsw_oram_error)?;
+        let writeback_digest =
+            private_hnsw_oram_writeback_digest(signature_input).map_err(private_hnsw_oram_error)?;
+        let consensus_writeback = PrivateHnswOramConsensusWriteback {
+            old: old.clone(),
+            new: new.clone(),
+            writeback_digest,
+        };
+        if expected_consensus_writeback.is_some_and(|expected| expected != &consensus_writeback) {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM replicated writeback does not match consensus",
+            ));
+        }
         validate_commit_manifest_context(&manifest, old, bucket_count)?;
         for bucket in updated_buckets {
             validate_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
@@ -688,7 +778,8 @@ impl PrivateHnswOramStore {
             merkle_tree: prepared_merkle_commit.tree,
             commit_signature: commit_signature.clone(),
         };
-        write_json_atomic(&self.root, &self.temp_dir(), &pending_path, &pending)
+        write_json_atomic(&self.root, &self.temp_dir(), &pending_path, &pending)?;
+        Ok(consensus_writeback)
     }
 
     pub fn commit_prepared_writeback_with_signature(
@@ -758,6 +849,77 @@ impl PrivateHnswOramStore {
         }
     }
 
+    pub fn pending_writeback_consensus_transition_with_signature(
+        &self,
+        max_ciphertext_bytes: usize,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+    ) -> CollectionResult<Option<PrivateHnswOramConsensusWriteback>> {
+        if !self.pending_writeback_exists()? {
+            return Ok(None);
+        }
+        let pending: PrivateHnswPendingWriteback =
+            read_json_private_file(&self.pending_writeback_path(), MAX_PENDING_WRITEBACK_BYTES)?;
+        self.validate_pending_writeback(&pending, max_ciphertext_bytes, signature_verification)
+            .map(Some)
+    }
+
+    pub fn pending_writeback_replication_batch_with_signature(
+        &self,
+        max_ciphertext_bytes: usize,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+    ) -> CollectionResult<
+        Option<(
+            PrivateHnswOramWritebackBatch,
+            PrivateHnswOramConsensusWriteback,
+        )>,
+    > {
+        if !self.pending_writeback_exists()? {
+            return Ok(None);
+        }
+        let pending: PrivateHnswPendingWriteback =
+            read_json_private_file(&self.pending_writeback_path(), MAX_PENDING_WRITEBACK_BYTES)?;
+        let consensus_writeback = self.validate_pending_writeback(
+            &pending,
+            max_ciphertext_bytes,
+            signature_verification,
+        )?;
+        Ok(Some((
+            PrivateHnswOramWritebackBatch {
+                version: pending.version,
+                old: pending.old,
+                new: pending.new,
+                bucket_count: pending.bucket_count,
+                updated_buckets: pending.updated_buckets,
+                commit_signature: pending.commit_signature,
+            },
+            consensus_writeback,
+        )))
+    }
+
+    pub fn prepare_replica_writeback_with_signature(
+        &self,
+        batch: &PrivateHnswOramWritebackBatch,
+        expected_consensus_writeback: &PrivateHnswOramConsensusWriteback,
+        max_ciphertext_bytes: usize,
+        signature_verification: PrivateHnswSignatureVerification<'_>,
+    ) -> CollectionResult<PrivateHnswOramConsensusWriteback> {
+        if batch.version != 1 {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM replicated writeback is invalid",
+            ));
+        }
+        self.prepare_durable_writeback_with_signature_and_consensus(
+            &batch.old,
+            &batch.new,
+            batch.bucket_count,
+            &batch.updated_buckets,
+            max_ciphertext_bytes,
+            &batch.commit_signature,
+            signature_verification,
+            Some(expected_consensus_writeback),
+        )
+    }
+
     pub fn recover_pending_writeback_with_signature(
         &self,
         max_ciphertext_bytes: usize,
@@ -818,7 +980,7 @@ impl PrivateHnswOramStore {
         pending: &PrivateHnswPendingWriteback,
         max_ciphertext_bytes: usize,
         signature_verification: PrivateHnswSignatureVerification<'_>,
-    ) -> CollectionResult<()> {
+    ) -> CollectionResult<PrivateHnswOramConsensusWriteback> {
         if pending.version != 1 || pending.updated_buckets.is_empty() {
             return Err(CollectionError::bad_request(
                 "private HNSW ORAM pending writeback is invalid",
@@ -834,6 +996,7 @@ impl PrivateHnswOramStore {
 
         let (manifest, _) = self.read_manifest()?;
         validate_commit_manifest_context(&manifest, &pending.old, pending.bucket_count)?;
+        validate_fixed_writeback_budget(&manifest, pending.updated_buckets.len())?;
         let mut seen_bucket_ids = BTreeSet::new();
         for bucket in &pending.updated_buckets {
             if !seen_bucket_ids.insert(bucket.bucket_id) {
@@ -880,25 +1043,33 @@ impl PrivateHnswOramStore {
                 ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
             })
             .collect::<Vec<_>>();
+        let signature_input = PrivateHnswOramCommitSignatureInput {
+            collection_id: &manifest.collection_id,
+            vector_name: &manifest.vector_name,
+            key_id: &manifest.key_id,
+            rk_id: &manifest.rk_id,
+            rk_epoch: manifest.rk_epoch,
+            old_epoch: pending.old.index_epoch,
+            new_epoch: pending.new.index_epoch,
+            old_root_hash: &pending.old.root_hash,
+            new_root_hash: &pending.new.root_hash,
+            updated_buckets: &updated_bucket_refs,
+            signature_alg: &pending.commit_signature.alg,
+            signature_key_id: &pending.commit_signature.key_id,
+        };
         validate_private_hnsw_oram_commit_signature(
-            PrivateHnswOramCommitSignatureInput {
-                collection_id: &manifest.collection_id,
-                vector_name: &manifest.vector_name,
-                key_id: &manifest.key_id,
-                rk_id: &manifest.rk_id,
-                rk_epoch: manifest.rk_epoch,
-                old_epoch: pending.old.index_epoch,
-                new_epoch: pending.new.index_epoch,
-                old_root_hash: &pending.old.root_hash,
-                new_root_hash: &pending.new.root_hash,
-                updated_buckets: &updated_bucket_refs,
-                signature_alg: &pending.commit_signature.alg,
-                signature_key_id: &pending.commit_signature.key_id,
-            },
+            signature_input,
             &pending.commit_signature.sig,
             signature_verification,
         )
-        .map_err(private_hnsw_oram_error)
+        .map_err(private_hnsw_oram_error)?;
+        let writeback_digest =
+            private_hnsw_oram_writeback_digest(signature_input).map_err(private_hnsw_oram_error)?;
+        Ok(PrivateHnswOramConsensusWriteback {
+            old: pending.old.clone(),
+            new: pending.new.clone(),
+            writeback_digest,
+        })
     }
 
     pub fn merkle_root_for_commitments(commitments: &[String]) -> CollectionResult<String> {
@@ -1330,6 +1501,21 @@ fn validate_commit_manifest_context(
     if manifest.bucket_count != bucket_count {
         return Err(CollectionError::bad_request(
             "private HNSW ORAM manifest bucket_count does not match commit bucket_count",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_fixed_writeback_budget(
+    manifest: &PrivateHnswOramManifest,
+    updated_bucket_count: usize,
+) -> CollectionResult<()> {
+    let max_updated_buckets =
+        server_private_hnsw_oram_fixed_writeback_bucket_budget(&manifest.oram)
+            .map_err(private_hnsw_oram_error)?;
+    if updated_bucket_count > max_updated_buckets {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM commit exceeds fixed writeback budget",
         ));
     }
     Ok(())
@@ -4515,7 +4701,7 @@ mod tests {
                 public_key: public_key.as_ref(),
             };
 
-            store
+            let consensus_writeback = store
                 .prepare_durable_writeback_with_signature(
                     &old,
                     &new,
@@ -4526,6 +4712,47 @@ mod tests {
                     signature_verification(),
                 )
                 .unwrap();
+            assert_eq!(consensus_writeback.old, old);
+            assert_eq!(consensus_writeback.new, new);
+            assert_eq!(
+                BASE64URL_NOPAD
+                    .decode(consensus_writeback.writeback_digest.as_bytes())
+                    .unwrap()
+                    .len(),
+                32,
+            );
+            assert_eq!(
+                store
+                    .pending_writeback_consensus_transition_with_signature(
+                        4096,
+                        signature_verification(),
+                    )
+                    .unwrap(),
+                Some(consensus_writeback.clone()),
+            );
+            assert_eq!(
+                store
+                    .prepare_durable_writeback_with_signature(
+                        &old,
+                        &new,
+                        bundle.bucket_count(),
+                        std::slice::from_ref(&updated_bucket),
+                        4096,
+                        &signature,
+                        signature_verification(),
+                    )
+                    .unwrap(),
+                consensus_writeback,
+            );
+            let rendered = format!("{consensus_writeback:?}");
+            for sentinel in [
+                old.root_hash.as_str(),
+                new.root_hash.as_str(),
+                consensus_writeback.writeback_digest.as_str(),
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
             assert_eq!(store.read_current_epoch().unwrap(), old);
             assert!(store.pending_writeback_path().exists());
 
@@ -4587,7 +4814,122 @@ mod tests {
             assert_eq!(proof.leaves[0].leaf_hash, updated_bucket.bucket_commitment);
             assert!(!store.pending_writeback_path().exists());
             assert!(!store.pending_writeback_exists().unwrap());
+            assert_eq!(
+                store
+                    .pending_writeback_consensus_transition_with_signature(
+                        4096,
+                        signature_verification(),
+                    )
+                    .unwrap(),
+                None,
+            );
         }
+    }
+
+    #[test]
+    fn replicated_signed_writeback_is_bound_to_consensus_before_prepare() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[35; 32]).unwrap();
+        let public_key = key_pair.public_key();
+        let (bundle, updated_bucket, new, signature) = fixture_signed_commit_update(&key_pair);
+        let source_temp = TempDir::new().unwrap();
+        let replica_temp = TempDir::new().unwrap();
+        let source = fixture_store(&source_temp);
+        let replica = fixture_store(&replica_temp);
+        let old = source.write_initial_upload_bundle(&bundle, 4096).unwrap();
+        assert_eq!(
+            replica.write_initial_upload_bundle(&bundle, 4096).unwrap(),
+            old,
+        );
+        let signature_verification = || PrivateHnswSignatureVerification {
+            expected_key_id: "tenant-a/private-hnsw-signing-v1",
+            public_key: public_key.as_ref(),
+        };
+
+        let prepared = source
+            .prepare_durable_writeback_with_signature(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                4096,
+                &signature,
+                signature_verification(),
+            )
+            .unwrap();
+        let (batch, exported) = source
+            .pending_writeback_replication_batch_with_signature(4096, signature_verification())
+            .unwrap()
+            .unwrap();
+        assert_eq!(exported, prepared);
+
+        let rendered = format!("{batch:?}");
+        for sentinel in [
+            old.root_hash.as_str(),
+            new.root_hash.as_str(),
+            updated_bucket.ciphertext.as_str(),
+            signature.sig.as_str(),
+        ] {
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
+
+        let mut oversized_batch = batch.clone();
+        let fixed_budget =
+            server_private_hnsw_oram_fixed_writeback_bucket_budget(&bundle.manifest.oram).unwrap();
+        oversized_batch.updated_buckets =
+            vec![updated_bucket.clone(); fixed_budget.saturating_add(1)];
+        let oversized = replica
+            .prepare_replica_writeback_with_signature(
+                &oversized_batch,
+                &exported,
+                4096,
+                signature_verification(),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(oversized.contains("exceeds fixed writeback budget"));
+        assert!(!oversized.contains(&updated_bucket.ciphertext));
+        assert!(!replica.pending_writeback_exists().unwrap());
+
+        let mut conflicting_consensus = exported.clone();
+        conflicting_consensus.writeback_digest = BASE64URL_NOPAD.encode(&[99; 32]);
+        let mismatch = replica
+            .prepare_replica_writeback_with_signature(
+                &batch,
+                &conflicting_consensus,
+                4096,
+                signature_verification(),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(mismatch.contains("does not match consensus"));
+        assert!(!mismatch.contains(&conflicting_consensus.writeback_digest));
+        assert!(!replica.pending_writeback_exists().unwrap());
+        assert_eq!(replica.read_current_epoch().unwrap(), old);
+
+        let replicated = replica
+            .prepare_replica_writeback_with_signature(
+                &batch,
+                &exported,
+                4096,
+                signature_verification(),
+            )
+            .unwrap();
+        assert_eq!(replicated, exported);
+        assert_eq!(replica.read_current_epoch().unwrap(), old);
+        assert!(replica.pending_writeback_exists().unwrap());
+
+        assert_eq!(
+            replica
+                .commit_prepared_writeback_with_signature(4096, signature_verification())
+                .unwrap(),
+            new,
+        );
+        assert_eq!(
+            replica
+                .read_bucket(0, new.index_epoch, bundle.bucket_count(), 4096)
+                .unwrap(),
+            updated_bucket,
+        );
     }
 
     #[test]

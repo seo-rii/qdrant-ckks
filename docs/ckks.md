@@ -103,6 +103,19 @@ is an internal recovery boundary only; distributed private ORAM routes remain
 closed until encrypted bucket replication and ownership are coupled to the
 same operation.
 
+Each collection-local HNSW/result store can export a validated replication
+batch from its owner-signed durable journal. The batch contains only old/new
+epoch state, encrypted buckets, bucket count, and the commit signature; Merkle
+state is not transported. A receiving store enforces the manifest-derived
+fixed writeback budget, derives the canonical writeback digest, requires an
+exact match with the proposed consensus transition before creating a journal,
+then recomputes the new Merkle tree from its own old tree. The Dispatcher CAS
+builder also reads the current Raft record so the previous epoch's optional
+digest remains part of the expected state. These are collection/storage
+primitives, not a replication transport: distributed routes remain closed
+until peer fan-out, acknowledgement, ownership, and recovery orchestration use
+them end to end.
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:
