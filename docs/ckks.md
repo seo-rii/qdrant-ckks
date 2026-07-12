@@ -154,6 +154,18 @@ The internal service applies the configured gRPC request-size cap before
 protobuf decoding as well as the provider-specific bucket and aggregate bounds
 inside the handler.
 
+Owner-side transport is available through `ChannelService` and the Dispatcher.
+Provider-specific request builders require the encrypted batch and consensus
+transition to match before serialization. Dispatcher derives the exact remote
+peer set, sends prepare concurrently, waits for every peer call to finish even
+when one fails, binds each acknowledgement to its peer and canonical digest,
+then uses the existing replicated coordinator for Raft CAS and remote-before-
+local finalize. Abort and finalize fan-out likewise attempts every target;
+finalize requires `completed=true`, while an abort no-op is idempotent. Peer RPC
+errors include only the peer id and never reflect collection identity,
+ciphertext, root, or digest. The client commit route is not yet switched to this
+owner-side coordinator, so distributed private ORAM APIs remain closed.
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:

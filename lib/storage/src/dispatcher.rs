@@ -4,12 +4,22 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use api::grpc::qdrant::{
+    CompletePrivateOramWritebackRequest, PreparePrivateOramWritebackRequest,
+    PrivateOramReplicationBucket, PrivateOramReplicationEpochState,
+    PrivateOramReplicationIndexKind, PrivateOramReplicationSignature,
+    PrivateOramReplicationTransition,
+};
 use api::rest::models::HardwareUsage;
 use collection::common::fetch_vectors::CollectionName;
 use collection::config::ShardingMethod;
 use collection::operations::verification::VerificationPass;
-use collection::private_hnsw_oram_store::PrivateHnswOramConsensusWriteback;
-use collection::private_result_oram_store::PrivateResultOramConsensusWriteback;
+use collection::private_hnsw_oram_store::{
+    PrivateHnswOramConsensusWriteback, PrivateHnswOramWritebackBatch,
+};
+use collection::private_result_oram_store::{
+    PrivateResultOramConsensusWriteback, PrivateResultOramWritebackBatch,
+};
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::PeerId;
 use common::counter::hardware_accumulator::HwSharedDrain;
@@ -530,6 +540,253 @@ impl Dispatcher {
         Ok(peers)
     }
 
+    pub async fn prepare_private_hnsw_oram_replicas(
+        &self,
+        replica_peers: &BTreeSet<PeerId>,
+        collection_name: &str,
+        collection_id: &str,
+        vector_name: &str,
+        batch: &PrivateHnswOramWritebackBatch,
+        transition: &PrivateHnswOramConsensusWriteback,
+    ) -> Result<Vec<PrivateOramReplicaPrepareAck>, StorageError> {
+        self.prepare_private_oram_replicas(
+            replica_peers,
+            private_hnsw_oram_prepare_request(
+                collection_name,
+                collection_id,
+                vector_name,
+                batch,
+                transition,
+            )?,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn coordinate_private_hnsw_oram_writeback<PrepareLocal, AbortLocal, FinalizeLocal>(
+        &self,
+        collection_name: CollectionName,
+        collection_id: String,
+        vector_name: String,
+        batch: PrivateHnswOramWritebackBatch,
+        transition: PrivateHnswOramConsensusWriteback,
+        wait_timeout: Option<Duration>,
+        prepare_local: PrepareLocal,
+        abort_local: AbortLocal,
+        finalize_local: FinalizeLocal,
+    ) -> Result<(), StorageError>
+    where
+        PrepareLocal: FnOnce() -> Result<(), StorageError>,
+        AbortLocal: FnOnce() -> Result<(), StorageError>,
+        FinalizeLocal: FnOnce() -> Result<(), StorageError>,
+    {
+        let operation = self.private_hnsw_oram_writeback_cas(
+            collection_id.clone(),
+            vector_name.clone(),
+            &transition,
+        )?;
+        let mut replica_peers = self
+            .private_oram_replication_peers(&collection_name)
+            .await?;
+        replica_peers.remove(&self.toc.this_peer_id);
+        let completion_request = private_oram_complete_request(
+            &collection_name,
+            &collection_id,
+            PrivateOramReplicationIndexKind::Hnsw,
+            &vector_name,
+            transition.old.index_epoch,
+            &transition.old.root_hash,
+            transition.new.index_epoch,
+            &transition.new.root_hash,
+            &transition.writeback_digest,
+            &batch.commit_signature.key_id,
+        )?;
+        let abort_request = completion_request.clone();
+        self.coordinate_replicated_private_oram_writeback(
+            operation,
+            &replica_peers,
+            wait_timeout,
+            prepare_local,
+            || {
+                self.prepare_private_hnsw_oram_replicas(
+                    &replica_peers,
+                    &collection_name,
+                    &collection_id,
+                    &vector_name,
+                    &batch,
+                    &transition,
+                )
+            },
+            abort_local,
+            || self.complete_private_oram_replicas(&replica_peers, abort_request, true),
+            finalize_local,
+            || self.complete_private_oram_replicas(&replica_peers, completion_request, false),
+        )
+        .await
+    }
+
+    pub async fn prepare_private_result_oram_replicas(
+        &self,
+        replica_peers: &BTreeSet<PeerId>,
+        collection_name: &str,
+        collection_id: &str,
+        batch: &PrivateResultOramWritebackBatch,
+        transition: &PrivateResultOramConsensusWriteback,
+    ) -> Result<Vec<PrivateOramReplicaPrepareAck>, StorageError> {
+        self.prepare_private_oram_replicas(
+            replica_peers,
+            private_result_oram_prepare_request(collection_name, collection_id, batch, transition)?,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn coordinate_private_result_oram_writeback<PrepareLocal, AbortLocal, FinalizeLocal>(
+        &self,
+        collection_name: CollectionName,
+        collection_id: String,
+        batch: PrivateResultOramWritebackBatch,
+        transition: PrivateResultOramConsensusWriteback,
+        wait_timeout: Option<Duration>,
+        prepare_local: PrepareLocal,
+        abort_local: AbortLocal,
+        finalize_local: FinalizeLocal,
+    ) -> Result<(), StorageError>
+    where
+        PrepareLocal: FnOnce() -> Result<(), StorageError>,
+        AbortLocal: FnOnce() -> Result<(), StorageError>,
+        FinalizeLocal: FnOnce() -> Result<(), StorageError>,
+    {
+        let operation =
+            self.private_result_oram_writeback_cas(collection_id.clone(), &transition)?;
+        let mut replica_peers = self
+            .private_oram_replication_peers(&collection_name)
+            .await?;
+        replica_peers.remove(&self.toc.this_peer_id);
+        let completion_request = private_oram_complete_request(
+            &collection_name,
+            &collection_id,
+            PrivateOramReplicationIndexKind::Result,
+            "",
+            transition.old.index_epoch,
+            &transition.old.root_hash,
+            transition.new.index_epoch,
+            &transition.new.root_hash,
+            &transition.writeback_digest,
+            &batch.commit_signature.key_id,
+        )?;
+        let abort_request = completion_request.clone();
+        self.coordinate_replicated_private_oram_writeback(
+            operation,
+            &replica_peers,
+            wait_timeout,
+            prepare_local,
+            || {
+                self.prepare_private_result_oram_replicas(
+                    &replica_peers,
+                    &collection_name,
+                    &collection_id,
+                    &batch,
+                    &transition,
+                )
+            },
+            abort_local,
+            || self.complete_private_oram_replicas(&replica_peers, abort_request, true),
+            finalize_local,
+            || self.complete_private_oram_replicas(&replica_peers, completion_request, false),
+        )
+        .await
+    }
+
+    async fn prepare_private_oram_replicas(
+        &self,
+        replica_peers: &BTreeSet<PeerId>,
+        request: PreparePrivateOramWritebackRequest,
+    ) -> Result<Vec<PrivateOramReplicaPrepareAck>, StorageError> {
+        let channel_service = self.toc.get_channel_service();
+        let mut pending = replica_peers
+            .iter()
+            .map(|peer_id| {
+                let peer_id = *peer_id;
+                let request = request.clone();
+                async move {
+                    channel_service
+                        .prepare_private_oram_writeback(peer_id, request)
+                        .await
+                        .map(|writeback_digest| PrivateOramReplicaPrepareAck {
+                            peer_id,
+                            writeback_digest,
+                        })
+                }
+            })
+            .collect::<FuturesUnordered<_>>();
+        let mut acknowledgements = Vec::with_capacity(replica_peers.len());
+        let mut first_error = None;
+        while let Some(result) = pending.next().await {
+            match result {
+                Ok(acknowledgement) => acknowledgements.push(acknowledgement),
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error.into());
+        }
+        Ok(acknowledgements)
+    }
+
+    pub async fn complete_private_oram_replicas(
+        &self,
+        replica_peers: &BTreeSet<PeerId>,
+        request: CompletePrivateOramWritebackRequest,
+        abort: bool,
+    ) -> Result<(), StorageError> {
+        let channel_service = self.toc.get_channel_service();
+        let mut pending = replica_peers
+            .iter()
+            .map(|peer_id| {
+                let peer_id = *peer_id;
+                let request = request.clone();
+                async move {
+                    let result = if abort {
+                        channel_service
+                            .abort_private_oram_writeback(peer_id, request)
+                            .await
+                    } else {
+                        channel_service
+                            .finalize_private_oram_writeback(peer_id, request)
+                            .await
+                    };
+                    result.and_then(|completed| {
+                        if abort || completed {
+                            Ok(())
+                        } else {
+                            Err(
+                                collection::operations::types::CollectionError::service_error(
+                                    format!(
+                                        "private ORAM finalize was not completed on peer {peer_id}"
+                                    ),
+                                ),
+                            )
+                        }
+                    })
+                }
+            })
+            .collect::<FuturesUnordered<_>>();
+        let mut first_error = None;
+        while let Some(result) = pending.next().await {
+            if let Err(error) = result
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
     pub fn private_oram_consensus_epoch(
         &self,
         key: &PrivateOramEpochKey,
@@ -643,6 +900,157 @@ fn validate_private_oram_replica_prepare_acks(
         ));
     }
     Ok(())
+}
+
+pub fn private_hnsw_oram_prepare_request(
+    collection_name: &str,
+    collection_id: &str,
+    vector_name: &str,
+    batch: &PrivateHnswOramWritebackBatch,
+    transition: &PrivateHnswOramConsensusWriteback,
+) -> Result<PreparePrivateOramWritebackRequest, StorageError> {
+    if batch.old != transition.old || batch.new != transition.new {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM replication batch transition does not match",
+        ));
+    }
+    validate_private_oram_writeback_digest(&transition.writeback_digest)?;
+    Ok(PreparePrivateOramWritebackRequest {
+        collection_name: collection_name.to_string(),
+        collection_id: collection_id.to_string(),
+        index_kind: PrivateOramReplicationIndexKind::Hnsw as i32,
+        vector_name: vector_name.to_string(),
+        version: u32::from(batch.version),
+        transition: Some(private_oram_transition(
+            batch.old.index_epoch,
+            &batch.old.root_hash,
+            batch.new.index_epoch,
+            &batch.new.root_hash,
+            &transition.writeback_digest,
+        )),
+        bucket_count: batch.bucket_count,
+        updated_buckets: batch
+            .updated_buckets
+            .iter()
+            .map(|bucket| PrivateOramReplicationBucket {
+                version: u32::from(bucket.version),
+                bucket_id: bucket.bucket_id,
+                index_epoch: bucket.index_epoch,
+                ciphertext: bucket.ciphertext.clone(),
+                ciphertext_sha256: bucket.ciphertext_sha256.clone(),
+                bucket_commitment: bucket.bucket_commitment.clone(),
+            })
+            .collect(),
+        commit_signature: Some(PrivateOramReplicationSignature {
+            alg: batch.commit_signature.alg.clone(),
+            key_id: batch.commit_signature.key_id.clone(),
+            sig: batch.commit_signature.sig.clone(),
+        }),
+    })
+}
+
+pub fn private_result_oram_prepare_request(
+    collection_name: &str,
+    collection_id: &str,
+    batch: &PrivateResultOramWritebackBatch,
+    transition: &PrivateResultOramConsensusWriteback,
+) -> Result<PreparePrivateOramWritebackRequest, StorageError> {
+    if batch.old != transition.old || batch.new != transition.new {
+        return Err(StorageError::bad_request(
+            "private result ORAM replication batch transition does not match",
+        ));
+    }
+    validate_private_oram_writeback_digest(&transition.writeback_digest)?;
+    Ok(PreparePrivateOramWritebackRequest {
+        collection_name: collection_name.to_string(),
+        collection_id: collection_id.to_string(),
+        index_kind: PrivateOramReplicationIndexKind::Result as i32,
+        vector_name: String::new(),
+        version: u32::from(batch.version),
+        transition: Some(private_oram_transition(
+            batch.old.index_epoch,
+            &batch.old.root_hash,
+            batch.new.index_epoch,
+            &batch.new.root_hash,
+            &transition.writeback_digest,
+        )),
+        bucket_count: batch.bucket_count,
+        updated_buckets: batch
+            .updated_buckets
+            .iter()
+            .map(|bucket| PrivateOramReplicationBucket {
+                version: u32::from(bucket.version),
+                bucket_id: bucket.bucket_id,
+                index_epoch: bucket.index_epoch,
+                ciphertext: bucket.ciphertext.clone(),
+                ciphertext_sha256: bucket.ciphertext_sha256.clone(),
+                bucket_commitment: bucket.bucket_commitment.clone(),
+            })
+            .collect(),
+        commit_signature: Some(PrivateOramReplicationSignature {
+            alg: batch.commit_signature.alg.clone(),
+            key_id: batch.commit_signature.key_id.clone(),
+            sig: batch.commit_signature.sig.clone(),
+        }),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn private_oram_complete_request(
+    collection_name: &str,
+    collection_id: &str,
+    index_kind: PrivateOramReplicationIndexKind,
+    vector_name: &str,
+    old_epoch: u64,
+    old_root_hash: &str,
+    new_epoch: u64,
+    new_root_hash: &str,
+    writeback_digest: &str,
+    signing_key_id: &str,
+) -> Result<CompletePrivateOramWritebackRequest, StorageError> {
+    if index_kind == PrivateOramReplicationIndexKind::Unspecified
+        || (index_kind == PrivateOramReplicationIndexKind::Hnsw && vector_name.is_empty())
+        || (index_kind == PrivateOramReplicationIndexKind::Result && !vector_name.is_empty())
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM replication completion identity is invalid",
+        ));
+    }
+    validate_private_oram_writeback_digest(writeback_digest)?;
+    Ok(CompletePrivateOramWritebackRequest {
+        collection_name: collection_name.to_string(),
+        collection_id: collection_id.to_string(),
+        index_kind: index_kind as i32,
+        vector_name: vector_name.to_string(),
+        transition: Some(private_oram_transition(
+            old_epoch,
+            old_root_hash,
+            new_epoch,
+            new_root_hash,
+            writeback_digest,
+        )),
+        signing_key_id: signing_key_id.to_string(),
+    })
+}
+
+fn private_oram_transition(
+    old_epoch: u64,
+    old_root_hash: &str,
+    new_epoch: u64,
+    new_root_hash: &str,
+    writeback_digest: &str,
+) -> PrivateOramReplicationTransition {
+    PrivateOramReplicationTransition {
+        old: Some(PrivateOramReplicationEpochState {
+            index_epoch: old_epoch,
+            root_hash: old_root_hash.to_string(),
+        }),
+        new: Some(PrivateOramReplicationEpochState {
+            index_epoch: new_epoch,
+            root_hash: new_root_hash.to_string(),
+        }),
+        writeback_digest: writeback_digest.to_string(),
+    }
 }
 
 fn derive_private_oram_replication_peers(
@@ -786,5 +1194,47 @@ mod tests {
             .to_string();
         assert!(local_missing.contains("identical shard replica membership"));
         assert!(!local_missing.contains("11"));
+    }
+
+    #[test]
+    fn private_oram_completion_wire_request_preserves_exact_transition() {
+        let digest = BASE64URL_NOPAD.encode(&[47; 32]);
+        let request = private_oram_complete_request(
+            "docs",
+            "collection-id",
+            PrivateOramReplicationIndexKind::Hnsw,
+            "text",
+            42,
+            "old-root",
+            43,
+            "new-root",
+            &digest,
+            "owner-key",
+        )
+        .unwrap();
+        assert_eq!(
+            request.index_kind,
+            PrivateOramReplicationIndexKind::Hnsw as i32
+        );
+        assert_eq!(request.vector_name, "text");
+        assert_eq!(request.transition.unwrap().writeback_digest, digest,);
+
+        let error = private_oram_complete_request(
+            "docs",
+            "collection-id",
+            PrivateOramReplicationIndexKind::Result,
+            "text",
+            42,
+            "old-root",
+            43,
+            "new-root",
+            &BASE64URL_NOPAD.encode(&[48; 32]),
+            "owner-key",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("completion identity is invalid"));
+        assert!(!error.contains("old-root"));
+        assert!(!error.contains("new-root"));
     }
 }

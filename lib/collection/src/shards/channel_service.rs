@@ -2,8 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use api::grpc::qdrant::WaitOnConsensusCommitRequest;
 use api::grpc::qdrant::qdrant_internal_client::QdrantInternalClient;
+use api::grpc::qdrant::{
+    CompletePrivateOramWritebackRequest, PreparePrivateOramWritebackRequest,
+    WaitOnConsensusCommitRequest,
+};
 use api::grpc::transport_channel_pool::{AddTimeout, TransportChannelPool};
 use futures::Future;
 use futures::future::try_join_all;
@@ -148,6 +151,73 @@ impl ChannelService {
             )));
         }
         Ok(())
+    }
+
+    pub async fn prepare_private_oram_writeback(
+        &self,
+        peer_id: PeerId,
+        request: PreparePrivateOramWritebackRequest,
+    ) -> CollectionResult<String> {
+        self.with_qdrant_client(peer_id, |mut client| {
+            let request = request.clone();
+            async move {
+                client
+                    .prepare_private_oram_writeback(Request::new(request))
+                    .await
+            }
+        })
+        .await
+        .map(|response| response.into_inner().writeback_digest)
+        .map_err(|_| {
+            CollectionError::service_error(format!("private ORAM prepare failed on peer {peer_id}"))
+        })
+    }
+
+    pub async fn finalize_private_oram_writeback(
+        &self,
+        peer_id: PeerId,
+        request: CompletePrivateOramWritebackRequest,
+    ) -> CollectionResult<bool> {
+        self.complete_private_oram_writeback(peer_id, request, false)
+            .await
+    }
+
+    pub async fn abort_private_oram_writeback(
+        &self,
+        peer_id: PeerId,
+        request: CompletePrivateOramWritebackRequest,
+    ) -> CollectionResult<bool> {
+        self.complete_private_oram_writeback(peer_id, request, true)
+            .await
+    }
+
+    async fn complete_private_oram_writeback(
+        &self,
+        peer_id: PeerId,
+        request: CompletePrivateOramWritebackRequest,
+        abort: bool,
+    ) -> CollectionResult<bool> {
+        self.with_qdrant_client(peer_id, |mut client| {
+            let request = request.clone();
+            async move {
+                if abort {
+                    client
+                        .abort_private_oram_writeback(Request::new(request))
+                        .await
+                } else {
+                    client
+                        .finalize_private_oram_writeback(Request::new(request))
+                        .await
+                }
+            }
+        })
+        .await
+        .map(|response| response.into_inner().completed)
+        .map_err(|_| {
+            CollectionError::service_error(format!(
+                "private ORAM completion failed on peer {peer_id}"
+            ))
+        })
     }
 
     pub async fn with_qdrant_client<T, O: Future<Output = Result<T, Status>>>(
@@ -347,5 +417,45 @@ mod tests {
         let peers_below_log = format!("{peers_below:?}");
         assert!(peers_below_log.contains("crypto_fingerprint_present: true"));
         assert!(!peers_below_log.contains("crypto-fingerprint-sentinel"));
+    }
+
+    #[tokio::test]
+    async fn private_oram_peer_rpc_errors_do_not_reflect_request_values() {
+        let service = ChannelService::default();
+        let collection_sentinel = "private-oram-collection-secret-sentinel";
+        let digest_sentinel = "private-oram-digest-secret-sentinel";
+        let prepare = PreparePrivateOramWritebackRequest {
+            collection_name: collection_sentinel.to_string(),
+            transition: Some(api::grpc::qdrant::PrivateOramReplicationTransition {
+                writeback_digest: digest_sentinel.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let error = service
+            .prepare_private_oram_writeback(7, prepare)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("peer 7"));
+        assert!(!error.contains(collection_sentinel));
+        assert!(!error.contains(digest_sentinel));
+
+        let complete = CompletePrivateOramWritebackRequest {
+            collection_name: collection_sentinel.to_string(),
+            transition: Some(api::grpc::qdrant::PrivateOramReplicationTransition {
+                writeback_digest: digest_sentinel.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let error = service
+            .finalize_private_oram_writeback(9, complete)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("peer 9"));
+        assert!(!error.contains(collection_sentinel));
+        assert!(!error.contains(digest_sentinel));
     }
 }
