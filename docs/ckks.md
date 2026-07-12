@@ -136,6 +136,13 @@ transition. No internal network RPC implements the prepare/finalize/abort
 callbacks yet, so this coordinator still does not open distributed private ORAM
 routes.
 
+The internal protobuf now reserves a structured replication wire contract for
+HNSW and result ORAM writebacks: collection identity, index kind, exact old/new
+transition, encrypted bucket records, owner signature, and canonical digest are
+separate typed fields. It does not use an opaque JSON payload. These messages are
+not RPC methods yet; registration waits for receiver runtime-policy validation,
+request bounds, and serialized journal mutation to be connected.
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:

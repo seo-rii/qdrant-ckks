@@ -15761,6 +15761,147 @@ pub struct GetAuditLogResponse {
     #[prost(string, repeated, tag = "1")]
     pub entries: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateOramReplicationEpochState {
+    #[prost(uint64, tag = "1")]
+    pub index_epoch: u64,
+    #[prost(string, tag = "2")]
+    pub root_hash: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateOramReplicationTransition {
+    #[prost(message, optional, tag = "1")]
+    pub old: ::core::option::Option<PrivateOramReplicationEpochState>,
+    #[prost(message, optional, tag = "2")]
+    pub new: ::core::option::Option<PrivateOramReplicationEpochState>,
+    #[prost(string, tag = "3")]
+    pub writeback_digest: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateOramReplicationBucket {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    #[prost(uint64, tag = "2")]
+    pub bucket_id: u64,
+    #[prost(uint64, tag = "3")]
+    pub index_epoch: u64,
+    #[prost(string, tag = "4")]
+    pub ciphertext: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub ciphertext_sha256: ::prost::alloc::string::String,
+    #[prost(string, tag = "6")]
+    pub bucket_commitment: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateOramReplicationSignature {
+    #[prost(string, tag = "1")]
+    pub alg: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub key_id: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub sig: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PreparePrivateOramWritebackRequest {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub collection_id: ::prost::alloc::string::String,
+    #[prost(enumeration = "PrivateOramReplicationIndexKind", tag = "3")]
+    pub index_kind: i32,
+    /// Required for HNSW and empty for the collection-level result ORAM index.
+    #[prost(string, tag = "4")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "5")]
+    pub version: u32,
+    #[prost(message, optional, tag = "6")]
+    pub transition: ::core::option::Option<PrivateOramReplicationTransition>,
+    #[prost(uint64, tag = "7")]
+    pub bucket_count: u64,
+    #[prost(message, repeated, tag = "8")]
+    pub updated_buckets: ::prost::alloc::vec::Vec<PrivateOramReplicationBucket>,
+    #[prost(message, optional, tag = "9")]
+    pub commit_signature: ::core::option::Option<PrivateOramReplicationSignature>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PreparePrivateOramWritebackResponse {
+    /// Echoed only after the receiver independently derives the same digest.
+    #[prost(string, tag = "1")]
+    pub writeback_digest: ::prost::alloc::string::String,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CompletePrivateOramWritebackRequest {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub collection_id: ::prost::alloc::string::String,
+    #[prost(enumeration = "PrivateOramReplicationIndexKind", tag = "3")]
+    pub index_kind: i32,
+    #[prost(string, tag = "4")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "5")]
+    pub transition: ::core::option::Option<PrivateOramReplicationTransition>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CompletePrivateOramWritebackResponse {
+    #[prost(bool, tag = "1")]
+    pub completed: bool,
+}
+/// Internal-only wire contract for replicated private ORAM writebacks. The RPC
+/// methods using these messages are registered only after receiver-side runtime,
+/// signature, fixed-budget, and exact-transition validation is connected.
+#[derive(serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum PrivateOramReplicationIndexKind {
+    Unspecified = 0,
+    Hnsw = 1,
+    Result = 2,
+}
+impl PrivateOramReplicationIndexKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            PrivateOramReplicationIndexKind::Unspecified => {
+                "PRIVATE_ORAM_REPLICATION_INDEX_KIND_UNSPECIFIED"
+            }
+            PrivateOramReplicationIndexKind::Hnsw => {
+                "PRIVATE_ORAM_REPLICATION_INDEX_KIND_HNSW"
+            }
+            PrivateOramReplicationIndexKind::Result => {
+                "PRIVATE_ORAM_REPLICATION_INDEX_KIND_RESULT"
+            }
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PRIVATE_ORAM_REPLICATION_INDEX_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "PRIVATE_ORAM_REPLICATION_INDEX_KIND_HNSW" => Some(Self::Hnsw),
+            "PRIVATE_ORAM_REPLICATION_INDEX_KIND_RESULT" => Some(Self::Result),
+            _ => None,
+        }
+    }
+}
 /// Generated client implementations.
 pub mod qdrant_internal_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]

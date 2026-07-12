@@ -59,3 +59,68 @@ message GetAuditLogResponse {
   // Audit log entries as raw JSON strings (one per entry)
   repeated string entries = 1;
 }
+
+// Internal-only wire contract for replicated private ORAM writebacks. The RPC
+// methods using these messages are registered only after receiver-side runtime,
+// signature, fixed-budget, and exact-transition validation is connected.
+enum PrivateOramReplicationIndexKind {
+  PRIVATE_ORAM_REPLICATION_INDEX_KIND_UNSPECIFIED = 0;
+  PRIVATE_ORAM_REPLICATION_INDEX_KIND_HNSW = 1;
+  PRIVATE_ORAM_REPLICATION_INDEX_KIND_RESULT = 2;
+}
+
+message PrivateOramReplicationEpochState {
+  uint64 index_epoch = 1;
+  string root_hash = 2;
+}
+
+message PrivateOramReplicationTransition {
+  PrivateOramReplicationEpochState old = 1;
+  PrivateOramReplicationEpochState new = 2;
+  string writeback_digest = 3;
+}
+
+message PrivateOramReplicationBucket {
+  uint32 version = 1;
+  uint64 bucket_id = 2;
+  uint64 index_epoch = 3;
+  string ciphertext = 4;
+  string ciphertext_sha256 = 5;
+  string bucket_commitment = 6;
+}
+
+message PrivateOramReplicationSignature {
+  string alg = 1;
+  string key_id = 2;
+  string sig = 3;
+}
+
+message PreparePrivateOramWritebackRequest {
+  string collection_name = 1;
+  string collection_id = 2;
+  PrivateOramReplicationIndexKind index_kind = 3;
+  // Required for HNSW and empty for the collection-level result ORAM index.
+  string vector_name = 4;
+  uint32 version = 5;
+  PrivateOramReplicationTransition transition = 6;
+  uint64 bucket_count = 7;
+  repeated PrivateOramReplicationBucket updated_buckets = 8;
+  PrivateOramReplicationSignature commit_signature = 9;
+}
+
+message PreparePrivateOramWritebackResponse {
+  // Echoed only after the receiver independently derives the same digest.
+  string writeback_digest = 1;
+}
+
+message CompletePrivateOramWritebackRequest {
+  string collection_name = 1;
+  string collection_id = 2;
+  PrivateOramReplicationIndexKind index_kind = 3;
+  string vector_name = 4;
+  PrivateOramReplicationTransition transition = 5;
+}
+
+message CompletePrivateOramWritebackResponse {
+  bool completed = 1;
+}
