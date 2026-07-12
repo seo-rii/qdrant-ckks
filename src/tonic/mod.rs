@@ -316,7 +316,10 @@ pub fn init_internal(
             telemetry_collector,
             settings.clone(),
             consensus_state.clone(),
+            toc.clone(),
         );
+        let qdrant_internal_max_decoding_message_size =
+            private_oram_grpc_max_decoding_message_size(settings.service.max_request_size_mb);
         let collections_internal_service = CollectionsInternalService::new(toc.clone());
         let shard_snapshots_service =
             ShardSnapshotsService::new(toc.clone(), http_client, settings);
@@ -364,7 +367,7 @@ pub fn init_internal(
                 QdrantInternalServer::new(qdrant_internal_service)
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip)
-                    .max_decoding_message_size(usize::MAX),
+                    .max_decoding_message_size(qdrant_internal_max_decoding_message_size),
             )
             .add_service(
                 CollectionsInternalServer::new(collections_internal_service)

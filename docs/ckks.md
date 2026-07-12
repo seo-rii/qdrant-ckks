@@ -132,16 +132,27 @@ than ordinary shard routing because the ORAM store is collection-local rather
 than shard-local. Replica finalize and abort also require the exact expected
 old/new epoch, root, and canonical writeback digest to match the owner-signed
 pending journal; a stale internal request cannot act on a different pending
-transition. No internal network RPC implements the prepare/finalize/abort
-callbacks yet, so this coordinator still does not open distributed private ORAM
-routes.
+transition. Internal prepare/finalize/abort RPCs now expose these receiver
+operations, but the owner-side ChannelService fan-out is not connected yet, so
+the coordinator still does not open distributed private ORAM routes.
 
-The internal protobuf now reserves a structured replication wire contract for
+The internal protobuf defines a structured replication wire contract for
 HNSW and result ORAM writebacks: collection identity, index kind, exact old/new
 transition, encrypted bucket records, owner signature, and canonical digest are
-separate typed fields. It does not use an opaque JSON payload. These messages are
-not RPC methods yet; registration waits for receiver runtime-policy validation,
-request bounds, and serialized journal mutation to be connected.
+separate typed fields. It does not use an opaque JSON payload. The internal
+Qdrant service registers prepare, finalize, and abort methods. Receiver prepare
+revalidates stable collection identity, runtime provider policy, manifest and
+owner signatures, fixed budget, bucket hashes/commitments, Merkle transition,
+and canonical digest before returning an acknowledgement. Finalize and abort
+require the exact pending transition. All receiver journal mutations are
+serialized by a node-local service lock, and a prepare replay after an already
+successful finalize only acknowledges when the current epoch/root, Merkle tree,
+and every updated encrypted bucket exactly match the signed batch. Request
+bounds and fixed error messages prevent ciphertext, digest, and signing-key
+reflection.
+The internal service applies the configured gRPC request-size cap before
+protobuf decoding as well as the provider-specific bucket and aggregate bounds
+inside the handler.
 
 ## Payload text
 

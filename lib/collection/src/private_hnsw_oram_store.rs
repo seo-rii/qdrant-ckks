@@ -713,7 +713,6 @@ impl PrivateHnswOramStore {
                 "private HNSW ORAM commit new epoch must be greater than old epoch",
             ));
         }
-        self.ensure_current_epoch_matches(old)?;
         let (manifest, _) = self.read_manifest()?;
         validate_fixed_writeback_budget(&manifest, updated_buckets.len())?;
         let updated_bucket_refs = updated_buckets
@@ -761,6 +760,35 @@ impl PrivateHnswOramStore {
             validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
         }
         validate_bucket_commitment_context(&manifest, new.index_epoch, updated_buckets)?;
+        let current = self.read_current_epoch()?;
+        if current == *new {
+            let merkle_tree = self.read_merkle_tree()?;
+            validate_merkle_tree_context(
+                &merkle_tree,
+                new.index_epoch,
+                &new.root_hash,
+                bucket_count,
+            )?;
+            for expected_bucket in updated_buckets {
+                let stored_bucket = self.read_bucket(
+                    expected_bucket.bucket_id,
+                    new.index_epoch,
+                    bucket_count,
+                    max_ciphertext_bytes,
+                )?;
+                if stored_bucket != *expected_bucket {
+                    return Err(CollectionError::bad_request(
+                        "private HNSW ORAM applied replicated writeback does not match",
+                    ));
+                }
+            }
+            return Ok(consensus_writeback);
+        }
+        if current != *old {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM current epoch/root does not match expected state",
+            ));
+        }
         let prepared_merkle_commit = self.prepare_merkle_commit(
             old.index_epoch,
             &old.root_hash,
@@ -5017,6 +5045,18 @@ mod tests {
                 .unwrap(),
             new,
         );
+        assert_eq!(
+            replica
+                .prepare_replica_writeback_with_signature(
+                    &batch,
+                    &exported,
+                    4096,
+                    signature_verification(),
+                )
+                .unwrap(),
+            exported,
+        );
+        assert!(!replica.pending_writeback_exists().unwrap());
         assert_eq!(
             replica
                 .read_bucket(0, new.index_epoch, bundle.bucket_count(), 4096)

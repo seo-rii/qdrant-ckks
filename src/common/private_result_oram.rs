@@ -7,7 +7,10 @@ use collection::config::{
     CollectionConfigInternal, CollectionEncryptionConfig, EncryptionRuleRef, EncryptionSelector,
 };
 use collection::operations::types::CollectionError;
-use collection::private_result_oram_store::{PrivateResultOramEpochState, PrivateResultOramStore};
+use collection::private_result_oram_store::{
+    PrivateResultOramConsensusWriteback, PrivateResultOramEpochState, PrivateResultOramStore,
+    PrivateResultOramWritebackBatch,
+};
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
@@ -1113,6 +1116,145 @@ pub async fn do_close_private_result_oram_session(
         ));
     }
     Ok(true)
+}
+
+pub async fn do_prepare_private_result_oram_replica_writeback(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    collection_id: &str,
+    batch: &PrivateResultOramWritebackBatch,
+    expected: &PrivateResultOramConsensusWriteback,
+) -> StorageResult<PrivateResultOramConsensusWriteback> {
+    let context = private_result_oram_replica_store_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        collection_id,
+        &batch.commit_signature.key_id,
+        "private_result_oram_replica_prepare",
+    )
+    .await?;
+    let _guard = begin_private_result_oram_upload_write_window(collection_id)?;
+    context
+        .store
+        .prepare_replica_writeback_with_signature(
+            batch,
+            expected,
+            context.max_ciphertext_bytes,
+            context.signature_verification(),
+        )
+        .map_err(private_result_oram_commit_writeback_store_error)
+}
+
+pub async fn do_complete_private_result_oram_replica_writeback(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    collection_id: &str,
+    signing_key_id: &str,
+    expected: &PrivateResultOramConsensusWriteback,
+    abort: bool,
+) -> StorageResult<bool> {
+    let context = private_result_oram_replica_store_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        collection_id,
+        signing_key_id,
+        "private_result_oram_replica_complete",
+    )
+    .await?;
+    let _guard = begin_private_result_oram_upload_write_window(collection_id)?;
+    if abort {
+        context
+            .store
+            .abort_replica_writeback_with_signature(
+                expected,
+                context.max_ciphertext_bytes,
+                context.signature_verification(),
+            )
+            .map_err(private_result_oram_commit_writeback_store_error)
+    } else {
+        context
+            .store
+            .commit_replica_writeback_with_signature(
+                expected,
+                context.max_ciphertext_bytes,
+                context.signature_verification(),
+            )
+            .map(|_| true)
+            .map_err(private_result_oram_commit_writeback_store_error)
+    }
+}
+
+struct PrivateResultOramReplicaStoreContext {
+    resolved: ResolvedPrivateResultOramContext,
+    store: PrivateResultOramStore,
+    signing_key_id: String,
+    max_ciphertext_bytes: usize,
+}
+
+impl PrivateResultOramReplicaStoreContext {
+    fn signature_verification(&self) -> PrivateResultOramSignatureVerification<'_> {
+        PrivateResultOramSignatureVerification {
+            expected_key_id: &self.signing_key_id,
+            public_key: &self.resolved.public_key,
+        }
+    }
+}
+
+async fn private_result_oram_replica_store_context(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    collection_id: &str,
+    signing_key_id: &str,
+    method: &str,
+) -> StorageResult<PrivateResultOramReplicaStoreContext> {
+    let resolved = resolve_private_result_oram_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        signing_key_id,
+        method,
+        AccessRequirements::new().write(),
+    )
+    .await?;
+    if resolved.collection_crypto_id != collection_id {
+        return Err(StorageError::bad_request(
+            "private result ORAM replication collection identity does not match",
+        ));
+    }
+    let store = PrivateResultOramStore::new(&resolved.collection_path);
+    let (manifest, manifest_signature) = read_uploaded_manifest(&store)?;
+    validate_private_result_oram_manifest_signature_shape(&manifest_signature)
+        .map_err(private_result_oram_error)?;
+    validate_private_result_oram_manifest_signature_owner_key(&manifest, &manifest_signature)?;
+    if manifest.owner_signing_key_id != signing_key_id {
+        return Err(StorageError::bad_request(
+            "private result ORAM replication signing key does not match manifest owner",
+        ));
+    }
+    validate_private_result_oram_manifest(
+        &manifest,
+        Some(&manifest_signature),
+        resolved.manifest_context(&manifest_signature.key_id),
+    )
+    .map_err(private_result_oram_error)?;
+    resolved.validate_manifest_runtime_policy(&manifest)?;
+    Ok(PrivateResultOramReplicaStoreContext {
+        max_ciphertext_bytes: max_bucket_ciphertext_bytes(&manifest.oram)?,
+        resolved,
+        store,
+        signing_key_id: signing_key_id.to_string(),
+    })
 }
 
 pub fn validate_recovered_private_result_oram_snapshot_signatures(

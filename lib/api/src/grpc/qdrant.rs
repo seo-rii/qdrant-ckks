@@ -15855,6 +15855,8 @@ pub struct CompletePrivateOramWritebackRequest {
     pub vector_name: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "5")]
     pub transition: ::core::option::Option<PrivateOramReplicationTransition>,
+    #[prost(string, tag = "6")]
+    pub signing_key_id: ::prost::alloc::string::String,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -16093,6 +16095,96 @@ pub mod qdrant_internal_client {
                 .insert(GrpcMethod::new("qdrant.QdrantInternal", "GetAuditLog"));
             self.inner.unary(req, path, codec).await
         }
+        /// Durably stage one owner-signed encrypted private ORAM writeback.
+        pub async fn prepare_private_oram_writeback(
+            &mut self,
+            request: impl tonic::IntoRequest<super::PreparePrivateOramWritebackRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PreparePrivateOramWritebackResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/PreparePrivateOramWriteback",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "PreparePrivateOramWriteback",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Apply a prepared writeback after its epoch transition commits through Raft.
+        pub async fn finalize_private_oram_writeback(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CompletePrivateOramWritebackRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CompletePrivateOramWritebackResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/FinalizePrivateOramWriteback",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "FinalizePrivateOramWriteback",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        /// Remove an uncommitted prepared writeback while its old view is still intact.
+        pub async fn abort_private_oram_writeback(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CompletePrivateOramWritebackRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CompletePrivateOramWritebackResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/AbortPrivateOramWriteback",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new("qdrant.QdrantInternal", "AbortPrivateOramWriteback"),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -16132,6 +16224,30 @@ pub mod qdrant_internal_server {
             request: tonic::Request<super::GetAuditLogRequest>,
         ) -> std::result::Result<
             tonic::Response<super::GetAuditLogResponse>,
+            tonic::Status,
+        >;
+        /// Durably stage one owner-signed encrypted private ORAM writeback.
+        async fn prepare_private_oram_writeback(
+            &self,
+            request: tonic::Request<super::PreparePrivateOramWritebackRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::PreparePrivateOramWritebackResponse>,
+            tonic::Status,
+        >;
+        /// Apply a prepared writeback after its epoch transition commits through Raft.
+        async fn finalize_private_oram_writeback(
+            &self,
+            request: tonic::Request<super::CompletePrivateOramWritebackRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CompletePrivateOramWritebackResponse>,
+            tonic::Status,
+        >;
+        /// Remove an uncommitted prepared writeback while its old view is still intact.
+        async fn abort_private_oram_writeback(
+            &self,
+            request: tonic::Request<super::CompletePrivateOramWritebackRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CompletePrivateOramWritebackResponse>,
             tonic::Status,
         >;
     }
@@ -16388,6 +16504,167 @@ pub mod qdrant_internal_server {
                     let fut = async move {
                         let inner = inner.0;
                         let method = GetAuditLogSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.QdrantInternal/PreparePrivateOramWriteback" => {
+                    #[allow(non_camel_case_types)]
+                    struct PreparePrivateOramWritebackSvc<T: QdrantInternal>(pub Arc<T>);
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::UnaryService<
+                        super::PreparePrivateOramWritebackRequest,
+                    > for PreparePrivateOramWritebackSvc<T> {
+                        type Response = super::PreparePrivateOramWritebackResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::PreparePrivateOramWritebackRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::prepare_private_oram_writeback(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = PreparePrivateOramWritebackSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.QdrantInternal/FinalizePrivateOramWriteback" => {
+                    #[allow(non_camel_case_types)]
+                    struct FinalizePrivateOramWritebackSvc<T: QdrantInternal>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::UnaryService<
+                        super::CompletePrivateOramWritebackRequest,
+                    > for FinalizePrivateOramWritebackSvc<T> {
+                        type Response = super::CompletePrivateOramWritebackResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::CompletePrivateOramWritebackRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::finalize_private_oram_writeback(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = FinalizePrivateOramWritebackSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.QdrantInternal/AbortPrivateOramWriteback" => {
+                    #[allow(non_camel_case_types)]
+                    struct AbortPrivateOramWritebackSvc<T: QdrantInternal>(pub Arc<T>);
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::UnaryService<
+                        super::CompletePrivateOramWritebackRequest,
+                    > for AbortPrivateOramWritebackSvc<T> {
+                        type Response = super::CompletePrivateOramWritebackResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::CompletePrivateOramWritebackRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::abort_private_oram_writeback(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = AbortPrivateOramWritebackSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

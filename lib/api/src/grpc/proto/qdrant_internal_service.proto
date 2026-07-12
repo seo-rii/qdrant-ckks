@@ -19,6 +19,18 @@ service QdrantInternal {
 
   // Get audit log entries from this peer
   rpc GetAuditLog(GetAuditLogRequest) returns (GetAuditLogResponse) {}
+
+  // Durably stage one owner-signed encrypted private ORAM writeback.
+  rpc PreparePrivateOramWriteback(PreparePrivateOramWritebackRequest)
+      returns (PreparePrivateOramWritebackResponse) {}
+
+  // Apply a prepared writeback after its epoch transition commits through Raft.
+  rpc FinalizePrivateOramWriteback(CompletePrivateOramWritebackRequest)
+      returns (CompletePrivateOramWritebackResponse) {}
+
+  // Remove an uncommitted prepared writeback while its old view is still intact.
+  rpc AbortPrivateOramWriteback(CompletePrivateOramWritebackRequest)
+      returns (CompletePrivateOramWritebackResponse) {}
 }
 
 message GetConsensusCommitRequest {}
@@ -119,6 +131,7 @@ message CompletePrivateOramWritebackRequest {
   PrivateOramReplicationIndexKind index_kind = 3;
   string vector_name = 4;
   PrivateOramReplicationTransition transition = 5;
+  string signing_key_id = 6;
 }
 
 message CompletePrivateOramWritebackResponse {

@@ -10,8 +10,9 @@ use collection::config::{
 };
 use collection::operations::types::CollectionError;
 use collection::private_hnsw_oram_store::{
-    PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND, PrivateHnswOramEpochState, PrivateHnswOramMerkleProof,
-    PrivateHnswOramStore,
+    PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND, PrivateHnswOramConsensusWriteback,
+    PrivateHnswOramEpochState, PrivateHnswOramMerkleProof, PrivateHnswOramStore,
+    PrivateHnswOramWritebackBatch,
 };
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
@@ -1354,6 +1355,152 @@ pub async fn do_close_private_hnsw_session(
         ));
     }
     Ok(true)
+}
+
+pub async fn do_prepare_private_hnsw_replica_writeback(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    collection_id: &str,
+    batch: &PrivateHnswOramWritebackBatch,
+    expected: &PrivateHnswOramConsensusWriteback,
+) -> StorageResult<PrivateHnswOramConsensusWriteback> {
+    let context = private_hnsw_replica_store_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        collection_id,
+        &batch.commit_signature.key_id,
+        "private_hnsw_replica_prepare",
+    )
+    .await?;
+    let _guard = begin_private_hnsw_upload_write_window(collection_id, vector_name)?;
+    context
+        .store
+        .prepare_replica_writeback_with_signature(
+            batch,
+            expected,
+            context.max_ciphertext_bytes,
+            context.signature_verification(),
+        )
+        .map_err(private_hnsw_commit_writeback_store_error)
+}
+
+pub async fn do_complete_private_hnsw_replica_writeback(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    collection_id: &str,
+    signing_key_id: &str,
+    expected: &PrivateHnswOramConsensusWriteback,
+    abort: bool,
+) -> StorageResult<bool> {
+    let context = private_hnsw_replica_store_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        collection_id,
+        signing_key_id,
+        "private_hnsw_replica_complete",
+    )
+    .await?;
+    let _guard = begin_private_hnsw_upload_write_window(collection_id, vector_name)?;
+    if abort {
+        context
+            .store
+            .abort_replica_writeback_with_signature(
+                expected,
+                context.max_ciphertext_bytes,
+                context.signature_verification(),
+            )
+            .map_err(private_hnsw_commit_writeback_store_error)
+    } else {
+        context
+            .store
+            .commit_replica_writeback_with_signature(
+                expected,
+                context.max_ciphertext_bytes,
+                context.signature_verification(),
+            )
+            .map(|_| true)
+            .map_err(private_hnsw_commit_writeback_store_error)
+    }
+}
+
+struct PrivateHnswReplicaStoreContext {
+    resolved: ResolvedPrivateHnswContext,
+    store: PrivateHnswOramStore,
+    signing_key_id: String,
+    max_ciphertext_bytes: usize,
+}
+
+impl PrivateHnswReplicaStoreContext {
+    fn signature_verification(&self) -> PrivateHnswSignatureVerification<'_> {
+        PrivateHnswSignatureVerification {
+            expected_key_id: &self.signing_key_id,
+            public_key: &self.resolved.public_key,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn private_hnsw_replica_store_context(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    collection_id: &str,
+    signing_key_id: &str,
+    method: &str,
+) -> StorageResult<PrivateHnswReplicaStoreContext> {
+    let resolved = resolve_private_hnsw_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        signing_key_id,
+        method,
+        AccessRequirements::new().write(),
+    )
+    .await?;
+    if resolved.collection_crypto_id != collection_id {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM replication collection identity does not match",
+        ));
+    }
+    let store = PrivateHnswOramStore::new(&resolved.collection_path, vector_name)?;
+    let (manifest, manifest_signature) = read_uploaded_manifest(&store)?;
+    validate_private_hnsw_oram_manifest_signature_shape(&manifest_signature)
+        .map_err(private_hnsw_error)?;
+    validate_private_hnsw_manifest_signature_owner_key(&manifest, &manifest_signature)?;
+    if manifest.owner_signing_key_id != signing_key_id {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM replication signing key does not match manifest owner",
+        ));
+    }
+    validate_private_hnsw_oram_manifest(
+        &manifest,
+        Some(&manifest_signature),
+        resolved.manifest_context(&manifest_signature.key_id),
+    )
+    .map_err(private_hnsw_error)?;
+    resolved.validate_manifest_runtime_policy(&manifest)?;
+    Ok(PrivateHnswReplicaStoreContext {
+        max_ciphertext_bytes: max_bucket_ciphertext_bytes(&manifest)?,
+        resolved,
+        store,
+        signing_key_id: signing_key_id.to_string(),
+    })
 }
 
 pub fn validate_recovered_private_hnsw_oram_snapshot_signatures(
