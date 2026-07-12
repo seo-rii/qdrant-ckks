@@ -1709,6 +1709,7 @@ mod tests {
         let initial_private_oram_epoch = PrivateOramConsensusEpoch {
             index_epoch: 42,
             root_hash: data_encoding::BASE64URL_NOPAD.encode(&[42; 32]),
+            writeback_digest: None,
         };
         handle
             .block_on(dispatcher.submit_private_oram_epoch_cas(
@@ -1745,6 +1746,7 @@ mod tests {
                     new: PrivateOramConsensusEpoch {
                         index_epoch: 43,
                         root_hash: data_encoding::BASE64URL_NOPAD.encode(&[43; 32]),
+                        writeback_digest: None,
                     },
                 },
                 None,
@@ -1785,6 +1787,7 @@ mod tests {
                     new: PrivateOramConsensusEpoch {
                         index_epoch: 44,
                         root_hash: data_encoding::BASE64URL_NOPAD.encode(&[44; 32]),
+                        writeback_digest: None,
                     },
                 },
                 None,
@@ -1814,6 +1817,7 @@ mod tests {
         let next_private_oram_epoch = PrivateOramConsensusEpoch {
             index_epoch: 43,
             root_hash: data_encoding::BASE64URL_NOPAD.encode(&[43; 32]),
+            writeback_digest: Some(data_encoding::BASE64URL_NOPAD.encode(&[11; 32])),
         };
         let writeback_operation = CompareAndSwapPrivateOramEpoch {
             key: private_oram_key.clone(),

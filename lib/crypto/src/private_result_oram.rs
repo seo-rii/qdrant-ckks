@@ -3059,6 +3059,13 @@ pub fn try_private_result_oram_commit_signature_message(
     Ok(message)
 }
 
+pub fn private_result_oram_writeback_digest(
+    input: PrivateResultOramCommitSignatureInput<'_>,
+) -> Result<String, PrivateResultOramError> {
+    let message = try_private_result_oram_commit_signature_message(input)?;
+    Ok(BASE64URL_NOPAD.encode(&Sha256::digest(message)))
+}
+
 fn validate_private_result_oram_commit_signature_shape(
     input: PrivateResultOramCommitSignatureInput<'_>,
 ) -> Result<(), PrivateResultOramError> {
@@ -7573,6 +7580,10 @@ mod tests {
         let digest = Sha256::digest(checked_commit_signature_message(input));
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
+            "Dsso6H8kYZbPZHYG49vdmgVaLa02M2fP47VCQH4wPtM"
+        );
+        assert_eq!(
+            private_result_oram_writeback_digest(input).unwrap(),
             "Dsso6H8kYZbPZHYG49vdmgVaLa02M2fP47VCQH4wPtM"
         );
     }

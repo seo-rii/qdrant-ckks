@@ -1369,10 +1369,12 @@ mod tests {
         let initial = PrivateOramConsensusEpoch {
             index_epoch: 42,
             root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+            writeback_digest: None,
         };
         let next = PrivateOramConsensusEpoch {
             index_epoch: 43,
             root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+            writeback_digest: Some(BASE64URL_NOPAD.encode(&[11; 32])),
         };
 
         assert!(
@@ -1418,11 +1420,29 @@ mod tests {
             source
                 .apply_normal_entry(&private_oram_epoch_entry(
                     key.clone(),
-                    Some(initial),
+                    Some(initial.clone()),
                     next.clone(),
                 ))
                 .unwrap(),
         );
+
+        let conflicting_digest = source
+            .apply_normal_entry(&private_oram_epoch_entry(
+                key.clone(),
+                Some(initial),
+                PrivateOramConsensusEpoch {
+                    index_epoch: next.index_epoch,
+                    root_hash: next.root_hash.clone(),
+                    writeback_digest: Some(BASE64URL_NOPAD.encode(&[12; 32])),
+                },
+            ))
+            .unwrap_err();
+        assert!(
+            conflicting_digest
+                .to_string()
+                .contains("consensus epoch/root CAS precondition failed"),
+        );
+        assert_eq!(source.private_oram_epoch(&key), Some(next.clone()));
 
         let snapshot = source.snapshot(0, 0).unwrap();
         let snapshot_data: SnapshotData = snapshot.get_data().try_into().unwrap();
@@ -1454,6 +1474,17 @@ mod tests {
 
         let decoded: SnapshotData = serde_json::from_value(legacy_value).unwrap();
         assert!(decoded.private_oram_epochs.is_empty());
+    }
+
+    #[test]
+    fn private_oram_epoch_without_writeback_digest_remains_compatible() {
+        let legacy_epoch = serde_json::json!({
+            "index_epoch": 42,
+            "root_hash": BASE64URL_NOPAD.encode(&[42; 32]),
+        });
+
+        let decoded: PrivateOramConsensusEpoch = serde_json::from_value(legacy_epoch).unwrap();
+        assert_eq!(decoded.writeback_digest, None);
     }
 
     fn private_oram_epoch_entry(

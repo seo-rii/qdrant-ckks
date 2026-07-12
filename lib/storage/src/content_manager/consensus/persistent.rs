@@ -531,8 +531,10 @@ fn validate_private_oram_epoch_cas(
     }
 
     validate_private_oram_consensus_root_hash(&operation.new.root_hash)?;
+    validate_private_oram_consensus_writeback_digest(operation.new.writeback_digest.as_deref())?;
     if let Some(expected) = &operation.expected {
         validate_private_oram_consensus_root_hash(&expected.root_hash)?;
+        validate_private_oram_consensus_writeback_digest(expected.writeback_digest.as_deref())?;
         if operation.new.index_epoch <= expected.index_epoch {
             return Err(StorageError::bad_request(
                 "private ORAM consensus epoch must increase",
@@ -559,6 +561,28 @@ fn validate_private_oram_consensus_root_hash(root_hash: &str) -> Result<(), Stor
     Ok(())
 }
 
+fn validate_private_oram_consensus_writeback_digest(
+    digest: Option<&str>,
+) -> Result<(), StorageError> {
+    let Some(digest) = digest else {
+        return Ok(());
+    };
+    if digest.len() != PRIVATE_ORAM_SHA256_BASE64URL_LEN {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus writeback digest is invalid",
+        ));
+    }
+    let decoded = BASE64URL_NOPAD.decode(digest.as_bytes()).map_err(|_| {
+        StorageError::bad_request("private ORAM consensus writeback digest is invalid")
+    })?;
+    if decoded.len() != 32 || BASE64URL_NOPAD.encode(&decoded) != digest {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus writeback digest is invalid",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_private_oram_epoch_snapshot(
     epochs: &HashMap<String, PrivateOramConsensusEpoch>,
 ) -> Result<(), StorageError> {
@@ -570,6 +594,7 @@ fn validate_private_oram_epoch_snapshot(
     for (key_digest, epoch) in epochs {
         validate_private_oram_consensus_digest(key_digest)?;
         validate_private_oram_consensus_root_hash(&epoch.root_hash)?;
+        validate_private_oram_consensus_writeback_digest(epoch.writeback_digest.as_deref())?;
     }
     Ok(())
 }
@@ -630,6 +655,7 @@ mod tests {
             PrivateOramConsensusEpoch {
                 index_epoch: 42,
                 root_hash: private_oram_root.clone(),
+                writeback_digest: None,
             },
         )]);
 
@@ -693,10 +719,12 @@ mod tests {
         let initial = PrivateOramConsensusEpoch {
             index_epoch: 42,
             root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+            writeback_digest: None,
         };
         let next = PrivateOramConsensusEpoch {
             index_epoch: 43,
             root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+            writeback_digest: Some(BASE64URL_NOPAD.encode(&[11; 32])),
         };
         let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
 
@@ -737,6 +765,7 @@ mod tests {
                 new: PrivateOramConsensusEpoch {
                     index_epoch: initial.index_epoch,
                     root_hash: next.root_hash.clone(),
+                    writeback_digest: next.writeback_digest.clone(),
                 },
             })
             .unwrap_err();
@@ -754,6 +783,7 @@ mod tests {
                 new: PrivateOramConsensusEpoch {
                     index_epoch: 43,
                     root_hash: invalid_root_sentinel.to_string(),
+                    writeback_digest: next.writeback_digest.clone(),
                 },
             })
             .unwrap_err();
@@ -764,13 +794,54 @@ mod tests {
         );
         assert!(!invalid_root.to_string().contains(invalid_root_sentinel));
 
+        let invalid_writeback_digest_sentinel = "private-oram-invalid-writeback-digest-sentinel";
+        let invalid_writeback_digest = persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: key.clone(),
+                expected: Some(initial.clone()),
+                new: PrivateOramConsensusEpoch {
+                    index_epoch: 43,
+                    root_hash: next.root_hash.clone(),
+                    writeback_digest: Some(invalid_writeback_digest_sentinel.to_string()),
+                },
+            })
+            .unwrap_err();
+        assert!(
+            invalid_writeback_digest
+                .to_string()
+                .contains("consensus writeback digest is invalid"),
+        );
+        assert!(
+            !invalid_writeback_digest
+                .to_string()
+                .contains(invalid_writeback_digest_sentinel),
+        );
+
         persistent
             .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
                 key: key.clone(),
-                expected: Some(initial),
+                expected: Some(initial.clone()),
                 new: next.clone(),
             })
             .unwrap();
+
+        let conflicting_digest = persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: key.clone(),
+                expected: Some(initial),
+                new: PrivateOramConsensusEpoch {
+                    index_epoch: next.index_epoch,
+                    root_hash: next.root_hash.clone(),
+                    writeback_digest: Some(BASE64URL_NOPAD.encode(&[12; 32])),
+                },
+            })
+            .unwrap_err();
+        assert!(
+            conflicting_digest
+                .to_string()
+                .contains("consensus epoch/root CAS precondition failed"),
+        );
+        assert_eq!(persistent.private_oram_epoch(&key), Some(next.clone()));
         drop(persistent);
 
         let mut reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
@@ -780,6 +851,7 @@ mod tests {
                 expected: Some(PrivateOramConsensusEpoch {
                     index_epoch: 42,
                     root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+                    writeback_digest: None,
                 }),
                 new: next.clone(),
             })
@@ -805,6 +877,7 @@ mod tests {
                 new: PrivateOramConsensusEpoch {
                     index_epoch: 7,
                     root_hash: BASE64URL_NOPAD.encode(&[7; 32]),
+                    writeback_digest: None,
                 },
             })
             .unwrap_err();
@@ -823,6 +896,7 @@ mod tests {
         let initial = PrivateOramConsensusEpoch {
             index_epoch: 42,
             root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+            writeback_digest: None,
         };
         let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
         persistent
@@ -833,12 +907,13 @@ mod tests {
             })
             .unwrap();
 
-        let invalid_digest_sentinel = "private-oram-invalid-digest-sentinel";
-        let malformed_digest = HashMap::from([(
-            invalid_digest_sentinel.to_string(),
+        let invalid_key_digest_sentinel = "private-oram-invalid-key-digest-sentinel";
+        let malformed_key_digest = HashMap::from([(
+            invalid_key_digest_sentinel.to_string(),
             PrivateOramConsensusEpoch {
                 index_epoch: 43,
                 root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+                writeback_digest: None,
             },
         )]);
         let digest_error = persistent
@@ -847,7 +922,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 Default::default(),
-                malformed_digest,
+                malformed_key_digest,
             )
             .unwrap_err();
         assert!(
@@ -855,7 +930,42 @@ mod tests {
                 .to_string()
                 .contains("consensus epoch snapshot is invalid"),
         );
-        assert!(!digest_error.to_string().contains(invalid_digest_sentinel),);
+        assert!(
+            !digest_error
+                .to_string()
+                .contains(invalid_key_digest_sentinel),
+        );
+        assert_eq!(persistent.private_oram_epoch(&key), Some(initial.clone()));
+
+        let invalid_writeback_digest_sentinel =
+            "private-oram-invalid-snapshot-writeback-digest-sentinel";
+        let malformed_writeback_digest = HashMap::from([(
+            private_oram_epoch_key_digest(&key),
+            PrivateOramConsensusEpoch {
+                index_epoch: 43,
+                root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+                writeback_digest: Some(invalid_writeback_digest_sentinel.to_string()),
+            },
+        )]);
+        let writeback_digest_error = persistent
+            .update_from_snapshot(
+                &SnapshotMetadata::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                malformed_writeback_digest,
+            )
+            .unwrap_err();
+        assert!(
+            writeback_digest_error
+                .to_string()
+                .contains("consensus writeback digest is invalid"),
+        );
+        assert!(
+            !writeback_digest_error
+                .to_string()
+                .contains(invalid_writeback_digest_sentinel),
+        );
         assert_eq!(persistent.private_oram_epoch(&key), Some(initial.clone()));
 
         let invalid_root_sentinel = "private-oram-invalid-snapshot-root-sentinel";
@@ -864,6 +974,7 @@ mod tests {
             PrivateOramConsensusEpoch {
                 index_epoch: 43,
                 root_hash: invalid_root_sentinel.to_string(),
+                writeback_digest: None,
             },
         )]);
         let root_error = persistent
@@ -900,6 +1011,7 @@ mod tests {
                 new: PrivateOramConsensusEpoch {
                     index_epoch: 42,
                     root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+                    writeback_digest: None,
                 },
             })
             .unwrap();

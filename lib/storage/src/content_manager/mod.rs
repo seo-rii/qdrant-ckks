@@ -66,6 +66,8 @@ pub mod consensus_ops {
     pub struct PrivateOramConsensusEpoch {
         pub index_epoch: u64,
         pub root_hash: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub writeback_digest: Option<String>,
     }
 
     impl fmt::Debug for PrivateOramConsensusEpoch {
@@ -73,6 +75,7 @@ pub mod consensus_ops {
             f.debug_struct("PrivateOramConsensusEpoch")
                 .field("index_epoch", &self.index_epoch)
                 .field("root_hash", &"[redacted]")
+                .field("has_writeback_digest", &self.writeback_digest.is_some())
                 .finish()
         }
     }
@@ -404,10 +407,16 @@ mod test {
                 expected: Some(PrivateOramConsensusEpoch {
                     index_epoch: 42,
                     root_hash: "qdrant-sec-private-oram-old-root-sentinel".to_string(),
+                    writeback_digest: Some(
+                        "qdrant-sec-private-oram-old-digest-sentinel".to_string(),
+                    ),
                 }),
                 new: PrivateOramConsensusEpoch {
                     index_epoch: 43,
                     root_hash: "qdrant-sec-private-oram-new-root-sentinel".to_string(),
+                    writeback_digest: Some(
+                        "qdrant-sec-private-oram-new-digest-sentinel".to_string(),
+                    ),
                 },
             });
 
@@ -429,6 +438,14 @@ mod test {
             );
             assert!(
                 !rendered.contains("qdrant-sec-private-oram-new-root-sentinel"),
+                "{rendered}",
+            );
+            assert!(
+                !rendered.contains("qdrant-sec-private-oram-old-digest-sentinel"),
+                "{rendered}",
+            );
+            assert!(
+                !rendered.contains("qdrant-sec-private-oram-new-digest-sentinel"),
                 "{rendered}",
             );
         }

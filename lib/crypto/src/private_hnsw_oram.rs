@@ -1184,6 +1184,13 @@ pub fn try_private_hnsw_oram_commit_signature_message(
     Ok(message)
 }
 
+pub fn private_hnsw_oram_writeback_digest(
+    input: PrivateHnswOramCommitSignatureInput<'_>,
+) -> Result<String, PrivateHnswOramError> {
+    let message = try_private_hnsw_oram_commit_signature_message(input)?;
+    Ok(BASE64URL_NOPAD.encode(&Sha256::digest(message)))
+}
+
 fn validate_private_hnsw_oram_commit_signature_shape(
     input: PrivateHnswOramCommitSignatureInput<'_>,
 ) -> Result<(), PrivateHnswOramError> {
@@ -2748,6 +2755,10 @@ mod tests {
         let digest = Sha256::digest(checked_commit_signature_message(input));
         assert_eq!(
             BASE64URL_NOPAD.encode(digest.as_ref()),
+            "K7D-QZtqOp7EBdqB0idlNYPSzjPMcg_Uripj067shYQ"
+        );
+        assert_eq!(
+            private_hnsw_oram_writeback_digest(input).unwrap(),
             "K7D-QZtqOp7EBdqB0idlNYPSzjPMcg_Uripj067shYQ"
         );
     }

@@ -86,14 +86,22 @@ contract:
 | Cluster mode | Manifest upload, bucket upload, session open, `read_paths`, and commit remain fail closed in distributed mode. Raft now persists an internal private-ORAM epoch/root CAS record, and the internal dispatcher bridge waits for local Raft apply with exact-replay idempotence, conflicting-stale rejection, and snapshot-restore coverage. The API guard remains until encrypted bucket ownership and movement are coupled to that record; layout movement operations and consensus snapshot state-apply changes are blocked before shard transfer, resharding, or shard-info mutation proceeds. | Manifest upload, bucket upload, session open, `read_buckets`, and commit remain fail closed in distributed mode. The same internal Raft epoch/root CAS record and awaited dispatcher bridge cover result ORAM identity with exact-replay idempotence, but result bucket replication and API commit integration are still required before the guard can open; result ORAM bucket movement and consensus snapshot state-apply changes follow the same cluster guard policy. |
 
 The internal Dispatcher writeback coordinator enforces durable local prepare,
-awaited Raft epoch/root CAS, then idempotent local finalize. If Raft rejects the
-CAS, the coordinator invokes a signed-journal abort that removes the journal
-only when the local epoch, Merkle tree, and every target bucket still match the
-old view; any partial local mutation preserves the journal and fails closed. If
-finalize fails after Raft apply, retrying the same operation reuses exact-CAS
-idempotence before running finalize again. This is an internal recovery boundary
-only; distributed private ORAM routes remain closed until encrypted bucket
-replication and ownership are coupled to the same operation.
+awaited Raft epoch/root CAS, then idempotent local finalize. A writeback epoch
+may also carry a provider-specific digest: SHA-256 over the canonical HNSW or
+result-ORAM commit signature message, which already includes its provider
+domain, lineage, old/new epoch and root, and ordered encrypted bucket hashes.
+Raft therefore binds the epoch/root transition to one opaque signed writeback
+without storing bucket ids or ciphertext. Initial ownership and snapshots from
+before this field use no digest. Exact replay includes the optional digest, so
+the same epoch/root paired with a different writeback is conflicting stale
+state. If Raft rejects the CAS, the coordinator invokes a signed-journal abort
+that removes the journal only when the local epoch, Merkle tree, and every
+target bucket still match the old view; any partial local mutation preserves
+the journal and fails closed. If finalize fails after Raft apply, retrying the
+same operation reuses exact-CAS idempotence before running finalize again. This
+is an internal recovery boundary only; distributed private ORAM routes remain
+closed until encrypted bucket replication and ownership are coupled to the
+same operation.
 
 ## Payload text
 
@@ -1396,8 +1404,9 @@ replica states; otherwise snapshot apply fails before it can create, remove, or
 reassign local shard data without a private ORAM bucket migration protocol.
 Distributed private ORAM epoch operations themselves fail closed in this MVP:
 manifest upload, bucket upload, session open, session-bound reads, and commits
-do not proceed until epoch/root CAS is backed by consensus rather than
-node-local files.
+do not proceed until encrypted bucket ownership and replication are coupled to
+the consensus epoch/root/writeback-digest CAS rather than collection-local
+files alone.
 
 The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
 preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`
