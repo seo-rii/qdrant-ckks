@@ -19,7 +19,9 @@ use qdrant_sec::{
     PrivateHnswOramBucket, PrivateHnswOramClientConfig, PrivateHnswOramManifest,
     PrivateHnswOramSignature, PrivateHnswParams, PrivateHnswPlaintextIndexBuild,
     PrivateHnswSearchParams, PrivateHnswSearchResult, PrivateResultOramBucket,
-    PrivateResultOramBucketCommitmentContext, PrivateResultOramManifest,
+    PrivateResultOramBucketCommitmentContext, PrivateResultOramClientCommitBucketRef,
+    PrivateResultOramCommitPlan, PrivateResultOramCommitSignatureContext,
+    PrivateResultOramManifest, PrivateResultOramReadBucketsSignatureContext,
     PrivateResultOramSignature, ResultPrivacyMode, SecretKey,
     build_private_hnsw_oram_manifest_from_encrypted_index,
     build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points,
@@ -29,7 +31,8 @@ use qdrant_sec::{
     seal_private_hnsw_oram_plaintext_index, search_private_hnsw_oram_encrypted_verified,
     sign_private_hnsw_oram_commit, sign_private_hnsw_oram_manifest,
     sign_private_hnsw_oram_manifest_refresh, sign_private_hnsw_oram_read_paths,
-    sign_private_hnsw_oram_read_paths_for_manifest_context, sign_private_result_oram_manifest,
+    sign_private_hnsw_oram_read_paths_for_manifest_context, sign_private_result_oram_commit,
+    sign_private_result_oram_manifest, sign_private_result_oram_read_buckets,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::json;
@@ -90,6 +93,10 @@ pub(crate) struct PrivateResultOramRouteFixture {
 
 impl PrivateResultOramRouteFixture {
     pub(crate) fn build() -> Self {
+        Self::build_for_collection_id(COLLECTION_ID)
+    }
+
+    pub(crate) fn build_for_collection_id(collection_id: &str) -> Self {
         let signing_key = Ed25519KeyPair::from_seed_unchecked(&[9; 32]).unwrap();
         let oram = OramParams {
             kind: OramKind::PathOram,
@@ -103,7 +110,7 @@ impl PrivateResultOramRouteFixture {
             version: 1,
             provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
             binding: PRIVATE_RESULT_ORAM_BINDING.to_string(),
-            collection_id: COLLECTION_ID.to_string(),
+            collection_id: collection_id.to_string(),
             key_id: KEY_ID.to_string(),
             rk_id: KEY_ID.to_string(),
             rk_epoch: RK_EPOCH,
@@ -135,6 +142,63 @@ impl PrivateResultOramRouteFixture {
             buckets,
             signing_key,
         }
+    }
+
+    pub(crate) fn read_signature(&self, bucket_ids: &[u64]) -> PrivateResultOramSignature {
+        sign_private_result_oram_read_buckets(
+            &self.signing_key,
+            PrivateResultOramReadBucketsSignatureContext {
+                collection_id: &self.manifest.collection_id,
+                key_id: &self.manifest.key_id,
+                rk_id: &self.manifest.rk_id,
+                rk_epoch: self.manifest.rk_epoch,
+                signing_key_id: RESULT_SIGNING_KEY_ID,
+            },
+            self.manifest.index_epoch,
+            &self.manifest.root_hash,
+            self.manifest.bucket_count,
+            bucket_ids,
+        )
+        .unwrap()
+    }
+
+    pub(crate) fn commit_bucket(
+        &self,
+    ) -> (PrivateResultOramBucket, PrivateResultOramSignature, String) {
+        let mut next_manifest = self.manifest.clone();
+        next_manifest.index_epoch = NEXT_EPOCH;
+        let updated_bucket = result_oram_bucket(0, &next_manifest);
+        let mut commitments = self
+            .buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect::<Vec<_>>();
+        commitments[0] = updated_bucket.bucket_commitment.clone();
+        let new_root_hash = private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
+        let plan = PrivateResultOramCommitPlan {
+            old_epoch: BASE_EPOCH,
+            new_epoch: NEXT_EPOCH,
+            old_root_hash: self.manifest.root_hash.clone(),
+            new_root_hash: new_root_hash.clone(),
+            leaf_commitments: commitments,
+            updated_buckets: vec![PrivateResultOramClientCommitBucketRef {
+                bucket_id: updated_bucket.bucket_id,
+                ciphertext_sha256: updated_bucket.ciphertext_sha256.clone(),
+            }],
+        };
+        let signature = sign_private_result_oram_commit(
+            &self.signing_key,
+            PrivateResultOramCommitSignatureContext {
+                collection_id: &self.manifest.collection_id,
+                key_id: &self.manifest.key_id,
+                rk_id: &self.manifest.rk_id,
+                rk_epoch: self.manifest.rk_epoch,
+                signing_key_id: RESULT_SIGNING_KEY_ID,
+            },
+            &plan,
+        )
+        .unwrap();
+        (updated_bucket, signature, new_root_hash)
     }
 
     pub(crate) fn route_settings_with_private_hnsw(

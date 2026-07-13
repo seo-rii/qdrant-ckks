@@ -1540,14 +1540,21 @@ mod tests {
         do_stage_private_hnsw_manifest_for_initial_replication,
     };
     use crate::common::private_hnsw_wire_fixture::{
-        BASE_EPOCH, COLLECTION_NAME, NEXT_EPOCH, PrivateHnswRouteWireFixture, VECTOR_NAME,
-        create_private_hnsw_collection, route_e2e_guard,
+        BASE_EPOCH, COLLECTION_NAME, NEXT_EPOCH, PrivateHnswRouteWireFixture,
+        PrivateResultOramRouteFixture, VECTOR_NAME,
+        create_private_hnsw_collection_with_private_result_oram, route_e2e_guard,
+    };
+    use crate::common::private_result_oram::{
+        do_stage_private_result_oram_buckets_for_initial_replication,
+        do_stage_private_result_oram_manifest_for_initial_replication,
     };
     use crate::settings::ConsensusConfig;
     use crate::tonic::api::qdrant_internal_api::{
-        close_private_hnsw_session_coordinated, commit_private_hnsw_paths_coordinated,
-        coordinate_private_hnsw_initial_upload, open_private_hnsw_session_coordinated,
-        read_private_hnsw_paths_coordinated,
+        close_private_hnsw_session_coordinated, close_private_result_oram_session_coordinated,
+        commit_private_hnsw_paths_coordinated, commit_private_result_oram_buckets_coordinated,
+        coordinate_private_hnsw_initial_upload, coordinate_private_result_oram_initial_upload,
+        open_private_hnsw_session_coordinated, open_private_result_oram_session_coordinated,
+        read_private_hnsw_paths_coordinated, read_private_result_oram_buckets_coordinated,
     };
 
     #[test]
@@ -1593,9 +1600,12 @@ mod tests {
         // Given
         let _route_guard = route_e2e_guard();
         let private_hnsw_settings_fixture = PrivateHnswRouteWireFixture::build_uploaded();
+        let private_result_settings_fixture = PrivateResultOramRouteFixture::build();
         let storage_dir = Builder::new().prefix("storage").tempdir().unwrap();
         let mut settings = crate::Settings::new(None).expect("Can't read config.");
-        settings.crypto = private_hnsw_settings_fixture.route_settings().crypto;
+        settings.crypto = private_result_settings_fixture
+            .route_settings_with_private_hnsw(&private_hnsw_settings_fixture)
+            .crypto;
         settings.storage.storage_path = storage_dir.path().to_path_buf();
         tracing_subscriber::fmt::init();
         let search_runtime =
@@ -2151,7 +2161,7 @@ mod tests {
         );
 
         handle.block_on(async {
-            create_private_hnsw_collection(&dispatcher).await;
+            create_private_hnsw_collection_with_private_result_oram(&dispatcher).await;
             let auth = Auth::new_internal(Access::full("private HNSW consensus route test"));
             let pass = new_unchecked_verification_pass();
             let collection_pass = auth
@@ -2172,7 +2182,10 @@ mod tests {
                 .unwrap();
             let collection_id: &'static str = Box::leak(collection_id.into_boxed_str());
             let private_hnsw_fixture =
-                PrivateHnswRouteWireFixture::build_uploaded_for_collection_id(collection_id);
+                PrivateHnswRouteWireFixture::build_uploaded_for_collection_id(collection_id)
+                    .with_result_privacy(qdrant_sec::ResultPrivacyMode::PrivatePayloadOramRequired);
+            let private_result_fixture =
+                PrivateResultOramRouteFixture::build_for_collection_id(collection_id);
             do_stage_private_hnsw_manifest_for_initial_replication(
                 dispatcher.toc(&auth, &pass),
                 &auth,
@@ -2215,7 +2228,7 @@ mod tests {
                 "tenant-a/consensus-sdk-instance".to_string(),
                 BASE_EPOCH,
                 true,
-                qdrant_sec::ResultPrivacyMode::IdsVisible,
+                qdrant_sec::ResultPrivacyMode::PrivatePayloadOramRequired,
             )
             .await
             .unwrap();
@@ -2305,6 +2318,129 @@ mod tests {
             assert!(
                 dispatcher
                     .private_oram_consensus_session_lease(&session_key)
+                    .unwrap()
+                    .is_none()
+            );
+
+            do_stage_private_result_oram_manifest_for_initial_replication(
+                dispatcher.toc(&auth, &pass),
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                private_result_fixture.manifest.clone(),
+                private_result_fixture.signature.clone(),
+            )
+            .await
+            .unwrap();
+            do_stage_private_result_oram_buckets_for_initial_replication(
+                dispatcher.toc(&auth, &pass),
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                BASE_EPOCH,
+                private_result_fixture.manifest.root_hash.clone(),
+                private_result_fixture.buckets.clone(),
+            )
+            .await
+            .unwrap();
+            coordinate_private_result_oram_initial_upload(
+                &dispatcher,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+            )
+            .await
+            .unwrap();
+
+            let result_session = open_private_result_oram_session_coordinated(
+                &dispatcher,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                "tenant-a/result-consensus-sdk-instance".to_string(),
+                BASE_EPOCH,
+                true,
+            )
+            .await
+            .unwrap();
+            let result_session_key = PrivateOramEpochKey {
+                collection_id: collection_id.to_string(),
+                index_kind: PrivateOramIndexKind::ResultPayload,
+                index_name: String::new(),
+            };
+            let result_lease = dispatcher
+                .private_oram_consensus_session_lease(&result_session_key)
+                .unwrap()
+                .expect("coordinated result open must acquire a consensus lease");
+            assert_eq!(result_lease.owner_peer_id, dispatcher.this_peer_id());
+            assert_eq!(
+                result_lease.expires_at_unix,
+                result_session.lease_expires_unix
+            );
+
+            let result_bucket_ids = vec![0, 1, 3];
+            let result_read_signature = private_result_fixture.read_signature(&result_bucket_ids);
+            let result_read = read_private_result_oram_buckets_coordinated(
+                &dispatcher,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                &result_session.session_id,
+                BASE_EPOCH,
+                result_session.root_hash.clone(),
+                result_bucket_ids,
+                result_read_signature,
+            )
+            .await
+            .unwrap();
+            assert_eq!(result_read.index_epoch, BASE_EPOCH);
+            assert_eq!(result_read.root_hash, result_session.root_hash);
+            assert!(!result_read.buckets.is_empty());
+
+            let (updated_result_bucket, result_commit_signature, result_new_root) =
+                private_result_fixture.commit_bucket();
+            let committed_result = commit_private_result_oram_buckets_coordinated(
+                &dispatcher,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                &result_session.session_id,
+                BASE_EPOCH,
+                NEXT_EPOCH,
+                private_result_fixture.manifest.root_hash.clone(),
+                result_new_root.clone(),
+                vec![updated_result_bucket],
+                result_commit_signature,
+            )
+            .await
+            .unwrap();
+            assert_eq!(committed_result.index_epoch, NEXT_EPOCH);
+            assert_eq!(committed_result.root_hash, result_new_root);
+            let result_consensus_epoch = dispatcher
+                .private_oram_consensus_epoch(&result_session_key)
+                .unwrap()
+                .expect("coordinated result commit must preserve consensus ownership");
+            assert_eq!(
+                result_consensus_epoch.index_epoch,
+                committed_result.index_epoch
+            );
+            assert_eq!(result_consensus_epoch.root_hash, committed_result.root_hash);
+            assert!(result_consensus_epoch.writeback_digest.is_some());
+
+            assert!(
+                close_private_result_oram_session_coordinated(
+                    &dispatcher,
+                    &auth,
+                    &settings,
+                    COLLECTION_NAME,
+                    &result_session.session_id,
+                )
+                .await
+                .unwrap()
+            );
+            assert!(
+                dispatcher
+                    .private_oram_consensus_session_lease(&result_session_key)
                     .unwrap()
                     .is_none()
             );
