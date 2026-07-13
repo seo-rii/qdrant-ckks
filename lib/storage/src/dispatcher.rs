@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use api::grpc::qdrant::{
-    CompletePrivateOramWritebackRequest, PreparePrivateOramWritebackRequest,
-    PrivateOramReplicationBucket, PrivateOramReplicationEpochState,
-    PrivateOramReplicationIndexKind, PrivateOramReplicationSignature,
-    PrivateOramReplicationTransition,
+    CompletePrivateOramWritebackRequest, InstallPrivateOramIndexRequest,
+    PreparePrivateOramWritebackRequest, PrivateOramReplicationBucket,
+    PrivateOramReplicationEpochState, PrivateOramReplicationIndexKind,
+    PrivateOramReplicationSignature, PrivateOramReplicationTransition,
 };
 use api::rest::models::HardwareUsage;
 use collection::common::fetch_vectors::CollectionName;
@@ -369,6 +369,24 @@ impl Dispatcher {
             &writeback.new.root_hash,
             &writeback.writeback_digest,
         )
+    }
+
+    pub fn private_oram_initial_epoch_cas(
+        &self,
+        key: PrivateOramEpochKey,
+        index_epoch: u64,
+        root_hash: String,
+    ) -> Result<CompareAndSwapPrivateOramEpoch, StorageError> {
+        validate_private_oram_root_hash(&root_hash)?;
+        Ok(CompareAndSwapPrivateOramEpoch {
+            key,
+            expected: None,
+            new: PrivateOramConsensusEpoch {
+                index_epoch,
+                root_hash,
+                writeback_digest: None,
+            },
+        })
     }
 
     fn private_oram_writeback_cas(
@@ -787,6 +805,65 @@ impl Dispatcher {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub async fn coordinate_private_oram_initial_install(
+        &self,
+        collection_name: &CollectionName,
+        key: PrivateOramEpochKey,
+        request: InstallPrivateOramIndexRequest,
+        expected_epoch: u64,
+        expected_root_hash: &str,
+        wait_timeout: Option<Duration>,
+    ) -> Result<(), StorageError> {
+        validate_private_oram_root_hash(expected_root_hash)?;
+        let mut replica_peers = self.private_oram_replication_peers(collection_name).await?;
+        replica_peers.remove(&self.toc.this_peer_id);
+        let channel_service = self.toc.get_channel_service();
+        let mut pending = replica_peers
+            .iter()
+            .map(|peer_id| {
+                let peer_id = *peer_id;
+                let request = request.clone();
+                async move {
+                    channel_service
+                        .install_private_oram_index(peer_id, request)
+                        .await
+                        .and_then(|response| {
+                            if response.index_epoch == expected_epoch
+                                && response.root_hash == expected_root_hash
+                            {
+                                Ok(())
+                            } else {
+                                Err(collection::operations::types::CollectionError::service_error(
+                                    format!(
+                                        "private ORAM initial install acknowledgement is invalid on peer {peer_id}"
+                                    ),
+                                ))
+                            }
+                        })
+                }
+            })
+            .collect::<FuturesUnordered<_>>();
+        let mut first_error = None;
+        while let Some(result) = pending.next().await {
+            if let Err(error) = result
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+        }
+        if let Some(error) = first_error {
+            return Err(error.into());
+        }
+        let operation = self.private_oram_initial_epoch_cas(
+            key,
+            expected_epoch,
+            expected_root_hash.to_string(),
+        )?;
+        self.submit_private_oram_epoch_cas(operation, wait_timeout)
+            .await
+    }
+
     pub fn private_oram_consensus_epoch(
         &self,
         key: &PrivateOramEpochKey,
@@ -1097,6 +1174,18 @@ fn validate_private_oram_writeback_digest(digest: &str) -> Result<(), StorageErr
     Ok(())
 }
 
+fn validate_private_oram_root_hash(root_hash: &str) -> Result<(), StorageError> {
+    let decoded = BASE64URL_NOPAD
+        .decode(root_hash.as_bytes())
+        .map_err(|_| StorageError::bad_request("private ORAM consensus root hash is invalid"))?;
+    if decoded.len() != 32 || BASE64URL_NOPAD.encode(&decoded) != root_hash {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus root hash is invalid",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1236,5 +1325,12 @@ mod tests {
         assert!(error.contains("completion identity is invalid"));
         assert!(!error.contains("old-root"));
         assert!(!error.contains("new-root"));
+
+        let root_sentinel = "private-oram-invalid-root-sentinel";
+        let error = validate_private_oram_root_hash(root_sentinel)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("consensus root hash is invalid"));
+        assert!(!error.contains(root_sentinel));
     }
 }

@@ -340,7 +340,7 @@ fn manifest_to_proto(manifest: PrivateHnswOramManifest) -> grpc::PrivateHnswMani
     }
 }
 
-fn manifest_from_proto(
+pub(crate) fn manifest_from_proto(
     manifest: grpc::PrivateHnswManifest,
 ) -> Result<PrivateHnswOramManifest, Status> {
     let version = u16::try_from(manifest.version)
@@ -401,7 +401,9 @@ fn bucket_to_proto(bucket: PrivateHnswOramBucket) -> grpc::PrivateHnswBucket {
     }
 }
 
-fn bucket_from_proto(bucket: grpc::PrivateHnswBucket) -> Result<PrivateHnswOramBucket, Status> {
+pub(crate) fn bucket_from_proto(
+    bucket: grpc::PrivateHnswBucket,
+) -> Result<PrivateHnswOramBucket, Status> {
     let version = u16::try_from(bucket.version)
         .map_err(|_| Status::invalid_argument("bucket.version exceeds u16"))?;
     Ok(PrivateHnswOramBucket {
@@ -422,7 +424,9 @@ fn signature_to_proto(signature: PrivateHnswOramSignature) -> grpc::PrivateHnswS
     }
 }
 
-fn signature_from_proto(signature: grpc::PrivateHnswSignature) -> PrivateHnswOramSignature {
+pub(crate) fn signature_from_proto(
+    signature: grpc::PrivateHnswSignature,
+) -> PrivateHnswOramSignature {
     PrivateHnswOramSignature {
         alg: signature.alg,
         key_id: signature.key_id,

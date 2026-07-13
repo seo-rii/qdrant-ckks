@@ -4,6 +4,8 @@ package qdrant;
 option csharp_namespace = "Qdrant.Client.Grpc";
 
 import "telemetry_internal.proto";
+import "private_hnsw_oram_service.proto";
+import "private_result_oram_service.proto";
 
 service QdrantInternal {
   // Get current commit and term on the target peer.
@@ -31,6 +33,10 @@ service QdrantInternal {
   // Remove an uncommitted prepared writeback while its old view is still intact.
   rpc AbortPrivateOramWriteback(CompletePrivateOramWritebackRequest)
       returns (CompletePrivateOramWritebackResponse) {}
+
+  // Idempotently install one complete signed encrypted index on a replica.
+  rpc InstallPrivateOramIndex(InstallPrivateOramIndexRequest)
+      returns (InstallPrivateOramIndexResponse) {}
 }
 
 message GetConsensusCommitRequest {}
@@ -136,4 +142,32 @@ message CompletePrivateOramWritebackRequest {
 
 message CompletePrivateOramWritebackResponse {
   bool completed = 1;
+}
+
+message PrivateHnswInitialReplicationBundle {
+  PrivateHnswManifest manifest = 1;
+  PrivateHnswSignature manifest_signature = 2;
+  repeated PrivateHnswBucket buckets = 3;
+}
+
+message PrivateResultOramInitialReplicationBundle {
+  PrivateResultOramManifest manifest = 1;
+  PrivateResultOramSignature manifest_signature = 2;
+  repeated PrivateResultOramBucket buckets = 3;
+}
+
+message InstallPrivateOramIndexRequest {
+  string collection_name = 1;
+  string collection_id = 2;
+  PrivateOramReplicationIndexKind index_kind = 3;
+  string vector_name = 4;
+  oneof bundle {
+    PrivateHnswInitialReplicationBundle hnsw = 5;
+    PrivateResultOramInitialReplicationBundle result = 6;
+  }
+}
+
+message InstallPrivateOramIndexResponse {
+  uint64 index_epoch = 1;
+  string root_hash = 2;
 }

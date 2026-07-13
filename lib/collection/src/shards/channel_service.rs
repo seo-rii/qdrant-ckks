@@ -4,7 +4,8 @@ use std::time::Duration;
 
 use api::grpc::qdrant::qdrant_internal_client::QdrantInternalClient;
 use api::grpc::qdrant::{
-    CompletePrivateOramWritebackRequest, PreparePrivateOramWritebackRequest,
+    CompletePrivateOramWritebackRequest, InstallPrivateOramIndexRequest,
+    InstallPrivateOramIndexResponse, PreparePrivateOramWritebackRequest,
     WaitOnConsensusCommitRequest,
 };
 use api::grpc::transport_channel_pool::{AddTimeout, TransportChannelPool};
@@ -189,6 +190,28 @@ impl ChannelService {
     ) -> CollectionResult<bool> {
         self.complete_private_oram_writeback(peer_id, request, true)
             .await
+    }
+
+    pub async fn install_private_oram_index(
+        &self,
+        peer_id: PeerId,
+        request: InstallPrivateOramIndexRequest,
+    ) -> CollectionResult<InstallPrivateOramIndexResponse> {
+        self.with_qdrant_client(peer_id, |mut client| {
+            let request = request.clone();
+            async move {
+                client
+                    .install_private_oram_index(Request::new(request))
+                    .await
+            }
+        })
+        .await
+        .map(tonic::Response::into_inner)
+        .map_err(|_| {
+            CollectionError::service_error(format!(
+                "private ORAM initial install failed on peer {peer_id}"
+            ))
+        })
     }
 
     async fn complete_private_oram_writeback(
@@ -440,6 +463,18 @@ mod tests {
         assert!(error.contains("peer 7"));
         assert!(!error.contains(collection_sentinel));
         assert!(!error.contains(digest_sentinel));
+
+        let install = InstallPrivateOramIndexRequest {
+            collection_name: collection_sentinel.to_string(),
+            ..Default::default()
+        };
+        let error = service
+            .install_private_oram_index(11, install)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("peer 11"));
+        assert!(!error.contains(collection_sentinel));
 
         let complete = CompletePrivateOramWritebackRequest {
             collection_name: collection_sentinel.to_string(),

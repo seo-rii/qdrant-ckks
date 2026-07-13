@@ -1149,6 +1149,47 @@ pub async fn do_prepare_private_result_oram_replica_writeback(
         .map_err(private_result_oram_commit_writeback_store_error)
 }
 
+pub async fn do_install_private_result_oram_replica_bundle(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    collection_id: &str,
+    bundle: &PrivateResultOramUploadBundle,
+) -> StorageResult<PrivateResultOramEpochState> {
+    validate_private_result_oram_manifest_signature_shape(&bundle.manifest_signature)
+        .map_err(private_result_oram_error)?;
+    validate_private_result_oram_manifest_signature_owner_key(
+        &bundle.manifest,
+        &bundle.manifest_signature,
+    )?;
+    let resolved = resolve_private_result_oram_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        &bundle.manifest_signature.key_id,
+        "private_result_oram_replica_initial_install",
+        AccessRequirements::new().write(),
+    )
+    .await?;
+    if resolved.collection_crypto_id != collection_id {
+        return Err(StorageError::bad_request(
+            "private result ORAM initial replication collection identity does not match",
+        ));
+    }
+    resolved.validate_manifest_runtime_policy(&bundle.manifest)?;
+    let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&bundle.manifest.oram)?;
+    let _guard = begin_private_result_oram_upload_write_window(collection_id)?;
+    PrivateResultOramStore::new(&resolved.collection_path)
+        .write_initial_upload_bundle_with_signature(
+            bundle,
+            max_ciphertext_bytes,
+            resolved.manifest_context(&bundle.manifest_signature.key_id),
+        )
+        .map_err(private_result_oram_upload_store_error)
+}
+
 pub async fn do_complete_private_result_oram_replica_writeback(
     toc: &TableOfContent,
     auth: &Auth,

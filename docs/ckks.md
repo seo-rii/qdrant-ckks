@@ -173,8 +173,20 @@ bucket count, enforces a caller-provided aggregate memory budget before
 allocating the bucket vector, reads every encrypted bucket, revalidates the full
 upload bundle, and requires persisted Merkle leaves to match. Once any writeback
 advances the store, it cannot be mislabeled and exported as an initial bundle.
-The internal install RPC and initial consensus ownership registration remain the
-next cluster-mode step.
+
+The internal Qdrant service now also accepts a typed, provider-discriminated
+initial install RPC using the existing HNSW/result manifest, signature, and
+bucket protobuf records. The receiver enforces the same decode and aggregate
+bucket bounds, exact provider-kind/oneof/vector-name matching, stable collection
+identity, runtime policy, manifest owner signature, full upload validation, and
+node-local mutation lock as writeback replication. Installation is idempotent
+only for an exactly matching existing bundle. ChannelService sanitizes install
+transport errors to peer id only. Dispatcher sends the bundle to every derived
+remote replica, waits for all calls even after failures, requires every ACK to
+match the expected epoch/root, and only then submits the initial
+`expected=None`, digest-free ownership CAS to Raft. A failed CAS leaves the
+validated encrypted bundles in place for an exact retry. Public upload routes
+are still closed in cluster mode until they invoke this coordinator.
 
 ## Payload text
 

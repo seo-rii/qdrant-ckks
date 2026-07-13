@@ -301,7 +301,7 @@ fn manifest_to_proto(manifest: PrivateResultOramManifest) -> grpc::PrivateResult
     }
 }
 
-fn manifest_from_proto(
+pub(crate) fn manifest_from_proto(
     manifest: grpc::PrivateResultOramManifest,
 ) -> Result<PrivateResultOramManifest, Status> {
     let version = u16::try_from(manifest.version)
@@ -343,7 +343,7 @@ fn bucket_to_proto(bucket: PrivateResultOramBucket) -> grpc::PrivateResultOramBu
     }
 }
 
-fn bucket_from_proto(
+pub(crate) fn bucket_from_proto(
     bucket: grpc::PrivateResultOramBucket,
 ) -> Result<PrivateResultOramBucket, Status> {
     let version = u16::try_from(bucket.version)
@@ -366,7 +366,9 @@ fn signature_to_proto(signature: PrivateResultOramSignature) -> grpc::PrivateRes
     }
 }
 
-fn signature_from_proto(signature: grpc::PrivateResultOramSignature) -> PrivateResultOramSignature {
+pub(crate) fn signature_from_proto(
+    signature: grpc::PrivateResultOramSignature,
+) -> PrivateResultOramSignature {
     PrivateResultOramSignature {
         alg: signature.alg,
         key_id: signature.key_id,

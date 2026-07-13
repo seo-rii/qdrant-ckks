@@ -6,9 +6,11 @@ use api::grpc::qdrant_internal_server::QdrantInternal;
 use api::grpc::{
     CompletePrivateOramWritebackRequest, CompletePrivateOramWritebackResponse, GetAuditLogRequest,
     GetAuditLogResponse, GetConsensusCommitRequest, GetConsensusCommitResponse,
-    GetTelemetryRequest, GetTelemetryResponse, PeerTelemetry, PreparePrivateOramWritebackRequest,
+    GetTelemetryRequest, GetTelemetryResponse, InstallPrivateOramIndexRequest,
+    InstallPrivateOramIndexResponse, PeerTelemetry, PreparePrivateOramWritebackRequest,
     PreparePrivateOramWritebackResponse, PrivateOramReplicationIndexKind,
     PrivateOramReplicationTransition, WaitOnConsensusCommitRequest, WaitOnConsensusCommitResponse,
+    install_private_oram_index_request,
 };
 use chrono::DateTime;
 use collection::private_hnsw_oram_store::{
@@ -20,8 +22,8 @@ use collection::private_result_oram_store::{
 };
 use common::types::{DetailsLevel, TelemetryDetail};
 use qdrant_sec::{
-    PrivateHnswOramBucket, PrivateHnswOramSignature, PrivateResultOramBucket,
-    PrivateResultOramSignature,
+    PrivateHnswOramBucket, PrivateHnswOramSignature, PrivateHnswOramUploadBundle,
+    PrivateResultOramBucket, PrivateResultOramSignature, PrivateResultOramUploadBundle,
 };
 use storage::audit::AuditConfig;
 use storage::audit_reader::{AuditLogQuery, read_local_audit_logs};
@@ -34,6 +36,7 @@ use tonic::{Request, Response, Status};
 use crate::common::telemetry::TelemetryCollector;
 use crate::common::{private_hnsw, private_result_oram};
 use crate::settings::Settings;
+use crate::tonic::api::{private_hnsw_api, private_result_oram_api};
 
 pub struct QdrantInternalService {
     /// Telemetry collector
@@ -201,6 +204,38 @@ fn validate_completion_request_shape(
     {
         return Err(Status::invalid_argument(
             "private ORAM completion request shape is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_initial_install_bucket_bounds(
+    bucket_sizes: impl IntoIterator<Item = (usize, usize, usize)>,
+) -> Result<(), Status> {
+    let mut count = 0usize;
+    let mut total = 0usize;
+    for (ciphertext, ciphertext_hash, commitment) in bucket_sizes {
+        count = count.checked_add(1).ok_or_else(|| {
+            Status::invalid_argument("private ORAM initial install request is oversized")
+        })?;
+        if ciphertext > MAX_PRIVATE_ORAM_REPLICATION_CIPHERTEXT_CHARS
+            || ciphertext_hash > 128
+            || commitment > 128
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM initial install bucket shape is invalid",
+            ));
+        }
+        total = total.checked_add(ciphertext).ok_or_else(|| {
+            Status::invalid_argument("private ORAM initial install request is oversized")
+        })?;
+    }
+    if count == 0
+        || count > MAX_PRIVATE_ORAM_REPLICATION_BUCKETS
+        || total > MAX_PRIVATE_ORAM_REPLICATION_TOTAL_CIPHERTEXT_CHARS
+    {
+        return Err(Status::invalid_argument(
+            "private ORAM initial install request is oversized",
         ));
     }
     Ok(())
@@ -528,6 +563,130 @@ impl QdrantInternal for QdrantInternalService {
             .await
             .map(Response::new)
     }
+
+    async fn install_private_oram_index(
+        &self,
+        request: Request<InstallPrivateOramIndexRequest>,
+    ) -> Result<Response<InstallPrivateOramIndexResponse>, Status> {
+        let request = request.into_inner();
+        if request.collection_name.is_empty()
+            || request.collection_name.len() > 255
+            || request.collection_id.is_empty()
+            || request.collection_id.len() > 255
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM initial install request shape is invalid",
+            ));
+        }
+        let kind = PrivateOramReplicationIndexKind::try_from(request.index_kind)
+            .map_err(|_| Status::invalid_argument("private ORAM index kind is invalid"))?;
+        let auth = Auth::new_internal(Access::full("private ORAM replication"));
+
+        enum InitialBundle {
+            Hnsw(PrivateHnswOramUploadBundle),
+            Result(PrivateResultOramUploadBundle),
+        }
+        let bundle = match (kind, request.bundle) {
+            (
+                PrivateOramReplicationIndexKind::Hnsw,
+                Some(install_private_oram_index_request::Bundle::Hnsw(bundle)),
+            ) if !request.vector_name.is_empty() && request.vector_name.len() <= 255 => {
+                validate_initial_install_bucket_bounds(bundle.buckets.iter().map(|bucket| {
+                    (
+                        bucket.ciphertext.len(),
+                        bucket.ciphertext_sha256.len(),
+                        bucket.bucket_commitment.len(),
+                    )
+                }))?;
+                InitialBundle::Hnsw(PrivateHnswOramUploadBundle {
+                    manifest: private_hnsw_api::manifest_from_proto(bundle.manifest.ok_or_else(
+                        || Status::invalid_argument("private HNSW ORAM manifest is required"),
+                    )?)?,
+                    manifest_signature: private_hnsw_api::signature_from_proto(
+                        bundle.manifest_signature.ok_or_else(|| {
+                            Status::invalid_argument(
+                                "private HNSW ORAM manifest signature is required",
+                            )
+                        })?,
+                    ),
+                    buckets: bundle
+                        .buckets
+                        .into_iter()
+                        .map(private_hnsw_api::bucket_from_proto)
+                        .collect::<Result<Vec<_>, _>>()?,
+                })
+            }
+            (
+                PrivateOramReplicationIndexKind::Result,
+                Some(install_private_oram_index_request::Bundle::Result(bundle)),
+            ) if request.vector_name.is_empty() => {
+                validate_initial_install_bucket_bounds(bundle.buckets.iter().map(|bucket| {
+                    (
+                        bucket.ciphertext.len(),
+                        bucket.ciphertext_sha256.len(),
+                        bucket.bucket_commitment.len(),
+                    )
+                }))?;
+                InitialBundle::Result(PrivateResultOramUploadBundle {
+                    manifest: private_result_oram_api::manifest_from_proto(
+                        bundle.manifest.ok_or_else(|| {
+                            Status::invalid_argument("private result ORAM manifest is required")
+                        })?,
+                    )?,
+                    manifest_signature: private_result_oram_api::signature_from_proto(
+                        bundle.manifest_signature.ok_or_else(|| {
+                            Status::invalid_argument(
+                                "private result ORAM manifest signature is required",
+                            )
+                        })?,
+                    ),
+                    buckets: bundle
+                        .buckets
+                        .into_iter()
+                        .map(private_result_oram_api::bucket_from_proto)
+                        .collect::<Result<Vec<_>, _>>()?,
+                })
+            }
+            _ => {
+                return Err(Status::invalid_argument(
+                    "private ORAM initial install index kind and bundle do not match",
+                ));
+            }
+        };
+
+        let _lock = self.private_oram_replication_lock.lock().await;
+        let (index_epoch, root_hash) = match bundle {
+            InitialBundle::Hnsw(bundle) => {
+                let epoch = private_hnsw::do_install_private_hnsw_replica_bundle(
+                    &self.toc,
+                    &auth,
+                    &self.settings,
+                    &request.collection_name,
+                    &request.vector_name,
+                    &request.collection_id,
+                    &bundle,
+                )
+                .await?;
+                (epoch.index_epoch, epoch.root_hash)
+            }
+            InitialBundle::Result(bundle) => {
+                let epoch = private_result_oram::do_install_private_result_oram_replica_bundle(
+                    &self.toc,
+                    &auth,
+                    &self.settings,
+                    &request.collection_name,
+                    &request.collection_id,
+                    &bundle,
+                )
+                .await?;
+                (epoch.index_epoch, epoch.root_hash)
+            }
+        };
+        Ok(Response::new(InstallPrivateOramIndexResponse {
+            index_epoch,
+            root_hash,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -623,5 +782,33 @@ mod tests {
             "private ORAM completion request shape is invalid"
         );
         assert!(!err.message().contains(&sentinel));
+    }
+
+    #[test]
+    fn private_oram_initial_install_bounds_fail_closed() {
+        validate_initial_install_bucket_bounds([(1024, 43, 43)]).unwrap();
+
+        let empty = validate_initial_install_bucket_bounds(std::iter::empty()).unwrap_err();
+        assert_eq!(
+            empty.message(),
+            "private ORAM initial install request is oversized"
+        );
+
+        let oversized_hash = validate_initial_install_bucket_bounds([(1024, 129, 43)]).unwrap_err();
+        assert_eq!(
+            oversized_hash.message(),
+            "private ORAM initial install bucket shape is invalid"
+        );
+
+        let oversized_ciphertext = validate_initial_install_bucket_bounds([(
+            MAX_PRIVATE_ORAM_REPLICATION_CIPHERTEXT_CHARS + 1,
+            43,
+            43,
+        )])
+        .unwrap_err();
+        assert_eq!(
+            oversized_ciphertext.message(),
+            "private ORAM initial install bucket shape is invalid"
+        );
     }
 }

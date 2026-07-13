@@ -1390,6 +1390,49 @@ pub async fn do_prepare_private_hnsw_replica_writeback(
         .map_err(private_hnsw_commit_writeback_store_error)
 }
 
+pub async fn do_install_private_hnsw_replica_bundle(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    collection_id: &str,
+    bundle: &qdrant_sec::PrivateHnswOramUploadBundle,
+) -> StorageResult<PrivateHnswOramEpochState> {
+    validate_private_hnsw_oram_manifest_signature_shape(&bundle.manifest_signature)
+        .map_err(private_hnsw_error)?;
+    validate_private_hnsw_manifest_signature_owner_key(
+        &bundle.manifest,
+        &bundle.manifest_signature,
+    )?;
+    let resolved = resolve_private_hnsw_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        &bundle.manifest_signature.key_id,
+        "private_hnsw_replica_initial_install",
+        AccessRequirements::new().write(),
+    )
+    .await?;
+    if resolved.collection_crypto_id != collection_id {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM initial replication collection identity does not match",
+        ));
+    }
+    resolved.validate_manifest_runtime_policy(&bundle.manifest)?;
+    let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&bundle.manifest)?;
+    let _guard = begin_private_hnsw_upload_write_window(collection_id, vector_name)?;
+    PrivateHnswOramStore::new(&resolved.collection_path, vector_name)?
+        .write_initial_upload_bundle_with_signature(
+            bundle,
+            max_ciphertext_bytes,
+            resolved.manifest_context(&bundle.manifest_signature.key_id),
+        )
+        .map_err(private_hnsw_upload_store_error)
+}
+
 pub async fn do_complete_private_hnsw_replica_writeback(
     toc: &TableOfContent,
     auth: &Auth,
