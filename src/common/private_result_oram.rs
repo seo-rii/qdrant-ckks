@@ -1354,6 +1354,86 @@ pub async fn do_complete_private_result_oram_replica_writeback(
     }
 }
 
+pub struct PrivateResultOramRecoveryContext {
+    pub collection_id: String,
+    pub current: PrivateResultOramEpochState,
+    pub pending: Option<(
+        PrivateResultOramWritebackBatch,
+        PrivateResultOramConsensusWriteback,
+    )>,
+    replica: PrivateResultOramReplicaStoreContext,
+    _guard: PrivateResultOramUploadGuard,
+}
+
+impl PrivateResultOramRecoveryContext {
+    pub fn complete_pending(
+        &self,
+        expected: &PrivateResultOramConsensusWriteback,
+        abort: bool,
+    ) -> StorageResult<bool> {
+        if abort {
+            self.replica
+                .store
+                .abort_replica_writeback_with_signature(
+                    expected,
+                    self.replica.max_ciphertext_bytes,
+                    self.replica.signature_verification(),
+                )
+                .map_err(private_result_oram_commit_writeback_store_error)
+        } else {
+            self.replica
+                .store
+                .commit_replica_writeback_with_signature(
+                    expected,
+                    self.replica.max_ciphertext_bytes,
+                    self.replica.signature_verification(),
+                )
+                .map(|_| true)
+                .map_err(private_result_oram_commit_writeback_store_error)
+        }
+    }
+}
+
+pub async fn do_inspect_private_result_oram_recovery(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+) -> StorageResult<PrivateResultOramRecoveryContext> {
+    let record = do_get_private_result_oram_manifest(toc, auth, settings, collection_name).await?;
+    let collection_id = record.manifest.collection_id.clone();
+    let signing_key_id = record.manifest.owner_signing_key_id.clone();
+    let replica = private_result_oram_replica_store_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        &collection_id,
+        &signing_key_id,
+        "private_result_oram_recovery_inspect",
+    )
+    .await?;
+    let guard = begin_private_result_oram_upload_write_window(&collection_id)?;
+    let current = replica
+        .store
+        .read_current_epoch()
+        .map_err(private_result_oram_epoch_store_error)?;
+    let pending = replica
+        .store
+        .pending_writeback_replication_batch_with_signature(
+            replica.max_ciphertext_bytes,
+            replica.signature_verification(),
+        )
+        .map_err(private_result_oram_commit_writeback_store_error)?;
+    Ok(PrivateResultOramRecoveryContext {
+        collection_id,
+        current,
+        pending,
+        replica,
+        _guard: guard,
+    })
+}
+
 struct PrivateResultOramReplicaStoreContext {
     resolved: ResolvedPrivateResultOramContext,
     store: PrivateResultOramStore,

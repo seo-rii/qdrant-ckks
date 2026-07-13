@@ -6379,6 +6379,20 @@ mod private_hnsw_grpc_tests {
             assert_eq!(bundle.manifest, fixture.manifest);
             assert_eq!(bundle.manifest_signature, fixture.manifest_signature);
             assert_eq!(bundle.buckets, fixture.encrypted_build.buckets);
+
+            let recovery = crate::common::private_hnsw::do_inspect_private_hnsw_recovery(
+                toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+            )
+            .await
+            .unwrap();
+            assert_eq!(recovery.collection_id, COLLECTION_ID);
+            assert_eq!(recovery.vector_name, VECTOR_NAME);
+            assert_eq!(recovery.current, manifest_epoch);
+            assert!(recovery.pending.is_none());
         });
     }
 

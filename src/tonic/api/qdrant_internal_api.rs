@@ -32,7 +32,10 @@ use storage::content_manager::consensus_manager::ConsensusStateRef;
 use storage::content_manager::consensus_ops::{PrivateOramEpochKey, PrivateOramIndexKind};
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
-use storage::dispatcher::Dispatcher;
+use storage::dispatcher::{
+    Dispatcher, PrivateOramEpochRef, PrivateOramPendingTransitionRef, PrivateOramRecoveryAction,
+    classify_private_oram_recovery,
+};
 use storage::rbac::{Access, Auth};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
@@ -361,6 +364,145 @@ pub(crate) async fn coordinate_private_result_oram_initial_upload(
             None,
         )
         .await
+}
+
+#[allow(dead_code)]
+pub(crate) async fn recover_private_hnsw_replication(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+) -> Result<(), StorageError> {
+    let pass = new_unchecked_verification_pass();
+    let context = private_hnsw::do_inspect_private_hnsw_recovery(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+    )
+    .await?;
+    let key = PrivateOramEpochKey {
+        collection_id: context.collection_id.clone(),
+        index_kind: PrivateOramIndexKind::Hnsw,
+        index_name: vector_name.to_string(),
+    };
+    let consensus = dispatcher.private_oram_consensus_epoch(&key)?;
+    let pending = context
+        .pending
+        .as_ref()
+        .map(|(_, transition)| PrivateOramPendingTransitionRef {
+            old: PrivateOramEpochRef {
+                index_epoch: transition.old.index_epoch,
+                root_hash: &transition.old.root_hash,
+            },
+            new: PrivateOramEpochRef {
+                index_epoch: transition.new.index_epoch,
+                root_hash: &transition.new.root_hash,
+            },
+            writeback_digest: &transition.writeback_digest,
+        });
+    let action = classify_private_oram_recovery(
+        consensus.as_ref(),
+        PrivateOramEpochRef {
+            index_epoch: context.current.index_epoch,
+            root_hash: &context.current.root_hash,
+        },
+        pending,
+    )?;
+    let abort = match action {
+        PrivateOramRecoveryAction::Clean => return Ok(()),
+        PrivateOramRecoveryAction::AbortPending => true,
+        PrivateOramRecoveryAction::FinalizePending => false,
+    };
+    let (batch, transition) = context.pending.as_ref().ok_or_else(|| {
+        StorageError::service_error("private HNSW ORAM recovery transition is unavailable")
+    })?;
+    dispatcher
+        .complete_private_hnsw_oram_recovery_replicas(
+            &collection_name.to_string(),
+            &context.collection_id,
+            vector_name,
+            transition,
+            &batch.commit_signature.key_id,
+            abort,
+        )
+        .await?;
+    if !context.complete_pending(transition, abort)? {
+        return Err(StorageError::service_error(
+            "private HNSW ORAM local recovery was not completed",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub(crate) async fn recover_private_result_oram_replication(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+) -> Result<(), StorageError> {
+    let pass = new_unchecked_verification_pass();
+    let context = private_result_oram::do_inspect_private_result_oram_recovery(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+    )
+    .await?;
+    let key = PrivateOramEpochKey {
+        collection_id: context.collection_id.clone(),
+        index_kind: PrivateOramIndexKind::ResultPayload,
+        index_name: String::new(),
+    };
+    let consensus = dispatcher.private_oram_consensus_epoch(&key)?;
+    let pending = context
+        .pending
+        .as_ref()
+        .map(|(_, transition)| PrivateOramPendingTransitionRef {
+            old: PrivateOramEpochRef {
+                index_epoch: transition.old.index_epoch,
+                root_hash: &transition.old.root_hash,
+            },
+            new: PrivateOramEpochRef {
+                index_epoch: transition.new.index_epoch,
+                root_hash: &transition.new.root_hash,
+            },
+            writeback_digest: &transition.writeback_digest,
+        });
+    let action = classify_private_oram_recovery(
+        consensus.as_ref(),
+        PrivateOramEpochRef {
+            index_epoch: context.current.index_epoch,
+            root_hash: &context.current.root_hash,
+        },
+        pending,
+    )?;
+    let abort = match action {
+        PrivateOramRecoveryAction::Clean => return Ok(()),
+        PrivateOramRecoveryAction::AbortPending => true,
+        PrivateOramRecoveryAction::FinalizePending => false,
+    };
+    let (batch, transition) = context.pending.as_ref().ok_or_else(|| {
+        StorageError::service_error("private result ORAM recovery transition is unavailable")
+    })?;
+    dispatcher
+        .complete_private_result_oram_recovery_replicas(
+            &collection_name.to_string(),
+            &context.collection_id,
+            transition,
+            &batch.commit_signature.key_id,
+            abort,
+        )
+        .await?;
+    if !context.complete_pending(transition, abort)? {
+        return Err(StorageError::service_error(
+            "private result ORAM local recovery was not completed",
+        ));
+    }
+    Ok(())
 }
 
 fn required_transition(

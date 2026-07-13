@@ -5348,6 +5348,19 @@ mod private_result_oram_grpc_tests {
             assert_eq!(bundle.manifest, fixture.manifest);
             assert_eq!(bundle.manifest_signature, fixture.signature);
             assert_eq!(bundle.buckets, fixture.buckets);
+
+            let recovery =
+                crate::common::private_result_oram::do_inspect_private_result_oram_recovery(
+                    toc,
+                    &auth,
+                    &settings,
+                    COLLECTION_NAME,
+                )
+                .await
+                .unwrap();
+            assert_eq!(recovery.collection_id, COLLECTION_ID);
+            assert_eq!(recovery.current, manifest_epoch);
+            assert!(recovery.pending.is_none());
         });
     }
 

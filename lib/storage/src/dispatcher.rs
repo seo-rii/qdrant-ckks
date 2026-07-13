@@ -734,6 +734,88 @@ impl Dispatcher {
         .await
     }
 
+    pub async fn complete_private_hnsw_oram_recovery_replicas(
+        &self,
+        collection_name: &CollectionName,
+        collection_id: &str,
+        vector_name: &str,
+        transition: &PrivateHnswOramConsensusWriteback,
+        signing_key_id: &str,
+        abort: bool,
+    ) -> Result<(), StorageError> {
+        self.complete_private_oram_recovery_replicas(
+            collection_name,
+            collection_id,
+            PrivateOramReplicationIndexKind::Hnsw,
+            vector_name,
+            transition.old.index_epoch,
+            &transition.old.root_hash,
+            transition.new.index_epoch,
+            &transition.new.root_hash,
+            &transition.writeback_digest,
+            signing_key_id,
+            abort,
+        )
+        .await
+    }
+
+    pub async fn complete_private_result_oram_recovery_replicas(
+        &self,
+        collection_name: &CollectionName,
+        collection_id: &str,
+        transition: &PrivateResultOramConsensusWriteback,
+        signing_key_id: &str,
+        abort: bool,
+    ) -> Result<(), StorageError> {
+        self.complete_private_oram_recovery_replicas(
+            collection_name,
+            collection_id,
+            PrivateOramReplicationIndexKind::Result,
+            "",
+            transition.old.index_epoch,
+            &transition.old.root_hash,
+            transition.new.index_epoch,
+            &transition.new.root_hash,
+            &transition.writeback_digest,
+            signing_key_id,
+            abort,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn complete_private_oram_recovery_replicas(
+        &self,
+        collection_name: &CollectionName,
+        collection_id: &str,
+        index_kind: PrivateOramReplicationIndexKind,
+        index_name: &str,
+        old_epoch: u64,
+        old_root_hash: &str,
+        new_epoch: u64,
+        new_root_hash: &str,
+        writeback_digest: &str,
+        signing_key_id: &str,
+        abort: bool,
+    ) -> Result<(), StorageError> {
+        let mut replica_peers = self.private_oram_replication_peers(collection_name).await?;
+        replica_peers.remove(&self.toc.this_peer_id);
+        let request = private_oram_complete_request(
+            collection_name,
+            collection_id,
+            index_kind,
+            index_name,
+            old_epoch,
+            old_root_hash,
+            new_epoch,
+            new_root_hash,
+            writeback_digest,
+            signing_key_id,
+        )?;
+        self.complete_private_oram_replicas(&replica_peers, request, abort)
+            .await
+    }
+
     async fn prepare_private_oram_replicas(
         &self,
         replica_peers: &BTreeSet<PeerId>,

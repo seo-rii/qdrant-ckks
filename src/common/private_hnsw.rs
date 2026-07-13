@@ -1610,6 +1610,91 @@ pub async fn do_complete_private_hnsw_replica_writeback(
     }
 }
 
+pub struct PrivateHnswRecoveryContext {
+    pub collection_id: String,
+    pub vector_name: String,
+    pub current: PrivateHnswOramEpochState,
+    pub pending: Option<(
+        PrivateHnswOramWritebackBatch,
+        PrivateHnswOramConsensusWriteback,
+    )>,
+    replica: PrivateHnswReplicaStoreContext,
+    _guard: PrivateHnswUploadGuard,
+}
+
+impl PrivateHnswRecoveryContext {
+    pub fn complete_pending(
+        &self,
+        expected: &PrivateHnswOramConsensusWriteback,
+        abort: bool,
+    ) -> StorageResult<bool> {
+        if abort {
+            self.replica
+                .store
+                .abort_replica_writeback_with_signature(
+                    expected,
+                    self.replica.max_ciphertext_bytes,
+                    self.replica.signature_verification(),
+                )
+                .map_err(private_hnsw_commit_writeback_store_error)
+        } else {
+            self.replica
+                .store
+                .commit_replica_writeback_with_signature(
+                    expected,
+                    self.replica.max_ciphertext_bytes,
+                    self.replica.signature_verification(),
+                )
+                .map(|_| true)
+                .map_err(private_hnsw_commit_writeback_store_error)
+        }
+    }
+}
+
+pub async fn do_inspect_private_hnsw_recovery(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+) -> StorageResult<PrivateHnswRecoveryContext> {
+    let record =
+        do_get_private_hnsw_manifest(toc, auth, settings, collection_name, vector_name).await?;
+    let collection_id = record.manifest.collection_id.clone();
+    let signing_key_id = record.manifest.owner_signing_key_id.clone();
+    let replica = private_hnsw_replica_store_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        &collection_id,
+        &signing_key_id,
+        "private_hnsw_recovery_inspect",
+    )
+    .await?;
+    let guard = begin_private_hnsw_upload_write_window(&collection_id, vector_name)?;
+    let current = replica
+        .store
+        .read_current_epoch()
+        .map_err(private_hnsw_epoch_store_error)?;
+    let pending = replica
+        .store
+        .pending_writeback_replication_batch_with_signature(
+            replica.max_ciphertext_bytes,
+            replica.signature_verification(),
+        )
+        .map_err(private_hnsw_commit_writeback_store_error)?;
+    Ok(PrivateHnswRecoveryContext {
+        collection_id,
+        vector_name: vector_name.to_string(),
+        current,
+        pending,
+        replica,
+        _guard: guard,
+    })
+}
+
 struct PrivateHnswReplicaStoreContext {
     resolved: ResolvedPrivateHnswContext,
     store: PrivateHnswOramStore,

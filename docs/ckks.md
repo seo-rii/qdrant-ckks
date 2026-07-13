@@ -212,6 +212,21 @@ closed. This provider-neutral classifier does not by itself open distributed
 session routes; provider journal validation and remote/local recovery fan-out
 must consume the decision first.
 
+HNSW and result ORAM now expose validated recovery contexts for that next
+step. A context revalidates runtime policy, manifest ownership, current epoch,
+and the owner-signed pending replication batch, then holds the existing
+upload/session mutation reservation until it is dropped. The internal recovery
+orchestrator classifies that snapshot against Raft, re-derives the complete
+active replica set, sends exact abort/finalize completion to every remote, and
+only then applies the same exact transition locally. Clean initial stores are
+covered by route fixtures for both providers. This orchestrator is not yet
+connected to public sessions. In particular, a replica that already removed
+its finalized journal cannot prove an exact digest replay from epoch/root
+alone; a durable consensus-bound completion record is required before partial
+remote-finalize recovery can safely become idempotent. Such cases continue to
+fail closed rather than accepting a same-epoch/root transition with a different
+digest.
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:
