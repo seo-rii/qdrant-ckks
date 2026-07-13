@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::grpc::qdrant_internal_server::QdrantInternal;
 use api::grpc::{
@@ -26,14 +26,15 @@ use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     PrivateHnswOramBucket, PrivateHnswOramSignature, PrivateHnswOramUploadBundle,
     PrivateResultOramBucket, PrivateResultOramSignature, PrivateResultOramUploadBundle,
+    ResultPrivacyMode,
 };
 use sha2::{Digest, Sha256};
 use storage::audit::AuditConfig;
 use storage::audit_reader::{AuditLogQuery, read_local_audit_logs};
 use storage::content_manager::consensus_manager::ConsensusStateRef;
 use storage::content_manager::consensus_ops::{
-    CompareAndSwapPrivateOramSessionLease, PrivateOramEpochKey, PrivateOramIndexKind,
-    PrivateOramSessionLease,
+    CompareAndSwapPrivateOramSessionLease, PrivateOramConsensusEpoch, PrivateOramEpochKey,
+    PrivateOramIndexKind, PrivateOramSessionLease,
 };
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
@@ -256,6 +257,7 @@ fn validate_initial_install_bucket_bounds(
 const BYTES_PER_MIB: usize = 1024 * 1024;
 const PRIVATE_ORAM_SESSION_LEASE_HASH_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-session-lease-id/v1";
+const PRIVATE_ORAM_SESSION_LEASE_RENEW_SECS: u64 = 300;
 
 pub(crate) fn private_oram_session_lease_hash(session_id: &str) -> Result<String, StorageError> {
     if session_id.is_empty() || session_id.len() > 256 {
@@ -270,7 +272,6 @@ pub(crate) fn private_oram_session_lease_hash(session_id: &str) -> Result<String
     Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
 }
 
-#[allow(dead_code)]
 pub(crate) async fn acquire_private_oram_session_lease(
     dispatcher: &Dispatcher,
     key: PrivateOramEpochKey,
@@ -311,7 +312,6 @@ pub(crate) async fn acquire_private_oram_session_lease(
     Ok(lease)
 }
 
-#[allow(dead_code)]
 pub(crate) fn require_private_oram_session_lease(
     dispatcher: &Dispatcher,
     key: &PrivateOramEpochKey,
@@ -353,7 +353,6 @@ fn renewed_private_oram_session_lease(
     })
 }
 
-#[allow(dead_code)]
 pub(crate) async fn renew_private_oram_session_lease(
     dispatcher: &Dispatcher,
     key: PrivateOramEpochKey,
@@ -376,7 +375,6 @@ pub(crate) async fn renew_private_oram_session_lease(
     Ok(renewed)
 }
 
-#[allow(dead_code)]
 pub(crate) async fn release_private_oram_session_lease(
     dispatcher: &Dispatcher,
     key: PrivateOramEpochKey,
@@ -402,6 +400,52 @@ pub(crate) async fn release_private_oram_session_lease(
             None,
         )
         .await
+}
+
+fn current_private_oram_unix_secs() -> Result<u64, StorageError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| StorageError::service_error("system clock is before UNIX epoch"))
+}
+
+fn private_oram_renewal_expiry(
+    current: &PrivateOramSessionLease,
+    now_unix: u64,
+) -> Result<u64, StorageError> {
+    let ttl_expiry = now_unix
+        .checked_add(PRIVATE_ORAM_SESSION_LEASE_RENEW_SECS)
+        .ok_or_else(|| StorageError::service_error("private ORAM session lease overflowed"))?;
+    let monotonic_expiry = current
+        .expires_at_unix
+        .checked_add(1)
+        .ok_or_else(|| StorageError::service_error("private ORAM session lease overflowed"))?;
+    Ok(ttl_expiry.max(monotonic_expiry))
+}
+
+fn classify_failed_private_oram_owner_writeback(
+    consensus: Option<&PrivateOramConsensusEpoch>,
+    old_epoch: u64,
+    old_root_hash: &str,
+    new_epoch: u64,
+    new_root_hash: &str,
+    writeback_digest: &str,
+) -> Result<PrivateOramRecoveryAction, StorageError> {
+    if consensus.is_some_and(|state| {
+        state.index_epoch == new_epoch
+            && state.root_hash == new_root_hash
+            && state.writeback_digest.as_deref() == Some(writeback_digest)
+    }) {
+        return Ok(PrivateOramRecoveryAction::FinalizePending);
+    }
+    if consensus
+        .is_some_and(|state| state.index_epoch == old_epoch && state.root_hash == old_root_hash)
+    {
+        return Ok(PrivateOramRecoveryAction::AbortPending);
+    }
+    Err(StorageError::service_error(
+        "private ORAM consensus state is ambiguous after commit failure",
+    ))
 }
 
 pub(crate) async fn coordinate_private_hnsw_initial_upload(
@@ -520,7 +564,6 @@ pub(crate) async fn coordinate_private_result_oram_initial_upload(
         .await
 }
 
-#[allow(dead_code)]
 pub(crate) async fn recover_private_hnsw_replication(
     dispatcher: &Dispatcher,
     auth: &Auth,
@@ -591,7 +634,6 @@ pub(crate) async fn recover_private_hnsw_replication(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub(crate) async fn recover_private_result_oram_replication(
     dispatcher: &Dispatcher,
     auth: &Auth,
@@ -657,6 +699,557 @@ pub(crate) async fn recover_private_result_oram_replication(
         ));
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn open_private_hnsw_session_coordinated(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    client_id: String,
+    desired_epoch: u64,
+    fixed_budget: bool,
+    result_privacy: ResultPrivacyMode,
+) -> Result<private_hnsw::PrivateHnswSessionResponse, StorageError> {
+    recover_private_hnsw_replication(dispatcher, auth, settings, collection_name, vector_name)
+        .await?;
+    let pass = new_unchecked_verification_pass();
+    let session = private_hnsw::do_open_private_hnsw_session_coordinated(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        client_id,
+        desired_epoch,
+        fixed_budget,
+        result_privacy,
+    )
+    .await?;
+    let key = PrivateOramEpochKey {
+        collection_id: session.collection_id.clone(),
+        index_kind: PrivateOramIndexKind::Hnsw,
+        index_name: vector_name.to_string(),
+    };
+    let lease_result = async {
+        let consensus = dispatcher.private_oram_consensus_epoch(&key)?;
+        if !consensus.as_ref().is_some_and(|state| {
+            state.index_epoch == session.index_epoch && state.root_hash == session.root_hash
+        }) {
+            return Err(StorageError::service_error(
+                "private HNSW ORAM local epoch/root does not match consensus",
+            ));
+        }
+        let now_unix = current_private_oram_unix_secs()?;
+        acquire_private_oram_session_lease(
+            dispatcher,
+            key,
+            &session.session_id,
+            now_unix,
+            session.lease_expires_unix,
+        )
+        .await
+        .map(|_| ())
+    }
+    .await;
+    if let Err(error) = lease_result {
+        let cleanup_pass = new_unchecked_verification_pass();
+        private_hnsw::do_close_private_hnsw_session(
+            dispatcher.toc(auth, &cleanup_pass),
+            auth,
+            settings,
+            collection_name,
+            vector_name,
+            &session.session_id,
+        )
+        .await?;
+        return Err(error);
+    }
+    Ok(session)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn read_private_hnsw_paths_coordinated(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    session_id: &str,
+    index_epoch: u64,
+    root_hash: &str,
+    paths: Vec<String>,
+    padding: private_hnsw::PrivateHnswReadPadding,
+    client_signature: private_hnsw::PrivateHnswClientSignature,
+) -> Result<private_hnsw::PrivateHnswReadPathsResponse, StorageError> {
+    let now_unix = current_private_oram_unix_secs()?;
+    let (collection_id, _) = private_hnsw::private_hnsw_session_consensus_lease_identity(
+        vector_name,
+        session_id,
+        now_unix,
+    )?;
+    require_private_oram_session_lease(
+        dispatcher,
+        &PrivateOramEpochKey {
+            collection_id,
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: vector_name.to_string(),
+        },
+        session_id,
+        now_unix,
+    )?;
+    let pass = new_unchecked_verification_pass();
+    private_hnsw::do_read_private_hnsw_paths_coordinated(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        session_id,
+        index_epoch,
+        root_hash,
+        paths,
+        padding,
+        client_signature,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn commit_private_hnsw_paths_coordinated(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    session_id: &str,
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: String,
+    new_root_hash: String,
+    updated_buckets: Vec<PrivateHnswOramBucket>,
+    commit_signature: private_hnsw::PrivateHnswClientSignature,
+) -> Result<PrivateHnswOramEpochState, StorageError> {
+    let now_unix = current_private_oram_unix_secs()?;
+    let (collection_id, _) = private_hnsw::private_hnsw_session_consensus_lease_identity(
+        vector_name,
+        session_id,
+        now_unix,
+    )?;
+    let key = PrivateOramEpochKey {
+        collection_id: collection_id.clone(),
+        index_kind: PrivateOramIndexKind::Hnsw,
+        index_name: vector_name.to_string(),
+    };
+    let current_lease = require_private_oram_session_lease(dispatcher, &key, session_id, now_unix)?;
+    let pass = new_unchecked_verification_pass();
+    let context = private_hnsw::do_stage_private_hnsw_owner_writeback(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        session_id,
+        old_epoch,
+        new_epoch,
+        old_root_hash,
+        new_root_hash,
+        updated_buckets,
+        commit_signature,
+    )
+    .await?;
+    if context.collection_id() != collection_id {
+        context.cancel_staged_session()?;
+        return Err(StorageError::service_error(
+            "private HNSW ORAM session identity changed during commit staging",
+        ));
+    }
+    let lease_expires_unix = match private_oram_renewal_expiry(&current_lease, now_unix) {
+        Ok(expires_at) => expires_at,
+        Err(error) => {
+            context.cancel_staged_session()?;
+            return Err(error);
+        }
+    };
+    if let Err(error) = renew_private_oram_session_lease(
+        dispatcher,
+        key.clone(),
+        session_id,
+        now_unix,
+        lease_expires_unix,
+    )
+    .await
+    {
+        context.cancel_staged_session()?;
+        return Err(error);
+    }
+    let batch = context.batch().clone();
+    let transition = context.transition().clone();
+    let prepare_context = context.clone();
+    let abort_context = context.clone();
+    let finalize_context = context.clone();
+    let result = dispatcher
+        .coordinate_private_hnsw_oram_writeback(
+            collection_name.to_string(),
+            collection_id,
+            vector_name.to_string(),
+            batch,
+            transition.clone(),
+            None,
+            move || prepare_context.prepare_local(),
+            move || abort_context.abort_local(),
+            move || finalize_context.finalize_local(lease_expires_unix),
+        )
+        .await;
+    match result {
+        Ok(()) => Ok(transition.new),
+        Err(coordinate_error) => {
+            let consensus = dispatcher.private_oram_consensus_epoch(&key)?;
+            match classify_failed_private_oram_owner_writeback(
+                consensus.as_ref(),
+                transition.old.index_epoch,
+                &transition.old.root_hash,
+                transition.new.index_epoch,
+                &transition.new.root_hash,
+                &transition.writeback_digest,
+            )? {
+                PrivateOramRecoveryAction::FinalizePending => {
+                    dispatcher
+                        .complete_private_hnsw_oram_recovery_replicas(
+                            &collection_name.to_string(),
+                            context.collection_id(),
+                            vector_name,
+                            &transition,
+                            &context.batch().commit_signature.key_id,
+                            false,
+                        )
+                        .await?;
+                    context.finalize_local(lease_expires_unix)?;
+                    Ok(transition.new)
+                }
+                PrivateOramRecoveryAction::AbortPending => {
+                    let remote_abort = dispatcher
+                        .complete_private_hnsw_oram_recovery_replicas(
+                            &collection_name.to_string(),
+                            context.collection_id(),
+                            vector_name,
+                            &transition,
+                            &context.batch().commit_signature.key_id,
+                            true,
+                        )
+                        .await;
+                    let local_abort = context.abort_local();
+                    remote_abort?;
+                    local_abort?;
+                    Err(coordinate_error)
+                }
+                PrivateOramRecoveryAction::Clean => Err(StorageError::service_error(
+                    "private HNSW ORAM commit recovery classification is invalid",
+                )),
+            }
+        }
+    }
+}
+
+pub(crate) async fn close_private_hnsw_session_coordinated(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    session_id: &str,
+) -> Result<bool, StorageError> {
+    let now_unix = current_private_oram_unix_secs()?;
+    let (collection_id, _) = private_hnsw::private_hnsw_session_consensus_lease_identity(
+        vector_name,
+        session_id,
+        now_unix,
+    )?;
+    let key = PrivateOramEpochKey {
+        collection_id,
+        index_kind: PrivateOramIndexKind::Hnsw,
+        index_name: vector_name.to_string(),
+    };
+    require_private_oram_session_lease(dispatcher, &key, session_id, now_unix)?;
+    let pass = new_unchecked_verification_pass();
+    let closed = private_hnsw::do_close_private_hnsw_session(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        session_id,
+    )
+    .await?;
+    release_private_oram_session_lease(dispatcher, key, session_id).await?;
+    Ok(closed)
+}
+
+pub(crate) async fn open_private_result_oram_session_coordinated(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    client_id: String,
+    desired_epoch: u64,
+    fixed_budget: bool,
+) -> Result<private_result_oram::PrivateResultOramSessionResponse, StorageError> {
+    recover_private_result_oram_replication(dispatcher, auth, settings, collection_name).await?;
+    let pass = new_unchecked_verification_pass();
+    let session = private_result_oram::do_open_private_result_oram_session_coordinated(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        client_id,
+        desired_epoch,
+        fixed_budget,
+    )
+    .await?;
+    let key = PrivateOramEpochKey {
+        collection_id: session.collection_id.clone(),
+        index_kind: PrivateOramIndexKind::ResultPayload,
+        index_name: String::new(),
+    };
+    let lease_result = async {
+        let consensus = dispatcher.private_oram_consensus_epoch(&key)?;
+        if !consensus.as_ref().is_some_and(|state| {
+            state.index_epoch == session.index_epoch && state.root_hash == session.root_hash
+        }) {
+            return Err(StorageError::service_error(
+                "private result ORAM local epoch/root does not match consensus",
+            ));
+        }
+        let now_unix = current_private_oram_unix_secs()?;
+        acquire_private_oram_session_lease(
+            dispatcher,
+            key,
+            &session.session_id,
+            now_unix,
+            session.lease_expires_unix,
+        )
+        .await
+        .map(|_| ())
+    }
+    .await;
+    if let Err(error) = lease_result {
+        let cleanup_pass = new_unchecked_verification_pass();
+        private_result_oram::do_close_private_result_oram_session(
+            dispatcher.toc(auth, &cleanup_pass),
+            auth,
+            settings,
+            collection_name,
+            &session.session_id,
+        )
+        .await?;
+        return Err(error);
+    }
+    Ok(session)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn read_private_result_oram_buckets_coordinated(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    session_id: &str,
+    index_epoch: u64,
+    root_hash: String,
+    bucket_ids: Vec<u64>,
+    read_signature: PrivateResultOramSignature,
+) -> Result<private_result_oram::PrivateResultOramReadBucketsResponse, StorageError> {
+    let now_unix = current_private_oram_unix_secs()?;
+    let (collection_id, _) =
+        private_result_oram::private_result_oram_session_consensus_lease_identity(
+            session_id, now_unix,
+        )?;
+    require_private_oram_session_lease(
+        dispatcher,
+        &PrivateOramEpochKey {
+            collection_id,
+            index_kind: PrivateOramIndexKind::ResultPayload,
+            index_name: String::new(),
+        },
+        session_id,
+        now_unix,
+    )?;
+    let pass = new_unchecked_verification_pass();
+    private_result_oram::do_read_private_result_oram_buckets_coordinated(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        session_id,
+        index_epoch,
+        root_hash,
+        bucket_ids,
+        read_signature,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn commit_private_result_oram_buckets_coordinated(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    session_id: &str,
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: String,
+    new_root_hash: String,
+    updated_buckets: Vec<PrivateResultOramBucket>,
+    commit_signature: PrivateResultOramSignature,
+) -> Result<PrivateResultOramEpochState, StorageError> {
+    let now_unix = current_private_oram_unix_secs()?;
+    let (collection_id, _) =
+        private_result_oram::private_result_oram_session_consensus_lease_identity(
+            session_id, now_unix,
+        )?;
+    let key = PrivateOramEpochKey {
+        collection_id: collection_id.clone(),
+        index_kind: PrivateOramIndexKind::ResultPayload,
+        index_name: String::new(),
+    };
+    let current_lease = require_private_oram_session_lease(dispatcher, &key, session_id, now_unix)?;
+    let pass = new_unchecked_verification_pass();
+    let context = private_result_oram::do_stage_private_result_oram_owner_writeback(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        session_id,
+        old_epoch,
+        new_epoch,
+        old_root_hash,
+        new_root_hash,
+        updated_buckets,
+        commit_signature,
+    )
+    .await?;
+    if context.collection_id() != collection_id {
+        context.cancel_staged_session()?;
+        return Err(StorageError::service_error(
+            "private result ORAM session identity changed during commit staging",
+        ));
+    }
+    let lease_expires_unix = match private_oram_renewal_expiry(&current_lease, now_unix) {
+        Ok(expires_at) => expires_at,
+        Err(error) => {
+            context.cancel_staged_session()?;
+            return Err(error);
+        }
+    };
+    if let Err(error) = renew_private_oram_session_lease(
+        dispatcher,
+        key.clone(),
+        session_id,
+        now_unix,
+        lease_expires_unix,
+    )
+    .await
+    {
+        context.cancel_staged_session()?;
+        return Err(error);
+    }
+    let batch = context.batch().clone();
+    let transition = context.transition().clone();
+    let prepare_context = context.clone();
+    let abort_context = context.clone();
+    let finalize_context = context.clone();
+    let result = dispatcher
+        .coordinate_private_result_oram_writeback(
+            collection_name.to_string(),
+            collection_id,
+            batch,
+            transition.clone(),
+            None,
+            move || prepare_context.prepare_local(),
+            move || abort_context.abort_local(),
+            move || finalize_context.finalize_local(lease_expires_unix),
+        )
+        .await;
+    match result {
+        Ok(()) => Ok(transition.new),
+        Err(coordinate_error) => {
+            let consensus = dispatcher.private_oram_consensus_epoch(&key)?;
+            match classify_failed_private_oram_owner_writeback(
+                consensus.as_ref(),
+                transition.old.index_epoch,
+                &transition.old.root_hash,
+                transition.new.index_epoch,
+                &transition.new.root_hash,
+                &transition.writeback_digest,
+            )? {
+                PrivateOramRecoveryAction::FinalizePending => {
+                    dispatcher
+                        .complete_private_result_oram_recovery_replicas(
+                            &collection_name.to_string(),
+                            context.collection_id(),
+                            &transition,
+                            &context.batch().commit_signature.key_id,
+                            false,
+                        )
+                        .await?;
+                    context.finalize_local(lease_expires_unix)?;
+                    Ok(transition.new)
+                }
+                PrivateOramRecoveryAction::AbortPending => {
+                    let remote_abort = dispatcher
+                        .complete_private_result_oram_recovery_replicas(
+                            &collection_name.to_string(),
+                            context.collection_id(),
+                            &transition,
+                            &context.batch().commit_signature.key_id,
+                            true,
+                        )
+                        .await;
+                    let local_abort = context.abort_local();
+                    remote_abort?;
+                    local_abort?;
+                    Err(coordinate_error)
+                }
+                PrivateOramRecoveryAction::Clean => Err(StorageError::service_error(
+                    "private result ORAM commit recovery classification is invalid",
+                )),
+            }
+        }
+    }
+}
+
+pub(crate) async fn close_private_result_oram_session_coordinated(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    session_id: &str,
+) -> Result<bool, StorageError> {
+    let now_unix = current_private_oram_unix_secs()?;
+    let (collection_id, _) =
+        private_result_oram::private_result_oram_session_consensus_lease_identity(
+            session_id, now_unix,
+        )?;
+    let key = PrivateOramEpochKey {
+        collection_id,
+        index_kind: PrivateOramIndexKind::ResultPayload,
+        index_name: String::new(),
+    };
+    require_private_oram_session_lease(dispatcher, &key, session_id, now_unix)?;
+    let pass = new_unchecked_verification_pass();
+    let closed = private_result_oram::do_close_private_result_oram_session(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        session_id,
+    )
+    .await?;
+    release_private_oram_session_lease(dispatcher, key, session_id).await?;
+    Ok(closed)
 }
 
 fn required_transition(
@@ -1149,6 +1742,72 @@ mod tests {
                     .to_string();
             assert!(rendered.contains("renewal interval is invalid"));
             assert!(!rendered.contains(&current.lease_id_hash));
+        }
+
+        assert_eq!(private_oram_renewal_expiry(&current, 101).unwrap(), 401);
+        assert_eq!(private_oram_renewal_expiry(&current, 200).unwrap(), 500);
+        assert!(private_oram_renewal_expiry(&current, u64::MAX).is_err());
+    }
+
+    #[test]
+    fn failed_owner_writeback_recovery_requires_exact_consensus_state() {
+        let old = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: "old-root-sentinel".to_string(),
+            writeback_digest: Some("prior-digest-sentinel".to_string()),
+        };
+        let new = PrivateOramConsensusEpoch {
+            index_epoch: 43,
+            root_hash: "new-root-sentinel".to_string(),
+            writeback_digest: Some("writeback-digest-sentinel".to_string()),
+        };
+        assert_eq!(
+            classify_failed_private_oram_owner_writeback(
+                Some(&old),
+                42,
+                "old-root-sentinel",
+                43,
+                "new-root-sentinel",
+                "writeback-digest-sentinel",
+            )
+            .unwrap(),
+            PrivateOramRecoveryAction::AbortPending
+        );
+        assert_eq!(
+            classify_failed_private_oram_owner_writeback(
+                Some(&new),
+                42,
+                "old-root-sentinel",
+                43,
+                "new-root-sentinel",
+                "writeback-digest-sentinel",
+            )
+            .unwrap(),
+            PrivateOramRecoveryAction::FinalizePending
+        );
+
+        let mut conflicting = new;
+        conflicting.writeback_digest = Some("conflicting-digest-sentinel".to_string());
+        for consensus in [Some(&conflicting), None] {
+            let rendered = classify_failed_private_oram_owner_writeback(
+                consensus,
+                42,
+                "old-root-sentinel",
+                43,
+                "new-root-sentinel",
+                "writeback-digest-sentinel",
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(rendered.contains("consensus state is ambiguous"));
+            for secret in [
+                "old-root-sentinel",
+                "new-root-sentinel",
+                "writeback-digest-sentinel",
+                "conflicting-digest-sentinel",
+            ] {
+                assert!(!rendered.contains(secret));
+            }
         }
     }
 

@@ -20,8 +20,8 @@ use qdrant_sec::{
     PrivateResultOramReadBucketsSignatureInput, PrivateResultOramSignature,
     PrivateResultOramSignatureVerification, PrivateResultOramUploadBundle,
     private_result_oram_bucket_ciphertext_bytes, private_result_oram_fixed_writeback_bucket_budget,
-    validate_private_result_oram_commit_signature, validate_private_result_oram_manifest,
-    validate_private_result_oram_manifest_signature_shape,
+    private_result_oram_writeback_digest, validate_private_result_oram_commit_signature,
+    validate_private_result_oram_manifest, validate_private_result_oram_manifest_signature_shape,
     validate_private_result_oram_read_buckets_signature,
     validate_private_result_oram_upload_bundle,
 };
@@ -98,6 +98,122 @@ impl Debug for PrivateResultOramSessionResponse {
     }
 }
 
+#[derive(Clone)]
+pub(crate) struct PrivateResultOramOwnerWritebackContext {
+    collection_id: String,
+    session_id: String,
+    store: PrivateResultOramStore,
+    max_ciphertext_bytes: usize,
+    signing_key_id: String,
+    public_key: Vec<u8>,
+    batch: PrivateResultOramWritebackBatch,
+    transition: PrivateResultOramConsensusWriteback,
+}
+
+impl Debug for PrivateResultOramOwnerWritebackContext {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramOwnerWritebackContext")
+            .field("collection_id", &"[redacted]")
+            .field("session_id", &"[redacted]")
+            .field("store", &"[redacted]")
+            .field("max_ciphertext_bytes", &"[redacted]")
+            .field("signing_key_id", &"[redacted]")
+            .field("public_key", &"[redacted]")
+            .field("batch", &self.batch)
+            .field("transition", &self.transition)
+            .finish()
+    }
+}
+
+impl PrivateResultOramOwnerWritebackContext {
+    pub(crate) fn collection_id(&self) -> &str {
+        &self.collection_id
+    }
+
+    pub(crate) fn batch(&self) -> &PrivateResultOramWritebackBatch {
+        &self.batch
+    }
+
+    pub(crate) fn transition(&self) -> &PrivateResultOramConsensusWriteback {
+        &self.transition
+    }
+
+    pub(crate) fn prepare_local(&self) -> StorageResult<()> {
+        let prepared = self
+            .store
+            .prepare_durable_writeback_with_signature(
+                &self.batch.old,
+                &self.batch.new,
+                self.batch.bucket_count,
+                &self.batch.updated_buckets,
+                self.max_ciphertext_bytes,
+                &self.batch.commit_signature,
+                self.signature_verification(),
+            )
+            .map_err(private_result_oram_commit_writeback_store_error)?;
+        if prepared != self.transition {
+            return Err(StorageError::service_error(
+                "private result ORAM owner prepare digest does not match staged transition",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn abort_local(&self) -> StorageResult<()> {
+        self.store
+            .abort_replica_writeback_with_signature(
+                &self.transition,
+                self.max_ciphertext_bytes,
+                self.signature_verification(),
+            )
+            .map_err(private_result_oram_commit_writeback_store_error)?;
+        session_registry()
+            .lock()
+            .map_err(|_| {
+                StorageError::service_error("private result ORAM session registry poisoned")
+            })?
+            .cancel_commit(&self.collection_id, &self.session_id)
+    }
+
+    pub(crate) fn finalize_local(&self, lease_expires_unix: u64) -> StorageResult<()> {
+        let committed = self
+            .store
+            .commit_replica_writeback_with_signature(
+                &self.transition,
+                self.max_ciphertext_bytes,
+                self.signature_verification(),
+            )
+            .map_err(private_result_oram_commit_writeback_store_error)?;
+        session_registry()
+            .lock()
+            .map_err(|_| {
+                StorageError::service_error("private result ORAM session registry poisoned")
+            })?
+            .complete_commit(
+                &self.collection_id,
+                &self.session_id,
+                &committed,
+                lease_expires_unix,
+            )
+    }
+
+    pub(crate) fn cancel_staged_session(&self) -> StorageResult<()> {
+        session_registry()
+            .lock()
+            .map_err(|_| {
+                StorageError::service_error("private result ORAM session registry poisoned")
+            })?
+            .cancel_commit(&self.collection_id, &self.session_id)
+    }
+
+    fn signature_verification(&self) -> PrivateResultOramSignatureVerification<'_> {
+        PrivateResultOramSignatureVerification {
+            expected_key_id: &self.signing_key_id,
+            public_key: &self.public_key,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct PrivateResultOramReadBucketsResponse {
     pub index_epoch: u64,
@@ -160,7 +276,7 @@ impl Debug for PrivateResultOramSession {
             .field("bucket_count", &"[redacted]")
             .field("max_bucket_ciphertext_bytes", &"[redacted]")
             .field("manifest", &"[redacted]")
-            .field("commit_in_progress", &self.commit_in_progress)
+            .field("commit_in_progress", &"[redacted]")
             .finish()
     }
 }
@@ -175,6 +291,32 @@ struct PrivateResultOramSessionRegistry {
 }
 
 impl PrivateResultOramSessionRegistry {
+    fn consensus_lease_identity(
+        &mut self,
+        session_id: &str,
+        now_unix: u64,
+    ) -> StorageResult<(String, u64)> {
+        self.expire(now_unix);
+        let session = self.sessions.get(session_id).ok_or_else(|| {
+            StorageError::bad_request("private result ORAM session is missing or expired")
+        })?;
+        if !self
+            .active_writer_by_collection
+            .get(&session.collection_id)
+            .is_some_and(|active| active == session_id)
+        {
+            return Err(StorageError::bad_request(
+                "private result ORAM session writer lock is missing or stale",
+            ));
+        }
+        if session.commit_in_progress {
+            return Err(StorageError::bad_request(
+                "private result ORAM session commit is already in progress",
+            ));
+        }
+        Ok((session.collection_id.clone(), session.lease_expires_unix))
+    }
+
     fn open(
         &mut self,
         mut session: PrivateResultOramSession,
@@ -419,9 +561,7 @@ impl PrivateResultOramSessionRegistry {
     fn cancel_commit(&mut self, collection_id: &str, session_id: &str) -> StorageResult<()> {
         let session = self.checked_session_mut(collection_id, session_id, 0, true)?;
         if !session.commit_in_progress {
-            return Err(StorageError::bad_request(
-                "private result ORAM session has no commit in progress",
-            ));
+            return Ok(());
         }
         session.commit_in_progress = false;
         Ok(())
@@ -482,6 +622,17 @@ impl PrivateResultOramSessionRegistry {
             }
         }
     }
+}
+
+pub(crate) fn private_result_oram_session_consensus_lease_identity(
+    session_id: &str,
+    now_unix: u64,
+) -> StorageResult<(String, u64)> {
+    validate_private_result_oram_session_id_shape(session_id)?;
+    session_registry()
+        .lock()
+        .map_err(|_| StorageError::service_error("private result ORAM session registry poisoned"))?
+        .consensus_lease_identity(session_id, now_unix)
 }
 
 impl PrivateResultOramSession {
@@ -788,6 +939,53 @@ pub async fn do_open_private_result_oram_session(
     desired_epoch: u64,
     fixed_budget: bool,
 ) -> StorageResult<PrivateResultOramSessionResponse> {
+    do_open_private_result_oram_session_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        client_id,
+        desired_epoch,
+        fixed_budget,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn do_open_private_result_oram_session_coordinated(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    client_id: String,
+    desired_epoch: u64,
+    fixed_budget: bool,
+) -> StorageResult<PrivateResultOramSessionResponse> {
+    do_open_private_result_oram_session_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        client_id,
+        desired_epoch,
+        fixed_budget,
+        true,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn do_open_private_result_oram_session_inner(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    client_id: String,
+    desired_epoch: u64,
+    fixed_budget: bool,
+    coordinated_distributed: bool,
+) -> StorageResult<PrivateResultOramSessionResponse> {
     validate_private_result_oram_client_id_shape(&client_id)?;
     if is_strict(settings) && !fixed_budget {
         return Err(StorageError::bad_request(
@@ -805,7 +1003,9 @@ pub async fn do_open_private_result_oram_session(
         AccessRequirements::new().write(),
         "private_result_oram_session_open",
     )?;
-    validate_private_result_oram_single_node_epoch_mode(toc.is_distributed())?;
+    if !coordinated_distributed {
+        validate_private_result_oram_single_node_epoch_mode(toc.is_distributed())?;
+    }
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
@@ -840,9 +1040,15 @@ pub async fn do_open_private_result_oram_session(
     .map_err(private_result_oram_error)?;
     resolved.validate_manifest_runtime_policy(&manifest)?;
     let max_bucket_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest.oram)?;
-    let recovery_guard = store
+    let pending_writeback = store
         .pending_writeback_exists()
-        .map_err(private_result_oram_commit_writeback_store_error)?
+        .map_err(private_result_oram_commit_writeback_store_error)?;
+    if coordinated_distributed && pending_writeback {
+        return Err(StorageError::service_error(
+            "private result ORAM distributed session open requires coordinated recovery",
+        ));
+    }
+    let recovery_guard = pending_writeback
         .then(|| begin_private_result_oram_upload_write_window(&collection_crypto_id))
         .transpose()?;
     if recovery_guard.is_some() {
@@ -1069,6 +1275,61 @@ pub async fn do_read_private_result_oram_buckets(
     bucket_ids: Vec<u64>,
     read_signature: PrivateResultOramSignature,
 ) -> StorageResult<PrivateResultOramReadBucketsResponse> {
+    do_read_private_result_oram_buckets_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        session_id,
+        index_epoch,
+        root_hash,
+        bucket_ids,
+        read_signature,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn do_read_private_result_oram_buckets_coordinated(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    session_id: &str,
+    index_epoch: u64,
+    root_hash: String,
+    bucket_ids: Vec<u64>,
+    read_signature: PrivateResultOramSignature,
+) -> StorageResult<PrivateResultOramReadBucketsResponse> {
+    do_read_private_result_oram_buckets_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        session_id,
+        index_epoch,
+        root_hash,
+        bucket_ids,
+        read_signature,
+        true,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn do_read_private_result_oram_buckets_inner(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    session_id: &str,
+    index_epoch: u64,
+    root_hash: String,
+    bucket_ids: Vec<u64>,
+    read_signature: PrivateResultOramSignature,
+    coordinated_distributed: bool,
+) -> StorageResult<PrivateResultOramReadBucketsResponse> {
     validate_private_result_oram_manifest_signature_shape(&read_signature)
         .map_err(private_result_oram_error)?;
     validate_private_result_oram_session_id_shape(session_id)?;
@@ -1084,7 +1345,9 @@ pub async fn do_read_private_result_oram_buckets(
         AccessRequirements::new(),
     )
     .await?;
-    validate_private_result_oram_single_node_epoch_mode(toc.is_distributed())?;
+    if !coordinated_distributed {
+        validate_private_result_oram_single_node_epoch_mode(toc.is_distributed())?;
+    }
     let now_unix = current_unix_secs()?;
     let mut registry = session_registry().lock().map_err(|_| {
         StorageError::service_error("private result ORAM session registry poisoned")
@@ -1158,6 +1421,146 @@ pub async fn do_read_private_result_oram_buckets(
             })
         },
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn do_stage_private_result_oram_owner_writeback(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    session_id: &str,
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: String,
+    new_root_hash: String,
+    updated_buckets: Vec<qdrant_sec::PrivateResultOramBucket>,
+    commit_signature: PrivateResultOramSignature,
+) -> StorageResult<PrivateResultOramOwnerWritebackContext> {
+    validate_private_result_oram_manifest_signature_shape(&commit_signature)
+        .map_err(private_result_oram_error)?;
+    validate_private_result_oram_session_id_shape(session_id)?;
+    validate_base64url_32_string(&old_root_hash, "old_root_hash")?;
+    validate_base64url_32_string(&new_root_hash, "new_root_hash")?;
+    validate_commit_bucket_request_shape(&updated_buckets)?;
+    if !toc.is_distributed() {
+        return Err(StorageError::service_error(
+            "private result ORAM owner writeback staging requires distributed mode",
+        ));
+    }
+    let request_context = collection_context_for_request(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        None,
+        "private_result_oram_distributed_commit",
+        AccessRequirements::new().write(),
+    )
+    .await?;
+    let now_unix = current_unix_secs()?;
+    session_registry()
+        .lock()
+        .map_err(|_| {
+            StorageError::service_error("private result ORAM session registry poisoned")
+        })?
+        .begin_commit(
+            &request_context.collection_crypto_id,
+            session_id,
+            now_unix,
+            |session| {
+                request_context.validate_manifest_runtime_policy(&session.manifest)?;
+                if session.index_epoch != old_epoch || session.root_hash != old_root_hash {
+                    return Err(StorageError::bad_request(
+                        "private result ORAM commit old epoch/root does not match active session",
+                    ));
+                }
+                if new_epoch <= old_epoch {
+                    return Err(StorageError::bad_request(
+                        "private result ORAM commit new_epoch must be greater than old_epoch",
+                    ));
+                }
+                let max_updated_buckets = max_updated_bucket_count(session)?;
+                if updated_buckets.is_empty() || updated_buckets.len() > max_updated_buckets {
+                    return Err(StorageError::bad_request(
+                        "private result ORAM commit updated_buckets must contain at least one bucket and fit the fixed writeback budget",
+                    ));
+                }
+                let updated_bucket_refs = updated_buckets
+                    .iter()
+                    .map(|bucket| PrivateResultOramCommitBucketRef {
+                        bucket_id: bucket.bucket_id,
+                        ciphertext_sha256: bucket.ciphertext_sha256.as_str(),
+                    })
+                    .collect::<Vec<_>>();
+                validate_session_signature_owner_key(session, &commit_signature.key_id)?;
+                let public_key = request_context.signature_public_key(&commit_signature.key_id)?;
+                let signature_input = PrivateResultOramCommitSignatureInput {
+                    collection_id: &session.manifest.collection_id,
+                    key_id: &session.manifest.key_id,
+                    rk_id: &session.manifest.rk_id,
+                    rk_epoch: session.manifest.rk_epoch,
+                    old_epoch,
+                    new_epoch,
+                    old_root_hash: &old_root_hash,
+                    new_root_hash: &new_root_hash,
+                    updated_buckets: &updated_bucket_refs,
+                    signature_alg: &commit_signature.alg,
+                    signature_key_id: &commit_signature.key_id,
+                };
+                validate_private_result_oram_commit_signature(
+                    signature_input,
+                    &commit_signature.sig,
+                    PrivateResultOramSignatureVerification {
+                        expected_key_id: &commit_signature.key_id,
+                        public_key: &public_key,
+                    },
+                )
+                .map_err(private_result_oram_error)?;
+                for bucket in &updated_buckets {
+                    validate_bucket_ciphertext_fixed_size(bucket, &session.manifest)?;
+                }
+
+                let store = PrivateResultOramStore::new(&session.collection_path);
+                ensure_private_result_oram_active_session_current_epoch(
+                    &store,
+                    old_epoch,
+                    &old_root_hash,
+                )?;
+                let old = PrivateResultOramEpochState {
+                    index_epoch: old_epoch,
+                    root_hash: old_root_hash.clone(),
+                };
+                let new = PrivateResultOramEpochState {
+                    index_epoch: new_epoch,
+                    root_hash: new_root_hash.clone(),
+                };
+                let transition = PrivateResultOramConsensusWriteback {
+                    old: old.clone(),
+                    new: new.clone(),
+                    writeback_digest: private_result_oram_writeback_digest(signature_input)
+                        .map_err(private_result_oram_error)?,
+                };
+                let batch = PrivateResultOramWritebackBatch {
+                    version: 1,
+                    old,
+                    new,
+                    bucket_count: session.bucket_count,
+                    updated_buckets: updated_buckets.clone(),
+                    commit_signature: commit_signature.clone(),
+                };
+                Ok(PrivateResultOramOwnerWritebackContext {
+                    collection_id: session.collection_id.clone(),
+                    session_id: session_id.to_string(),
+                    store,
+                    max_ciphertext_bytes: session.max_bucket_ciphertext_bytes,
+                    signing_key_id: commit_signature.key_id.clone(),
+                    public_key,
+                    batch,
+                    transition,
+                })
+            },
+        )
 }
 
 pub async fn do_commit_private_result_oram_buckets(

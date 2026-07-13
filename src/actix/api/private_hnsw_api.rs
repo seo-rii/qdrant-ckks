@@ -20,7 +20,11 @@ use crate::common::private_hnsw::{
     do_upload_private_hnsw_manifest,
 };
 use crate::settings::Settings;
-use crate::tonic::api::qdrant_internal_api::coordinate_private_hnsw_initial_upload;
+use crate::tonic::api::qdrant_internal_api::{
+    close_private_hnsw_session_coordinated, commit_private_hnsw_paths_coordinated,
+    coordinate_private_hnsw_initial_upload, open_private_hnsw_session_coordinated,
+    read_private_hnsw_paths_coordinated,
+};
 
 #[derive(Deserialize, Validate)]
 struct PrivateHnswPath {
@@ -351,18 +355,33 @@ async fn open_session(
     let path = path.into_inner();
     let request = request.into_inner();
     let timing = Instant::now();
-    let result = do_open_private_hnsw_session(
-        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
-        &auth,
-        settings.get_ref(),
-        &path.collection.collection_name,
-        &path.vector_name,
-        request.client_id,
-        request.desired_epoch,
-        request.fixed_budget,
-        request.result_privacy,
-    )
-    .await;
+    let result = if dispatcher.consensus_state().is_some() {
+        open_private_hnsw_session_coordinated(
+            dispatcher.get_ref(),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            &path.vector_name,
+            request.client_id,
+            request.desired_epoch,
+            request.fixed_budget,
+            request.result_privacy,
+        )
+        .await
+    } else {
+        do_open_private_hnsw_session(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            &path.vector_name,
+            request.client_id,
+            request.desired_epoch,
+            request.fixed_budget,
+            request.result_privacy,
+        )
+        .await
+    };
     process_response(result, timing, None)
 }
 
@@ -377,23 +396,41 @@ async fn read_paths(
     let path = path.into_inner();
     let request = request.into_inner();
     let timing = Instant::now();
-    let result = do_read_private_hnsw_paths(
-        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
-        &auth,
-        settings.get_ref(),
-        &path.collection.collection_name,
-        &path.vector_name,
-        &request.session_id,
-        request.index_epoch,
-        &request.root_hash,
-        request.paths,
-        CommonPrivateHnswReadPadding {
-            requested_paths: request.padding.requested_paths,
-            dummy_paths_included: request.padding.dummy_paths_included,
-        },
-        request.client_signature.into(),
-    )
-    .await;
+    let padding = CommonPrivateHnswReadPadding {
+        requested_paths: request.padding.requested_paths,
+        dummy_paths_included: request.padding.dummy_paths_included,
+    };
+    let result = if dispatcher.consensus_state().is_some() {
+        read_private_hnsw_paths_coordinated(
+            dispatcher.get_ref(),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            &path.vector_name,
+            &request.session_id,
+            request.index_epoch,
+            &request.root_hash,
+            request.paths,
+            padding,
+            request.client_signature.into(),
+        )
+        .await
+    } else {
+        do_read_private_hnsw_paths(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            &path.vector_name,
+            &request.session_id,
+            request.index_epoch,
+            &request.root_hash,
+            request.paths,
+            padding,
+            request.client_signature.into(),
+        )
+        .await
+    };
     process_response(result, timing, None)
 }
 
@@ -408,21 +445,39 @@ async fn commit_paths(
     let path = path.into_inner();
     let request = request.into_inner();
     let timing = Instant::now();
-    let result = do_commit_private_hnsw_paths(
-        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
-        &auth,
-        settings.get_ref(),
-        &path.collection.collection_name,
-        &path.vector_name,
-        &request.session_id,
-        request.old_epoch,
-        request.new_epoch,
-        request.old_root_hash,
-        request.new_root_hash,
-        request.updated_buckets,
-        request.commit_signature.into(),
-    )
-    .await;
+    let result = if dispatcher.consensus_state().is_some() {
+        commit_private_hnsw_paths_coordinated(
+            dispatcher.get_ref(),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            &path.vector_name,
+            &request.session_id,
+            request.old_epoch,
+            request.new_epoch,
+            request.old_root_hash,
+            request.new_root_hash,
+            request.updated_buckets,
+            request.commit_signature.into(),
+        )
+        .await
+    } else {
+        do_commit_private_hnsw_paths(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            &path.vector_name,
+            &request.session_id,
+            request.old_epoch,
+            request.new_epoch,
+            request.old_root_hash,
+            request.new_root_hash,
+            request.updated_buckets,
+            request.commit_signature.into(),
+        )
+        .await
+    };
     process_response(result, timing, None)
 }
 
@@ -435,15 +490,27 @@ async fn close_session(
 ) -> HttpResponse {
     let path = path.into_inner();
     let timing = Instant::now();
-    let result = do_close_private_hnsw_session(
-        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
-        &auth,
-        settings.get_ref(),
-        &path.private_hnsw.collection.collection_name,
-        &path.private_hnsw.vector_name,
-        &path.session_id,
-    )
-    .await;
+    let result = if dispatcher.consensus_state().is_some() {
+        close_private_hnsw_session_coordinated(
+            dispatcher.get_ref(),
+            &auth,
+            settings.get_ref(),
+            &path.private_hnsw.collection.collection_name,
+            &path.private_hnsw.vector_name,
+            &path.session_id,
+        )
+        .await
+    } else {
+        do_close_private_hnsw_session(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.private_hnsw.collection.collection_name,
+            &path.private_hnsw.vector_name,
+            &path.session_id,
+        )
+        .await
+    };
     process_response(result, timing, None)
 }
 

@@ -21,7 +21,11 @@ use crate::common::private_result_oram::{
     do_upload_private_result_oram_buckets, do_upload_private_result_oram_manifest,
 };
 use crate::settings::Settings;
-use crate::tonic::api::qdrant_internal_api::coordinate_private_result_oram_initial_upload;
+use crate::tonic::api::qdrant_internal_api::{
+    close_private_result_oram_session_coordinated, commit_private_result_oram_buckets_coordinated,
+    coordinate_private_result_oram_initial_upload, open_private_result_oram_session_coordinated,
+    read_private_result_oram_buckets_coordinated,
+};
 use crate::tonic::auth::extract_auth;
 
 const ORAM_KIND_PATH_ORAM: i32 = 1;
@@ -174,16 +178,29 @@ impl PrivateResultOram for PrivateResultOramService {
         validate_collection(&request.collection_name)?;
         let pass = new_unchecked_verification_pass();
 
-        let session = do_open_private_result_oram_session(
-            self.dispatcher.toc(&auth, &pass),
-            &auth,
-            &self.settings,
-            &request.collection_name,
-            request.client_id,
-            request.desired_epoch,
-            request.fixed_budget,
-        )
-        .await?;
+        let session = if self.dispatcher.consensus_state().is_some() {
+            open_private_result_oram_session_coordinated(
+                &self.dispatcher,
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                request.client_id,
+                request.desired_epoch,
+                request.fixed_budget,
+            )
+            .await?
+        } else {
+            do_open_private_result_oram_session(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                request.client_id,
+                request.desired_epoch,
+                request.fixed_budget,
+            )
+            .await?
+        };
 
         Ok(Response::new(grpc::OpenPrivateResultOramSessionResponse {
             session_id: session.session_id,
@@ -208,18 +225,33 @@ impl PrivateResultOram for PrivateResultOramService {
         let read_signature =
             signature_from_proto(required(request.read_signature, "read_signature")?);
 
-        let response = do_read_private_result_oram_buckets(
-            self.dispatcher.toc(&auth, &pass),
-            &auth,
-            &self.settings,
-            &request.collection_name,
-            &request.session_id,
-            request.index_epoch,
-            request.root_hash,
-            request.bucket_ids,
-            read_signature,
-        )
-        .await?;
+        let response = if self.dispatcher.consensus_state().is_some() {
+            read_private_result_oram_buckets_coordinated(
+                &self.dispatcher,
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.session_id,
+                request.index_epoch,
+                request.root_hash,
+                request.bucket_ids,
+                read_signature,
+            )
+            .await?
+        } else {
+            do_read_private_result_oram_buckets(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.session_id,
+                request.index_epoch,
+                request.root_hash,
+                request.bucket_ids,
+                read_signature,
+            )
+            .await?
+        };
 
         Ok(Response::new(grpc::ReadPrivateResultOramBucketsResponse {
             index_epoch: response.index_epoch,
@@ -250,20 +282,37 @@ impl PrivateResultOram for PrivateResultOramService {
             signature_from_proto(required(request.commit_signature, "commit_signature")?);
         let pass = new_unchecked_verification_pass();
 
-        let epoch = do_commit_private_result_oram_buckets(
-            self.dispatcher.toc(&auth, &pass),
-            &auth,
-            &self.settings,
-            &request.collection_name,
-            &request.session_id,
-            request.old_epoch,
-            request.new_epoch,
-            request.old_root_hash,
-            request.new_root_hash,
-            updated_buckets,
-            commit_signature,
-        )
-        .await?;
+        let epoch = if self.dispatcher.consensus_state().is_some() {
+            commit_private_result_oram_buckets_coordinated(
+                &self.dispatcher,
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.session_id,
+                request.old_epoch,
+                request.new_epoch,
+                request.old_root_hash,
+                request.new_root_hash,
+                updated_buckets,
+                commit_signature,
+            )
+            .await?
+        } else {
+            do_commit_private_result_oram_buckets(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.session_id,
+                request.old_epoch,
+                request.new_epoch,
+                request.old_root_hash,
+                request.new_root_hash,
+                updated_buckets,
+                commit_signature,
+            )
+            .await?
+        };
 
         Ok(Response::new(grpc::PrivateResultOramEpochResponse {
             index_epoch: epoch.index_epoch,
@@ -282,14 +331,25 @@ impl PrivateResultOram for PrivateResultOramService {
         validate_collection(&request.collection_name)?;
         let pass = new_unchecked_verification_pass();
 
-        let closed = do_close_private_result_oram_session(
-            self.dispatcher.toc(&auth, &pass),
-            &auth,
-            &self.settings,
-            &request.collection_name,
-            &request.session_id,
-        )
-        .await?;
+        let closed = if self.dispatcher.consensus_state().is_some() {
+            close_private_result_oram_session_coordinated(
+                &self.dispatcher,
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.session_id,
+            )
+            .await?
+        } else {
+            do_close_private_result_oram_session(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.session_id,
+            )
+            .await?
+        };
 
         Ok(Response::new(grpc::ClosePrivateResultOramSessionResponse {
             closed,

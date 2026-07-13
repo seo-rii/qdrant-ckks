@@ -83,7 +83,7 @@ contract:
 | Normal Qdrant reads/writes | Dense vector upsert/update, point/vector delete, collection peer `SyncPoints`, `with_vector` reads, ordinary search/query/recommend/discover, grouped paths, search matrix, and `lookup_from`/point-id reference-vector resolution fail closed for the private vector; clients must use the private HNSW session APIs. | Point create/replace/delete, full payload replacement/clear, protected-path payload writes, indexes, filters, ordering, grouping, facets, formulas, and raw payload reads fail closed for the private result path; public non-overlapping payload merges remain ordinary. |
 | Dedicated APIs | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_paths`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_buckets`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. |
 | Snapshot/restore | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and paired result ORAM policy before accepting a restored store. | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and configured binding/runtime policy before accepting a restored store. |
-| Cluster mode | Initial manifest upload stages an owner-signed manifest on the receiving coordinator node. A complete initial bucket upload returns only after the coordinator validates and exports the local bundle, installs the exact encrypted bundle on every derived active replica, validates all epoch/root acknowledgements, and applies the initial Raft ownership CAS. Session open, `read_paths`, and writeback commit remain fail closed. Layout movement operations and consensus snapshot state-apply changes remain blocked. | Initial manifest staging and complete bucket upload use the same all-replica install and initial Raft ownership CAS contract. Session open, `read_buckets`, and writeback commit remain fail closed until the replicated writeback coordinator is connected to the public routes. Result ORAM layout movement follows the same cluster guard policy. |
+| Cluster mode | Initial upload installs the exact signed encrypted bundle on every derived active replica before the initial Raft ownership CAS. Session open acquires a hashed Raft lease after recovery; `read_paths` requires that exact live lease; commit renews it, durably prepares every replica, applies the digest-bound epoch/root CAS, then finalizes remote replicas before the owner. Close releases the exact lease. Layout movement and consensus snapshot layout changes remain blocked. | Initial upload, session lease, `read_buckets`, replicated writeback, recovery, and close use the same coordinator contract as HNSW. Result ORAM layout movement follows the same cluster guard policy. |
 
 The internal Dispatcher writeback coordinator enforces durable local prepare,
 awaited Raft epoch/root CAS, then idempotent local finalize. A writeback epoch
@@ -98,10 +98,11 @@ state. If Raft rejects the CAS, the coordinator invokes a signed-journal abort
 that removes the journal only when the local epoch, Merkle tree, and every
 target bucket still match the old view; any partial local mutation preserves
 the journal and fails closed. If finalize fails after Raft apply, retrying the
-same operation reuses exact-CAS idempotence before running finalize again. This
-remains an internal recovery boundary for writebacks. Distributed initial
-upload now couples encrypted bucket replication and ownership to the initial
-CAS, while session-bound reads and writeback routes remain closed.
+same operation reuses exact-CAS idempotence before running finalize again. The
+public REST/gRPC distributed commit routes now use this boundary. Distributed
+initial upload couples encrypted bucket replication and ownership to the
+initial CAS; session open recovers pending state before acquiring a consensus
+lease, and session-bound reads require that exact owner/hash/expiry lease.
 
 Each collection-local HNSW/result store can export a validated replication
 batch from its owner-signed durable journal. The batch contains only old/new
@@ -112,9 +113,8 @@ exact match with the proposed consensus transition before creating a journal,
 then recomputes the new Merkle tree from its own old tree. The Dispatcher CAS
 builder also reads the current Raft record so the previous epoch's optional
 digest remains part of the expected state. These are collection/storage
-primitives consumed by the internal replication transport. Public writeback
-routes remain closed until the same fan-out and recovery orchestration is
-connected to session commits.
+primitives consumed by the internal replication transport and public
+distributed session commits.
 
 The internal replicated-writeback coordinator now requires canonical
 digest-matching prepare acknowledgements from exactly the caller-supplied
@@ -134,8 +134,8 @@ old/new epoch, root, and canonical writeback digest to match the owner-signed
 pending journal; a stale internal request cannot act on a different pending
 transition. Internal prepare/finalize/abort RPCs expose these receiver
 operations and the owner-side ChannelService fan-out invokes them. Public
-session and writeback routes remain closed while that coordinator is not yet
-bound to client session commits.
+session commits stage this validated owner batch under a pinned node-local
+session, renew the consensus lease, and invoke the coordinator.
 
 The internal protobuf defines a structured replication wire contract for
 HNSW and result ORAM writebacks: collection identity, index kind, exact old/new
@@ -164,9 +164,9 @@ then uses the existing replicated coordinator for Raft CAS and remote-before-
 local finalize. Abort and finalize fan-out likewise attempts every target;
 finalize requires `completed=true`, while an abort no-op is idempotent. Peer RPC
 errors include only the peer id and never reflect collection identity,
-ciphertext, root, or digest. The client commit route is not yet switched to this
-owner-side coordinator, so distributed session/read/writeback APIs remain
-closed.
+ciphertext, root, or digest. REST and gRPC use this same owner-side coordinator;
+a distributed `TableOfContent` without Dispatcher consensus state still fails
+closed through the single-node epoch guard.
 
 For initial replica installation, both collection stores can export a complete
 signed upload bundle only while the persisted current epoch/root still equals
@@ -208,9 +208,8 @@ aborted only when both local and consensus still match its old epoch/root, and
 is finalized only when consensus exactly matches its new epoch/root and
 canonical writeback digest. Missing ownership, unrelated state, digest drift,
 or a locally finalized transition whose consensus state is still old fails
-closed. This provider-neutral classifier does not by itself open distributed
-session routes; provider journal validation and remote/local recovery fan-out
-must consume the decision first.
+closed. Session open consumes this classifier through provider journal
+validation and remote-first completion before creating a local session.
 
 HNSW and result ORAM now expose validated recovery contexts for that next
 step. A context revalidates runtime policy, manifest ownership, current epoch,
@@ -219,8 +218,8 @@ upload/session mutation reservation until it is dropped. The internal recovery
 orchestrator classifies that snapshot against Raft, re-derives the complete
 active replica set, sends exact abort/finalize completion to every remote, and
 only then applies the same exact transition locally. Clean initial stores are
-covered by route fixtures for both providers. This orchestrator is not yet
-connected to public sessions yet. Finalize now writes a durable completion
+covered by route fixtures for both providers. Public distributed session open
+runs this orchestrator before lease acquisition. Finalize writes a durable completion
 record to the canonical epoch commit file before removing the pending journal.
 The record binds index epoch, root, and canonical writeback digest while
 `current.json` remains the epoch/root-only API state. A finalize replay without
@@ -231,8 +230,8 @@ commit files remain readable and are upgraded only after the signed pending
 journal and final bucket/Merkle state have been revalidated. Snapshot source
 and restore preflight accept canonical digest-bearing commit files, reject a
 digest in `current.json`, and reject malformed digest values without reflecting
-them. This makes partial remote-finalize recovery idempotent; consensus-backed
-session ownership and public commit routing remain the next guard.
+them. This makes partial remote-finalize recovery and public commit retries
+idempotent.
 
 Raft persistent state now also has a separate per-index private ORAM session
 lease map. A lease contains the owner peer, a SHA-256 hash of an opaque lease
@@ -247,10 +246,11 @@ projections redact the index identity and lease hash. Dispatcher exposes an
 awaited Raft apply bridge and current-lease lookup. The qdrant coordinator
 derives a domain-separated SHA-256 lease hash from the node-local session id,
 acquires or expired-takes-over the lease, verifies owner/hash/expiry before
-session work, and releases only an exact local lease. Oversized lease ids and
-lease errors do not reflect the submitted session id. Public session open/
-renew/close is not yet bound to these helpers, so distributed session routes
-remain closed in this step.
+session work, renews it only after commit authorization and owner-signature
+validation, and releases only an exact local lease. Oversized lease ids and
+lease errors do not reflect the submitted session id. A commit pins its local
+session while network/Raft work is in progress, so read, close, expiry cleanup,
+and a second commit cannot interleave with its writeback.
 
 ## Payload text
 
@@ -1556,10 +1556,11 @@ stages only local owner-signed metadata, and complete bucket upload installs the
 validated encrypted bundle on every derived active replica before applying the
 initial consensus epoch/root ownership CAS. A missing consensus coordinator,
 incomplete replica set, invalid acknowledgement, or CAS failure fails the
-request closed. Session open, session-bound reads, and commits remain closed
-until their encrypted writebacks are coupled to the replicated
-epoch/root/writeback-digest coordinator rather than collection-local files
-alone.
+request closed. Session open, session-bound reads, commits, and close are
+coordinator-led when consensus state is available. They recover pending state,
+enforce a hashed per-index lease, and couple each encrypted writeback to the
+replicated epoch/root/writeback-digest transition. A distributed TOC without
+that coordinator remains fail closed.
 
 The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
 preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`

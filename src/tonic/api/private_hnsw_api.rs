@@ -20,7 +20,11 @@ use crate::common::private_hnsw::{
     do_upload_private_hnsw_manifest,
 };
 use crate::settings::Settings;
-use crate::tonic::api::qdrant_internal_api::coordinate_private_hnsw_initial_upload;
+use crate::tonic::api::qdrant_internal_api::{
+    close_private_hnsw_session_coordinated, commit_private_hnsw_paths_coordinated,
+    coordinate_private_hnsw_initial_upload, open_private_hnsw_session_coordinated,
+    read_private_hnsw_paths_coordinated,
+};
 use crate::tonic::auth::extract_auth;
 
 const DISTANCE_COSINE: i32 = 1;
@@ -127,18 +131,33 @@ impl PrivateHnswOram for PrivateHnswOramService {
         let result_privacy = result_privacy_from_proto(request.result_privacy)?;
         let pass = new_unchecked_verification_pass();
 
-        let session = do_open_private_hnsw_session(
-            self.dispatcher.toc(&auth, &pass),
-            &auth,
-            &self.settings,
-            &request.collection_name,
-            &request.vector_name,
-            request.client_id,
-            request.desired_epoch,
-            request.fixed_budget,
-            result_privacy,
-        )
-        .await?;
+        let session = if self.dispatcher.consensus_state().is_some() {
+            open_private_hnsw_session_coordinated(
+                &self.dispatcher,
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.vector_name,
+                request.client_id,
+                request.desired_epoch,
+                request.fixed_budget,
+                result_privacy,
+            )
+            .await?
+        } else {
+            do_open_private_hnsw_session(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.vector_name,
+                request.client_id,
+                request.desired_epoch,
+                request.fixed_budget,
+                result_privacy,
+            )
+            .await?
+        };
 
         Ok(Response::new(grpc::OpenPrivateHnswSessionResponse {
             session_id: session.session_id,
@@ -224,20 +243,37 @@ impl PrivateHnswOram for PrivateHnswOramService {
             common_signature_from_proto(required(request.client_signature, "client_signature")?);
         let pass = new_unchecked_verification_pass();
 
-        let response = do_read_private_hnsw_paths(
-            self.dispatcher.toc(&auth, &pass),
-            &auth,
-            &self.settings,
-            &request.collection_name,
-            &request.vector_name,
-            &request.session_id,
-            request.index_epoch,
-            &request.root_hash,
-            request.paths,
-            padding,
-            client_signature,
-        )
-        .await?;
+        let response = if self.dispatcher.consensus_state().is_some() {
+            read_private_hnsw_paths_coordinated(
+                &self.dispatcher,
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.vector_name,
+                &request.session_id,
+                request.index_epoch,
+                &request.root_hash,
+                request.paths,
+                padding,
+                client_signature,
+            )
+            .await?
+        } else {
+            do_read_private_hnsw_paths(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.vector_name,
+                &request.session_id,
+                request.index_epoch,
+                &request.root_hash,
+                request.paths,
+                padding,
+                client_signature,
+            )
+            .await?
+        };
 
         Ok(Response::new(grpc::OramReadPathsResponse {
             index_epoch: response.index_epoch,
@@ -268,21 +304,39 @@ impl PrivateHnswOram for PrivateHnswOramService {
             common_signature_from_proto(required(request.commit_signature, "commit_signature")?);
         let pass = new_unchecked_verification_pass();
 
-        let epoch = do_commit_private_hnsw_paths(
-            self.dispatcher.toc(&auth, &pass),
-            &auth,
-            &self.settings,
-            &request.collection_name,
-            &request.vector_name,
-            &request.session_id,
-            request.old_epoch,
-            request.new_epoch,
-            request.old_root_hash,
-            request.new_root_hash,
-            updated_buckets,
-            commit_signature,
-        )
-        .await?;
+        let epoch = if self.dispatcher.consensus_state().is_some() {
+            commit_private_hnsw_paths_coordinated(
+                &self.dispatcher,
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.vector_name,
+                &request.session_id,
+                request.old_epoch,
+                request.new_epoch,
+                request.old_root_hash,
+                request.new_root_hash,
+                updated_buckets,
+                commit_signature,
+            )
+            .await?
+        } else {
+            do_commit_private_hnsw_paths(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.vector_name,
+                &request.session_id,
+                request.old_epoch,
+                request.new_epoch,
+                request.old_root_hash,
+                request.new_root_hash,
+                updated_buckets,
+                commit_signature,
+            )
+            .await?
+        };
 
         Ok(Response::new(grpc::PrivateHnswEpochResponse {
             index_epoch: epoch.index_epoch,
@@ -301,15 +355,27 @@ impl PrivateHnswOram for PrivateHnswOramService {
         validate_collection_and_vector(&request.collection_name, &request.vector_name)?;
         let pass = new_unchecked_verification_pass();
 
-        let closed = do_close_private_hnsw_session(
-            self.dispatcher.toc(&auth, &pass),
-            &auth,
-            &self.settings,
-            &request.collection_name,
-            &request.vector_name,
-            &request.session_id,
-        )
-        .await?;
+        let closed = if self.dispatcher.consensus_state().is_some() {
+            close_private_hnsw_session_coordinated(
+                &self.dispatcher,
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.vector_name,
+                &request.session_id,
+            )
+            .await?
+        } else {
+            do_close_private_hnsw_session(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                &request.vector_name,
+                &request.session_id,
+            )
+            .await?
+        };
 
         Ok(Response::new(grpc::ClosePrivateHnswSessionResponse {
             closed,

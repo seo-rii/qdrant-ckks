@@ -20,7 +20,11 @@ use crate::common::private_result_oram::{
     do_upload_private_result_oram_buckets, do_upload_private_result_oram_manifest,
 };
 use crate::settings::Settings;
-use crate::tonic::api::qdrant_internal_api::coordinate_private_result_oram_initial_upload;
+use crate::tonic::api::qdrant_internal_api::{
+    close_private_result_oram_session_coordinated, commit_private_result_oram_buckets_coordinated,
+    coordinate_private_result_oram_initial_upload, open_private_result_oram_session_coordinated,
+    read_private_result_oram_buckets_coordinated,
+};
 
 #[derive(Deserialize, Validate)]
 struct PrivateResultOramPath {
@@ -305,16 +309,29 @@ async fn open_session(
     let path = path.into_inner();
     let request = request.into_inner();
     let timing = Instant::now();
-    let result = do_open_private_result_oram_session(
-        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
-        &auth,
-        settings.get_ref(),
-        &path.collection.collection_name,
-        request.client_id,
-        request.desired_epoch,
-        request.fixed_budget,
-    )
-    .await;
+    let result = if dispatcher.consensus_state().is_some() {
+        open_private_result_oram_session_coordinated(
+            dispatcher.get_ref(),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            request.client_id,
+            request.desired_epoch,
+            request.fixed_budget,
+        )
+        .await
+    } else {
+        do_open_private_result_oram_session(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            request.client_id,
+            request.desired_epoch,
+            request.fixed_budget,
+        )
+        .await
+    };
     process_response(result, timing, None)
 }
 
@@ -329,18 +346,33 @@ async fn read_buckets(
     let path = path.into_inner();
     let request = request.into_inner();
     let timing = Instant::now();
-    let result = do_read_private_result_oram_buckets(
-        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
-        &auth,
-        settings.get_ref(),
-        &path.collection.collection_name,
-        &request.session_id,
-        request.index_epoch,
-        request.root_hash,
-        request.bucket_ids,
-        request.read_signature,
-    )
-    .await;
+    let result = if dispatcher.consensus_state().is_some() {
+        read_private_result_oram_buckets_coordinated(
+            dispatcher.get_ref(),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            &request.session_id,
+            request.index_epoch,
+            request.root_hash,
+            request.bucket_ids,
+            request.read_signature,
+        )
+        .await
+    } else {
+        do_read_private_result_oram_buckets(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            &request.session_id,
+            request.index_epoch,
+            request.root_hash,
+            request.bucket_ids,
+            request.read_signature,
+        )
+        .await
+    };
     process_response(result, timing, None)
 }
 
@@ -355,20 +387,37 @@ async fn commit_buckets(
     let path = path.into_inner();
     let request = request.into_inner();
     let timing = Instant::now();
-    let result = do_commit_private_result_oram_buckets(
-        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
-        &auth,
-        settings.get_ref(),
-        &path.collection.collection_name,
-        &request.session_id,
-        request.old_epoch,
-        request.new_epoch,
-        request.old_root_hash,
-        request.new_root_hash,
-        request.updated_buckets,
-        request.commit_signature,
-    )
-    .await;
+    let result = if dispatcher.consensus_state().is_some() {
+        commit_private_result_oram_buckets_coordinated(
+            dispatcher.get_ref(),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            &request.session_id,
+            request.old_epoch,
+            request.new_epoch,
+            request.old_root_hash,
+            request.new_root_hash,
+            request.updated_buckets,
+            request.commit_signature,
+        )
+        .await
+    } else {
+        do_commit_private_result_oram_buckets(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            &request.session_id,
+            request.old_epoch,
+            request.new_epoch,
+            request.old_root_hash,
+            request.new_root_hash,
+            request.updated_buckets,
+            request.commit_signature,
+        )
+        .await
+    };
     process_response(result, timing, None)
 }
 
@@ -381,14 +430,25 @@ async fn close_session(
 ) -> HttpResponse {
     let path = path.into_inner();
     let timing = Instant::now();
-    let result = do_close_private_result_oram_session(
-        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
-        &auth,
-        settings.get_ref(),
-        &path.private_result_oram.collection.collection_name,
-        &path.session_id,
-    )
-    .await;
+    let result = if dispatcher.consensus_state().is_some() {
+        close_private_result_oram_session_coordinated(
+            dispatcher.get_ref(),
+            &auth,
+            settings.get_ref(),
+            &path.private_result_oram.collection.collection_name,
+            &path.session_id,
+        )
+        .await
+    } else {
+        do_close_private_result_oram_session(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.private_result_oram.collection.collection_name,
+            &path.session_id,
+        )
+        .await
+    };
     process_response(result, timing, None)
 }
 
