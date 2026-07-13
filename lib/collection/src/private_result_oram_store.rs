@@ -240,6 +240,7 @@ impl PrivateResultOramStore {
         max_ciphertext_bytes: usize,
     ) -> CollectionResult<PrivateResultOramEpochState> {
         let leaf_commitments = validate_upload_bundle(bundle, max_ciphertext_bytes)?;
+        self.ensure_no_pending_initial_replication()?;
         let epoch = PrivateResultOramEpochState {
             index_epoch: bundle.manifest.index_epoch,
             root_hash: bundle.manifest.root_hash.clone(),
@@ -290,6 +291,7 @@ impl PrivateResultOramStore {
         max_bundle_bytes: usize,
     ) -> CollectionResult<PrivateResultOramUploadBundle> {
         let (manifest, manifest_signature) = self.read_manifest()?;
+        self.ensure_no_pending_initial_replication()?;
         let expected_bucket_count = private_result_oram_bucket_count(manifest.oram.tree_height)
             .map_err(private_result_oram_error)?;
         if manifest.bucket_count != expected_bucket_count || expected_bucket_count == 0 {
@@ -355,6 +357,15 @@ impl PrivateResultOramStore {
             ));
         }
         Ok(bundle)
+    }
+
+    fn ensure_no_pending_initial_replication(&self) -> CollectionResult<()> {
+        if self.pending_writeback_exists()? {
+            return Err(CollectionError::bad_request(
+                "private result ORAM initial replication requires no pending writeback",
+            ));
+        }
+        Ok(())
     }
 
     fn initial_epoch_status(
@@ -4234,6 +4245,26 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(exported, prepared);
+
+        for pending_initial_replication in [
+            source
+                .read_initial_upload_bundle(128, 16 * 1024 * 1024)
+                .unwrap_err(),
+            source
+                .write_initial_upload_bundle(&bundle, 128)
+                .unwrap_err(),
+        ] {
+            let rendered = pending_initial_replication.to_string();
+            assert!(rendered.contains("requires no pending writeback"));
+            for sentinel in [
+                old.root_hash.as_str(),
+                new.root_hash.as_str(),
+                exported.writeback_digest.as_str(),
+                updated_bucket.ciphertext.as_str(),
+            ] {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
+        }
 
         let rendered = format!("{batch:?}");
         for sentinel in [

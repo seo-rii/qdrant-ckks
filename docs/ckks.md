@@ -175,6 +175,10 @@ bucket count, enforces a caller-provided aggregate memory budget before
 allocating the bucket vector, reads every encrypted bucket, revalidates the full
 upload bundle, and requires persisted Merkle leaves to match. Once any writeback
 advances the store, it cannot be mislabeled and exported as an initial bundle.
+A durable pending writeback also blocks both initial export and exact
+idempotent install even while the current epoch still equals the manifest
+epoch; transitional state must be reconciled against consensus before the
+store can participate in another initial-replication decision.
 
 The internal Qdrant service now also accepts a typed, provider-discriminated
 initial install RPC using the existing HNSW/result manifest, signature, and
