@@ -61,6 +61,25 @@ pub struct PrivateResultOramEpochState {
     pub root_hash: String,
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateResultOramEpochCommit {
+    index_epoch: u64,
+    root_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    writeback_digest: Option<String>,
+}
+
+impl Debug for PrivateResultOramEpochCommit {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateResultOramEpochCommit")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("has_writeback_digest", &self.writeback_digest.is_some())
+            .finish()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct PrivateResultOramConsensusWriteback {
     pub old: PrivateResultOramEpochState,
@@ -545,9 +564,21 @@ impl PrivateResultOramStore {
         old: &PrivateResultOramEpochState,
         new: &PrivateResultOramEpochState,
     ) -> CollectionResult<()> {
+        self.compare_and_swap_epoch_with_writeback_digest(old, new, None)
+    }
+
+    fn compare_and_swap_epoch_with_writeback_digest(
+        &self,
+        old: &PrivateResultOramEpochState,
+        new: &PrivateResultOramEpochState,
+        writeback_digest: Option<&str>,
+    ) -> CollectionResult<()> {
         self.ensure_layout()?;
         validate_epoch_state(old)?;
         validate_epoch_state(new)?;
+        if let Some(writeback_digest) = writeback_digest {
+            validate_writeback_digest(writeback_digest)?;
+        }
         if new.index_epoch <= old.index_epoch {
             return Err(CollectionError::bad_request(
                 "private result ORAM new epoch must be greater than old epoch",
@@ -565,7 +596,11 @@ impl PrivateResultOramStore {
             &self.root,
             &self.temp_dir(),
             &self.commit_epoch_path(new.index_epoch),
-            new,
+            &PrivateResultOramEpochCommit {
+                index_epoch: new.index_epoch,
+                root_hash: new.root_hash.clone(),
+                writeback_digest: writeback_digest.map(str::to_string),
+            },
         )?;
         write_json_atomic(
             &self.root,
@@ -882,7 +917,11 @@ impl PrivateResultOramStore {
         }
         self.write_merkle_tree(&pending.merkle_tree)?;
         if current == pending.old {
-            self.compare_and_swap_epoch(&pending.old, &pending.new)?;
+            self.compare_and_swap_epoch_with_writeback_digest(
+                &pending.old,
+                &pending.new,
+                Some(&consensus_writeback.writeback_digest),
+            )?;
         }
 
         if self.read_current_epoch()? != pending.new
@@ -905,12 +944,71 @@ impl PrivateResultOramStore {
                 ));
             }
         }
+        self.write_completed_writeback_record(&consensus_writeback)?;
         remove_private_file(
             &self.pending_writeback_path(),
             &self.temp_dir(),
             MAX_PENDING_WRITEBACK_BYTES,
         )?;
         Ok(pending.new)
+    }
+
+    pub fn completed_replica_writeback_matches(
+        &self,
+        expected: &PrivateResultOramConsensusWriteback,
+    ) -> CollectionResult<bool> {
+        validate_writeback_digest(&expected.writeback_digest)?;
+        if self.pending_writeback_exists()? || self.read_current_epoch()? != expected.new {
+            return Ok(false);
+        }
+        let tree = self.read_merkle_tree()?;
+        if tree.index_epoch != expected.new.index_epoch || tree.root_hash != expected.new.root_hash
+        {
+            return Ok(false);
+        }
+        let commit = self.read_epoch_commit(expected.new.index_epoch)?;
+        Ok(commit.index_epoch == expected.new.index_epoch
+            && commit.root_hash == expected.new.root_hash
+            && commit.writeback_digest.as_deref() == Some(&expected.writeback_digest))
+    }
+
+    fn write_completed_writeback_record(
+        &self,
+        expected: &PrivateResultOramConsensusWriteback,
+    ) -> CollectionResult<()> {
+        validate_writeback_digest(&expected.writeback_digest)?;
+        let completed = PrivateResultOramEpochCommit {
+            index_epoch: expected.new.index_epoch,
+            root_hash: expected.new.root_hash.clone(),
+            writeback_digest: Some(expected.writeback_digest.clone()),
+        };
+        match self.read_epoch_commit(expected.new.index_epoch) {
+            Ok(existing) if existing == completed => return Ok(()),
+            Ok(existing)
+                if existing.index_epoch == completed.index_epoch
+                    && existing.root_hash == completed.root_hash
+                    && existing.writeback_digest.is_none() => {}
+            Ok(_) => {
+                return Err(CollectionError::bad_request(
+                    "private result ORAM completed writeback record does not match",
+                ));
+            }
+            Err(CollectionError::NotFound { .. }) => {}
+            Err(err) => return Err(err),
+        }
+        write_json_atomic(
+            &self.root,
+            &self.temp_dir(),
+            &self.commit_epoch_path(completed.index_epoch),
+            &completed,
+        )
+    }
+
+    fn read_epoch_commit(&self, epoch: u64) -> CollectionResult<PrivateResultOramEpochCommit> {
+        validate_private_dir(&self.epochs_dir())?;
+        let commit = read_json_private_file(&self.commit_epoch_path(epoch), MAX_EPOCH_BYTES)?;
+        validate_epoch_commit(&commit, epoch)?;
+        Ok(commit)
     }
 
     pub fn pending_writeback_exists(&self) -> CollectionResult<bool> {
@@ -1787,6 +1885,26 @@ fn validate_upload_bundle_with_signature(
 fn validate_epoch_state(epoch: &PrivateResultOramEpochState) -> CollectionResult<()> {
     decode_base64url_32(&epoch.root_hash, "root_hash")?;
     Ok(())
+}
+
+fn validate_epoch_commit(
+    commit: &PrivateResultOramEpochCommit,
+    expected_epoch: u64,
+) -> CollectionResult<()> {
+    if commit.index_epoch != expected_epoch {
+        return Err(CollectionError::bad_request(
+            "private result ORAM completed writeback epoch does not match",
+        ));
+    }
+    decode_base64url_32(&commit.root_hash, "root_hash")?;
+    if let Some(writeback_digest) = commit.writeback_digest.as_deref() {
+        validate_writeback_digest(writeback_digest)?;
+    }
+    Ok(())
+}
+
+fn validate_writeback_digest(writeback_digest: &str) -> CollectionResult<()> {
+    decode_base64url_32(writeback_digest, "writeback_digest").map(|_| ())
 }
 
 fn base64url_nopad_encoded_len(byte_len: usize) -> CollectionResult<usize> {
@@ -4198,6 +4316,11 @@ mod tests {
             assert_eq!(proof.leaves[0].leaf_hash, updated_bucket.bucket_commitment);
             assert!(!store.pending_writeback_path().exists());
             assert!(!store.pending_writeback_exists().unwrap());
+            assert!(
+                store
+                    .completed_replica_writeback_matches(&consensus_writeback)
+                    .unwrap()
+            );
             assert_eq!(
                 store
                     .pending_writeback_consensus_transition_with_signature(
@@ -4363,6 +4486,16 @@ mod tests {
             exported,
         );
         assert!(!replica.pending_writeback_exists().unwrap());
+        assert!(
+            replica
+                .completed_replica_writeback_matches(&exported)
+                .unwrap()
+        );
+        assert!(
+            !replica
+                .completed_replica_writeback_matches(&conflicting_consensus)
+                .unwrap()
+        );
         assert_eq!(
             replica
                 .read_bucket(1, new.index_epoch, bundle.bucket_count(), 128)

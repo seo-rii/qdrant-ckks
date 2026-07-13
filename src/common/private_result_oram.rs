@@ -1342,6 +1342,13 @@ pub async fn do_complete_private_result_oram_replica_writeback(
             )
             .map_err(private_result_oram_commit_writeback_store_error)
     } else {
+        if context
+            .store
+            .completed_replica_writeback_matches(expected)
+            .map_err(private_result_oram_commit_writeback_store_error)?
+        {
+            return Ok(true);
+        }
         context
             .store
             .commit_replica_writeback_with_signature(
@@ -1381,6 +1388,14 @@ impl PrivateResultOramRecoveryContext {
                 )
                 .map_err(private_result_oram_commit_writeback_store_error)
         } else {
+            if self
+                .replica
+                .store
+                .completed_replica_writeback_matches(expected)
+                .map_err(private_result_oram_commit_writeback_store_error)?
+            {
+                return Ok(true);
+            }
             self.replica
                 .store
                 .commit_replica_writeback_with_signature(

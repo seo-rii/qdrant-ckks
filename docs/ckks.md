@@ -220,12 +220,19 @@ orchestrator classifies that snapshot against Raft, re-derives the complete
 active replica set, sends exact abort/finalize completion to every remote, and
 only then applies the same exact transition locally. Clean initial stores are
 covered by route fixtures for both providers. This orchestrator is not yet
-connected to public sessions. In particular, a replica that already removed
-its finalized journal cannot prove an exact digest replay from epoch/root
-alone; a durable consensus-bound completion record is required before partial
-remote-finalize recovery can safely become idempotent. Such cases continue to
-fail closed rather than accepting a same-epoch/root transition with a different
-digest.
+connected to public sessions yet. Finalize now writes a durable completion
+record to the canonical epoch commit file before removing the pending journal.
+The record binds index epoch, root, and canonical writeback digest while
+`current.json` remains the epoch/root-only API state. A finalize replay without
+a pending journal succeeds only when current state, validated Merkle state, and
+the completion record all match the exact new epoch/root/digest. Same
+epoch/root with a different digest remains fail closed. Legacy digest-less
+commit files remain readable and are upgraded only after the signed pending
+journal and final bucket/Merkle state have been revalidated. Snapshot source
+and restore preflight accept canonical digest-bearing commit files, reject a
+digest in `current.json`, and reject malformed digest values without reflecting
+them. This makes partial remote-finalize recovery idempotent; consensus-backed
+session ownership and public commit routing remain the next guard.
 
 ## Payload text
 

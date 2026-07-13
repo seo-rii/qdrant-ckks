@@ -6390,7 +6390,6 @@ mod private_hnsw_grpc_tests {
             .await
             .unwrap();
             assert_eq!(recovery.collection_id, COLLECTION_ID);
-            assert_eq!(recovery.vector_name, VECTOR_NAME);
             assert_eq!(recovery.current, manifest_epoch);
             assert!(recovery.pending.is_none());
         });

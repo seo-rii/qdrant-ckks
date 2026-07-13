@@ -60,6 +60,8 @@ const PRIVATE_ORAM_SNAPSHOT_MAX_EPOCH_BYTES: u64 = 16 * 1024;
 struct PrivateOramSnapshotEpochFile {
     index_epoch: u64,
     root_hash: String,
+    #[serde(default)]
+    writeback_digest: Option<String>,
 }
 
 impl Collection {
@@ -1300,6 +1302,11 @@ fn validate_private_oram_snapshot_epoch_file(
         .map_err(|_| private_oram_snapshot_unexpected_store_file_error(label))?;
     if expected_epoch.is_some_and(|expected_epoch| epoch.index_epoch != expected_epoch)
         || !private_oram_snapshot_root_hash_is_canonical(&epoch.root_hash)
+        || expected_epoch.is_none() && epoch.writeback_digest.is_some()
+        || epoch
+            .writeback_digest
+            .as_deref()
+            .is_some_and(|digest| !private_oram_snapshot_root_hash_is_canonical(digest))
     {
         return Err(private_oram_snapshot_unexpected_store_file_error(label));
     }
@@ -2893,8 +2900,8 @@ mod tests {
                 .join("epochs")
                 .join("00000042.commit"),
             format!(
-                r#"{{"index_epoch":{},"root_hash":"{}"}}"#,
-                hnsw_manifest.index_epoch, hnsw_manifest.root_hash
+                r#"{{"index_epoch":{},"root_hash":"{}","writeback_digest":"{}"}}"#,
+                hnsw_manifest.index_epoch, hnsw_manifest.root_hash, hnsw_manifest.root_hash,
             ),
         )
         .unwrap();
@@ -2911,12 +2918,51 @@ mod tests {
                 .join("epochs")
                 .join("00000042.commit"),
             format!(
-                r#"{{"index_epoch":{},"root_hash":"{}"}}"#,
-                result_manifest.index_epoch, result_manifest.root_hash
+                r#"{{"index_epoch":{},"root_hash":"{}","writeback_digest":"{}"}}"#,
+                result_manifest.index_epoch, result_manifest.root_hash, result_manifest.root_hash,
             ),
         )
         .unwrap();
         private_oram_snapshot_source_dir(temp_dir.path(), PRIVATE_RESULT_ORAM_DIR).unwrap();
+    }
+
+    #[test]
+    fn private_oram_snapshot_epoch_digest_is_commit_only_and_canonical() {
+        let temp_dir = tempfile::Builder::new()
+            .prefix("private-oram-snapshot-epoch-digest")
+            .tempdir()
+            .unwrap();
+        let root_hash = data_encoding::BASE64URL_NOPAD.encode(&[7; 32]);
+        let current = temp_dir.path().join("current.json");
+        fs::write(
+            &current,
+            format!(
+                r#"{{"index_epoch":42,"root_hash":"{root_hash}","writeback_digest":"{root_hash}"}}"#
+            ),
+        )
+        .unwrap();
+        let current_error =
+            validate_private_oram_snapshot_epoch_file(&current, None, "private ORAM")
+                .unwrap_err()
+                .to_string();
+        assert!(current_error.contains("unexpected file"));
+        assert!(!current_error.contains(&root_hash));
+
+        let commit = temp_dir.path().join("00000042.commit");
+        fs::write(
+            &commit,
+            format!(
+                r#"{{"index_epoch":42,"root_hash":"{root_hash}","writeback_digest":"malformed-digest-sentinel"}}"#
+            ),
+        )
+        .unwrap();
+        let commit_error =
+            validate_private_oram_snapshot_epoch_file(&commit, Some(42), "private ORAM")
+                .unwrap_err()
+                .to_string();
+        assert!(commit_error.contains("unexpected file"));
+        assert!(!commit_error.contains("sentinel"));
+        assert!(!commit_error.contains(&root_hash));
     }
 
     #[test]
@@ -4486,8 +4532,8 @@ mod tests {
                 .join("epochs")
                 .join("00000042.commit"),
             format!(
-                r#"{{"index_epoch":{},"root_hash":"{}"}}"#,
-                manifest.index_epoch, manifest.root_hash
+                r#"{{"index_epoch":{},"root_hash":"{}","writeback_digest":"{}"}}"#,
+                manifest.index_epoch, manifest.root_hash, manifest.root_hash
             ),
         )
         .unwrap();
@@ -6679,8 +6725,8 @@ mod tests {
                 .join("epochs")
                 .join("00000042.commit"),
             format!(
-                r#"{{"index_epoch":{},"root_hash":"{}"}}"#,
-                manifest.index_epoch, manifest.root_hash
+                r#"{{"index_epoch":{},"root_hash":"{}","writeback_digest":"{}"}}"#,
+                manifest.index_epoch, manifest.root_hash, manifest.root_hash
             ),
         )
         .unwrap();

@@ -1598,6 +1598,13 @@ pub async fn do_complete_private_hnsw_replica_writeback(
             )
             .map_err(private_hnsw_commit_writeback_store_error)
     } else {
+        if context
+            .store
+            .completed_replica_writeback_matches(expected)
+            .map_err(private_hnsw_commit_writeback_store_error)?
+        {
+            return Ok(true);
+        }
         context
             .store
             .commit_replica_writeback_with_signature(
@@ -1612,7 +1619,6 @@ pub async fn do_complete_private_hnsw_replica_writeback(
 
 pub struct PrivateHnswRecoveryContext {
     pub collection_id: String,
-    pub vector_name: String,
     pub current: PrivateHnswOramEpochState,
     pub pending: Option<(
         PrivateHnswOramWritebackBatch,
@@ -1638,6 +1644,14 @@ impl PrivateHnswRecoveryContext {
                 )
                 .map_err(private_hnsw_commit_writeback_store_error)
         } else {
+            if self
+                .replica
+                .store
+                .completed_replica_writeback_matches(expected)
+                .map_err(private_hnsw_commit_writeback_store_error)?
+            {
+                return Ok(true);
+            }
             self.replica
                 .store
                 .commit_replica_writeback_with_signature(
@@ -1687,7 +1701,6 @@ pub async fn do_inspect_private_hnsw_recovery(
         .map_err(private_hnsw_commit_writeback_store_error)?;
     Ok(PrivateHnswRecoveryContext {
         collection_id,
-        vector_name: vector_name.to_string(),
         current,
         pending,
         replica,
