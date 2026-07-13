@@ -109,6 +109,10 @@ impl Dispatcher {
         self.consensus_state.as_ref()
     }
 
+    pub fn this_peer_id(&self) -> PeerId {
+        self.toc.this_peer_id
+    }
+
     pub fn is_resharding_enabled(&self) -> bool {
         self.resharding_enabled
     }

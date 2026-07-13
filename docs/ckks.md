@@ -244,9 +244,13 @@ new issue time is at or after the previous expiry. Early takeover, stale
 release, overlong leases, malformed hashes, and capacity overflow fail closed.
 Lease state survives process restart and Raft snapshot restore, and debug/log
 projections redact the index identity and lease hash. Dispatcher exposes an
-awaited Raft apply bridge and current-lease lookup. Public session open/renew/
-close is not yet bound to this state, so distributed session routes remain
-closed in this step.
+awaited Raft apply bridge and current-lease lookup. The qdrant coordinator
+derives a domain-separated SHA-256 lease hash from the node-local session id,
+acquires or expired-takes-over the lease, verifies owner/hash/expiry before
+session work, and releases only an exact local lease. Oversized lease ids and
+lease errors do not reflect the submitted session id. Public session open/
+renew/close is not yet bound to these helpers, so distributed session routes
+remain closed in this step.
 
 ## Payload text
 

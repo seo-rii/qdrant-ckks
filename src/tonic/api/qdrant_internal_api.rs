@@ -22,14 +22,19 @@ use collection::private_result_oram_store::{
     PrivateResultOramWritebackBatch,
 };
 use common::types::{DetailsLevel, TelemetryDetail};
+use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     PrivateHnswOramBucket, PrivateHnswOramSignature, PrivateHnswOramUploadBundle,
     PrivateResultOramBucket, PrivateResultOramSignature, PrivateResultOramUploadBundle,
 };
+use sha2::{Digest, Sha256};
 use storage::audit::AuditConfig;
 use storage::audit_reader::{AuditLogQuery, read_local_audit_logs};
 use storage::content_manager::consensus_manager::ConsensusStateRef;
-use storage::content_manager::consensus_ops::{PrivateOramEpochKey, PrivateOramIndexKind};
+use storage::content_manager::consensus_ops::{
+    CompareAndSwapPrivateOramSessionLease, PrivateOramEpochKey, PrivateOramIndexKind,
+    PrivateOramSessionLease,
+};
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::{
@@ -249,6 +254,111 @@ fn validate_initial_install_bucket_bounds(
 }
 
 const BYTES_PER_MIB: usize = 1024 * 1024;
+const PRIVATE_ORAM_SESSION_LEASE_HASH_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-session-lease-id/v1";
+
+pub(crate) fn private_oram_session_lease_hash(session_id: &str) -> Result<String, StorageError> {
+    if session_id.is_empty() || session_id.len() > 256 {
+        return Err(StorageError::bad_request(
+            "private ORAM session lease id is invalid",
+        ));
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(PRIVATE_ORAM_SESSION_LEASE_HASH_DOMAIN);
+    hasher.update((session_id.len() as u64).to_be_bytes());
+    hasher.update(session_id.as_bytes());
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+#[allow(dead_code)]
+pub(crate) async fn acquire_private_oram_session_lease(
+    dispatcher: &Dispatcher,
+    key: PrivateOramEpochKey,
+    session_id: &str,
+    issued_at_unix: u64,
+    expires_at_unix: u64,
+) -> Result<PrivateOramSessionLease, StorageError> {
+    if expires_at_unix <= issued_at_unix {
+        return Err(StorageError::bad_request(
+            "private ORAM session lease interval is invalid",
+        ));
+    }
+    let current = dispatcher.private_oram_consensus_session_lease(&key)?;
+    if current
+        .as_ref()
+        .is_some_and(|lease| lease.expires_at_unix > issued_at_unix)
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM session lease is already active",
+        ));
+    }
+    let lease = PrivateOramSessionLease {
+        owner_peer_id: dispatcher.this_peer_id(),
+        lease_id_hash: private_oram_session_lease_hash(session_id)?,
+        issued_at_unix,
+        expires_at_unix,
+    };
+    dispatcher
+        .submit_private_oram_session_lease_cas(
+            CompareAndSwapPrivateOramSessionLease {
+                key,
+                expected: current,
+                new: Some(lease.clone()),
+            },
+            None,
+        )
+        .await?;
+    Ok(lease)
+}
+
+#[allow(dead_code)]
+pub(crate) fn require_private_oram_session_lease(
+    dispatcher: &Dispatcher,
+    key: &PrivateOramEpochKey,
+    session_id: &str,
+    now_unix: u64,
+) -> Result<PrivateOramSessionLease, StorageError> {
+    let lease = dispatcher
+        .private_oram_consensus_session_lease(key)?
+        .ok_or_else(|| StorageError::bad_request("private ORAM session lease is missing"))?;
+    if lease.owner_peer_id != dispatcher.this_peer_id()
+        || lease.lease_id_hash != private_oram_session_lease_hash(session_id)?
+        || lease.expires_at_unix <= now_unix
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM session lease does not match active session",
+        ));
+    }
+    Ok(lease)
+}
+
+#[allow(dead_code)]
+pub(crate) async fn release_private_oram_session_lease(
+    dispatcher: &Dispatcher,
+    key: PrivateOramEpochKey,
+    session_id: &str,
+) -> Result<(), StorageError> {
+    let lease = dispatcher
+        .private_oram_consensus_session_lease(&key)?
+        .ok_or_else(|| StorageError::bad_request("private ORAM session lease is missing"))?;
+    if lease.owner_peer_id != dispatcher.this_peer_id()
+        || lease.lease_id_hash != private_oram_session_lease_hash(session_id)?
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM session lease does not match active session",
+        ));
+    }
+    dispatcher
+        .submit_private_oram_session_lease_cas(
+            CompareAndSwapPrivateOramSessionLease {
+                key,
+                expected: Some(lease),
+                new: None,
+            },
+            None,
+        )
+        .await
+}
 
 pub(crate) async fn coordinate_private_hnsw_initial_upload(
     dispatcher: &Dispatcher,
@@ -956,6 +1066,23 @@ impl QdrantInternal for QdrantInternalService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_oram_session_lease_hash_is_domain_separated_and_bounded() {
+        let first = private_oram_session_lease_hash("session-1").unwrap();
+        let replay = private_oram_session_lease_hash("session-1").unwrap();
+        let second = private_oram_session_lease_hash("session-2").unwrap();
+        assert_eq!(first, replay);
+        assert_ne!(first, second);
+        assert_eq!(BASE64URL_NOPAD.decode(first.as_bytes()).unwrap().len(), 32);
+
+        let sentinel = "private-oram-session-lease-id-sentinel".repeat(8);
+        let rendered = private_oram_session_lease_hash(&sentinel)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("lease id is invalid"));
+        assert!(!rendered.contains(&sentinel));
+    }
 
     fn replication_request_fixture() -> PreparePrivateOramWritebackRequest {
         PreparePrivateOramWritebackRequest {
