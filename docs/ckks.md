@@ -201,6 +201,17 @@ is installed, clients must send the manifest and bucket upload to the same
 coordinator node and retry the exact signed bundle after an indeterminate
 response.
 
+Distributed recovery classifies local state against the Raft ownership record
+before any pending journal may be acted on. A store without a pending journal
+must exactly match the consensus epoch/root. A signed pending transition is
+aborted only when both local and consensus still match its old epoch/root, and
+is finalized only when consensus exactly matches its new epoch/root and
+canonical writeback digest. Missing ownership, unrelated state, digest drift,
+or a locally finalized transition whose consensus state is still old fails
+closed. This provider-neutral classifier does not by itself open distributed
+session routes; provider journal validation and remote/local recovery fan-out
+must consume the decision first.
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:

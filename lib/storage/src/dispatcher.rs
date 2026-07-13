@@ -63,6 +63,24 @@ impl Debug for PrivateOramReplicaPrepareAck {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivateOramRecoveryAction {
+    Clean,
+    AbortPending,
+    FinalizePending,
+}
+
+pub struct PrivateOramEpochRef<'a> {
+    pub index_epoch: u64,
+    pub root_hash: &'a str,
+}
+
+pub struct PrivateOramPendingTransitionRef<'a> {
+    pub old: PrivateOramEpochRef<'a>,
+    pub new: PrivateOramEpochRef<'a>,
+    pub writeback_digest: &'a str,
+}
+
 impl Dispatcher {
     pub fn new(toc: Arc<TableOfContent>) -> Self {
         Self {
@@ -1186,9 +1204,164 @@ fn validate_private_oram_root_hash(root_hash: &str) -> Result<(), StorageError> 
     Ok(())
 }
 
+pub fn classify_private_oram_recovery(
+    consensus: Option<&PrivateOramConsensusEpoch>,
+    local: PrivateOramEpochRef<'_>,
+    pending: Option<PrivateOramPendingTransitionRef<'_>>,
+) -> Result<PrivateOramRecoveryAction, StorageError> {
+    validate_private_oram_root_hash(local.root_hash)?;
+    let consensus = consensus.ok_or_else(|| {
+        StorageError::bad_request("private ORAM consensus ownership is not initialized")
+    })?;
+    validate_private_oram_root_hash(&consensus.root_hash)?;
+    if let Some(digest) = consensus.writeback_digest.as_deref() {
+        validate_private_oram_writeback_digest(digest)?;
+    }
+
+    let Some(pending) = pending else {
+        if local.index_epoch == consensus.index_epoch && local.root_hash == consensus.root_hash {
+            return Ok(PrivateOramRecoveryAction::Clean);
+        }
+        return Err(StorageError::bad_request(
+            "private ORAM local state does not match consensus",
+        ));
+    };
+
+    validate_private_oram_root_hash(pending.old.root_hash)?;
+    validate_private_oram_root_hash(pending.new.root_hash)?;
+    validate_private_oram_writeback_digest(pending.writeback_digest)?;
+    let local_is_old =
+        local.index_epoch == pending.old.index_epoch && local.root_hash == pending.old.root_hash;
+    let local_is_new =
+        local.index_epoch == pending.new.index_epoch && local.root_hash == pending.new.root_hash;
+    if pending.new.index_epoch <= pending.old.index_epoch || (!local_is_old && !local_is_new) {
+        return Err(StorageError::bad_request(
+            "private ORAM pending recovery state is inconsistent",
+        ));
+    }
+
+    let consensus_is_new = consensus.index_epoch == pending.new.index_epoch
+        && consensus.root_hash == pending.new.root_hash
+        && consensus.writeback_digest.as_deref() == Some(pending.writeback_digest);
+    if consensus_is_new {
+        return Ok(PrivateOramRecoveryAction::FinalizePending);
+    }
+
+    let consensus_is_old = consensus.index_epoch == pending.old.index_epoch
+        && consensus.root_hash == pending.old.root_hash;
+    if local_is_old && consensus_is_old {
+        return Ok(PrivateOramRecoveryAction::AbortPending);
+    }
+
+    Err(StorageError::bad_request(
+        "private ORAM pending recovery does not match consensus",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_oram_recovery_requires_exact_consensus_state() {
+        let old_root = BASE64URL_NOPAD.encode(&[1; 32]);
+        let new_root = BASE64URL_NOPAD.encode(&[2; 32]);
+        let unrelated_root = BASE64URL_NOPAD.encode(&[3; 32]);
+        let previous_digest = BASE64URL_NOPAD.encode(&[4; 32]);
+        let writeback_digest = BASE64URL_NOPAD.encode(&[5; 32]);
+        let old_consensus = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: old_root.clone(),
+            writeback_digest: Some(previous_digest),
+        };
+        let new_consensus = PrivateOramConsensusEpoch {
+            index_epoch: 43,
+            root_hash: new_root.clone(),
+            writeback_digest: Some(writeback_digest.clone()),
+        };
+        let local_old = || PrivateOramEpochRef {
+            index_epoch: 42,
+            root_hash: &old_root,
+        };
+        let local_new = || PrivateOramEpochRef {
+            index_epoch: 43,
+            root_hash: &new_root,
+        };
+        let pending = || PrivateOramPendingTransitionRef {
+            old: local_old(),
+            new: local_new(),
+            writeback_digest: &writeback_digest,
+        };
+
+        assert_eq!(
+            classify_private_oram_recovery(Some(&old_consensus), local_old(), None).unwrap(),
+            PrivateOramRecoveryAction::Clean,
+        );
+        assert_eq!(
+            classify_private_oram_recovery(Some(&old_consensus), local_old(), Some(pending()),)
+                .unwrap(),
+            PrivateOramRecoveryAction::AbortPending,
+        );
+        for local in [local_old(), local_new()] {
+            assert_eq!(
+                classify_private_oram_recovery(Some(&new_consensus), local, Some(pending()),)
+                    .unwrap(),
+                PrivateOramRecoveryAction::FinalizePending,
+            );
+        }
+
+        let wrong_digest_consensus = PrivateOramConsensusEpoch {
+            writeback_digest: Some(BASE64URL_NOPAD.encode(&[6; 32])),
+            ..new_consensus.clone()
+        };
+        let unrelated_consensus = PrivateOramConsensusEpoch {
+            index_epoch: 44,
+            root_hash: unrelated_root.clone(),
+            writeback_digest: None,
+        };
+        for mismatch in [
+            classify_private_oram_recovery(Some(&new_consensus), local_old(), None).unwrap_err(),
+            classify_private_oram_recovery(
+                Some(&wrong_digest_consensus),
+                local_old(),
+                Some(pending()),
+            )
+            .unwrap_err(),
+            classify_private_oram_recovery(Some(&old_consensus), local_new(), Some(pending()))
+                .unwrap_err(),
+            classify_private_oram_recovery(
+                Some(&unrelated_consensus),
+                local_old(),
+                Some(pending()),
+            )
+            .unwrap_err(),
+            classify_private_oram_recovery(None, local_old(), None).unwrap_err(),
+        ] {
+            let rendered = mismatch.to_string();
+            for sentinel in [
+                old_root.as_str(),
+                new_root.as_str(),
+                unrelated_root.as_str(),
+                writeback_digest.as_str(),
+            ] {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
+        }
+
+        let malformed = "private-oram-recovery-root-sentinel";
+        let malformed = classify_private_oram_recovery(
+            Some(&old_consensus),
+            PrivateOramEpochRef {
+                index_epoch: 42,
+                root_hash: malformed,
+            },
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(malformed.contains("consensus root hash is invalid"));
+        assert!(!malformed.contains("sentinel"));
+    }
 
     #[test]
     fn private_oram_replica_prepare_acks_require_exact_peers_and_digest() {
