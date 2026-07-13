@@ -61,6 +61,7 @@ pub(crate) const MAX_CIPHERTEXT_BYTES: usize = 16 * 1024;
 
 pub(crate) struct PrivateHnswRouteWireFixture {
     _temp: TempDir,
+    collection_id: &'static str,
     pub(crate) store: PrivateHnswOramStore,
     pub(crate) keys: PrivateHnswClientKeys,
     pub(crate) base_context: PrivateHnswBucketAeadBaseContext<'static>,
@@ -228,18 +229,29 @@ impl PrivateHnswRouteWireFixture {
     }
 
     pub(crate) fn build_uploaded_with_path_batch_size(path_batch_size: u32) -> Self {
+        Self::build_uploaded_for_collection_id_with_path_batch_size(COLLECTION_ID, path_batch_size)
+    }
+
+    pub(crate) fn build_uploaded_for_collection_id(collection_id: &'static str) -> Self {
+        Self::build_uploaded_for_collection_id_with_path_batch_size(collection_id, 1)
+    }
+
+    fn build_uploaded_for_collection_id_with_path_batch_size(
+        collection_id: &'static str,
+        path_batch_size: u32,
+    ) -> Self {
         let temp = TempDir::new().unwrap();
         let store = PrivateHnswOramStore::new(temp.path(), VECTOR_NAME).unwrap();
         let keys = PrivateHnswClientKeys::derive_from_resource_key_with_context(
             &SecretKey::from_bytes([13; 32]),
-            COLLECTION_ID,
+            collection_id,
             VECTOR_NAME,
             KEY_ID,
             RK_EPOCH,
         )
         .unwrap();
         let base_context = PrivateHnswBucketAeadBaseContext {
-            collection_id: COLLECTION_ID,
+            collection_id,
             vector_name: VECTOR_NAME,
             key_id: KEY_ID,
             rk_id: KEY_ID,
@@ -266,7 +278,7 @@ impl PrivateHnswRouteWireFixture {
         .unwrap();
         let manifest = build_private_hnsw_oram_manifest_from_encrypted_index(
             PrivateHnswManifestBuildContext {
-                collection_id: COLLECTION_ID,
+                collection_id,
                 vector_name: VECTOR_NAME,
                 key_id: KEY_ID,
                 rk_id: KEY_ID,
@@ -342,6 +354,7 @@ impl PrivateHnswRouteWireFixture {
 
         Self {
             _temp: temp,
+            collection_id,
             store,
             keys,
             base_context,
@@ -455,7 +468,7 @@ impl PrivateHnswRouteWireFixture {
         sign_private_hnsw_oram_read_paths(
             &self.signing_key,
             PrivateHnswCommitSignatureContext {
-                collection_id: COLLECTION_ID,
+                collection_id: self.collection_id,
                 vector_name: VECTOR_NAME,
                 key_id: KEY_ID,
                 rk_id: KEY_ID,
@@ -550,7 +563,7 @@ impl PrivateHnswRouteWireFixture {
         sign_private_hnsw_oram_commit(
             &self.signing_key,
             PrivateHnswCommitSignatureContext {
-                collection_id: COLLECTION_ID,
+                collection_id: self.collection_id,
                 vector_name: VECTOR_NAME,
                 key_id: KEY_ID,
                 rk_id: KEY_ID,

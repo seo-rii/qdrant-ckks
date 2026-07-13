@@ -1509,6 +1509,7 @@ mod tests {
     use std::thread;
 
     use collection::operations::vector_params_builder::VectorParamsBuilder;
+    use collection::operations::verification::new_unchecked_verification_pass;
     use collection::private_hnsw_oram_store::{
         PrivateHnswOramConsensusWriteback, PrivateHnswOramEpochState,
     };
@@ -1528,12 +1529,26 @@ mod tests {
     };
     use storage::content_manager::toc::TableOfContent;
     use storage::dispatcher::{Dispatcher, PrivateOramReplicaPrepareAck};
-    use storage::rbac::{Access, Auth};
+    use storage::rbac::{Access, AccessRequirements, Auth};
     use tempfile::Builder;
 
     use super::Consensus;
     use crate::common::helpers::create_general_purpose_runtime;
+    use crate::common::private_hnsw::{
+        PrivateHnswClientSignature, PrivateHnswReadPadding,
+        do_stage_private_hnsw_buckets_for_initial_replication,
+        do_stage_private_hnsw_manifest_for_initial_replication,
+    };
+    use crate::common::private_hnsw_wire_fixture::{
+        BASE_EPOCH, COLLECTION_NAME, NEXT_EPOCH, PrivateHnswRouteWireFixture, VECTOR_NAME,
+        create_private_hnsw_collection, route_e2e_guard,
+    };
     use crate::settings::ConsensusConfig;
+    use crate::tonic::api::qdrant_internal_api::{
+        close_private_hnsw_session_coordinated, commit_private_hnsw_paths_coordinated,
+        coordinate_private_hnsw_initial_upload, open_private_hnsw_session_coordinated,
+        read_private_hnsw_paths_coordinated,
+    };
 
     #[test]
     fn raft_message_log_projection_redacts_entry_payload_bytes() {
@@ -1576,8 +1591,11 @@ mod tests {
     #[test]
     fn collection_creation_and_private_oram_epoch_cas_pass_consensus() {
         // Given
+        let _route_guard = route_e2e_guard();
+        let private_hnsw_settings_fixture = PrivateHnswRouteWireFixture::build_uploaded();
         let storage_dir = Builder::new().prefix("storage").tempdir().unwrap();
         let mut settings = crate::Settings::new(None).expect("Can't read config.");
+        settings.crypto = private_hnsw_settings_fixture.route_settings().crypto;
         settings.storage.storage_path = storage_dir.path().to_path_buf();
         tracing_subscriber::fmt::init();
         let search_runtime =
@@ -2131,5 +2149,165 @@ mod tests {
                 .unwrap(),
             Some(follow_up_consensus_epoch),
         );
+
+        handle.block_on(async {
+            create_private_hnsw_collection(&dispatcher).await;
+            let auth = Auth::new_internal(Access::full("private HNSW consensus route test"));
+            let pass = new_unchecked_verification_pass();
+            let collection_pass = auth
+                .check_collection_access(
+                    COLLECTION_NAME,
+                    AccessRequirements::new(),
+                    "private_hnsw_consensus_fixture_identity",
+                )
+                .unwrap();
+            let collection = dispatcher
+                .toc(&auth, &pass)
+                .get_collection(&collection_pass)
+                .await
+                .unwrap();
+            let collection_config = collection.config_snapshot().await;
+            let collection_id = collection_config
+                .stable_crypto_id(collection.name())
+                .unwrap();
+            let collection_id: &'static str = Box::leak(collection_id.into_boxed_str());
+            let private_hnsw_fixture =
+                PrivateHnswRouteWireFixture::build_uploaded_for_collection_id(collection_id);
+            do_stage_private_hnsw_manifest_for_initial_replication(
+                dispatcher.toc(&auth, &pass),
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                private_hnsw_fixture.manifest.clone(),
+                private_hnsw_fixture.manifest_signature.clone(),
+            )
+            .await
+            .unwrap();
+            do_stage_private_hnsw_buckets_for_initial_replication(
+                dispatcher.toc(&auth, &pass),
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                BASE_EPOCH,
+                private_hnsw_fixture.encrypted_build.root_hash.clone(),
+                private_hnsw_fixture.encrypted_build.buckets.clone(),
+            )
+            .await
+            .unwrap();
+            coordinate_private_hnsw_initial_upload(
+                &dispatcher,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+            )
+            .await
+            .unwrap();
+
+            let session = open_private_hnsw_session_coordinated(
+                &dispatcher,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                "tenant-a/consensus-sdk-instance".to_string(),
+                BASE_EPOCH,
+                true,
+                qdrant_sec::ResultPrivacyMode::IdsVisible,
+            )
+            .await
+            .unwrap();
+            let session_key = PrivateOramEpochKey {
+                collection_id: collection_id.to_string(),
+                index_kind: PrivateOramIndexKind::Hnsw,
+                index_name: VECTOR_NAME.to_string(),
+            };
+            let lease = dispatcher
+                .private_oram_consensus_session_lease(&session_key)
+                .unwrap()
+                .expect("coordinated open must acquire a consensus lease");
+            assert_eq!(lease.owner_peer_id, dispatcher.this_peer_id());
+            assert_eq!(lease.expires_at_unix, session.lease_expires_unix);
+
+            let paths = vec![private_hnsw_fixture.entry_leaf_label()];
+            let read_signature = private_hnsw_fixture.sign_read_paths(&paths, 1, true);
+            let read = read_private_hnsw_paths_coordinated(
+                &dispatcher,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                &session.session_id,
+                BASE_EPOCH,
+                &session.root_hash,
+                paths,
+                PrivateHnswReadPadding {
+                    requested_paths: 1,
+                    dummy_paths_included: true,
+                },
+                PrivateHnswClientSignature {
+                    alg: read_signature.alg,
+                    key_id: read_signature.key_id,
+                    sig: read_signature.sig,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(read.index_epoch, BASE_EPOCH);
+            assert_eq!(read.root_hash, session.root_hash);
+            assert!(!read.buckets.is_empty());
+
+            let search_run = private_hnsw_fixture.run_single_search_collect_writeback();
+            let committed = commit_private_hnsw_paths_coordinated(
+                &dispatcher,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                VECTOR_NAME,
+                &session.session_id,
+                BASE_EPOCH,
+                NEXT_EPOCH,
+                search_run.commit_plan.old_root_hash,
+                search_run.commit_plan.new_root_hash.clone(),
+                search_run.updated_buckets,
+                PrivateHnswClientSignature {
+                    alg: search_run.commit_signature.alg,
+                    key_id: search_run.commit_signature.key_id,
+                    sig: search_run.commit_signature.sig,
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(committed.index_epoch, NEXT_EPOCH);
+            assert_eq!(committed.root_hash, search_run.commit_plan.new_root_hash);
+            let consensus_epoch = dispatcher
+                .private_oram_consensus_epoch(&session_key)
+                .unwrap()
+                .expect("coordinated commit must preserve consensus ownership");
+            assert_eq!(consensus_epoch.index_epoch, committed.index_epoch);
+            assert_eq!(consensus_epoch.root_hash, committed.root_hash);
+            assert!(consensus_epoch.writeback_digest.is_some());
+
+            assert!(
+                close_private_hnsw_session_coordinated(
+                    &dispatcher,
+                    &auth,
+                    &settings,
+                    COLLECTION_NAME,
+                    VECTOR_NAME,
+                    &session.session_id,
+                )
+                .await
+                .unwrap()
+            );
+            assert!(
+                dispatcher
+                    .private_oram_consensus_session_lease(&session_key)
+                    .unwrap()
+                    .is_none()
+            );
+        });
     }
 }
