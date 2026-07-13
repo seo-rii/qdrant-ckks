@@ -189,6 +189,7 @@ struct PrivateHnswSession {
     path_batch_size: u32,
     max_bucket_ciphertext_bytes: usize,
     manifest: PrivateHnswOramManifest,
+    commit_in_progress: bool,
 }
 
 impl Debug for PrivateHnswSession {
@@ -207,6 +208,7 @@ impl Debug for PrivateHnswSession {
             .field("path_batch_size", &"[redacted]")
             .field("max_bucket_ciphertext_bytes", &"[redacted]")
             .field("manifest", &"[redacted]")
+            .field("commit_in_progress", &self.commit_in_progress)
             .finish()
     }
 }
@@ -293,6 +295,13 @@ impl PrivateHnswSessionRegistry {
         now_unix: u64,
     ) -> bool {
         self.expire(now_unix);
+        if self
+            .sessions
+            .get(session_id)
+            .is_some_and(|session| session.commit_in_progress)
+        {
+            return false;
+        }
         let removed = self.sessions.remove(session_id);
         if let Some(session) = removed {
             if session.collection_id == collection_id && session.vector_name == vector_name {
@@ -423,6 +432,87 @@ impl PrivateHnswSessionRegistry {
         now_unix: u64,
         action: impl FnOnce(&mut PrivateHnswSession) -> StorageResult<T>,
     ) -> StorageResult<T> {
+        let session =
+            self.checked_session_mut(collection_id, vector_name, session_id, now_unix, false)?;
+        if session.commit_in_progress {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM session commit is already in progress",
+            ));
+        }
+        action(session)
+    }
+
+    fn begin_commit<T>(
+        &mut self,
+        collection_id: &str,
+        vector_name: &str,
+        session_id: &str,
+        now_unix: u64,
+        action: impl FnOnce(&PrivateHnswSession) -> StorageResult<T>,
+    ) -> StorageResult<T> {
+        let session =
+            self.checked_session_mut(collection_id, vector_name, session_id, now_unix, false)?;
+        if session.commit_in_progress {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM session commit is already in progress",
+            ));
+        }
+        let result = action(session)?;
+        session.commit_in_progress = true;
+        Ok(result)
+    }
+
+    fn complete_commit(
+        &mut self,
+        collection_id: &str,
+        vector_name: &str,
+        session_id: &str,
+        committed: &PrivateHnswOramEpochState,
+        lease_expires_unix: u64,
+    ) -> StorageResult<()> {
+        let session = self.checked_session_mut(
+            collection_id,
+            vector_name,
+            session_id,
+            lease_expires_unix,
+            true,
+        )?;
+        if !session.commit_in_progress {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM session has no commit in progress",
+            ));
+        }
+        session.index_epoch = committed.index_epoch;
+        session.root_hash = committed.root_hash.clone();
+        session.lease_expires_unix = lease_expires_unix;
+        session.commit_in_progress = false;
+        Ok(())
+    }
+
+    fn cancel_commit(
+        &mut self,
+        collection_id: &str,
+        vector_name: &str,
+        session_id: &str,
+    ) -> StorageResult<()> {
+        let session = self.checked_session_mut(collection_id, vector_name, session_id, 0, true)?;
+        if !session.commit_in_progress {
+            return Err(StorageError::bad_request(
+                "private HNSW ORAM session has no commit in progress",
+            ));
+        }
+        session.commit_in_progress = false;
+        Ok(())
+    }
+
+    fn checked_session_mut(
+        &mut self,
+        collection_id: &str,
+        vector_name: &str,
+        session_id: &str,
+        now_unix: u64,
+        allow_expired_commit: bool,
+    ) -> StorageResult<&mut PrivateHnswSession> {
         self.expire(now_unix);
         let session = self.sessions.get_mut(session_id).ok_or_else(|| {
             StorageError::bad_request("private HNSW ORAM session is missing or expired")
@@ -442,12 +532,12 @@ impl PrivateHnswSessionRegistry {
                 "private HNSW ORAM session writer lock is missing or stale",
             ));
         }
-        if session.lease_expires_unix <= now_unix {
+        if !allow_expired_commit && session.lease_expires_unix <= now_unix {
             return Err(StorageError::bad_request(
                 "private HNSW ORAM session lease expired",
             ));
         }
-        action(session)
+        Ok(session)
     }
 
     fn expire(&mut self, now_unix: u64) {
@@ -455,7 +545,8 @@ impl PrivateHnswSessionRegistry {
             .sessions
             .iter()
             .filter_map(|(session_id, session)| {
-                (session.lease_expires_unix <= now_unix).then_some(session_id.clone())
+                (session.lease_expires_unix <= now_unix && !session.commit_in_progress)
+                    .then_some(session_id.clone())
             })
             .collect::<Vec<_>>();
         for session_id in expired {
@@ -1164,6 +1255,7 @@ pub async fn do_open_private_hnsw_session(
         path_batch_size: manifest.oram.path_batch_size,
         max_bucket_ciphertext_bytes,
         manifest,
+        commit_in_progress: false,
     };
     let mut registry = session_registry()
         .lock()
@@ -5200,6 +5292,7 @@ mod private_hnsw_tests {
             path_batch_size: 1,
             max_bucket_ciphertext_bytes: 4096,
             manifest,
+            commit_in_progress: false,
         }
     }
 
@@ -5746,6 +5839,64 @@ mod private_hnsw_tests {
         registry
             .open(fixture_session("session-2", 20), now)
             .unwrap();
+    }
+
+    #[test]
+    fn session_registry_pins_writer_while_commit_is_in_progress() {
+        let now = 10;
+        let expired_at = 20;
+        let mut registry = PrivateHnswSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", expired_at), now)
+            .unwrap();
+
+        let epoch = registry
+            .begin_commit("collection-uuid-1", "text", "session-1", now, |session| {
+                Ok(session.index_epoch)
+            })
+            .unwrap();
+        assert_eq!(epoch, 42);
+
+        let rendered = registry
+            .with_session_mut("collection-uuid-1", "text", "session-1", now, |_| Ok(()))
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("commit is already in progress"));
+        assert_private_hnsw_registry_error_redacts_ids(&rendered);
+        assert!(!registry.close("collection-uuid-1", "text", "session-1", now));
+        assert!(registry.has_active_index("collection-uuid-1", "text", expired_at));
+
+        let committed = PrivateHnswOramEpochState {
+            index_epoch: 43,
+            root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+        };
+        registry
+            .complete_commit("collection-uuid-1", "text", "session-1", &committed, 30)
+            .unwrap();
+        registry
+            .with_session_mut(
+                "collection-uuid-1",
+                "text",
+                "session-1",
+                expired_at,
+                |session| {
+                    assert_eq!(session.index_epoch, committed.index_epoch);
+                    assert_eq!(session.root_hash, committed.root_hash);
+                    assert_eq!(session.lease_expires_unix, 30);
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        registry
+            .begin_commit("collection-uuid-1", "text", "session-1", expired_at, |_| {
+                Ok(())
+            })
+            .unwrap();
+        registry
+            .cancel_commit("collection-uuid-1", "text", "session-1")
+            .unwrap();
+        assert!(registry.close("collection-uuid-1", "text", "session-1", expired_at));
     }
 
     #[test]
