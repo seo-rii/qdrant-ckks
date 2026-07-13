@@ -668,6 +668,51 @@ pub async fn do_upload_private_hnsw_manifest(
     manifest: PrivateHnswOramManifest,
     signature: PrivateHnswOramSignature,
 ) -> StorageResult<PrivateHnswOramEpochState> {
+    do_upload_private_hnsw_manifest_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        manifest,
+        signature,
+        false,
+    )
+    .await
+}
+
+pub(crate) async fn do_stage_private_hnsw_manifest_for_initial_replication(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    manifest: PrivateHnswOramManifest,
+    signature: PrivateHnswOramSignature,
+) -> StorageResult<PrivateHnswOramEpochState> {
+    do_upload_private_hnsw_manifest_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        manifest,
+        signature,
+        true,
+    )
+    .await
+}
+
+async fn do_upload_private_hnsw_manifest_inner(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    manifest: PrivateHnswOramManifest,
+    signature: PrivateHnswOramSignature,
+    coordinated_initial_replication: bool,
+) -> StorageResult<PrivateHnswOramEpochState> {
     validate_private_hnsw_oram_manifest_signature_shape(&signature).map_err(private_hnsw_error)?;
     validate_private_hnsw_manifest_signature_owner_key(&manifest, &signature)?;
     let resolved = resolve_private_hnsw_context(
@@ -681,7 +726,10 @@ pub async fn do_upload_private_hnsw_manifest(
         AccessRequirements::new().write(),
     )
     .await?;
-    validate_private_hnsw_oram_single_node_epoch_mode(toc.is_distributed())?;
+    validate_private_hnsw_oram_upload_epoch_mode(
+        toc.is_distributed(),
+        coordinated_initial_replication,
+    )?;
     let epoch = validate_private_hnsw_oram_manifest(
         &manifest,
         Some(&signature),
@@ -805,6 +853,38 @@ pub async fn do_get_private_hnsw_manifest(
     })
 }
 
+pub async fn do_export_private_hnsw_initial_replication_bundle(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    max_bundle_bytes: usize,
+) -> StorageResult<qdrant_sec::PrivateHnswOramUploadBundle> {
+    let record =
+        do_get_private_hnsw_manifest(toc, auth, settings, collection_name, vector_name).await?;
+    let pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new().write(),
+        "private_hnsw_initial_replication_export",
+    )?;
+    let collection = toc.get_collection(&pass).await?;
+    let _guard =
+        begin_private_hnsw_upload_write_window(&record.manifest.collection_id, vector_name)?;
+    let bundle = PrivateHnswOramStore::new(collection.path(), vector_name)?
+        .read_initial_upload_bundle(
+            max_bucket_ciphertext_bytes(&record.manifest)?,
+            max_bundle_bytes,
+        )
+        .map_err(private_hnsw_upload_store_error)?;
+    if bundle.manifest != record.manifest || bundle.manifest_signature != record.signature {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM initial replication bundle does not match validated manifest",
+        ));
+    }
+    Ok(bundle)
+}
+
 pub async fn do_upload_private_hnsw_buckets(
     toc: &TableOfContent,
     auth: &Auth,
@@ -815,6 +895,55 @@ pub async fn do_upload_private_hnsw_buckets(
     root_hash: String,
     buckets: Vec<PrivateHnswOramBucket>,
 ) -> StorageResult<PrivateHnswOramEpochState> {
+    do_upload_private_hnsw_buckets_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        index_epoch,
+        root_hash,
+        buckets,
+        false,
+    )
+    .await
+}
+
+pub(crate) async fn do_stage_private_hnsw_buckets_for_initial_replication(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    index_epoch: u64,
+    root_hash: String,
+    buckets: Vec<PrivateHnswOramBucket>,
+) -> StorageResult<PrivateHnswOramEpochState> {
+    do_upload_private_hnsw_buckets_inner(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        index_epoch,
+        root_hash,
+        buckets,
+        true,
+    )
+    .await
+}
+
+async fn do_upload_private_hnsw_buckets_inner(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    index_epoch: u64,
+    root_hash: String,
+    buckets: Vec<PrivateHnswOramBucket>,
+    coordinated_initial_replication: bool,
+) -> StorageResult<PrivateHnswOramEpochState> {
     validate_root_hash_string(&root_hash, "root_hash")?;
     validate_private_hnsw_upload_bucket_request_shape(&buckets)?;
     let pass = auth.check_collection_access(
@@ -824,7 +953,10 @@ pub async fn do_upload_private_hnsw_buckets(
     )?;
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
-    validate_private_hnsw_oram_single_node_epoch_mode(toc.is_distributed())?;
+    validate_private_hnsw_oram_upload_epoch_mode(
+        toc.is_distributed(),
+        coordinated_initial_replication,
+    )?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
     let collection_crypto_id = config.stable_crypto_id(collection.name())?;
     validate_collection_crypto_runtime_with_crypto_id(
@@ -2223,6 +2355,16 @@ fn validate_private_hnsw_oram_single_node_epoch_mode(distributed: bool) -> Stora
             "private HNSW ORAM distributed operations require consensus-backed epoch/root CAS; \
              this MVP supports private ORAM sessions only in single-node mode",
         ));
+    }
+    Ok(())
+}
+
+fn validate_private_hnsw_oram_upload_epoch_mode(
+    distributed: bool,
+    coordinated_initial_replication: bool,
+) -> StorageResult<()> {
+    if distributed && !coordinated_initial_replication {
+        return validate_private_hnsw_oram_single_node_epoch_mode(true);
     }
     Ok(())
 }
@@ -3660,8 +3802,13 @@ mod private_hnsw_tests {
     #[test]
     fn distributed_epoch_operations_require_consensus_backed_cas() {
         assert!(validate_private_hnsw_oram_single_node_epoch_mode(false).is_ok());
+        assert!(validate_private_hnsw_oram_upload_epoch_mode(false, false).is_ok());
+        assert!(validate_private_hnsw_oram_upload_epoch_mode(false, true).is_ok());
+        assert!(validate_private_hnsw_oram_upload_epoch_mode(true, true).is_ok());
 
         let err = validate_private_hnsw_oram_single_node_epoch_mode(true).unwrap_err();
+        assert!(err.to_string().contains("consensus-backed epoch/root CAS"));
+        let err = validate_private_hnsw_oram_upload_epoch_mode(true, false).unwrap_err();
         assert!(err.to_string().contains("consensus-backed epoch/root CAS"));
     }
 

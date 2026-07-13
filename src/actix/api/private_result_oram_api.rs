@@ -14,10 +14,13 @@ use crate::actix::helpers::process_response;
 use crate::common::private_result_oram::{
     do_close_private_result_oram_session, do_commit_private_result_oram_buckets,
     do_get_private_result_oram_manifest, do_open_private_result_oram_session,
-    do_read_private_result_oram_buckets, do_upload_private_result_oram_buckets,
-    do_upload_private_result_oram_manifest,
+    do_read_private_result_oram_buckets,
+    do_stage_private_result_oram_buckets_for_initial_replication,
+    do_stage_private_result_oram_manifest_for_initial_replication,
+    do_upload_private_result_oram_buckets, do_upload_private_result_oram_manifest,
 };
 use crate::settings::Settings;
+use crate::tonic::api::qdrant_internal_api::coordinate_private_result_oram_initial_upload;
 
 #[derive(Deserialize, Validate)]
 struct PrivateResultOramPath {
@@ -197,15 +200,27 @@ async fn upload_manifest(
     let path = path.into_inner();
     let request = request.into_inner();
     let timing = Instant::now();
-    let result = do_upload_private_result_oram_manifest(
-        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
-        &auth,
-        settings.get_ref(),
-        &path.collection.collection_name,
-        request.manifest,
-        request.signature,
-    )
-    .await;
+    let result = if dispatcher.consensus_state().is_some() {
+        do_stage_private_result_oram_manifest_for_initial_replication(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            request.manifest,
+            request.signature,
+        )
+        .await
+    } else {
+        do_upload_private_result_oram_manifest(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            request.manifest,
+            request.signature,
+        )
+        .await
+    };
     process_response(result, timing, None)
 }
 
@@ -239,16 +254,43 @@ async fn upload_buckets(
     let path = path.into_inner();
     let request = request.into_inner();
     let timing = Instant::now();
-    let result = do_upload_private_result_oram_buckets(
-        dispatcher.toc(&auth, &new_unchecked_verification_pass()),
-        &auth,
-        settings.get_ref(),
-        &path.collection.collection_name,
-        request.index_epoch,
-        request.root_hash,
-        request.buckets,
-    )
-    .await;
+    let coordinated_initial_replication = dispatcher.consensus_state().is_some();
+    let result = if coordinated_initial_replication {
+        do_stage_private_result_oram_buckets_for_initial_replication(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            request.index_epoch,
+            request.root_hash,
+            request.buckets,
+        )
+        .await
+    } else {
+        do_upload_private_result_oram_buckets(
+            dispatcher.toc(&auth, &new_unchecked_verification_pass()),
+            &auth,
+            settings.get_ref(),
+            &path.collection.collection_name,
+            request.index_epoch,
+            request.root_hash,
+            request.buckets,
+        )
+        .await
+    };
+    let result = match result {
+        Ok(epoch) if coordinated_initial_replication => {
+            coordinate_private_result_oram_initial_upload(
+                dispatcher.get_ref(),
+                &auth,
+                settings.get_ref(),
+                &path.collection.collection_name,
+            )
+            .await
+            .map(|()| epoch)
+        }
+        result => result,
+    };
     process_response(result, timing, None)
 }
 

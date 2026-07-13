@@ -15,10 +15,13 @@ use tonic::{Request, Response, Status, async_trait};
 use crate::common::private_result_oram::{
     do_close_private_result_oram_session, do_commit_private_result_oram_buckets,
     do_get_private_result_oram_manifest, do_open_private_result_oram_session,
-    do_read_private_result_oram_buckets, do_upload_private_result_oram_buckets,
-    do_upload_private_result_oram_manifest,
+    do_read_private_result_oram_buckets,
+    do_stage_private_result_oram_buckets_for_initial_replication,
+    do_stage_private_result_oram_manifest_for_initial_replication,
+    do_upload_private_result_oram_buckets, do_upload_private_result_oram_manifest,
 };
 use crate::settings::Settings;
+use crate::tonic::api::qdrant_internal_api::coordinate_private_result_oram_initial_upload;
 use crate::tonic::auth::extract_auth;
 
 const ORAM_KIND_PATH_ORAM: i32 = 1;
@@ -76,15 +79,27 @@ impl PrivateResultOram for PrivateResultOramService {
         let signature = signature_from_proto(required(request.signature, "signature")?);
         let pass = new_unchecked_verification_pass();
 
-        let epoch = do_upload_private_result_oram_manifest(
-            self.dispatcher.toc(&auth, &pass),
-            &auth,
-            &self.settings,
-            &request.collection_name,
-            manifest,
-            signature,
-        )
-        .await?;
+        let epoch = if self.dispatcher.consensus_state().is_some() {
+            do_stage_private_result_oram_manifest_for_initial_replication(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                manifest,
+                signature,
+            )
+            .await?
+        } else {
+            do_upload_private_result_oram_manifest(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                manifest,
+                signature,
+            )
+            .await?
+        };
 
         Ok(Response::new(grpc::PrivateResultOramEpochResponse {
             index_epoch: epoch.index_epoch,
@@ -108,16 +123,39 @@ impl PrivateResultOram for PrivateResultOramService {
             .collect::<Result<Vec<_>, _>>()?;
         let pass = new_unchecked_verification_pass();
 
-        let epoch = do_upload_private_result_oram_buckets(
-            self.dispatcher.toc(&auth, &pass),
-            &auth,
-            &self.settings,
-            &request.collection_name,
-            request.index_epoch,
-            request.root_hash,
-            buckets,
-        )
-        .await?;
+        let coordinated_initial_replication = self.dispatcher.consensus_state().is_some();
+        let epoch = if coordinated_initial_replication {
+            do_stage_private_result_oram_buckets_for_initial_replication(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                request.index_epoch,
+                request.root_hash,
+                buckets,
+            )
+            .await?
+        } else {
+            do_upload_private_result_oram_buckets(
+                self.dispatcher.toc(&auth, &pass),
+                &auth,
+                &self.settings,
+                &request.collection_name,
+                request.index_epoch,
+                request.root_hash,
+                buckets,
+            )
+            .await?
+        };
+        if coordinated_initial_replication {
+            coordinate_private_result_oram_initial_upload(
+                &self.dispatcher,
+                &auth,
+                &self.settings,
+                &request.collection_name,
+            )
+            .await?;
+        }
 
         Ok(Response::new(grpc::PrivateResultOramEpochResponse {
             index_epoch: epoch.index_epoch,
@@ -275,7 +313,9 @@ fn required<T>(value: Option<T>, field: &str) -> Result<T, Status> {
     value.ok_or_else(|| Status::invalid_argument(format!("{field} is required")))
 }
 
-fn manifest_to_proto(manifest: PrivateResultOramManifest) -> grpc::PrivateResultOramManifest {
+pub(crate) fn manifest_to_proto(
+    manifest: PrivateResultOramManifest,
+) -> grpc::PrivateResultOramManifest {
     grpc::PrivateResultOramManifest {
         version: manifest.version as u32,
         provider: manifest.provider,
@@ -332,7 +372,7 @@ pub(crate) fn manifest_from_proto(
     })
 }
 
-fn bucket_to_proto(bucket: PrivateResultOramBucket) -> grpc::PrivateResultOramBucket {
+pub(crate) fn bucket_to_proto(bucket: PrivateResultOramBucket) -> grpc::PrivateResultOramBucket {
     grpc::PrivateResultOramBucket {
         version: bucket.version as u32,
         bucket_id: bucket.bucket_id,
@@ -358,7 +398,9 @@ pub(crate) fn bucket_from_proto(
     })
 }
 
-fn signature_to_proto(signature: PrivateResultOramSignature) -> grpc::PrivateResultOramSignature {
+pub(crate) fn signature_to_proto(
+    signature: PrivateResultOramSignature,
+) -> grpc::PrivateResultOramSignature {
     grpc::PrivateResultOramSignature {
         alg: signature.alg,
         key_id: signature.key_id,
@@ -5251,6 +5293,61 @@ mod private_result_oram_grpc_tests {
                     err.message()
                 );
             }
+        });
+    }
+
+    #[test]
+    fn distributed_initial_staging_builds_validated_result_replication_bundle() {
+        let _guard = route_e2e_guard();
+        let fixture = PrivateResultRouteFixture::build();
+        let settings = fixture.settings();
+        let (_temp, dispatcher) = test_distributed_dispatcher();
+
+        actix_web::rt::System::new().block_on(async {
+            create_private_result_collection(&dispatcher).await;
+            let auth = Auth::new_internal(Access::full("private result initial staging test"));
+            let pass = new_unchecked_verification_pass();
+            let toc = dispatcher.toc(&auth, &pass);
+
+            let manifest_epoch =
+                do_stage_private_result_oram_manifest_for_initial_replication(
+                    toc,
+                    &auth,
+                    &settings,
+                    COLLECTION_NAME,
+                    fixture.manifest.clone(),
+                    fixture.signature.clone(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(manifest_epoch.index_epoch, fixture.manifest.index_epoch);
+            assert_eq!(manifest_epoch.root_hash, fixture.manifest.root_hash);
+
+            let bucket_epoch = do_stage_private_result_oram_buckets_for_initial_replication(
+                toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                fixture.manifest.index_epoch,
+                fixture.manifest.root_hash.clone(),
+                fixture.buckets.clone(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(bucket_epoch, manifest_epoch);
+
+            let bundle = crate::common::private_result_oram::do_export_private_result_oram_initial_replication_bundle(
+                toc,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                1024 * 1024,
+            )
+            .await
+            .unwrap();
+            assert_eq!(bundle.manifest, fixture.manifest);
+            assert_eq!(bundle.manifest_signature, fixture.signature);
+            assert_eq!(bundle.buckets, fixture.buckets);
         });
     }
 

@@ -1,6 +1,3 @@
-#[cfg(not(test))]
-mod api;
-#[cfg(test)]
 pub(crate) mod api;
 mod auth;
 mod forwarded;

@@ -13,6 +13,7 @@ use api::grpc::{
     install_private_oram_index_request,
 };
 use chrono::DateTime;
+use collection::operations::verification::new_unchecked_verification_pass;
 use collection::private_hnsw_oram_store::{
     PrivateHnswOramConsensusWriteback, PrivateHnswOramEpochState, PrivateHnswOramWritebackBatch,
 };
@@ -28,7 +29,10 @@ use qdrant_sec::{
 use storage::audit::AuditConfig;
 use storage::audit_reader::{AuditLogQuery, read_local_audit_logs};
 use storage::content_manager::consensus_manager::ConsensusStateRef;
+use storage::content_manager::consensus_ops::{PrivateOramEpochKey, PrivateOramIndexKind};
+use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
+use storage::dispatcher::Dispatcher;
 use storage::rbac::{Access, Auth};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
@@ -239,6 +243,124 @@ fn validate_initial_install_bucket_bounds(
         ));
     }
     Ok(())
+}
+
+const BYTES_PER_MIB: usize = 1024 * 1024;
+
+pub(crate) async fn coordinate_private_hnsw_initial_upload(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+) -> Result<(), StorageError> {
+    let pass = new_unchecked_verification_pass();
+    let max_bundle_bytes = settings
+        .service
+        .max_request_size_mb
+        .saturating_mul(BYTES_PER_MIB);
+    let bundle = private_hnsw::do_export_private_hnsw_initial_replication_bundle(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        max_bundle_bytes,
+    )
+    .await?;
+    let collection_id = bundle.manifest.collection_id.clone();
+    let index_epoch = bundle.manifest.index_epoch;
+    let root_hash = bundle.manifest.root_hash.clone();
+    let request = InstallPrivateOramIndexRequest {
+        collection_name: collection_name.to_string(),
+        collection_id: collection_id.clone(),
+        index_kind: PrivateOramReplicationIndexKind::Hnsw as i32,
+        vector_name: vector_name.to_string(),
+        bundle: Some(install_private_oram_index_request::Bundle::Hnsw(
+            api::grpc::PrivateHnswInitialReplicationBundle {
+                manifest: Some(private_hnsw_api::manifest_to_proto(bundle.manifest)),
+                manifest_signature: Some(private_hnsw_api::signature_to_proto(
+                    bundle.manifest_signature,
+                )),
+                buckets: bundle
+                    .buckets
+                    .into_iter()
+                    .map(private_hnsw_api::bucket_to_proto)
+                    .collect(),
+            },
+        )),
+    };
+    dispatcher
+        .coordinate_private_oram_initial_install(
+            &collection_name.to_string(),
+            PrivateOramEpochKey {
+                collection_id,
+                index_kind: PrivateOramIndexKind::Hnsw,
+                index_name: vector_name.to_string(),
+            },
+            request,
+            index_epoch,
+            &root_hash,
+            None,
+        )
+        .await
+}
+
+pub(crate) async fn coordinate_private_result_oram_initial_upload(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+) -> Result<(), StorageError> {
+    let pass = new_unchecked_verification_pass();
+    let max_bundle_bytes = settings
+        .service
+        .max_request_size_mb
+        .saturating_mul(BYTES_PER_MIB);
+    let bundle = private_result_oram::do_export_private_result_oram_initial_replication_bundle(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        max_bundle_bytes,
+    )
+    .await?;
+    let collection_id = bundle.manifest.collection_id.clone();
+    let index_epoch = bundle.manifest.index_epoch;
+    let root_hash = bundle.manifest.root_hash.clone();
+    let request = InstallPrivateOramIndexRequest {
+        collection_name: collection_name.to_string(),
+        collection_id: collection_id.clone(),
+        index_kind: PrivateOramReplicationIndexKind::Result as i32,
+        vector_name: String::new(),
+        bundle: Some(install_private_oram_index_request::Bundle::Result(
+            api::grpc::PrivateResultOramInitialReplicationBundle {
+                manifest: Some(private_result_oram_api::manifest_to_proto(bundle.manifest)),
+                manifest_signature: Some(private_result_oram_api::signature_to_proto(
+                    bundle.manifest_signature,
+                )),
+                buckets: bundle
+                    .buckets
+                    .into_iter()
+                    .map(private_result_oram_api::bucket_to_proto)
+                    .collect(),
+            },
+        )),
+    };
+    dispatcher
+        .coordinate_private_oram_initial_install(
+            &collection_name.to_string(),
+            PrivateOramEpochKey {
+                collection_id,
+                index_kind: PrivateOramIndexKind::ResultPayload,
+                index_name: String::new(),
+            },
+            request,
+            index_epoch,
+            &root_hash,
+            None,
+        )
+        .await
 }
 
 fn required_transition(

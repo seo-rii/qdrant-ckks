@@ -83,7 +83,7 @@ contract:
 | Normal Qdrant reads/writes | Dense vector upsert/update, point/vector delete, collection peer `SyncPoints`, `with_vector` reads, ordinary search/query/recommend/discover, grouped paths, search matrix, and `lookup_from`/point-id reference-vector resolution fail closed for the private vector; clients must use the private HNSW session APIs. | Point create/replace/delete, full payload replacement/clear, protected-path payload writes, indexes, filters, ordering, grouping, facets, formulas, and raw payload reads fail closed for the private result path; public non-overlapping payload merges remain ordinary. |
 | Dedicated APIs | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_paths`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_buckets`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. |
 | Snapshot/restore | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and paired result ORAM policy before accepting a restored store. | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and configured binding/runtime policy before accepting a restored store. |
-| Cluster mode | Manifest upload, bucket upload, session open, `read_paths`, and commit remain fail closed in distributed mode. Raft now persists an internal private-ORAM epoch/root CAS record, and the internal dispatcher bridge waits for local Raft apply with exact-replay idempotence, conflicting-stale rejection, and snapshot-restore coverage. The API guard remains until encrypted bucket ownership and movement are coupled to that record; layout movement operations and consensus snapshot state-apply changes are blocked before shard transfer, resharding, or shard-info mutation proceeds. | Manifest upload, bucket upload, session open, `read_buckets`, and commit remain fail closed in distributed mode. The same internal Raft epoch/root CAS record and awaited dispatcher bridge cover result ORAM identity with exact-replay idempotence, but result bucket replication and API commit integration are still required before the guard can open; result ORAM bucket movement and consensus snapshot state-apply changes follow the same cluster guard policy. |
+| Cluster mode | Initial manifest upload stages an owner-signed manifest on the receiving coordinator node. A complete initial bucket upload returns only after the coordinator validates and exports the local bundle, installs the exact encrypted bundle on every derived active replica, validates all epoch/root acknowledgements, and applies the initial Raft ownership CAS. Session open, `read_paths`, and writeback commit remain fail closed. Layout movement operations and consensus snapshot state-apply changes remain blocked. | Initial manifest staging and complete bucket upload use the same all-replica install and initial Raft ownership CAS contract. Session open, `read_buckets`, and writeback commit remain fail closed until the replicated writeback coordinator is connected to the public routes. Result ORAM layout movement follows the same cluster guard policy. |
 
 The internal Dispatcher writeback coordinator enforces durable local prepare,
 awaited Raft epoch/root CAS, then idempotent local finalize. A writeback epoch
@@ -99,9 +99,9 @@ that removes the journal only when the local epoch, Merkle tree, and every
 target bucket still match the old view; any partial local mutation preserves
 the journal and fails closed. If finalize fails after Raft apply, retrying the
 same operation reuses exact-CAS idempotence before running finalize again. This
-is an internal recovery boundary only; distributed private ORAM routes remain
-closed until encrypted bucket replication and ownership are coupled to the
-same operation.
+remains an internal recovery boundary for writebacks. Distributed initial
+upload now couples encrypted bucket replication and ownership to the initial
+CAS, while session-bound reads and writeback routes remain closed.
 
 Each collection-local HNSW/result store can export a validated replication
 batch from its owner-signed durable journal. The batch contains only old/new
@@ -112,9 +112,9 @@ exact match with the proposed consensus transition before creating a journal,
 then recomputes the new Merkle tree from its own old tree. The Dispatcher CAS
 builder also reads the current Raft record so the previous epoch's optional
 digest remains part of the expected state. These are collection/storage
-primitives, not a replication transport: distributed routes remain closed
-until peer fan-out, acknowledgement, ownership, and recovery orchestration use
-them end to end.
+primitives consumed by the internal replication transport. Public writeback
+routes remain closed until the same fan-out and recovery orchestration is
+connected to session commits.
 
 The internal replicated-writeback coordinator now requires canonical
 digest-matching prepare acknowledgements from exactly the caller-supplied
@@ -132,9 +132,10 @@ than ordinary shard routing because the ORAM store is collection-local rather
 than shard-local. Replica finalize and abort also require the exact expected
 old/new epoch, root, and canonical writeback digest to match the owner-signed
 pending journal; a stale internal request cannot act on a different pending
-transition. Internal prepare/finalize/abort RPCs now expose these receiver
-operations, but the owner-side ChannelService fan-out is not connected yet, so
-the coordinator still does not open distributed private ORAM routes.
+transition. Internal prepare/finalize/abort RPCs expose these receiver
+operations and the owner-side ChannelService fan-out invokes them. Public
+session and writeback routes remain closed while that coordinator is not yet
+bound to client session commits.
 
 The internal protobuf defines a structured replication wire contract for
 HNSW and result ORAM writebacks: collection identity, index kind, exact old/new
@@ -164,7 +165,8 @@ local finalize. Abort and finalize fan-out likewise attempts every target;
 finalize requires `completed=true`, while an abort no-op is idempotent. Peer RPC
 errors include only the peer id and never reflect collection identity,
 ciphertext, root, or digest. The client commit route is not yet switched to this
-owner-side coordinator, so distributed private ORAM APIs remain closed.
+owner-side coordinator, so distributed session/read/writeback APIs remain
+closed.
 
 For initial replica installation, both collection stores can export a complete
 signed upload bundle only while the persisted current epoch/root still equals
@@ -185,8 +187,15 @@ transport errors to peer id only. Dispatcher sends the bundle to every derived
 remote replica, waits for all calls even after failures, requires every ACK to
 match the expected epoch/root, and only then submits the initial
 `expected=None`, digest-free ownership CAS to Raft. A failed CAS leaves the
-validated encrypted bundles in place for an exact retry. Public upload routes
-are still closed in cluster mode until they invoke this coordinator.
+validated encrypted bundles in place for an exact retry. Public REST and gRPC
+manifest routes use a coordinator-local staging path only when consensus is
+available. Their complete bucket upload routes then export the validated local
+bundle and invoke this all-replica coordinator before returning success. A
+distributed `TableOfContent` without a Dispatcher consensus coordinator still
+fails closed. Because manifest staging is node-local until the complete bundle
+is installed, clients must send the manifest and bucket upload to the same
+coordinator node and retry the exact signed bundle after an indeterminate
+response.
 
 ## Payload text
 
@@ -1487,11 +1496,15 @@ allowed. Incoming shard-info state must preserve the current shard id set,
 shard-key mapping, and replica membership, and must not introduce resharding
 replica states; otherwise snapshot apply fails before it can create, remove, or
 reassign local shard data without a private ORAM bucket migration protocol.
-Distributed private ORAM epoch operations themselves fail closed in this MVP:
-manifest upload, bucket upload, session open, session-bound reads, and commits
-do not proceed until encrypted bucket ownership and replication are coupled to
-the consensus epoch/root/writeback-digest CAS rather than collection-local
-files alone.
+Distributed initial private ORAM upload is coordinator-led: manifest upload
+stages only local owner-signed metadata, and complete bucket upload installs the
+validated encrypted bundle on every derived active replica before applying the
+initial consensus epoch/root ownership CAS. A missing consensus coordinator,
+incomplete replica set, invalid acknowledgement, or CAS failure fails the
+request closed. Session open, session-bound reads, and commits remain closed
+until their encrypted writebacks are coupled to the replicated
+epoch/root/writeback-digest coordinator rather than collection-local files
+alone.
 
 The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
 preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`
