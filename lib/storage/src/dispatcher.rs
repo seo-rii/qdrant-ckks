@@ -31,8 +31,8 @@ use segment::types::ShardKey;
 
 use crate::content_manager::collection_meta_ops::AliasOperations;
 use crate::content_manager::consensus_ops::{
-    CompareAndSwapPrivateOramEpoch, PrivateOramConsensusEpoch, PrivateOramEpochKey,
-    PrivateOramIndexKind,
+    CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramSessionLease,
+    PrivateOramConsensusEpoch, PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramSessionLease,
 };
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
 use crate::rbac::{Auth, CollectionMultipass};
@@ -345,6 +345,30 @@ impl Dispatcher {
         if !applied {
             return Err(StorageError::service_error(
                 "private ORAM consensus epoch/root CAS was not applied",
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn submit_private_oram_session_lease_cas(
+        &self,
+        operation: CompareAndSwapPrivateOramSessionLease,
+        wait_timeout: Option<Duration>,
+    ) -> Result<(), StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM consensus session lease CAS requires distributed mode",
+            )
+        })?;
+        let applied = consensus_state
+            .propose_consensus_op_with_await(
+                ConsensusOperations::CompareAndSwapPrivateOramSessionLease(operation),
+                wait_timeout,
+            )
+            .await?;
+        if !applied {
+            return Err(StorageError::service_error(
+                "private ORAM consensus session lease CAS was not applied",
             ));
         }
         Ok(())
@@ -974,6 +998,18 @@ impl Dispatcher {
             )
         })?;
         Ok(consensus_state.private_oram_epoch(key))
+    }
+
+    pub fn private_oram_consensus_session_lease(
+        &self,
+        key: &PrivateOramEpochKey,
+    ) -> Result<Option<PrivateOramSessionLease>, StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM consensus session lease requires distributed mode",
+            )
+        })?;
+        Ok(consensus_state.private_oram_session_lease(key))
     }
 
     pub async fn await_consensus_sync(

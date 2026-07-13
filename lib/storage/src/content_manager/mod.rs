@@ -87,6 +87,42 @@ pub mod consensus_ops {
         pub new: PrivateOramConsensusEpoch,
     }
 
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramSessionLease {
+        pub owner_peer_id: PeerId,
+        pub lease_id_hash: String,
+        pub issued_at_unix: u64,
+        pub expires_at_unix: u64,
+    }
+
+    impl fmt::Debug for PrivateOramSessionLease {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramSessionLease")
+                .field("owner_peer_id", &self.owner_peer_id)
+                .field("lease_id_hash", &"[redacted]")
+                .field("issued_at_unix", &self.issued_at_unix)
+                .field("expires_at_unix", &self.expires_at_unix)
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct CompareAndSwapPrivateOramSessionLease {
+        pub key: PrivateOramEpochKey,
+        pub expected: Option<PrivateOramSessionLease>,
+        pub new: Option<PrivateOramSessionLease>,
+    }
+
+    impl fmt::Debug for CompareAndSwapPrivateOramSessionLease {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("CompareAndSwapPrivateOramSessionLease")
+                .field("key", &self.key)
+                .field("has_expected", &self.expected.is_some())
+                .field("has_new", &self.new.is_some())
+                .finish()
+        }
+    }
+
     /// Operation that should pass consensus
     #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
     pub enum ConsensusOperations {
@@ -105,6 +141,7 @@ pub mod consensus_ops {
             value: serde_json::Value,
         },
         CompareAndSwapPrivateOramEpoch(CompareAndSwapPrivateOramEpoch),
+        CompareAndSwapPrivateOramSessionLease(CompareAndSwapPrivateOramSessionLease),
         RequestSnapshot,
         ReportSnapshot {
             peer_id: PeerId,
@@ -275,6 +312,12 @@ pub mod consensus_ops {
                     .field("has_expected", &operation.expected.is_some())
                     .field("new_epoch", &operation.new.index_epoch)
                     .finish(),
+                ConsensusOperations::CompareAndSwapPrivateOramSessionLease(operation) => f
+                    .debug_struct("CompareAndSwapPrivateOramSessionLease")
+                    .field("index_kind", &operation.key.index_kind)
+                    .field("has_expected", &operation.expected.is_some())
+                    .field("has_new", &operation.new.is_some())
+                    .finish(),
                 ConsensusOperations::RequestSnapshot => f.write_str("RequestSnapshot"),
                 ConsensusOperations::ReportSnapshot { peer_id, status } => f
                     .debug_struct("ReportSnapshot")
@@ -349,8 +392,9 @@ mod test {
     use serde_json::json;
 
     use super::consensus_ops::{
-        CompareAndSwapPrivateOramEpoch, ConsensusOperations, PrivateOramConsensusEpoch,
-        PrivateOramEpochKey, PrivateOramIndexKind,
+        CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramSessionLease, ConsensusOperations,
+        PrivateOramConsensusEpoch, PrivateOramEpochKey, PrivateOramIndexKind,
+        PrivateOramSessionLease,
     };
 
     // Consensus messages are serialized to CBOR when sent over network and written into WAL.
@@ -451,6 +495,40 @@ mod test {
         }
         assert!(redacted.contains("has_expected: true"), "{redacted}");
         assert!(redacted.contains("new_epoch: 43"), "{redacted}");
+    }
+
+    #[test]
+    fn private_oram_session_lease_log_projection_redacts_identity_and_hash() {
+        let lease_hash = "qdrant-sec-private-oram-lease-hash-sentinel";
+        let operation = ConsensusOperations::CompareAndSwapPrivateOramSessionLease(
+            CompareAndSwapPrivateOramSessionLease {
+                key: PrivateOramEpochKey {
+                    collection_id: "qdrant-sec-private-oram-lease-collection-sentinel".to_string(),
+                    index_kind: PrivateOramIndexKind::Hnsw,
+                    index_name: "qdrant-sec-private-oram-lease-vector-sentinel".to_string(),
+                },
+                expected: None,
+                new: Some(PrivateOramSessionLease {
+                    owner_peer_id: 7,
+                    lease_id_hash: lease_hash.to_string(),
+                    issued_at_unix: 100,
+                    expires_at_unix: 160,
+                }),
+            },
+        );
+
+        for rendered in [
+            format!("{operation:?}"),
+            format!("{:?}", operation.redacted_log()),
+        ] {
+            assert!(rendered.contains("CompareAndSwapPrivateOramSessionLease"));
+            assert!(!rendered.contains(lease_hash), "{rendered}");
+            assert!(
+                !rendered.contains("lease-collection-sentinel"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("lease-vector-sentinel"), "{rendered}");
+        }
     }
 
     #[test]

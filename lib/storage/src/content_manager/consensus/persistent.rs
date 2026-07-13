@@ -21,8 +21,8 @@ use sha2::{Digest, Sha256};
 use crate::StorageError;
 use crate::content_manager::consensus::entry_queue::{EntryApplyProgressQueue, EntryId};
 use crate::content_manager::consensus_ops::{
-    CompareAndSwapPrivateOramEpoch, PrivateOramConsensusEpoch, PrivateOramEpochKey,
-    PrivateOramIndexKind,
+    CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramSessionLease,
+    PrivateOramConsensusEpoch, PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramSessionLease,
 };
 use crate::types::{PeerAddressById, PeerMetadataById};
 
@@ -33,6 +33,7 @@ const STATE_FILE_NAME: &str = "raft_state.json";
 const PRIVATE_ORAM_EPOCH_KEY_DOMAIN: &[u8] = b"qdrant-sec/private-oram-consensus-epoch-key/v1";
 const PRIVATE_ORAM_EPOCH_MAX_RECORDS: usize = 1_000_000;
 const PRIVATE_ORAM_SHA256_BASE64URL_LEN: usize = 43;
+const PRIVATE_ORAM_SESSION_LEASE_MAX_SECS: u64 = 3_600;
 
 /// State of the Raft consensus, which should be saved between restarts.
 /// State of the collections, aliases and transfers are stored as regular storage.
@@ -59,6 +60,8 @@ pub struct Persistent {
     pub cluster_metadata: HashMap<String, serde_json::Value>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub private_oram_epochs: HashMap<String, PrivateOramConsensusEpoch>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_oram_session_leases: HashMap<String, PrivateOramSessionLease>,
     pub this_peer_id: PeerId,
     #[serde(skip)]
     pub path: PathBuf,
@@ -92,6 +95,10 @@ impl fmt::Debug for Persistent {
             )
             .field("cluster_metadata_keys", &cluster_metadata_keys)
             .field("private_oram_epoch_count", &self.private_oram_epochs.len())
+            .field(
+                "private_oram_session_lease_count",
+                &self.private_oram_session_leases.len(),
+            )
             .field("this_peer_id", &self.this_peer_id)
             .field("path", &self.path)
             .field("dirty", &self.dirty.load(Ordering::Relaxed))
@@ -115,8 +122,10 @@ impl Persistent {
         mut metadata_by_id: PeerMetadataById,
         new_cluster_metadata: HashMap<String, serde_json::Value>,
         new_private_oram_epochs: HashMap<String, PrivateOramConsensusEpoch>,
+        new_private_oram_session_leases: HashMap<String, PrivateOramSessionLease>,
     ) -> Result<(), StorageError> {
         validate_private_oram_epoch_snapshot(&new_private_oram_epochs)?;
+        validate_private_oram_session_lease_snapshot(&new_private_oram_session_leases)?;
         // IF YOU ADD NEW DATA INTO `PERSISTENT` STATE, DON'T FORGET TO ALSO ADD IT INTO RAFT SNAPSHOT!
         let Self {
             state,
@@ -127,6 +136,7 @@ impl Persistent {
             peer_metadata_by_id,
             cluster_metadata,
             private_oram_epochs,
+            private_oram_session_leases,
             this_peer_id: _,
             path: _,
             dirty: _,
@@ -145,6 +155,7 @@ impl Persistent {
         *peer_metadata_by_id.write() = metadata_by_id;
         *cluster_metadata = new_cluster_metadata;
         *private_oram_epochs = new_private_oram_epochs;
+        *private_oram_session_leases = new_private_oram_session_leases;
 
         // Last Raft commit and last snapshot index must be equal and persisted in one operation
         // Our `ConsensusManager::new` function relies on this for reconciling WAL clears
@@ -376,6 +387,59 @@ impl Persistent {
         Ok(())
     }
 
+    pub fn private_oram_session_lease(
+        &self,
+        key: &PrivateOramEpochKey,
+    ) -> Option<PrivateOramSessionLease> {
+        self.private_oram_session_leases
+            .get(&private_oram_epoch_key_digest(key))
+            .cloned()
+    }
+
+    pub fn compare_and_swap_private_oram_session_lease(
+        &mut self,
+        operation: &CompareAndSwapPrivateOramSessionLease,
+    ) -> Result<(), StorageError> {
+        validate_private_oram_session_lease_cas(operation)?;
+        let key = private_oram_epoch_key_digest(&operation.key);
+        let current = self.private_oram_session_leases.get(&key);
+        if current == operation.new.as_ref() {
+            return Ok(());
+        }
+        if current != operation.expected.as_ref() {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus session lease CAS precondition failed",
+            ));
+        }
+        if current.is_none()
+            && operation.new.is_some()
+            && self.private_oram_session_leases.len() >= PRIVATE_ORAM_EPOCH_MAX_RECORDS
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus session lease capacity exceeded",
+            ));
+        }
+
+        let previous = match &operation.new {
+            Some(new) => self
+                .private_oram_session_leases
+                .insert(key.clone(), new.clone()),
+            None => self.private_oram_session_leases.remove(&key),
+        };
+        if let Err(err) = self.save() {
+            match previous {
+                Some(previous) => {
+                    self.private_oram_session_leases.insert(key, previous);
+                }
+                None => {
+                    self.private_oram_session_leases.remove(&key);
+                }
+            }
+            return Err(err);
+        }
+        Ok(())
+    }
+
     pub fn last_applied_entry(&self) -> Option<u64> {
         self.apply_progress_queue.get_last_applied()
     }
@@ -452,6 +516,7 @@ impl Persistent {
             peer_metadata_by_id: Default::default(),
             cluster_metadata: Default::default(),
             private_oram_epochs: Default::default(),
+            private_oram_session_leases: Default::default(),
             this_peer_id,
             path,
             latest_snapshot_meta: Default::default(),
@@ -465,6 +530,7 @@ impl Persistent {
         let reader = BufReader::new(File::open(&path)?);
         let mut state: Self = serde_cbor::from_reader(reader)?;
         validate_private_oram_epoch_snapshot(&state.private_oram_epochs)?;
+        validate_private_oram_session_lease_snapshot(&state.private_oram_session_leases)?;
         state.path = path;
         Ok(state)
     }
@@ -473,6 +539,7 @@ impl Persistent {
         let reader = BufReader::new(File::open(&path)?);
         let mut state: Self = serde_json::from_reader(reader)?;
         validate_private_oram_epoch_snapshot(&state.private_oram_epochs)?;
+        validate_private_oram_session_lease_snapshot(&state.private_oram_session_leases)?;
         state.path = path;
         Ok(state)
     }
@@ -516,19 +583,7 @@ fn update_length_prefixed(hasher: &mut Sha256, value: &[u8]) {
 fn validate_private_oram_epoch_cas(
     operation: &CompareAndSwapPrivateOramEpoch,
 ) -> Result<(), StorageError> {
-    let valid_key = !operation.key.collection_id.is_empty()
-        && operation.key.collection_id.len() <= 1024
-        && match operation.key.index_kind {
-            PrivateOramIndexKind::Hnsw => {
-                !operation.key.index_name.is_empty() && operation.key.index_name.len() <= 128
-            }
-            PrivateOramIndexKind::ResultPayload => operation.key.index_name.is_empty(),
-        };
-    if !valid_key {
-        return Err(StorageError::bad_request(
-            "private ORAM consensus epoch key is invalid",
-        ));
-    }
+    validate_private_oram_epoch_key(&operation.key)?;
 
     validate_private_oram_consensus_root_hash(&operation.new.root_hash)?;
     validate_private_oram_consensus_writeback_digest(operation.new.writeback_digest.as_deref())?;
@@ -540,6 +595,69 @@ fn validate_private_oram_epoch_cas(
                 "private ORAM consensus epoch must increase",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_private_oram_epoch_key(key: &PrivateOramEpochKey) -> Result<(), StorageError> {
+    let valid_key = !key.collection_id.is_empty()
+        && key.collection_id.len() <= 1024
+        && match key.index_kind {
+            PrivateOramIndexKind::Hnsw => !key.index_name.is_empty() && key.index_name.len() <= 128,
+            PrivateOramIndexKind::ResultPayload => key.index_name.is_empty(),
+        };
+    if !valid_key {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus epoch key is invalid",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_private_oram_session_lease_cas(
+    operation: &CompareAndSwapPrivateOramSessionLease,
+) -> Result<(), StorageError> {
+    validate_private_oram_epoch_key(&operation.key)?;
+    if operation.expected.is_none() && operation.new.is_none() {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus session lease CAS is invalid",
+        ));
+    }
+    if let Some(expected) = &operation.expected {
+        validate_private_oram_session_lease(expected)?;
+    }
+    if let Some(new) = &operation.new {
+        validate_private_oram_session_lease(new)?;
+    }
+    if let (Some(expected), Some(new)) = (&operation.expected, &operation.new) {
+        let same_owner = expected.owner_peer_id == new.owner_peer_id
+            && expected.lease_id_hash == new.lease_id_hash;
+        let valid_renewal = same_owner
+            && new.issued_at_unix >= expected.issued_at_unix
+            && new.expires_at_unix > expected.expires_at_unix;
+        let valid_takeover = !same_owner && new.issued_at_unix >= expected.expires_at_unix;
+        if !valid_renewal && !valid_takeover {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus session lease transition is invalid",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_private_oram_session_lease(
+    lease: &PrivateOramSessionLease,
+) -> Result<(), StorageError> {
+    validate_private_oram_consensus_digest(&lease.lease_id_hash).map_err(|_| {
+        StorageError::bad_request("private ORAM consensus session lease is invalid")
+    })?;
+    if lease.expires_at_unix <= lease.issued_at_unix
+        || lease.expires_at_unix - lease.issued_at_unix > PRIVATE_ORAM_SESSION_LEASE_MAX_SECS
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus session lease is invalid",
+        ));
     }
     Ok(())
 }
@@ -595,6 +713,25 @@ fn validate_private_oram_epoch_snapshot(
         validate_private_oram_consensus_digest(key_digest)?;
         validate_private_oram_consensus_root_hash(&epoch.root_hash)?;
         validate_private_oram_consensus_writeback_digest(epoch.writeback_digest.as_deref())?;
+    }
+    Ok(())
+}
+
+fn validate_private_oram_session_lease_snapshot(
+    leases: &HashMap<String, PrivateOramSessionLease>,
+) -> Result<(), StorageError> {
+    if leases.len() > PRIVATE_ORAM_EPOCH_MAX_RECORDS {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus session lease snapshot is invalid",
+        ));
+    }
+    for (key_digest, lease) in leases {
+        validate_private_oram_consensus_digest(key_digest).map_err(|_| {
+            StorageError::bad_request("private ORAM consensus session lease snapshot is invalid")
+        })?;
+        validate_private_oram_session_lease(lease).map_err(|_| {
+            StorageError::bad_request("private ORAM consensus session lease snapshot is invalid")
+        })?;
     }
     Ok(())
 }
@@ -668,6 +805,7 @@ mod tests {
             peer_metadata_by_id: Arc::new(RwLock::new(peer_metadata_by_id)),
             cluster_metadata,
             private_oram_epochs,
+            private_oram_session_leases: Default::default(),
             this_peer_id: 7,
             path: PathBuf::from("/tmp/qdrant-sec-persistent-state"),
             dirty: AtomicBool::new(false),
@@ -860,6 +998,150 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_session_lease_cas_enforces_renewal_takeover_and_release() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = PrivateOramEpochKey {
+            collection_id: "collection-uuid-1".to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let lease_hash_a = BASE64URL_NOPAD.encode(&[21; 32]);
+        let lease_hash_b = BASE64URL_NOPAD.encode(&[22; 32]);
+        let lease_a = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: lease_hash_a.clone(),
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        };
+        let renewed_a = PrivateOramSessionLease {
+            issued_at_unix: 120,
+            expires_at_unix: 220,
+            ..lease_a.clone()
+        };
+        let lease_b = PrivateOramSessionLease {
+            owner_peer_id: 9,
+            lease_id_hash: lease_hash_b.clone(),
+            issued_at_unix: 220,
+            expires_at_unix: 280,
+        };
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+
+        let acquire = CompareAndSwapPrivateOramSessionLease {
+            key: key.clone(),
+            expected: None,
+            new: Some(lease_a.clone()),
+        };
+        persistent
+            .compare_and_swap_private_oram_session_lease(&acquire)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_session_lease(&acquire)
+            .unwrap();
+        assert_eq!(
+            persistent.private_oram_session_lease(&key),
+            Some(lease_a.clone())
+        );
+
+        let early_takeover = persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: key.clone(),
+                expected: Some(lease_a.clone()),
+                new: Some(PrivateOramSessionLease {
+                    issued_at_unix: 159,
+                    expires_at_unix: 219,
+                    ..lease_b.clone()
+                }),
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(early_takeover.contains("session lease transition is invalid"));
+
+        persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: key.clone(),
+                expected: Some(lease_a.clone()),
+                new: Some(renewed_a.clone()),
+            })
+            .unwrap();
+        let stale_release = persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: key.clone(),
+                expected: Some(lease_a),
+                new: None,
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(stale_release.contains("session lease CAS precondition failed"));
+
+        persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: key.clone(),
+                expected: Some(renewed_a),
+                new: Some(lease_b.clone()),
+            })
+            .unwrap();
+        assert_eq!(
+            persistent.private_oram_session_lease(&key),
+            Some(lease_b.clone())
+        );
+
+        let rendered = format!("{:?}", persistent.private_oram_session_lease(&key).unwrap());
+        assert!(rendered.contains("owner_peer_id: 9"));
+        assert!(!rendered.contains(&lease_hash_a));
+        assert!(!rendered.contains(&lease_hash_b));
+
+        persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: key.clone(),
+                expected: Some(lease_b),
+                new: None,
+            })
+            .unwrap();
+        assert_eq!(persistent.private_oram_session_lease(&key), None);
+        drop(persistent);
+
+        let reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        assert_eq!(reloaded.private_oram_session_lease(&key), None);
+
+        let invalid_hash = "private-oram-session-lease-hash-sentinel";
+        let invalid = validate_private_oram_session_lease(&PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: invalid_hash.to_string(),
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(invalid.contains("session lease is invalid"));
+        assert!(!invalid.contains(invalid_hash));
+
+        let overlong = validate_private_oram_session_lease(&PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: BASE64URL_NOPAD.encode(&[23; 32]),
+            issued_at_unix: 100,
+            expires_at_unix: 100 + PRIVATE_ORAM_SESSION_LEASE_MAX_SECS + 1,
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(overlong.contains("session lease is invalid"));
+
+        let malformed_snapshot_key = "private-oram-session-lease-snapshot-key-sentinel";
+        let malformed_snapshot = validate_private_oram_session_lease_snapshot(&HashMap::from([(
+            malformed_snapshot_key.to_string(),
+            PrivateOramSessionLease {
+                owner_peer_id: 7,
+                lease_id_hash: BASE64URL_NOPAD.encode(&[24; 32]),
+                issued_at_unix: 100,
+                expires_at_unix: 160,
+            },
+        )]))
+        .unwrap_err()
+        .to_string();
+        assert!(malformed_snapshot.contains("session lease snapshot is invalid"));
+        assert!(!malformed_snapshot.contains(malformed_snapshot_key));
+    }
+
+    #[test]
     fn private_oram_epoch_cas_rolls_back_memory_state_when_persist_fails() {
         let temp = tempfile::tempdir().unwrap();
         let key = PrivateOramEpochKey {
@@ -923,6 +1205,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 malformed_key_digest,
+                Default::default(),
             )
             .unwrap_err();
         assert!(
@@ -954,6 +1237,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 malformed_writeback_digest,
+                Default::default(),
             )
             .unwrap_err();
         assert!(
@@ -984,6 +1268,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 malformed_root,
+                Default::default(),
             )
             .unwrap_err();
         assert!(

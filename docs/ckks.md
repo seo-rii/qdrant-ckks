@@ -234,6 +234,20 @@ digest in `current.json`, and reject malformed digest values without reflecting
 them. This makes partial remote-finalize recovery idempotent; consensus-backed
 session ownership and public commit routing remain the next guard.
 
+Raft persistent state now also has a separate per-index private ORAM session
+lease map. A lease contains the owner peer, a SHA-256 hash of an opaque lease
+id, and bounded issue/expiry times; collection identity and vector name remain
+hidden behind the same domain-separated index-key digest used by epoch state.
+Lease updates use exact CAS. They support initial acquisition, same-owner
+renewal, exact release, and deterministic expired-owner takeover only when the
+new issue time is at or after the previous expiry. Early takeover, stale
+release, overlong leases, malformed hashes, and capacity overflow fail closed.
+Lease state survives process restart and Raft snapshot restore, and debug/log
+projections redact the index identity and lease hash. Dispatcher exposes an
+awaited Raft apply bridge and current-lease lookup. Public session open/renew/
+close is not yet bound to this state, so distributed session routes remain
+closed in this step.
+
 ## Payload text
 
 Selected JSON string fields are replaced with a single marker object:
