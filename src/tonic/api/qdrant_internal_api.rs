@@ -332,6 +332,50 @@ pub(crate) fn require_private_oram_session_lease(
     Ok(lease)
 }
 
+fn renewed_private_oram_session_lease(
+    current: &PrivateOramSessionLease,
+    issued_at_unix: u64,
+    expires_at_unix: u64,
+) -> Result<PrivateOramSessionLease, StorageError> {
+    if issued_at_unix < current.issued_at_unix
+        || expires_at_unix <= issued_at_unix
+        || expires_at_unix <= current.expires_at_unix
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM session lease renewal interval is invalid",
+        ));
+    }
+    Ok(PrivateOramSessionLease {
+        owner_peer_id: current.owner_peer_id,
+        lease_id_hash: current.lease_id_hash.clone(),
+        issued_at_unix,
+        expires_at_unix,
+    })
+}
+
+#[allow(dead_code)]
+pub(crate) async fn renew_private_oram_session_lease(
+    dispatcher: &Dispatcher,
+    key: PrivateOramEpochKey,
+    session_id: &str,
+    issued_at_unix: u64,
+    expires_at_unix: u64,
+) -> Result<PrivateOramSessionLease, StorageError> {
+    let current = require_private_oram_session_lease(dispatcher, &key, session_id, issued_at_unix)?;
+    let renewed = renewed_private_oram_session_lease(&current, issued_at_unix, expires_at_unix)?;
+    dispatcher
+        .submit_private_oram_session_lease_cas(
+            CompareAndSwapPrivateOramSessionLease {
+                key,
+                expected: Some(current),
+                new: Some(renewed.clone()),
+            },
+            None,
+        )
+        .await?;
+    Ok(renewed)
+}
+
 #[allow(dead_code)]
 pub(crate) async fn release_private_oram_session_lease(
     dispatcher: &Dispatcher,
@@ -1082,6 +1126,30 @@ mod tests {
             .to_string();
         assert!(rendered.contains("lease id is invalid"));
         assert!(!rendered.contains(&sentinel));
+    }
+
+    #[test]
+    fn private_oram_session_lease_renewal_must_advance_monotonically() {
+        let current = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: BASE64URL_NOPAD.encode(&[9; 32]),
+            issued_at_unix: 100,
+            expires_at_unix: 400,
+        };
+        let renewed = renewed_private_oram_session_lease(&current, 101, 401).unwrap();
+        assert_eq!(renewed.owner_peer_id, current.owner_peer_id);
+        assert_eq!(renewed.lease_id_hash, current.lease_id_hash);
+        assert_eq!(renewed.issued_at_unix, 101);
+        assert_eq!(renewed.expires_at_unix, 401);
+
+        for (issued_at_unix, expires_at_unix) in [(99, 401), (101, 400), (401, 401)] {
+            let rendered =
+                renewed_private_oram_session_lease(&current, issued_at_unix, expires_at_unix)
+                    .unwrap_err()
+                    .to_string();
+            assert!(rendered.contains("renewal interval is invalid"));
+            assert!(!rendered.contains(&current.lease_id_hash));
+        }
     }
 
     fn replication_request_fixture() -> PreparePrivateOramWritebackRequest {
