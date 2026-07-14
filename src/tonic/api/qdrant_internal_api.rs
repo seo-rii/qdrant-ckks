@@ -402,6 +402,40 @@ pub(crate) async fn release_private_oram_session_lease(
         .await
 }
 
+async fn release_orphaned_private_oram_session_lease(
+    dispatcher: &Dispatcher,
+    key: PrivateOramEpochKey,
+    has_local_session: bool,
+) -> Result<(), StorageError> {
+    if has_local_session {
+        return Ok(());
+    }
+    let Some(lease) = dispatcher.private_oram_consensus_session_lease(&key)? else {
+        return Ok(());
+    };
+    if lease.owner_peer_id != dispatcher.this_peer_id() {
+        return Ok(());
+    }
+    let result = dispatcher
+        .submit_private_oram_session_lease_cas(
+            CompareAndSwapPrivateOramSessionLease {
+                key: key.clone(),
+                expected: Some(lease),
+                new: None,
+            },
+            None,
+        )
+        .await;
+    if result.is_err()
+        && dispatcher
+            .private_oram_consensus_session_lease(&key)?
+            .is_none()
+    {
+        return Ok(());
+    }
+    result
+}
+
 fn current_private_oram_unix_secs() -> Result<u64, StorageError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -609,7 +643,12 @@ pub(crate) async fn recover_private_hnsw_replication(
         pending,
     )?;
     let abort = match action {
-        PrivateOramRecoveryAction::Clean => return Ok(()),
+        PrivateOramRecoveryAction::Clean => {
+            let has_local_session =
+                private_hnsw::private_hnsw_has_active_session(&context.collection_id, vector_name)?;
+            release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session).await?;
+            return Ok(());
+        }
         PrivateOramRecoveryAction::AbortPending => true,
         PrivateOramRecoveryAction::FinalizePending => false,
     };
@@ -631,6 +670,17 @@ pub(crate) async fn recover_private_hnsw_replication(
             "private HNSW ORAM local recovery was not completed",
         ));
     }
+    let has_local_session = private_hnsw::recover_private_hnsw_session_writeback(
+        &context.collection_id,
+        vector_name,
+        if abort {
+            &transition.old
+        } else {
+            &transition.new
+        },
+        abort,
+    )?;
+    release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session).await?;
     Ok(())
 }
 
@@ -677,7 +727,13 @@ pub(crate) async fn recover_private_result_oram_replication(
         pending,
     )?;
     let abort = match action {
-        PrivateOramRecoveryAction::Clean => return Ok(()),
+        PrivateOramRecoveryAction::Clean => {
+            let has_local_session = private_result_oram::private_result_oram_has_active_session(
+                &context.collection_id,
+            )?;
+            release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session).await?;
+            return Ok(());
+        }
         PrivateOramRecoveryAction::AbortPending => true,
         PrivateOramRecoveryAction::FinalizePending => false,
     };
@@ -698,6 +754,16 @@ pub(crate) async fn recover_private_result_oram_replication(
             "private result ORAM local recovery was not completed",
         ));
     }
+    let has_local_session = private_result_oram::recover_private_result_oram_session_writeback(
+        &context.collection_id,
+        if abort {
+            &transition.old
+        } else {
+            &transition.new
+        },
+        abort,
+    )?;
+    release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session).await?;
     Ok(())
 }
 

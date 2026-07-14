@@ -1562,6 +1562,16 @@ enforce a hashed per-index lease, and couple each encrypted writeback to the
 replicated epoch/root/writeback-digest transition. A distributed TOC without
 that coordinator remains fail closed.
 
+If replica finalization fails after the Raft epoch/root CAS, the owner and any
+prepared replicas retain their signed pending-writeback journals. The next
+session open classifies the journal against the consensus epoch and digest,
+finalizes replicas before the local owner, and only then admits a new session.
+Recovery updates an in-process busy session when it still exists. After an
+owner process restart, where the node-local session registry is empty, recovery
+releases the old consensus lease by exact CAS only when that lease is owned by
+the current peer; it never takes over another peer's live lease. The same rule
+applies to private HNSW and private result ORAM indexes.
+
 The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
 preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`
 constructs a deterministic one-layer f32 neighbor graph for fixtures and

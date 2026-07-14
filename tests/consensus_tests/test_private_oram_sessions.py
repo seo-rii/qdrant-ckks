@@ -1,5 +1,6 @@
 import json
 import pathlib
+import stat
 import subprocess
 
 import pytest
@@ -9,6 +10,8 @@ from .assertions import assert_http_ok
 from .utils import (
     PROJECT_ROOT,
     get_cluster_info,
+    get_collection_cluster_info,
+    get_uri,
     kill_all_processes,
     make_peer_folders,
     processes,
@@ -17,6 +20,7 @@ from .utils import (
     wait_collection_exists_and_active_on_all_peers,
     wait_for_uniform_cluster_status,
     wait_peer_added,
+    wait_for_peer_online,
 )
 
 
@@ -141,7 +145,7 @@ def _collection_uuid(peer_url: str) -> str:
 
 def _start_private_oram_cluster(
     tmp_path: pathlib.Path, peer_count: int, replication_factor: int
-) -> tuple[list[str], dict, int]:
+) -> tuple[list[str], list[pathlib.Path], dict, int, str]:
     bootstrap_fixture = _private_oram_fixture(PLACEHOLDER_COLLECTION_ID)
     peer_dirs = make_peer_folders(tmp_path, peer_count)
     for peer_dir in peer_dirs:
@@ -203,7 +207,7 @@ def _start_private_oram_cluster(
     fixture = _private_oram_fixture(_collection_uuid(bootstrap_api))
     assert fixture["hnsw_public_key"] == bootstrap_fixture["hnsw_public_key"]
     assert fixture["result_public_key"] == bootstrap_fixture["result_public_key"]
-    return peer_urls, fixture, leader
+    return peer_urls, peer_dirs, fixture, leader, bootstrap_uri
 
 
 def _upload_hnsw(peer_url: str, fixture: dict) -> None:
@@ -397,7 +401,7 @@ def _assert_replica_can_open_current_sessions(peer_url: str) -> None:
 
 
 def test_private_oram_sessions_replicate_through_public_routes(tmp_path: pathlib.Path):
-    peer_urls, fixture, _ = _start_private_oram_cluster(tmp_path, 2, 2)
+    peer_urls, _, fixture, _, _ = _start_private_oram_cluster(tmp_path, 2, 2)
     bootstrap_api, replica_api = peer_urls
 
     _upload_hnsw(bootstrap_api, fixture)
@@ -411,7 +415,7 @@ def test_private_oram_sessions_replicate_through_public_routes(tmp_path: pathlib
 def test_private_oram_replica_prepare_failure_preserves_epoch(
     tmp_path: pathlib.Path, index_kind: str
 ):
-    peer_urls, fixture, leader = _start_private_oram_cluster(tmp_path, 3, 3)
+    peer_urls, _, fixture, leader, _ = _start_private_oram_cluster(tmp_path, 3, 3)
     peer_ids = [get_cluster_info(peer_url)["peer_id"] for peer_url in peer_urls]
     coordinator_index = peer_ids.index(leader)
     coordinator_url = peer_urls[coordinator_index]
@@ -477,3 +481,112 @@ def test_private_oram_replica_prepare_failure_preserves_epoch(
 
     assert reopened["index_epoch"] == BASE_EPOCH
     assert _post_result(reopened_close_url, {}) is True
+
+
+def _private_oram_buckets_dir(peer_dir: pathlib.Path, index_kind: str) -> pathlib.Path:
+    pattern = (
+        f"private_hnsw_oram/{VECTOR}/buckets"
+        if index_kind == "hnsw"
+        else "private_result_oram/buckets"
+    )
+    matches = list(peer_dir.rglob(pattern))
+    assert len(matches) == 1
+    return matches[0]
+
+
+@pytest.mark.parametrize("index_kind", ["hnsw", "result"])
+def test_private_oram_partial_finalize_recovers_after_coordinator_restart(
+    tmp_path: pathlib.Path, index_kind: str
+):
+    peer_urls, peer_dirs, fixture, leader, _ = _start_private_oram_cluster(
+        tmp_path, 3, 2
+    )
+    peer_ids = [get_cluster_info(peer_url)["peer_id"] for peer_url in peer_urls]
+    replica_indices = [
+        index
+        for index, peer_url in enumerate(peer_urls)
+        if get_collection_cluster_info(peer_url, COLLECTION)["local_shards"]
+    ]
+    assert len(replica_indices) == 2
+    coordinator_index = next(
+        index for index in replica_indices if peer_ids[index] != leader
+    )
+    finalize_failure_index = next(
+        index for index in replica_indices if index != coordinator_index
+    )
+    coordinator_url = peer_urls[coordinator_index]
+
+    if index_kind == "hnsw":
+        _upload_hnsw(coordinator_url, fixture)
+        session = _open_hnsw_owner_session(coordinator_url, BASE_EPOCH)
+        _read_hnsw_owner_session(coordinator_url, fixture, session)
+        commit = fixture["hnsw"]["commit"]
+        commit_url = f"{coordinator_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/oram/commit"
+        commit_body = {
+            "session_id": session["session_id"],
+            "old_epoch": commit["old_epoch"],
+            "new_epoch": commit["new_epoch"],
+            "old_root_hash": commit["old_root_hash"],
+            "new_root_hash": commit["new_root_hash"],
+            "updated_buckets": commit["updated_buckets"],
+            "commit_signature": commit["signature"],
+        }
+    else:
+        _upload_result_oram(coordinator_url, fixture)
+        session = _open_result_owner_session(coordinator_url, BASE_EPOCH)
+        _read_result_owner_session(coordinator_url, fixture, session)
+        commit = fixture["result"]["commit"]
+        commit_url = f"{coordinator_url}/collections/{COLLECTION}/private-result-oram/oram/commit"
+        commit_body = {
+            "session_id": session["session_id"],
+            "old_epoch": commit["old_epoch"],
+            "new_epoch": commit["new_epoch"],
+            "old_root_hash": commit["old_root_hash"],
+            "new_root_hash": commit["new_root_hash"],
+            "updated_buckets": commit["updated_buckets"],
+            "commit_signature": commit["signature"],
+        }
+
+    buckets_dir = _private_oram_buckets_dir(
+        peer_dirs[finalize_failure_index], index_kind
+    )
+    original_mode = stat.S_IMODE(buckets_dir.stat().st_mode)
+    buckets_dir.chmod(0o500)
+    try:
+        response = requests.post(commit_url, json=commit_body, timeout=60)
+    finally:
+        buckets_dir.chmod(original_mode)
+
+    assert 500 <= response.status_code < 600
+    for secret in [
+        session["session_id"],
+        commit["old_root_hash"],
+        commit["new_root_hash"],
+        commit["signature"]["sig"],
+        commit["updated_buckets"][0]["ciphertext"],
+    ]:
+        assert secret not in response.text
+    survivor_index = next(
+        index for index in range(len(peer_urls)) if index != coordinator_index
+    )
+    restart_bootstrap_uri = get_uri(processes[survivor_index].p2p_port)
+    processes.pop(coordinator_index).kill()
+    restarted_url = start_peer(
+        peer_dirs[coordinator_index],
+        f"private_oram_{index_kind}_coordinator_restarted.log",
+        restart_bootstrap_uri,
+    )
+    peer_urls[coordinator_index] = restarted_url
+    wait_for_peer_online(restarted_url, path="/cluster")
+    wait_for_uniform_cluster_status(peer_urls, leader)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+
+    if index_kind == "hnsw":
+        recovered = _open_hnsw_owner_session(restarted_url, NEXT_EPOCH)
+        recovered_close_url = f"{restarted_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session/{recovered['session_id']}/close"
+    else:
+        recovered = _open_result_owner_session(restarted_url, NEXT_EPOCH)
+        recovered_close_url = f"{restarted_url}/collections/{COLLECTION}/private-result-oram/session/{recovered['session_id']}/close"
+    assert recovered["index_epoch"] == NEXT_EPOCH
+    assert recovered["root_hash"] == commit["new_root_hash"]
+    assert _post_result(recovered_close_url, {}) is True

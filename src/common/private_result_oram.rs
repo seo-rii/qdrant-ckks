@@ -567,6 +567,55 @@ impl PrivateResultOramSessionRegistry {
         Ok(())
     }
 
+    fn recover_commit(
+        &mut self,
+        collection_id: &str,
+        committed: &PrivateResultOramEpochState,
+        abort: bool,
+    ) -> StorageResult<bool> {
+        let Some(session_id) = self.active_writer_by_collection.get(collection_id).cloned() else {
+            return Ok(false);
+        };
+        let session = self.sessions.get_mut(&session_id).ok_or_else(|| {
+            StorageError::service_error(
+                "private result ORAM recovery found an inconsistent session writer lock",
+            )
+        })?;
+        if session.collection_id != collection_id {
+            return Err(StorageError::service_error(
+                "private result ORAM recovery session context is inconsistent",
+            ));
+        }
+        if !session.commit_in_progress {
+            return Err(StorageError::service_error(
+                "private result ORAM recovery session has no commit in progress",
+            ));
+        }
+        if !abort {
+            session.index_epoch = committed.index_epoch;
+            session.root_hash = committed.root_hash.clone();
+        }
+        session.commit_in_progress = false;
+        Ok(true)
+    }
+
+    fn has_active_writer(&self, collection_id: &str) -> StorageResult<bool> {
+        let Some(session_id) = self.active_writer_by_collection.get(collection_id) else {
+            return Ok(false);
+        };
+        let session = self.sessions.get(session_id).ok_or_else(|| {
+            StorageError::service_error(
+                "private result ORAM recovery found an inconsistent session writer lock",
+            )
+        })?;
+        if session.collection_id != collection_id {
+            return Err(StorageError::service_error(
+                "private result ORAM recovery session context is inconsistent",
+            ));
+        }
+        Ok(true)
+    }
+
     fn checked_session_mut(
         &mut self,
         collection_id: &str,
@@ -633,6 +682,24 @@ pub(crate) fn private_result_oram_session_consensus_lease_identity(
         .lock()
         .map_err(|_| StorageError::service_error("private result ORAM session registry poisoned"))?
         .consensus_lease_identity(session_id, now_unix)
+}
+
+pub(crate) fn recover_private_result_oram_session_writeback(
+    collection_id: &str,
+    committed: &PrivateResultOramEpochState,
+    abort: bool,
+) -> StorageResult<bool> {
+    session_registry()
+        .lock()
+        .map_err(|_| StorageError::service_error("private result ORAM session registry poisoned"))?
+        .recover_commit(collection_id, committed, abort)
+}
+
+pub(crate) fn private_result_oram_has_active_session(collection_id: &str) -> StorageResult<bool> {
+    session_registry()
+        .lock()
+        .map_err(|_| StorageError::service_error("private result ORAM session registry poisoned"))?
+        .has_active_writer(collection_id)
 }
 
 impl PrivateResultOramSession {
@@ -4258,6 +4325,59 @@ mod private_result_oram_tests {
             .cancel_commit("collection-private-result-test", "session-1")
             .unwrap();
         assert!(registry.close("collection-private-result-test", "session-1", expired_at));
+    }
+
+    #[test]
+    fn session_registry_recovers_pinned_commit_without_replacing_writer() {
+        let now = 10;
+        let mut registry = PrivateResultOramSessionRegistry::default();
+        registry
+            .open(fixture_session("session-1", 30), now)
+            .unwrap();
+        registry
+            .begin_commit("collection-private-result-test", "session-1", now, |_| {
+                Ok(())
+            })
+            .unwrap();
+
+        let committed = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+        };
+        assert!(
+            registry
+                .recover_commit("collection-private-result-test", &committed, false)
+                .unwrap()
+        );
+        registry
+            .with_session_mut(
+                "collection-private-result-test",
+                "session-1",
+                now,
+                |session| {
+                    assert_eq!(session.index_epoch, committed.index_epoch);
+                    assert_eq!(session.root_hash, committed.root_hash);
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        registry
+            .begin_commit("collection-private-result-test", "session-1", now, |_| {
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            registry
+                .recover_commit("collection-private-result-test", &committed, true)
+                .unwrap()
+        );
+        assert!(registry.close("collection-private-result-test", "session-1", now));
+        assert!(
+            !registry
+                .recover_commit("collection-private-result-test", &committed, false)
+                .unwrap()
+        );
     }
 
     #[test]
