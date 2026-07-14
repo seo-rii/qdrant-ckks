@@ -8,7 +8,8 @@ use collection::config::{
 };
 use collection::operations::types::CollectionError;
 use collection::private_result_oram_store::{
-    PrivateResultOramConsensusWriteback, PrivateResultOramEpochState, PrivateResultOramStore,
+    PrivateResultOramConsensusWriteback, PrivateResultOramEpochState,
+    PrivateResultOramLiveReplicationBundle, PrivateResultOramStore,
     PrivateResultOramWritebackBatch,
 };
 use data_encoding::BASE64URL_NOPAD;
@@ -997,6 +998,35 @@ pub async fn do_export_private_result_oram_initial_replication_bundle(
     Ok(bundle)
 }
 
+pub async fn do_export_private_result_oram_live_replication_bundle(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    max_bundle_bytes: usize,
+) -> StorageResult<PrivateResultOramLiveReplicationBundle> {
+    let record = do_get_private_result_oram_manifest(toc, auth, settings, collection_name).await?;
+    let pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new().write(),
+        "private_result_oram_live_replication_export",
+    )?;
+    let collection = toc.get_collection(&pass).await?;
+    let _guard = begin_private_result_oram_upload_write_window(&record.manifest.collection_id)?;
+    let bundle = PrivateResultOramStore::new(collection.path())
+        .read_live_replication_bundle(
+            max_bucket_ciphertext_bytes(&record.manifest.oram)?,
+            max_bundle_bytes,
+        )
+        .map_err(private_result_oram_upload_store_error)?;
+    if bundle.manifest != record.manifest || bundle.manifest_signature != record.signature {
+        return Err(StorageError::bad_request(
+            "private result ORAM live replication bundle does not match validated manifest",
+        ));
+    }
+    Ok(bundle)
+}
+
 pub async fn do_open_private_result_oram_session(
     toc: &TableOfContent,
     auth: &Auth,
@@ -1854,6 +1884,52 @@ pub async fn do_install_private_result_oram_replica_bundle(
             bundle,
             max_ciphertext_bytes,
             resolved.manifest_context(&bundle.manifest_signature.key_id),
+        )
+        .map_err(private_result_oram_upload_store_error)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn do_install_private_result_oram_live_replica_bundle(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    collection_id: &str,
+    bundle: &PrivateResultOramLiveReplicationBundle,
+    expected_current: &PrivateResultOramEpochState,
+    expected_writeback_digest: Option<&str>,
+) -> StorageResult<PrivateResultOramEpochState> {
+    validate_private_result_oram_manifest_signature_shape(&bundle.manifest_signature)
+        .map_err(private_result_oram_error)?;
+    validate_private_result_oram_manifest_signature_owner_key(
+        &bundle.manifest,
+        &bundle.manifest_signature,
+    )?;
+    let resolved = resolve_private_result_oram_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        &bundle.manifest_signature.key_id,
+        "private_result_oram_replica_live_install",
+        AccessRequirements::new().write(),
+    )
+    .await?;
+    if resolved.collection_crypto_id != collection_id {
+        return Err(StorageError::bad_request(
+            "private result ORAM live replication collection identity does not match",
+        ));
+    }
+    resolved.validate_manifest_runtime_policy(&bundle.manifest)?;
+    let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&bundle.manifest.oram)?;
+    let _guard = begin_private_result_oram_upload_write_window(collection_id)?;
+    PrivateResultOramStore::new(&resolved.collection_path)
+        .write_live_replication_bundle_with_signature(
+            bundle,
+            max_ciphertext_bytes,
+            resolved.manifest_context(&bundle.manifest_signature.key_id),
+            expected_current,
+            expected_writeback_digest,
         )
         .map_err(private_result_oram_upload_store_error)
 }

@@ -11,8 +11,8 @@ use collection::config::{
 use collection::operations::types::CollectionError;
 use collection::private_hnsw_oram_store::{
     PRIVATE_HNSW_ORAM_MERKLE_PROOF_KIND, PrivateHnswOramConsensusWriteback,
-    PrivateHnswOramEpochState, PrivateHnswOramMerkleProof, PrivateHnswOramStore,
-    PrivateHnswOramWritebackBatch,
+    PrivateHnswOramEpochState, PrivateHnswOramLiveReplicationBundle, PrivateHnswOramMerkleProof,
+    PrivateHnswOramStore, PrivateHnswOramWritebackBatch,
 };
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
@@ -1212,6 +1212,38 @@ pub async fn do_export_private_hnsw_initial_replication_bundle(
     Ok(bundle)
 }
 
+pub async fn do_export_private_hnsw_live_replication_bundle(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    max_bundle_bytes: usize,
+) -> StorageResult<PrivateHnswOramLiveReplicationBundle> {
+    let record =
+        do_get_private_hnsw_manifest(toc, auth, settings, collection_name, vector_name).await?;
+    let pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new().write(),
+        "private_hnsw_live_replication_export",
+    )?;
+    let collection = toc.get_collection(&pass).await?;
+    let _guard =
+        begin_private_hnsw_upload_write_window(&record.manifest.collection_id, vector_name)?;
+    let bundle = PrivateHnswOramStore::new(collection.path(), vector_name)?
+        .read_live_replication_bundle(
+            max_bucket_ciphertext_bytes(&record.manifest)?,
+            max_bundle_bytes,
+        )
+        .map_err(private_hnsw_upload_store_error)?;
+    if bundle.manifest != record.manifest || bundle.manifest_signature != record.signature {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM live replication bundle does not match validated manifest",
+        ));
+    }
+    Ok(bundle)
+}
+
 pub async fn do_upload_private_hnsw_buckets(
     toc: &TableOfContent,
     auth: &Auth,
@@ -2169,6 +2201,54 @@ pub async fn do_install_private_hnsw_replica_bundle(
             bundle,
             max_ciphertext_bytes,
             resolved.manifest_context(&bundle.manifest_signature.key_id),
+        )
+        .map_err(private_hnsw_upload_store_error)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn do_install_private_hnsw_live_replica_bundle(
+    toc: &TableOfContent,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    collection_id: &str,
+    bundle: &PrivateHnswOramLiveReplicationBundle,
+    expected_current: &PrivateHnswOramEpochState,
+    expected_writeback_digest: Option<&str>,
+) -> StorageResult<PrivateHnswOramEpochState> {
+    validate_private_hnsw_oram_manifest_signature_shape(&bundle.manifest_signature)
+        .map_err(private_hnsw_error)?;
+    validate_private_hnsw_manifest_signature_owner_key(
+        &bundle.manifest,
+        &bundle.manifest_signature,
+    )?;
+    let resolved = resolve_private_hnsw_context(
+        toc,
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        &bundle.manifest_signature.key_id,
+        "private_hnsw_replica_live_install",
+        AccessRequirements::new().write(),
+    )
+    .await?;
+    if resolved.collection_crypto_id != collection_id {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM live replication collection identity does not match",
+        ));
+    }
+    resolved.validate_manifest_runtime_policy(&bundle.manifest)?;
+    let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&bundle.manifest)?;
+    let _guard = begin_private_hnsw_upload_write_window(collection_id, vector_name)?;
+    PrivateHnswOramStore::new(&resolved.collection_path, vector_name)?
+        .write_live_replication_bundle_with_signature(
+            bundle,
+            max_ciphertext_bytes,
+            resolved.manifest_context(&bundle.manifest_signature.key_id),
+            expected_current,
+            expected_writeback_digest,
         )
         .map_err(private_hnsw_upload_store_error)
 }

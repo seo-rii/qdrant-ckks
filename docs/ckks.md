@@ -198,6 +198,22 @@ and refuses to replace a different current state. These are storage primitives;
 shard-transfer orchestration remains fail closed until the source export,
 target install acknowledgement, and membership transition are connected.
 
+The internal Qdrant service exposes this store contract as a separate typed
+`InstallPrivateOramLiveReplica` RPC rather than overloading initial install.
+The HNSW/result oneof carries current epoch/root, optional writeback digest,
+and complete provider bucket records. Before touching the target store, the
+receiver checks aggregate wire bounds, reads its local Raft ownership record,
+requires an exact epoch/root/digest match, rejects a still-live consensus
+session lease, and then runs the provider signature and full-state install
+validation under the private-ORAM mutation lock. The source helper likewise
+exports under the collection write reservation, compares the exported state to
+its local Raft record, sends the typed request to the selected peer, and
+requires the acknowledgement to repeat the exact epoch/root/digest. Transport
+and acknowledgement errors include the peer id only and do not reflect roots,
+digests, signatures, or ciphertext. The helper is not yet called from ordinary
+shard transfer; the existing transfer guards remain the public gate until
+preinstall and membership sequencing are implemented.
+
 The internal Qdrant service now also accepts a typed, provider-discriminated
 initial install RPC using the existing HNSW/result manifest, signature, and
 bucket protobuf records. The receiver enforces the same decode and aggregate

@@ -37,6 +37,10 @@ service QdrantInternal {
   // Idempotently install one complete signed encrypted index on a replica.
   rpc InstallPrivateOramIndex(InstallPrivateOramIndexRequest)
       returns (InstallPrivateOramIndexResponse) {}
+
+  // Idempotently install one consensus-bound live encrypted index for movement.
+  rpc InstallPrivateOramLiveReplica(InstallPrivateOramLiveReplicaRequest)
+      returns (InstallPrivateOramLiveReplicaResponse) {}
 }
 
 message GetConsensusCommitRequest {}
@@ -170,4 +174,37 @@ message InstallPrivateOramIndexRequest {
 message InstallPrivateOramIndexResponse {
   uint64 index_epoch = 1;
   string root_hash = 2;
+}
+
+message PrivateHnswLiveReplicationBundle {
+  PrivateHnswManifest manifest = 1;
+  PrivateHnswSignature manifest_signature = 2;
+  PrivateOramReplicationEpochState current = 3;
+  optional string writeback_digest = 4;
+  repeated PrivateHnswBucket buckets = 5;
+}
+
+message PrivateResultOramLiveReplicationBundle {
+  PrivateResultOramManifest manifest = 1;
+  PrivateResultOramSignature manifest_signature = 2;
+  PrivateOramReplicationEpochState current = 3;
+  optional string writeback_digest = 4;
+  repeated PrivateResultOramBucket buckets = 5;
+}
+
+message InstallPrivateOramLiveReplicaRequest {
+  string collection_name = 1;
+  string collection_id = 2;
+  PrivateOramReplicationIndexKind index_kind = 3;
+  string vector_name = 4;
+  oneof bundle {
+    PrivateHnswLiveReplicationBundle hnsw = 5;
+    PrivateResultOramLiveReplicationBundle result = 6;
+  }
+}
+
+message InstallPrivateOramLiveReplicaResponse {
+  uint64 index_epoch = 1;
+  string root_hash = 2;
+  optional string writeback_digest = 3;
 }

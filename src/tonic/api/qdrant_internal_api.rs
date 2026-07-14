@@ -7,20 +7,24 @@ use api::grpc::{
     CompletePrivateOramWritebackRequest, CompletePrivateOramWritebackResponse, GetAuditLogRequest,
     GetAuditLogResponse, GetConsensusCommitRequest, GetConsensusCommitResponse,
     GetTelemetryRequest, GetTelemetryResponse, InstallPrivateOramIndexRequest,
-    InstallPrivateOramIndexResponse, PeerTelemetry, PreparePrivateOramWritebackRequest,
-    PreparePrivateOramWritebackResponse, PrivateOramReplicationIndexKind,
-    PrivateOramReplicationTransition, WaitOnConsensusCommitRequest, WaitOnConsensusCommitResponse,
-    install_private_oram_index_request,
+    InstallPrivateOramIndexResponse, InstallPrivateOramLiveReplicaRequest,
+    InstallPrivateOramLiveReplicaResponse, PeerTelemetry, PreparePrivateOramWritebackRequest,
+    PreparePrivateOramWritebackResponse, PrivateOramReplicationEpochState,
+    PrivateOramReplicationIndexKind, PrivateOramReplicationTransition,
+    WaitOnConsensusCommitRequest, WaitOnConsensusCommitResponse,
+    install_private_oram_index_request, install_private_oram_live_replica_request,
 };
 use chrono::DateTime;
 use collection::operations::verification::new_unchecked_verification_pass;
 use collection::private_hnsw_oram_store::{
-    PrivateHnswOramConsensusWriteback, PrivateHnswOramEpochState, PrivateHnswOramWritebackBatch,
+    PrivateHnswOramConsensusWriteback, PrivateHnswOramEpochState,
+    PrivateHnswOramLiveReplicationBundle, PrivateHnswOramWritebackBatch,
 };
 use collection::private_result_oram_store::{
     PrivateResultOramConsensusWriteback, PrivateResultOramEpochState,
-    PrivateResultOramWritebackBatch,
+    PrivateResultOramLiveReplicationBundle, PrivateResultOramWritebackBatch,
 };
+use collection::shards::shard::PeerId;
 use common::types::{DetailsLevel, TelemetryDetail};
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
@@ -249,6 +253,47 @@ fn validate_initial_install_bucket_bounds(
     {
         return Err(Status::invalid_argument(
             "private ORAM initial install request is oversized",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_live_install_bucket_bounds(
+    bucket_sizes: impl IntoIterator<Item = (usize, usize, usize)>,
+) -> Result<(), Status> {
+    validate_initial_install_bucket_bounds(bucket_sizes)
+        .map_err(|_| Status::invalid_argument("private ORAM live install bucket set is invalid"))
+}
+
+fn required_live_install_current(
+    current: Option<PrivateOramReplicationEpochState>,
+) -> Result<PrivateOramReplicationEpochState, Status> {
+    let current = current.ok_or_else(|| {
+        Status::invalid_argument("private ORAM live install current state is required")
+    })?;
+    let decoded = BASE64URL_NOPAD
+        .decode(current.root_hash.as_bytes())
+        .map_err(|_| {
+            Status::invalid_argument("private ORAM live install current state is invalid")
+        })?;
+    if decoded.len() != 32 || BASE64URL_NOPAD.encode(&decoded) != current.root_hash {
+        return Err(Status::invalid_argument(
+            "private ORAM live install current state is invalid",
+        ));
+    }
+    Ok(current)
+}
+
+fn validate_live_install_digest(writeback_digest: Option<&str>) -> Result<(), Status> {
+    let Some(writeback_digest) = writeback_digest else {
+        return Ok(());
+    };
+    let decoded = BASE64URL_NOPAD
+        .decode(writeback_digest.as_bytes())
+        .map_err(|_| Status::invalid_argument("private ORAM live install digest is invalid"))?;
+    if decoded.len() != 32 || BASE64URL_NOPAD.encode(&decoded) != writeback_digest {
+        return Err(Status::invalid_argument(
+            "private ORAM live install digest is invalid",
         ));
     }
     Ok(())
@@ -596,6 +641,162 @@ pub(crate) async fn coordinate_private_result_oram_initial_upload(
             None,
         )
         .await
+}
+
+#[allow(dead_code)]
+pub(crate) async fn install_private_hnsw_live_replica_on_peer(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    vector_name: &str,
+    target_peer: PeerId,
+) -> Result<(), StorageError> {
+    let pass = new_unchecked_verification_pass();
+    let max_bundle_bytes = settings
+        .service
+        .max_request_size_mb
+        .saturating_mul(BYTES_PER_MIB);
+    let bundle = private_hnsw::do_export_private_hnsw_live_replication_bundle(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        vector_name,
+        max_bundle_bytes,
+    )
+    .await?;
+    let collection_id = bundle.manifest.collection_id.clone();
+    let expected = PrivateOramConsensusEpoch {
+        index_epoch: bundle.current.index_epoch,
+        root_hash: bundle.current.root_hash.clone(),
+        writeback_digest: bundle.writeback_digest.clone(),
+    };
+    let key = PrivateOramEpochKey {
+        collection_id: collection_id.clone(),
+        index_kind: PrivateOramIndexKind::Hnsw,
+        index_name: vector_name.to_string(),
+    };
+    if dispatcher.private_oram_consensus_epoch(&key)?.as_ref() != Some(&expected) {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM live replica export does not match consensus",
+        ));
+    }
+    let request = InstallPrivateOramLiveReplicaRequest {
+        collection_name: collection_name.to_string(),
+        collection_id,
+        index_kind: PrivateOramReplicationIndexKind::Hnsw as i32,
+        vector_name: vector_name.to_string(),
+        bundle: Some(install_private_oram_live_replica_request::Bundle::Hnsw(
+            api::grpc::PrivateHnswLiveReplicationBundle {
+                manifest: Some(private_hnsw_api::manifest_to_proto(bundle.manifest)),
+                manifest_signature: Some(private_hnsw_api::signature_to_proto(
+                    bundle.manifest_signature,
+                )),
+                current: Some(PrivateOramReplicationEpochState {
+                    index_epoch: bundle.current.index_epoch,
+                    root_hash: bundle.current.root_hash,
+                }),
+                writeback_digest: bundle.writeback_digest,
+                buckets: bundle
+                    .buckets
+                    .into_iter()
+                    .map(private_hnsw_api::bucket_to_proto)
+                    .collect(),
+            },
+        )),
+    };
+    let response = dispatcher
+        .toc(auth, &pass)
+        .get_channel_service()
+        .install_private_oram_live_replica(target_peer, request)
+        .await?;
+    validate_live_install_ack(target_peer, &expected, response)
+}
+
+#[allow(dead_code)]
+pub(crate) async fn install_private_result_oram_live_replica_on_peer(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    target_peer: PeerId,
+) -> Result<(), StorageError> {
+    let pass = new_unchecked_verification_pass();
+    let max_bundle_bytes = settings
+        .service
+        .max_request_size_mb
+        .saturating_mul(BYTES_PER_MIB);
+    let bundle = private_result_oram::do_export_private_result_oram_live_replication_bundle(
+        dispatcher.toc(auth, &pass),
+        auth,
+        settings,
+        collection_name,
+        max_bundle_bytes,
+    )
+    .await?;
+    let collection_id = bundle.manifest.collection_id.clone();
+    let expected = PrivateOramConsensusEpoch {
+        index_epoch: bundle.current.index_epoch,
+        root_hash: bundle.current.root_hash.clone(),
+        writeback_digest: bundle.writeback_digest.clone(),
+    };
+    let key = PrivateOramEpochKey {
+        collection_id: collection_id.clone(),
+        index_kind: PrivateOramIndexKind::ResultPayload,
+        index_name: String::new(),
+    };
+    if dispatcher.private_oram_consensus_epoch(&key)?.as_ref() != Some(&expected) {
+        return Err(StorageError::bad_request(
+            "private result ORAM live replica export does not match consensus",
+        ));
+    }
+    let request = InstallPrivateOramLiveReplicaRequest {
+        collection_name: collection_name.to_string(),
+        collection_id,
+        index_kind: PrivateOramReplicationIndexKind::Result as i32,
+        vector_name: String::new(),
+        bundle: Some(install_private_oram_live_replica_request::Bundle::Result(
+            api::grpc::PrivateResultOramLiveReplicationBundle {
+                manifest: Some(private_result_oram_api::manifest_to_proto(bundle.manifest)),
+                manifest_signature: Some(private_result_oram_api::signature_to_proto(
+                    bundle.manifest_signature,
+                )),
+                current: Some(PrivateOramReplicationEpochState {
+                    index_epoch: bundle.current.index_epoch,
+                    root_hash: bundle.current.root_hash,
+                }),
+                writeback_digest: bundle.writeback_digest,
+                buckets: bundle
+                    .buckets
+                    .into_iter()
+                    .map(private_result_oram_api::bucket_to_proto)
+                    .collect(),
+            },
+        )),
+    };
+    let response = dispatcher
+        .toc(auth, &pass)
+        .get_channel_service()
+        .install_private_oram_live_replica(target_peer, request)
+        .await?;
+    validate_live_install_ack(target_peer, &expected, response)
+}
+
+fn validate_live_install_ack(
+    target_peer: PeerId,
+    expected: &PrivateOramConsensusEpoch,
+    response: InstallPrivateOramLiveReplicaResponse,
+) -> Result<(), StorageError> {
+    if response.index_epoch == expected.index_epoch
+        && response.root_hash == expected.root_hash
+        && response.writeback_digest == expected.writeback_digest
+    {
+        return Ok(());
+    }
+    Err(StorageError::service_error(format!(
+        "private ORAM live install acknowledgement is invalid on peer {target_peer}"
+    )))
 }
 
 pub(crate) async fn recover_private_hnsw_replication(
@@ -1764,6 +1965,212 @@ impl QdrantInternal for QdrantInternalService {
             root_hash,
         }))
     }
+
+    async fn install_private_oram_live_replica(
+        &self,
+        request: Request<InstallPrivateOramLiveReplicaRequest>,
+    ) -> Result<Response<InstallPrivateOramLiveReplicaResponse>, Status> {
+        let request = request.into_inner();
+        if request.collection_name.is_empty()
+            || request.collection_name.len() > 255
+            || request.collection_id.is_empty()
+            || request.collection_id.len() > 255
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM live install request shape is invalid",
+            ));
+        }
+        let kind = PrivateOramReplicationIndexKind::try_from(request.index_kind)
+            .map_err(|_| Status::invalid_argument("private ORAM index kind is invalid"))?;
+        let auth = Auth::new_internal(Access::full("private ORAM replication"));
+
+        enum LiveBundle {
+            Hnsw(PrivateHnswOramLiveReplicationBundle),
+            Result(PrivateResultOramLiveReplicationBundle),
+        }
+
+        let (bundle, current, writeback_digest, key) = match (kind, request.bundle) {
+            (
+                PrivateOramReplicationIndexKind::Hnsw,
+                Some(install_private_oram_live_replica_request::Bundle::Hnsw(bundle)),
+            ) if !request.vector_name.is_empty() && request.vector_name.len() <= 255 => {
+                validate_live_install_bucket_bounds(bundle.buckets.iter().map(|bucket| {
+                    (
+                        bucket.ciphertext.len(),
+                        bucket.ciphertext_sha256.len(),
+                        bucket.bucket_commitment.len(),
+                    )
+                }))?;
+                let current = required_live_install_current(bundle.current)?;
+                let current = PrivateHnswOramEpochState {
+                    index_epoch: current.index_epoch,
+                    root_hash: current.root_hash,
+                };
+                let writeback_digest = bundle.writeback_digest;
+                validate_live_install_digest(writeback_digest.as_deref())?;
+                let key = PrivateOramEpochKey {
+                    collection_id: request.collection_id.clone(),
+                    index_kind: PrivateOramIndexKind::Hnsw,
+                    index_name: request.vector_name.clone(),
+                };
+                (
+                    LiveBundle::Hnsw(PrivateHnswOramLiveReplicationBundle {
+                        manifest: private_hnsw_api::manifest_from_proto(
+                            bundle.manifest.ok_or_else(|| {
+                                Status::invalid_argument(
+                                    "private HNSW ORAM live install manifest is required",
+                                )
+                            })?,
+                        )?,
+                        manifest_signature: private_hnsw_api::signature_from_proto(
+                            bundle.manifest_signature.ok_or_else(|| {
+                                Status::invalid_argument(
+                                    "private HNSW ORAM live install manifest signature is required",
+                                )
+                            })?,
+                        ),
+                        current: current.clone(),
+                        writeback_digest: writeback_digest.clone(),
+                        buckets: bundle
+                            .buckets
+                            .into_iter()
+                            .map(private_hnsw_api::bucket_from_proto)
+                            .collect::<Result<Vec<_>, _>>()?,
+                    }),
+                    PrivateOramConsensusEpoch {
+                        index_epoch: current.index_epoch,
+                        root_hash: current.root_hash,
+                        writeback_digest: writeback_digest.clone(),
+                    },
+                    writeback_digest,
+                    key,
+                )
+            }
+            (
+                PrivateOramReplicationIndexKind::Result,
+                Some(install_private_oram_live_replica_request::Bundle::Result(bundle)),
+            ) if request.vector_name.is_empty() => {
+                validate_live_install_bucket_bounds(bundle.buckets.iter().map(|bucket| {
+                    (
+                        bucket.ciphertext.len(),
+                        bucket.ciphertext_sha256.len(),
+                        bucket.bucket_commitment.len(),
+                    )
+                }))?;
+                let current = required_live_install_current(bundle.current)?;
+                let current = PrivateResultOramEpochState {
+                    index_epoch: current.index_epoch,
+                    root_hash: current.root_hash,
+                };
+                let writeback_digest = bundle.writeback_digest;
+                validate_live_install_digest(writeback_digest.as_deref())?;
+                let key = PrivateOramEpochKey {
+                    collection_id: request.collection_id.clone(),
+                    index_kind: PrivateOramIndexKind::ResultPayload,
+                    index_name: String::new(),
+                };
+                (
+                    LiveBundle::Result(PrivateResultOramLiveReplicationBundle {
+                        manifest: private_result_oram_api::manifest_from_proto(
+                            bundle.manifest.ok_or_else(|| {
+                                Status::invalid_argument(
+                                    "private result ORAM live install manifest is required",
+                                )
+                            })?,
+                        )?,
+                        manifest_signature: private_result_oram_api::signature_from_proto(
+                            bundle.manifest_signature.ok_or_else(|| {
+                                Status::invalid_argument(
+                                    "private result ORAM live install manifest signature is required",
+                                )
+                            })?,
+                        ),
+                        current: current.clone(),
+                        writeback_digest: writeback_digest.clone(),
+                        buckets: bundle
+                            .buckets
+                            .into_iter()
+                            .map(private_result_oram_api::bucket_from_proto)
+                            .collect::<Result<Vec<_>, _>>()?,
+                    }),
+                    PrivateOramConsensusEpoch {
+                        index_epoch: current.index_epoch,
+                        root_hash: current.root_hash,
+                        writeback_digest: writeback_digest.clone(),
+                    },
+                    writeback_digest,
+                    key,
+                )
+            }
+            _ => {
+                return Err(Status::invalid_argument(
+                    "private ORAM live install index kind and bundle do not match",
+                ));
+            }
+        };
+
+        let _lock = self.private_oram_replication_lock.lock().await;
+        let consensus = self
+            .consensus_state
+            .private_oram_epoch(&key)
+            .ok_or_else(|| Status::failed_precondition("private ORAM ownership is missing"))?;
+        if consensus != current {
+            return Err(Status::failed_precondition(
+                "private ORAM live install does not match consensus",
+            ));
+        }
+        let now_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| Status::internal("private ORAM live install clock is invalid"))?
+            .as_secs();
+        if self
+            .consensus_state
+            .private_oram_session_lease(&key)
+            .is_some_and(|lease| lease.expires_at_unix > now_unix)
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM live install requires no active session",
+            ));
+        }
+
+        let (index_epoch, root_hash) = match bundle {
+            LiveBundle::Hnsw(bundle) => {
+                let epoch = private_hnsw::do_install_private_hnsw_live_replica_bundle(
+                    &self.toc,
+                    &auth,
+                    &self.settings,
+                    &request.collection_name,
+                    &request.vector_name,
+                    &request.collection_id,
+                    &bundle,
+                    &bundle.current,
+                    writeback_digest.as_deref(),
+                )
+                .await?;
+                (epoch.index_epoch, epoch.root_hash)
+            }
+            LiveBundle::Result(bundle) => {
+                let epoch =
+                    private_result_oram::do_install_private_result_oram_live_replica_bundle(
+                        &self.toc,
+                        &auth,
+                        &self.settings,
+                        &request.collection_name,
+                        &request.collection_id,
+                        &bundle,
+                        &bundle.current,
+                        writeback_digest.as_deref(),
+                    )
+                    .await?;
+                (epoch.index_epoch, epoch.root_hash)
+            }
+        };
+        Ok(Response::new(InstallPrivateOramLiveReplicaResponse {
+            index_epoch,
+            root_hash,
+            writeback_digest,
+        }))
+    }
 }
 
 #[cfg(test)]
@@ -1994,5 +2401,99 @@ mod tests {
             oversized_ciphertext.message(),
             "private ORAM initial install bucket shape is invalid"
         );
+    }
+
+    #[test]
+    fn private_oram_live_install_wire_bounds_fail_closed_without_reflection() {
+        validate_live_install_bucket_bounds([(1024, 43, 43)]).unwrap();
+        let root_hash = BASE64URL_NOPAD.encode(&[7; 32]);
+        assert_eq!(
+            required_live_install_current(Some(PrivateOramReplicationEpochState {
+                index_epoch: 43,
+                root_hash: root_hash.clone(),
+            }))
+            .unwrap()
+            .root_hash,
+            root_hash,
+        );
+        let digest = BASE64URL_NOPAD.encode(&[8; 32]);
+        validate_live_install_digest(Some(&digest)).unwrap();
+        validate_live_install_digest(None).unwrap();
+
+        let empty = validate_live_install_bucket_bounds(std::iter::empty()).unwrap_err();
+        assert_eq!(
+            empty.message(),
+            "private ORAM live install bucket set is invalid"
+        );
+        let oversized_chars = MAX_PRIVATE_ORAM_REPLICATION_CIPHERTEXT_CHARS + 1;
+        let oversized =
+            validate_live_install_bucket_bounds([(oversized_chars, 43, 43)]).unwrap_err();
+        assert_eq!(
+            oversized.message(),
+            "private ORAM live install bucket set is invalid"
+        );
+        assert!(!oversized.message().contains(&oversized_chars.to_string()));
+
+        for sentinel in [
+            "private-oram-live-root-sentinel",
+            "private-oram-live-digest-sentinel",
+        ] {
+            let err = if sentinel.contains("root") {
+                required_live_install_current(Some(PrivateOramReplicationEpochState {
+                    index_epoch: 43,
+                    root_hash: sentinel.to_string(),
+                }))
+                .unwrap_err()
+            } else {
+                validate_live_install_digest(Some(sentinel)).unwrap_err()
+            };
+            assert!(!err.message().contains(sentinel));
+        }
+    }
+
+    #[test]
+    fn private_oram_live_install_ack_is_exact_and_redacted() {
+        let root_hash = BASE64URL_NOPAD.encode(&[9; 32]);
+        let digest = BASE64URL_NOPAD.encode(&[10; 32]);
+        let expected = PrivateOramConsensusEpoch {
+            index_epoch: 43,
+            root_hash: root_hash.clone(),
+            writeback_digest: Some(digest.clone()),
+        };
+        validate_live_install_ack(
+            7,
+            &expected,
+            InstallPrivateOramLiveReplicaResponse {
+                index_epoch: 43,
+                root_hash: root_hash.clone(),
+                writeback_digest: Some(digest.clone()),
+            },
+        )
+        .unwrap();
+
+        for response in [
+            InstallPrivateOramLiveReplicaResponse {
+                index_epoch: 44,
+                root_hash: root_hash.clone(),
+                writeback_digest: Some(digest.clone()),
+            },
+            InstallPrivateOramLiveReplicaResponse {
+                index_epoch: 43,
+                root_hash: BASE64URL_NOPAD.encode(&[11; 32]),
+                writeback_digest: Some(digest.clone()),
+            },
+            InstallPrivateOramLiveReplicaResponse {
+                index_epoch: 43,
+                root_hash: root_hash.clone(),
+                writeback_digest: None,
+            },
+        ] {
+            let rendered = validate_live_install_ack(7, &expected, response)
+                .unwrap_err()
+                .to_string();
+            assert!(rendered.contains("peer 7"));
+            assert!(!rendered.contains(&root_hash));
+            assert!(!rendered.contains(&digest));
+        }
     }
 }

@@ -15923,6 +15923,76 @@ pub struct InstallPrivateOramIndexResponse {
     #[prost(string, tag = "2")]
     pub root_hash: ::prost::alloc::string::String,
 }
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateHnswLiveReplicationBundle {
+    #[prost(message, optional, tag = "1")]
+    pub manifest: ::core::option::Option<PrivateHnswManifest>,
+    #[prost(message, optional, tag = "2")]
+    pub manifest_signature: ::core::option::Option<PrivateHnswSignature>,
+    #[prost(message, optional, tag = "3")]
+    pub current: ::core::option::Option<PrivateOramReplicationEpochState>,
+    #[prost(string, optional, tag = "4")]
+    pub writeback_digest: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "5")]
+    pub buckets: ::prost::alloc::vec::Vec<PrivateHnswBucket>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateResultOramLiveReplicationBundle {
+    #[prost(message, optional, tag = "1")]
+    pub manifest: ::core::option::Option<PrivateResultOramManifest>,
+    #[prost(message, optional, tag = "2")]
+    pub manifest_signature: ::core::option::Option<PrivateResultOramSignature>,
+    #[prost(message, optional, tag = "3")]
+    pub current: ::core::option::Option<PrivateOramReplicationEpochState>,
+    #[prost(string, optional, tag = "4")]
+    pub writeback_digest: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "5")]
+    pub buckets: ::prost::alloc::vec::Vec<PrivateResultOramBucket>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InstallPrivateOramLiveReplicaRequest {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub collection_id: ::prost::alloc::string::String,
+    #[prost(enumeration = "PrivateOramReplicationIndexKind", tag = "3")]
+    pub index_kind: i32,
+    #[prost(string, tag = "4")]
+    pub vector_name: ::prost::alloc::string::String,
+    #[prost(oneof = "install_private_oram_live_replica_request::Bundle", tags = "5, 6")]
+    pub bundle: ::core::option::Option<
+        install_private_oram_live_replica_request::Bundle,
+    >,
+}
+/// Nested message and enum types in `InstallPrivateOramLiveReplicaRequest`.
+pub mod install_private_oram_live_replica_request {
+    #[derive(serde::Serialize)]
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Bundle {
+        #[prost(message, tag = "5")]
+        Hnsw(super::PrivateHnswLiveReplicationBundle),
+        #[prost(message, tag = "6")]
+        Result(super::PrivateResultOramLiveReplicationBundle),
+    }
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InstallPrivateOramLiveReplicaResponse {
+    #[prost(uint64, tag = "1")]
+    pub index_epoch: u64,
+    #[prost(string, tag = "2")]
+    pub root_hash: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "3")]
+    pub writeback_digest: ::core::option::Option<::prost::alloc::string::String>,
+}
 /// Internal-only wire contract for replicated private ORAM writebacks. The RPC
 /// methods using these messages are registered only after receiver-side runtime,
 /// signature, fixed-budget, and exact-transition validation is connected.
@@ -16271,6 +16341,37 @@ pub mod qdrant_internal_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// Idempotently install one consensus-bound live encrypted index for movement.
+        pub async fn install_private_oram_live_replica(
+            &mut self,
+            request: impl tonic::IntoRequest<super::InstallPrivateOramLiveReplicaRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::InstallPrivateOramLiveReplicaResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/InstallPrivateOramLiveReplica",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "InstallPrivateOramLiveReplica",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -16342,6 +16443,14 @@ pub mod qdrant_internal_server {
             request: tonic::Request<super::InstallPrivateOramIndexRequest>,
         ) -> std::result::Result<
             tonic::Response<super::InstallPrivateOramIndexResponse>,
+            tonic::Status,
+        >;
+        /// Idempotently install one consensus-bound live encrypted index for movement.
+        async fn install_private_oram_live_replica(
+            &self,
+            request: tonic::Request<super::InstallPrivateOramLiveReplicaRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::InstallPrivateOramLiveReplicaResponse>,
             tonic::Status,
         >;
     }
@@ -16811,6 +16920,61 @@ pub mod qdrant_internal_server {
                     let fut = async move {
                         let inner = inner.0;
                         let method = InstallPrivateOramIndexSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.QdrantInternal/InstallPrivateOramLiveReplica" => {
+                    #[allow(non_camel_case_types)]
+                    struct InstallPrivateOramLiveReplicaSvc<T: QdrantInternal>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::UnaryService<
+                        super::InstallPrivateOramLiveReplicaRequest,
+                    > for InstallPrivateOramLiveReplicaSvc<T> {
+                        type Response = super::InstallPrivateOramLiveReplicaResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::InstallPrivateOramLiveReplicaRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::install_private_oram_live_replica(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = InstallPrivateOramLiveReplicaSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

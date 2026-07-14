@@ -5,7 +5,8 @@ use std::time::Duration;
 use api::grpc::qdrant::qdrant_internal_client::QdrantInternalClient;
 use api::grpc::qdrant::{
     CompletePrivateOramWritebackRequest, InstallPrivateOramIndexRequest,
-    InstallPrivateOramIndexResponse, PreparePrivateOramWritebackRequest,
+    InstallPrivateOramIndexResponse, InstallPrivateOramLiveReplicaRequest,
+    InstallPrivateOramLiveReplicaResponse, PreparePrivateOramWritebackRequest,
     WaitOnConsensusCommitRequest,
 };
 use api::grpc::transport_channel_pool::{AddTimeout, TransportChannelPool};
@@ -210,6 +211,28 @@ impl ChannelService {
         .map_err(|_| {
             CollectionError::service_error(format!(
                 "private ORAM initial install failed on peer {peer_id}"
+            ))
+        })
+    }
+
+    pub async fn install_private_oram_live_replica(
+        &self,
+        peer_id: PeerId,
+        request: InstallPrivateOramLiveReplicaRequest,
+    ) -> CollectionResult<InstallPrivateOramLiveReplicaResponse> {
+        self.with_qdrant_client(peer_id, |mut client| {
+            let request = request.clone();
+            async move {
+                client
+                    .install_private_oram_live_replica(Request::new(request))
+                    .await
+            }
+        })
+        .await
+        .map(tonic::Response::into_inner)
+        .map_err(|_| {
+            CollectionError::service_error(format!(
+                "private ORAM live install failed on peer {peer_id}"
             ))
         })
     }
