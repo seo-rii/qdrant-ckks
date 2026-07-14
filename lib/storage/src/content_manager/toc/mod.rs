@@ -27,6 +27,7 @@ use collection::shards::channel_service::ChannelService;
 use collection::shards::replica_set::AbortShardTransfer;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::{PeerId, ShardId};
+use collection::shards::transfer::ShardTransferMethod;
 use collection::shards::{CollectionId, replica_set};
 use common::budget::ResourceBudget;
 use common::counter::hardware_accumulator::HwSharedDrain;
@@ -589,6 +590,7 @@ impl TableOfContent {
         &self,
         collection_name: String,
         shard_id: ShardId,
+        private_oram_preinstalled: bool,
     ) -> Result<(), StorageError> {
         // TODO: Ensure cancel safety!
 
@@ -597,11 +599,27 @@ impl TableOfContent {
         // TODO: Ensure cancel safety!
         let collection = self.get_collection_unchecked(&collection_name).await?;
         let config = collection.config_snapshot().await;
+        let private_oram_bucket_store_collection =
+            collection_params_use_private_oram_bucket_store(&config.params);
+        let consensus_authorized_preinstall =
+            if private_oram_bucket_store_collection && private_oram_preinstalled {
+                collection.state().await.transfers.iter().any(|transfer| {
+                    transfer.private_oram_preinstalled
+                        && transfer.is_target(self.this_peer_id, shard_id)
+                        && transfer.to_shard_id.is_none()
+                        && transfer.method == Some(ShardTransferMethod::StreamRecords)
+                        && transfer.filter.is_none()
+                })
+            } else {
+                false
+            };
         reject_private_oram_receiving_shard_until_supported(
             &collection_name,
-            collection_params_use_private_oram_bucket_store(&config.params),
+            private_oram_bucket_store_collection,
+            consensus_authorized_preinstall,
         )?;
-        let initiate_shard_transfer_future = collection.initiate_shard_transfer(shard_id);
+        let initiate_shard_transfer_future =
+            collection.initiate_shard_transfer(shard_id, consensus_authorized_preinstall);
         initiate_shard_transfer_future.await?;
         Ok(())
     }
@@ -879,15 +897,16 @@ impl TableOfContent {
 fn reject_private_oram_receiving_shard_until_supported(
     _collection_name: &str,
     private_oram_bucket_store_collection: bool,
+    consensus_authorized_preinstall: bool,
 ) -> Result<(), StorageError> {
-    if !private_oram_bucket_store_collection {
+    if !private_oram_bucket_store_collection || consensus_authorized_preinstall {
         return Ok(());
     }
 
     Err(StorageError::bad_request(format!(
         "cannot initiate receiving shard for private ORAM collections: \
-         encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are not \
-         implemented for shard transfer",
+         encrypted ORAM bucket preinstall and consensus-backed epoch/root ownership must be \
+         verified before shard transfer",
     )))
 }
 
@@ -1135,13 +1154,15 @@ mod tests {
     #[test]
     fn receiving_shard_rejects_private_oram_collection_until_bucket_transfer_exists() {
         for collection_name in PRIVATE_ORAM_RECEIVING_SHARD_COLLECTION_NAMES {
-            reject_private_oram_receiving_shard_until_supported(collection_name, false).unwrap();
+            reject_private_oram_receiving_shard_until_supported(collection_name, false, false)
+                .unwrap();
 
-            let err = reject_private_oram_receiving_shard_until_supported(collection_name, true)
-                .unwrap_err();
+            let err =
+                reject_private_oram_receiving_shard_until_supported(collection_name, true, false)
+                    .unwrap_err();
             let rendered = err.to_string();
             assert!(rendered.contains("private ORAM collections"));
-            assert!(rendered.contains("encrypted ORAM bucket transfer"));
+            assert!(rendered.contains("encrypted ORAM bucket preinstall"));
             assert!(rendered.contains("consensus-backed epoch/root"));
             assert!(!rendered.contains(collection_name));
             for &leaked_alias in PRIVATE_ORAM_RECEIVING_SHARD_REDACTION_STEMS {
@@ -1151,6 +1172,9 @@ mod tests {
             assert!(!rendered.contains("private_result_oram"));
             assert!(!rendered.contains(PRIVATE_HNSW_ORAM_BINDING));
             assert!(!rendered.contains(PRIVATE_RESULT_ORAM_BINDING));
+
+            reject_private_oram_receiving_shard_until_supported(collection_name, true, true)
+                .expect("consensus-authorized private ORAM preinstall must allow receive setup");
         }
     }
 
@@ -1181,6 +1205,7 @@ mod tests {
                 reject_private_oram_receiving_shard_until_supported(
                     "docs",
                     collection_params_use_private_oram_bucket_store(&params),
+                    false,
                 )
                 .is_err()
             );

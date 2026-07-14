@@ -1119,6 +1119,7 @@ impl Collection {
                     sync: true,
                     // For automatic shard transfers, always select some default method from this point on
                     method: Some(shard_transfer_method),
+                    private_oram_preinstalled: false,
                     filter: None,
                 };
 

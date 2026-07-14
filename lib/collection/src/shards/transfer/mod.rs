@@ -65,6 +65,7 @@ mod tests {
             to: 2,
             sync: true,
             method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: false,
             filter: Some(Filter::new_must(Condition::Field(
                 FieldCondition::new_match(
                     "document.body".parse().unwrap(),
@@ -81,6 +82,31 @@ mod tests {
         assert!(rendered.contains("filter_present: true"));
         assert!(!rendered.contains("qdrant-sec-transfer-filter-sentinel"));
         assert!(!rendered.contains("document.body"));
+    }
+
+    #[test]
+    fn private_oram_preinstall_marker_is_backward_compatible() {
+        let legacy = serde_json::json!({
+            "shard_id": 1,
+            "from": 1,
+            "to": 2,
+            "sync": true,
+            "method": "stream_records"
+        });
+        let decoded: ShardTransfer = serde_json::from_value(legacy).unwrap();
+        assert!(!decoded.private_oram_preinstalled);
+
+        let marked = ShardTransfer {
+            private_oram_preinstalled: true,
+            ..decoded
+        };
+        let encoded = serde_json::to_value(&marked).unwrap();
+        assert_eq!(encoded["private_oram_preinstalled"], true);
+        assert!(
+            serde_json::from_value::<ShardTransfer>(encoded)
+                .unwrap()
+                .private_oram_preinstalled
+        );
     }
 }
 
@@ -131,6 +157,10 @@ const CONSENSUS_CONFIRM_RETRY_DELAY: Duration = Duration::from_secs(1);
 /// Time after which confirming a consensus operation times out.
 const CONSENSUS_CONFIRM_TIMEOUT: Duration = defaults::CONSENSUS_META_OP_WAIT;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShardTransfer {
     pub shard_id: ShardId,
@@ -148,6 +178,11 @@ pub struct ShardTransfer {
     #[serde(default)]
     pub method: Option<ShardTransferMethod>,
 
+    /// The source installed and verified the collection-local private ORAM stores on the target
+    /// before proposing this transfer.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub private_oram_preinstalled: bool,
+
     // Optional filter to apply when transferring points
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<Filter>,
@@ -162,6 +197,7 @@ impl fmt::Debug for ShardTransfer {
             .field("to", &self.to)
             .field("sync", &self.sync)
             .field("method", &self.method)
+            .field("private_oram_preinstalled", &self.private_oram_preinstalled)
             .field("filter_present", &self.filter.is_some())
             .finish()
     }
@@ -176,6 +212,7 @@ impl ShardTransfer {
             to,
             sync: _,
             method: _,
+            private_oram_preinstalled: _,
             filter: _,
         } = self;
 
@@ -261,6 +298,7 @@ impl From<&ShardTransferRestart> for ShardTransfer {
             to,
             sync: false,
             method: Some(method),
+            private_oram_preinstalled: false,
             filter: None,
         }
     }
@@ -292,6 +330,7 @@ impl ShardTransferRestart {
             to,
             sync: _,
             method,
+            private_oram_preinstalled: _,
             filter: _,
         } = transfer;
 

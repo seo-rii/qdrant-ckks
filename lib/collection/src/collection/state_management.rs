@@ -15,7 +15,7 @@ use crate::shards::resharding::ReshardState;
 use crate::shards::shard::{PeerId, ShardId};
 use crate::shards::shard_holder::ShardTransferChange;
 use crate::shards::shard_holder::shard_mapping::ShardKeyMapping;
-use crate::shards::transfer::ShardTransfer;
+use crate::shards::transfer::{ShardTransfer, ShardTransferMethod};
 
 impl Collection {
     pub async fn check_config_compatible(
@@ -389,10 +389,18 @@ fn validate_private_oram_apply_shard_transfers_until_supported(
         return Ok(());
     }
 
+    if shard_transfers.iter().all(|transfer| {
+        transfer.private_oram_preinstalled
+            && transfer.to_shard_id.is_none()
+            && transfer.method == Some(ShardTransferMethod::StreamRecords)
+            && transfer.filter.is_none()
+    }) {
+        return Ok(());
+    }
+
     Err(CollectionError::bad_input(
-        "cannot apply shard transfer state for private ORAM collections: encrypted ORAM bucket \
-         transfer and consensus-backed epoch/root ownership are not implemented for consensus \
-         snapshot apply",
+        "cannot apply shard transfer state for private ORAM collections without a verified \
+         encrypted ORAM preinstall and consensus-backed epoch/root ownership",
     ))
 }
 
@@ -754,6 +762,7 @@ mod tests {
             to: 2002,
             sync: true,
             method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: false,
             filter: None,
         }]);
 
@@ -767,7 +776,7 @@ mod tests {
         assert!(
             rendered.contains("cannot apply shard transfer state for private ORAM collections")
         );
-        assert!(rendered.contains("encrypted ORAM bucket transfer"));
+        assert!(rendered.contains("encrypted ORAM preinstall"));
         assert!(rendered.contains("consensus-backed epoch/root"));
         assert!(!rendered.contains("shard 9"));
         assert!(!rendered.contains("1001"));
@@ -777,6 +786,19 @@ mod tests {
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+
+        let authorized = HashSet::from([ShardTransfer {
+            shard_id: 9,
+            to_shard_id: None,
+            from: 1001,
+            to: 2002,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: true,
+            filter: None,
+        }]);
+        validate_private_oram_apply_shard_transfers_until_supported(&authorized, true)
+            .expect("verified private ORAM transfer state must apply");
     }
 
     #[test]

@@ -237,13 +237,17 @@ impl RemoteShard {
         }
     }
 
-    pub async fn initiate_transfer(&self) -> CollectionResult<CollectionOperationResponse> {
+    pub async fn initiate_transfer(
+        &self,
+        private_oram_preinstalled: bool,
+    ) -> CollectionResult<CollectionOperationResponse> {
         let res = self
             .with_collections_client(|mut client| async move {
                 client
                     .initiate(InitiateShardTransferRequest {
                         collection_name: self.collection_id.clone(),
                         shard_id: self.id,
+                        private_oram_preinstalled,
                     })
                     .await
             })

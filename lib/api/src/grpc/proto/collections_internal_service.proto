@@ -36,6 +36,8 @@ message InitiateShardTransferRequest {
   string collection_name = 1;
   // Id of the temporary shard
   uint32 shard_id = 2;
+  // The transfer consensus entry attests that private ORAM stores were preinstalled.
+  bool private_oram_preinstalled = 3;
 }
 
 message WaitForShardStateRequest {

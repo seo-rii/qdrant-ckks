@@ -136,6 +136,7 @@ impl TableOfContent {
                 to: to_peer,
                 sync,
                 method,
+                private_oram_preinstalled: false,
                 filter: None,
             };
             let operation = ConsensusOperations::start_transfer(collection_name, transfer_request);

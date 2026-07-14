@@ -906,6 +906,7 @@ mod tests {
             to: 4,
             sync: true,
             method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: false,
             filter: Some(Filter::new_must(Condition::Field(
                 FieldCondition::new_match(
                     "document.body".parse().unwrap(),

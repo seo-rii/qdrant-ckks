@@ -10,7 +10,7 @@ use collection::operations::types::PeerMetadata;
 use collection::shards::collection_shard_distribution::CollectionShardDistribution;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::PeerId;
-use collection::shards::transfer::ShardTransfer;
+use collection::shards::transfer::{ShardTransfer, ShardTransferMethod};
 use collection::shards::{CollectionId, replica_set, transfer};
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::fs::safe_delete_in_tmp;
@@ -651,6 +651,7 @@ impl TableOfContent {
                     to: transfer_restart.to,
                     sync: old_transfer.sync, // Preserve sync flag from the old transfer
                     method: Some(transfer_restart.method),
+                    private_oram_preinstalled: old_transfer.private_oram_preinstalled,
                     filter: None,
                 };
 
@@ -871,11 +872,21 @@ fn reject_private_oram_shard_transfer_until_supported(
         return Ok(());
     }
 
+    if let ShardTransferOperations::Start(transfer) | ShardTransferOperations::Finish(transfer) =
+        transfer_operation
+        && transfer.private_oram_preinstalled
+        && params.shard_number.get() == 1
+        && transfer.to_shard_id.is_none()
+        && transfer.method == Some(ShardTransferMethod::StreamRecords)
+        && transfer.filter.is_none()
+    {
+        return Ok(());
+    }
+
     Err(StorageError::bad_input(format!(
-        "private ORAM shard transfer is not supported for private ORAM collections: \
-         encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are not \
-         implemented; abort the transfer or keep the private ORAM collection on the current shard \
-         owner",
+        "private ORAM shard transfer requires a single-shard, unfiltered stream-records transfer \
+         with encrypted ORAM stores preinstalled and consensus-backed epoch/root ownership \
+         verified; abort the transfer or use the private ORAM transfer coordinator",
     )))
 }
 
@@ -1275,6 +1286,7 @@ mod tests {
             to: 3,
             sync: false,
             method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: false,
             filter: None,
         });
 
@@ -1418,6 +1430,23 @@ mod tests {
                 "private ORAM consensus guard leaked client-state alias `{sentinel}`: {rendered}",
             );
         }
+
+        let ShardTransferOperations::Start(mut authorized_transfer) = operation else {
+            unreachable!()
+        };
+        authorized_transfer.private_oram_preinstalled = true;
+        reject_private_oram_shard_transfer_until_supported(
+            "docs",
+            &params,
+            &ShardTransferOperations::Start(authorized_transfer.clone()),
+        )
+        .expect("verified private ORAM preinstall must allow transfer start");
+        reject_private_oram_shard_transfer_until_supported(
+            "docs",
+            &params,
+            &ShardTransferOperations::Finish(authorized_transfer),
+        )
+        .expect("verified private ORAM preinstall must allow transfer finish");
     }
 
     #[test]
@@ -1476,6 +1505,7 @@ mod tests {
             to: 3,
             sync: false,
             method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: false,
             filter: None,
         };
         let transfer_key = ShardTransferKey {
@@ -1550,6 +1580,7 @@ mod tests {
             to: 3,
             sync: false,
             method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: false,
             filter: None,
         };
         let transfer_key = ShardTransferKey {

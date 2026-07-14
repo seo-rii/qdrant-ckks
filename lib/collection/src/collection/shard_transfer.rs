@@ -24,14 +24,15 @@ use crate::shards::{shard_initializing_flag_path, transfer};
 fn validate_private_oram_transfer_task_start_until_supported(
     _collection_name: &str,
     private_oram_bucket_store_collection: bool,
+    private_oram_preinstalled: bool,
 ) -> CollectionResult<()> {
-    if !private_oram_bucket_store_collection {
+    if !private_oram_bucket_store_collection || private_oram_preinstalled {
         return Ok(());
     }
 
     Err(CollectionError::bad_input(
-        "cannot start shard transfer task for private ORAM collections: encrypted ORAM bucket \
-         transfer and consensus-backed epoch/root ownership are not implemented for shard transfer",
+        "cannot start shard transfer task for private ORAM collections without a verified \
+         encrypted ORAM preinstall and consensus-backed epoch/root ownership",
     ))
 }
 
@@ -99,6 +100,7 @@ impl Collection {
         validate_private_oram_transfer_task_start_until_supported(
             self.name(),
             private_oram_bucket_store_collection,
+            shard_transfer.private_oram_preinstalled,
         )?;
 
         let do_transfer = {
@@ -464,6 +466,7 @@ impl Collection {
     pub fn initiate_shard_transfer(
         &self,
         shard_id: ShardId,
+        private_oram_preinstalled: bool,
     ) -> impl Future<Output = CollectionResult<()>> + 'static {
         // TODO: Ensure cancel safety!
 
@@ -485,6 +488,7 @@ impl Collection {
             validate_private_oram_transfer_task_start_until_supported(
                 &collection_name,
                 private_oram_bucket_store_collection,
+                private_oram_preinstalled,
             )?;
 
             let shards_holder_guard = shards_holder.clone().read_owned().await;
@@ -829,15 +833,22 @@ mod tests {
     #[test]
     fn private_oram_transfer_task_start_fails_closed_until_bucket_transfer_supported() {
         for collection_name in PRIVATE_ORAM_TRANSFER_COLLECTION_NAMES {
-            validate_private_oram_transfer_task_start_until_supported(collection_name, false)
-                .unwrap();
+            validate_private_oram_transfer_task_start_until_supported(
+                collection_name,
+                false,
+                false,
+            )
+            .unwrap();
 
-            let err =
-                validate_private_oram_transfer_task_start_until_supported(collection_name, true)
-                    .unwrap_err();
+            let err = validate_private_oram_transfer_task_start_until_supported(
+                collection_name,
+                true,
+                false,
+            )
+            .unwrap_err();
             let rendered = format!("{err:?}");
             assert!(rendered.contains("private ORAM collections"));
-            assert!(rendered.contains("encrypted ORAM bucket transfer"));
+            assert!(rendered.contains("encrypted ORAM preinstall"));
             assert!(rendered.contains("consensus-backed epoch/root"));
             assert!(!rendered.contains(collection_name));
             for &leaked_alias in PRIVATE_ORAM_TRANSFER_REDACTION_STEMS {
@@ -847,6 +858,9 @@ mod tests {
             assert!(!rendered.contains("private_result_oram"));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+
+            validate_private_oram_transfer_task_start_until_supported(collection_name, true, true)
+                .expect("verified private ORAM preinstall must allow transfer task startup");
         }
     }
 }

@@ -3995,6 +3995,9 @@ pub struct InitiateShardTransferRequest {
     /// Id of the temporary shard
     #[prost(uint32, tag = "2")]
     pub shard_id: u32,
+    /// The transfer consensus entry attests that private ORAM stores were preinstalled.
+    #[prost(bool, tag = "3")]
+    pub private_oram_preinstalled: bool,
 }
 #[derive(validator::Validate)]
 #[derive(serde::Serialize)]
