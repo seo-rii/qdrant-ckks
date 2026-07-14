@@ -180,6 +180,24 @@ idempotent install even while the current epoch still equals the manifest
 epoch; transitional state must be reconciled against consensus before the
 store can participate in another initial-replication decision.
 
+Shard movement uses a distinct live-replication store contract. HNSW and
+result ORAM stores can export the signed manifest as an immutable lineage
+anchor together with the current epoch/root, the current consensus writeback
+digest when the index has advanced, and the complete encrypted bucket set.
+Unchanged buckets may retain epochs older than an optionally refreshed
+manifest, but no bucket may be newer than the current epoch and every
+commitment is re-derived from its own epoch and manifest key lineage. Export rejects a
+pending writeback, a missing digest for advanced state, an incomplete or
+non-canonical bucket set, and any persisted Merkle mismatch. The receiver
+revalidates the owner manifest signature, requires the bundle's current
+epoch/root/digest to exactly match the expected Raft record, recomputes the
+Merkle root from all bucket commitments, and writes `current.json` only after
+the manifest, encrypted buckets, Merkle state, and digest-bearing completion
+record are durable. Installation is idempotent for an exactly matching store
+and refuses to replace a different current state. These are storage primitives;
+shard-transfer orchestration remains fail closed until the source export,
+target install acknowledgement, and membership transition are connected.
+
 The internal Qdrant service now also accepts a typed, provider-discriminated
 initial install RPC using the existing HNSW/result manifest, signature, and
 bucket protobuf records. The receiver enforces the same decode and aggregate

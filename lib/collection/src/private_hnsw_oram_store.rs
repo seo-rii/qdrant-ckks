@@ -13,7 +13,8 @@ use qdrant_sec::{
     private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
     private_hnsw_oram_bucket_count, private_hnsw_oram_writeback_digest,
     server_private_hnsw_oram_fixed_writeback_bucket_budget,
-    validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_upload_bundle,
+    validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_manifest,
+    validate_private_hnsw_oram_manifest_shape, validate_private_hnsw_oram_upload_bundle,
     validate_private_hnsw_oram_upload_bundle_with_signature,
 };
 use serde::{Deserialize, Serialize};
@@ -57,6 +58,30 @@ impl Debug for PrivateHnswOramStore {
 pub struct PrivateHnswOramEpochState {
     pub index_epoch: u64,
     pub root_hash: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateHnswOramLiveReplicationBundle {
+    pub manifest: PrivateHnswOramManifest,
+    pub manifest_signature: PrivateHnswOramSignature,
+    pub current: PrivateHnswOramEpochState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writeback_digest: Option<String>,
+    pub buckets: Vec<PrivateHnswOramBucket>,
+}
+
+impl Debug for PrivateHnswOramLiveReplicationBundle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramLiveReplicationBundle")
+            .field("manifest", &"[redacted]")
+            .field("manifest_signature", &"[redacted]")
+            .field("current_epoch", &self.current.index_epoch)
+            .field("current_root_hash", &"[redacted]")
+            .field("has_writeback_digest", &self.writeback_digest.is_some())
+            .field("bucket_count", &"[redacted]")
+            .finish()
+    }
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -448,6 +473,223 @@ impl PrivateHnswOramStore {
             ));
         }
         Ok(bundle)
+    }
+
+    pub fn read_live_replication_bundle(
+        &self,
+        max_ciphertext_bytes: usize,
+        max_bundle_bytes: usize,
+    ) -> CollectionResult<PrivateHnswOramLiveReplicationBundle> {
+        let (manifest, manifest_signature) = self.read_manifest()?;
+        validate_private_hnsw_oram_manifest_shape(&manifest).map_err(private_hnsw_oram_error)?;
+        self.ensure_no_pending_live_replication()?;
+        let current = self.read_current_epoch()?;
+        let writeback_digest = self.live_writeback_digest(&manifest, &current)?;
+        let buckets = self.read_live_replication_buckets(
+            &manifest,
+            &current,
+            max_ciphertext_bytes,
+            max_bundle_bytes,
+        )?;
+        let bundle = PrivateHnswOramLiveReplicationBundle {
+            manifest,
+            manifest_signature,
+            current,
+            writeback_digest,
+            buckets,
+        };
+        let commitments = validate_live_replication_bundle(&bundle, max_ciphertext_bytes)?;
+        let tree = self.read_merkle_tree()?;
+        validate_merkle_tree_context(
+            &tree,
+            bundle.current.index_epoch,
+            &bundle.current.root_hash,
+            bundle.manifest.bucket_count,
+        )?;
+        if tree.leaf_hashes != commitments {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM live replication Merkle state does not match",
+            ));
+        }
+        Ok(bundle)
+    }
+
+    pub fn write_live_replication_bundle_with_signature(
+        &self,
+        bundle: &PrivateHnswOramLiveReplicationBundle,
+        max_ciphertext_bytes: usize,
+        validation_context: PrivateHnswManifestValidationContext<'_>,
+        expected_current: &PrivateHnswOramEpochState,
+        expected_writeback_digest: Option<&str>,
+    ) -> CollectionResult<PrivateHnswOramEpochState> {
+        validate_private_hnsw_oram_manifest(
+            &bundle.manifest,
+            Some(&bundle.manifest_signature),
+            validation_context,
+        )
+        .map_err(private_hnsw_oram_error)?;
+        if bundle.current != *expected_current
+            || bundle.writeback_digest.as_deref() != expected_writeback_digest
+        {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM live replication bundle does not match consensus",
+            ));
+        }
+        let commitments = validate_live_replication_bundle(bundle, max_ciphertext_bytes)?;
+        self.ensure_no_pending_live_replication()?;
+
+        match self.read_current_epoch() {
+            Ok(current) if current == bundle.current => {
+                let stored = self.read_live_replication_bundle(max_ciphertext_bytes, usize::MAX)?;
+                if stored != *bundle {
+                    return Err(CollectionError::bad_request(
+                        "private HNSW ORAM live replication bundle does not match existing store",
+                    ));
+                }
+                return Ok(current);
+            }
+            Ok(_) => {
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM live replication cannot replace current state",
+                ));
+            }
+            Err(CollectionError::NotFound { .. }) => {}
+            Err(err) => return Err(err),
+        }
+
+        self.write_manifest(&bundle.manifest, &bundle.manifest_signature)?;
+        self.write_merkle_tree_from_commitments(
+            bundle.current.index_epoch,
+            bundle.current.root_hash.clone(),
+            commitments,
+        )?;
+        for bucket in &bundle.buckets {
+            self.write_bucket(
+                bucket,
+                bucket.index_epoch,
+                bundle.manifest.bucket_count,
+                max_ciphertext_bytes,
+            )?;
+        }
+        self.write_live_epoch(&bundle.current, bundle.writeback_digest.as_deref())?;
+
+        let stored = self.read_live_replication_bundle(max_ciphertext_bytes, usize::MAX)?;
+        if stored != *bundle {
+            return Err(CollectionError::service_error(
+                "private HNSW ORAM live replication final state validation failed",
+            ));
+        }
+        Ok(bundle.current.clone())
+    }
+
+    fn ensure_no_pending_live_replication(&self) -> CollectionResult<()> {
+        if self.pending_writeback_exists()? {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM live replication requires no pending writeback",
+            ));
+        }
+        Ok(())
+    }
+
+    fn live_writeback_digest(
+        &self,
+        manifest: &PrivateHnswOramManifest,
+        current: &PrivateHnswOramEpochState,
+    ) -> CollectionResult<Option<String>> {
+        match self.read_epoch_commit(current.index_epoch) {
+            Ok(commit) if commit.root_hash == current.root_hash => commit
+                .writeback_digest
+                .ok_or_else(|| {
+                    CollectionError::bad_request(
+                        "private HNSW ORAM live replication current commit has no consensus digest",
+                    )
+                })
+                .map(Some),
+            Ok(_) => Err(CollectionError::bad_request(
+                "private HNSW ORAM live replication commit does not match current state",
+            )),
+            Err(CollectionError::NotFound { .. })
+                if current.index_epoch == manifest.index_epoch
+                    && current.root_hash == manifest.root_hash =>
+            {
+                Ok(None)
+            }
+            Err(CollectionError::NotFound { .. }) => Err(CollectionError::bad_request(
+                "private HNSW ORAM live replication current commit is missing",
+            )),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn read_live_replication_buckets(
+        &self,
+        manifest: &PrivateHnswOramManifest,
+        current: &PrivateHnswOramEpochState,
+        max_ciphertext_bytes: usize,
+        max_bundle_bytes: usize,
+    ) -> CollectionResult<Vec<PrivateHnswOramBucket>> {
+        if manifest.bucket_count == 0 {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM live replication bucket_count is invalid",
+            ));
+        }
+        let first = self.read_bucket(
+            0,
+            current.index_epoch,
+            manifest.bucket_count,
+            max_ciphertext_bytes,
+        )?;
+        validate_initial_replication_bundle_budget(
+            manifest.bucket_count,
+            initial_replication_bucket_estimated_bytes(
+                first.ciphertext.len(),
+                first.ciphertext_sha256.len(),
+                first.bucket_commitment.len(),
+            )?,
+            max_bundle_bytes,
+            "private HNSW ORAM live replication bundle is oversized",
+        )?;
+        let capacity = usize::try_from(manifest.bucket_count).map_err(|_| {
+            CollectionError::bad_request(
+                "private HNSW ORAM live replication bucket_count is invalid",
+            )
+        })?;
+        let mut buckets = Vec::new();
+        buckets.try_reserve_exact(capacity).map_err(|_| {
+            CollectionError::service_error("private HNSW ORAM live replication allocation failed")
+        })?;
+        buckets.push(first);
+        for bucket_id in 1..manifest.bucket_count {
+            buckets.push(self.read_bucket(
+                bucket_id,
+                current.index_epoch,
+                manifest.bucket_count,
+                max_ciphertext_bytes,
+            )?);
+        }
+        Ok(buckets)
+    }
+
+    fn write_live_epoch(
+        &self,
+        current: &PrivateHnswOramEpochState,
+        writeback_digest: Option<&str>,
+    ) -> CollectionResult<()> {
+        validate_epoch_state(current)?;
+        if let Some(writeback_digest) = writeback_digest {
+            validate_writeback_digest(writeback_digest)?;
+            write_json_atomic(
+                &self.root,
+                &self.temp_dir(),
+                &self.commit_epoch_path(current.index_epoch),
+                &PrivateHnswOramEpochCommit {
+                    index_epoch: current.index_epoch,
+                    root_hash: current.root_hash.clone(),
+                    writeback_digest: Some(writeback_digest.to_string()),
+                },
+            )?;
+        }
+        self.write_initial_epoch(current)
     }
 
     fn ensure_no_pending_initial_replication(&self) -> CollectionResult<()> {
@@ -1984,6 +2226,73 @@ fn validate_upload_bundle_with_signature(
     Ok(leaf_commitments)
 }
 
+fn validate_live_replication_bundle(
+    bundle: &PrivateHnswOramLiveReplicationBundle,
+    max_ciphertext_bytes: usize,
+) -> CollectionResult<Vec<String>> {
+    validate_private_hnsw_oram_manifest_shape(&bundle.manifest).map_err(private_hnsw_oram_error)?;
+    validate_epoch_state(&bundle.current)?;
+    if bundle.current.index_epoch < bundle.manifest.index_epoch {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM live replication epoch precedes manifest anchor",
+        ));
+    }
+    if bundle.current.index_epoch == bundle.manifest.index_epoch {
+        if bundle.current.root_hash != bundle.manifest.root_hash {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM live replication initial state is invalid",
+            ));
+        }
+        if let Some(writeback_digest) = bundle.writeback_digest.as_deref() {
+            validate_writeback_digest(writeback_digest)?;
+        }
+    } else if let Some(writeback_digest) = bundle.writeback_digest.as_deref() {
+        validate_writeback_digest(writeback_digest)?;
+    } else {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM live replication advanced state requires consensus digest",
+        ));
+    }
+    let bucket_count = usize::try_from(bundle.manifest.bucket_count).map_err(|_| {
+        CollectionError::bad_request("private HNSW ORAM live replication bucket_count is invalid")
+    })?;
+    if bundle.buckets.len() != bucket_count || bucket_count == 0 {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM live replication bucket set is incomplete",
+        ));
+    }
+    let mut commitments = Vec::new();
+    commitments.try_reserve_exact(bucket_count).map_err(|_| {
+        CollectionError::service_error("private HNSW ORAM live replication allocation failed")
+    })?;
+    for (bucket_id, bucket) in bundle.buckets.iter().enumerate() {
+        let expected_bucket_id = u64::try_from(bucket_id).map_err(|_| {
+            CollectionError::bad_request("private HNSW ORAM live replication bucket id is invalid")
+        })?;
+        if bucket.bucket_id != expected_bucket_id || bucket.index_epoch > bundle.current.index_epoch
+        {
+            return Err(CollectionError::bad_request(
+                "private HNSW ORAM live replication bucket context is invalid",
+            ));
+        }
+        validate_bucket_shape(bucket, bundle.manifest.bucket_count, max_ciphertext_bytes)?;
+        validate_bucket_ciphertext_fixed_size(bucket, &bundle.manifest)?;
+        validate_bucket_commitment_context(
+            &bundle.manifest,
+            bucket.index_epoch,
+            std::slice::from_ref(bucket),
+        )?;
+        commitments.push(bucket.bucket_commitment.clone());
+    }
+    let computed_root = PrivateHnswOramStore::merkle_root_for_commitments(&commitments)?;
+    if computed_root != bundle.current.root_hash {
+        return Err(CollectionError::bad_request(
+            "private HNSW ORAM live replication root hash mismatch",
+        ));
+    }
+    Ok(commitments)
+}
+
 fn private_hnsw_client_error(err: qdrant_sec::PrivateHnswClientError) -> CollectionError {
     use qdrant_sec::PrivateHnswClientError;
 
@@ -2690,7 +2999,7 @@ mod tests {
         private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_merkle_root_for_commitments,
         seal_private_hnsw_oram_bucket, seal_private_hnsw_oram_plaintext_index,
         search_private_hnsw_oram_encrypted_verified, sign_private_hnsw_oram_commit,
-        verify_private_hnsw_oram_merkle_proof_json,
+        sign_private_hnsw_oram_manifest, verify_private_hnsw_oram_merkle_proof_json,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use tempfile::TempDir;
@@ -5352,6 +5661,118 @@ mod tests {
             .to_string();
         assert!(advanced.contains("requires the manifest epoch"));
         assert!(!advanced.contains(&new.root_hash));
+    }
+
+    #[test]
+    fn live_replication_bundle_installs_advanced_signed_state() {
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[53; 32]).unwrap();
+        let public_key = key_pair.public_key();
+        let (bundle, updated_bucket, new, signature) = fixture_signed_commit_update(&key_pair);
+        let source_temp = TempDir::new().unwrap();
+        let target_temp = TempDir::new().unwrap();
+        let source = fixture_store(&source_temp);
+        let target = fixture_store(&target_temp);
+        let old = source.write_initial_upload_bundle(&bundle, 4096).unwrap();
+        let verification = || PrivateHnswSignatureVerification {
+            expected_key_id: "tenant-a/private-hnsw-signing-v1",
+            public_key: public_key.as_ref(),
+        };
+
+        source
+            .commit_writeback_with_signature(
+                &old,
+                &new,
+                bundle.bucket_count(),
+                std::slice::from_ref(&updated_bucket),
+                4096,
+                &signature,
+                verification(),
+            )
+            .unwrap();
+        let unrefreshed = source
+            .read_live_replication_bundle(4096, 16 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(unrefreshed.manifest.index_epoch, old.index_epoch);
+        let mut refreshed_manifest = unrefreshed.manifest.clone();
+        refreshed_manifest.index_epoch = new.index_epoch;
+        refreshed_manifest.root_hash = new.root_hash.clone();
+        let refreshed_signature =
+            sign_private_hnsw_oram_manifest(&key_pair, &refreshed_manifest).unwrap();
+        source
+            .write_manifest(&refreshed_manifest, &refreshed_signature)
+            .unwrap();
+        let exported = source
+            .read_live_replication_bundle(4096, 16 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(exported.current, new);
+        assert_eq!(exported.manifest.index_epoch, new.index_epoch);
+        assert!(exported.writeback_digest.is_some());
+        assert_eq!(exported.buckets[0], updated_bucket);
+        assert!(
+            exported
+                .buckets
+                .iter()
+                .skip(1)
+                .all(|bucket| bucket.index_epoch == old.index_epoch)
+        );
+
+        let installed = target
+            .write_live_replication_bundle_with_signature(
+                &exported,
+                4096,
+                fixture_validation_context(public_key.as_ref()),
+                &new,
+                exported.writeback_digest.as_deref(),
+            )
+            .unwrap();
+        assert_eq!(installed, new);
+        assert_eq!(
+            target
+                .read_live_replication_bundle(4096, 16 * 1024 * 1024)
+                .unwrap(),
+            exported,
+        );
+        assert_eq!(
+            target
+                .write_live_replication_bundle_with_signature(
+                    &exported,
+                    4096,
+                    fixture_validation_context(public_key.as_ref()),
+                    &new,
+                    exported.writeback_digest.as_deref(),
+                )
+                .unwrap(),
+            new,
+        );
+
+        let mismatch_temp = TempDir::new().unwrap();
+        let mismatch_target = fixture_store(&mismatch_temp);
+        let mismatched_consensus = PrivateHnswOramEpochState {
+            root_hash: root_hash(98),
+            ..new.clone()
+        };
+        let rendered = mismatch_target
+            .write_live_replication_bundle_with_signature(
+                &exported,
+                4096,
+                fixture_validation_context(public_key.as_ref()),
+                &mismatched_consensus,
+                exported.writeback_digest.as_deref(),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("does not match consensus"));
+        assert!(!rendered.contains(&new.root_hash));
+        assert!(!mismatch_target.root_path().exists());
+
+        let rendered = format!("{exported:?}");
+        for sentinel in [
+            exported.current.root_hash.as_str(),
+            exported.buckets[0].ciphertext.as_str(),
+            exported.manifest_signature.sig.as_str(),
+        ] {
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
     }
 
     #[test]
