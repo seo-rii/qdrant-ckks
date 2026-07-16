@@ -796,12 +796,16 @@ server-side; normal vector writes, `delete_points`, `delete_vectors`, and
 server scoring, including legacy search/batch search, ordinary query/fusion/context/MMR,
 recommend/discover, `lookup_from` or point-id reference-vector resolution,
 grouped search/query, and search matrix paths, fail closed and direct clients
-to the private HNSW ORAM session APIs. Collection peer
-`SyncPoints` batches are also rejected for private HNSW ORAM collections because
-v1 shard transfer must preserve encrypted bucket/epoch parity instead of
-replaying point-level sync. Phase 11 implements
-the encrypted bucket store and session read/commit APIs behind this validated
-control-plane contract.
+to the private HNSW ORAM session APIs. Ordinary collection peer `SyncPoints`
+batches are also rejected for private HNSW ORAM collections. The only v1
+exception is a `SyncPoints` request received by the exact target shard while a
+consensus-recorded, source-preinstalled, unfiltered `stream_records` transfer is
+active. That exception does not permit point-level private vector or result
+payload replay: existing peer validation still rejects any protected vector
+name or private result ORAM payload path. The encrypted ORAM bucket/epoch state
+is installed and verified before the marked transfer starts. Phase 11
+implements the encrypted bucket store and session read/commit APIs behind this
+validated control-plane contract.
 Collection config and runtime validation require `vector/private-hnsw-oram@v1`
 and `private-hnsw-oram/v1` to be paired exactly, reject multi-vector v1 rules,
 and reject overlap with `vector/client-ckks@v1` or `vector/openfhe-ckks@v1`
@@ -1547,8 +1551,10 @@ private result ORAM checks before accepting a recovered collection.
 Cluster runtime parity uses the existing crypto capability fingerprint for this
 provider as well. The fingerprint includes non-secret private HNSW ORAM and
 private result ORAM policy such as tree shape, fixed budget, result privacy mode,
-and signing verifier digests, while redacting raw verifier public keys. A peer
-with a different ORAM shape or signing verifier fails runtime capability parity
+and signing verifier digests, while redacting raw verifier public keys. Its JSON
+view recursively sorts object keys before hashing, so equivalent runtime policy
+loaded by separate processes cannot diverge because of map insertion order. A
+peer with a different ORAM shape or signing verifier fails runtime capability parity
 before it can be treated as an equivalent private-ORAM-capable node. The mismatch diagnostic
 names the peer and fail-closed condition but does not echo the local or peer
 fingerprint strings.
@@ -1559,7 +1565,13 @@ acquires a bounded consensus lease reservation for every configured private
 HNSW/result index, installs the exact current encrypted bucket stores on the
 target, validates epoch/root/writeback-digest acknowledgements, and only then
 submits the marked shard transfer. Partial preinstalls are idempotent exact-state
-copies and do not change membership. `ReplicatePoints`, restart, snapshot, WAL,
+copies and do not change membership. The marked target accepts only the
+transfer's peer `SyncPoints` operation needed to initialize ordinary shard
+records, and normal peer crypto checks still reject protected vector or private
+result payload content. A two-process RF=1-to-RF=2 replication test advances
+both private ORAM stores, runs this preinstall/transfer path, waits for the
+target shard to become active, and reopens both committed sessions on the
+target. `ReplicatePoints`, restart, snapshot, WAL,
 resharding transfer methods, multi-shard layouts, and automatic dead-replica
 transfer recovery remain fail closed.
 Resharding start and progress operations are blocked for the same collection

@@ -18,6 +18,8 @@ from .utils import (
     start_first_peer,
     start_peer,
     wait_collection_exists_and_active_on_all_peers,
+    wait_for_collection_local_shards_count,
+    wait_for_collection_shard_transfers_count,
     wait_for_uniform_cluster_status,
     wait_peer_added,
     wait_for_peer_online,
@@ -409,6 +411,52 @@ def test_private_oram_sessions_replicate_through_public_routes(tmp_path: pathlib
     _upload_result_oram(bootstrap_api, fixture)
     _exercise_result_owner_session(bootstrap_api, fixture)
     _assert_replica_can_open_current_sessions(replica_api)
+
+
+def test_private_oram_shard_replication_preinstalls_live_store(
+    tmp_path: pathlib.Path,
+):
+    peer_urls, _, fixture, _, _ = _start_private_oram_cluster(tmp_path, 2, 1)
+    cluster_infos = [
+        get_collection_cluster_info(peer_url, COLLECTION) for peer_url in peer_urls
+    ]
+    source_indices = [
+        index for index, info in enumerate(cluster_infos) if info["local_shards"]
+    ]
+    assert len(source_indices) == 1
+    source_index = source_indices[0]
+    target_index = 1 - source_index
+    source_url = peer_urls[source_index]
+    target_url = peer_urls[target_index]
+    source_info = cluster_infos[source_index]
+    target_info = cluster_infos[target_index]
+
+    assert not target_info["local_shards"]
+    shard_id = source_info["local_shards"][0]["shard_id"]
+
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    _upload_result_oram(source_url, fixture)
+    _exercise_result_owner_session(source_url, fixture)
+
+    replicate = requests.post(
+        f"{source_url}/collections/{COLLECTION}/cluster",
+        json={
+            "replicate_shard": {
+                "shard_id": shard_id,
+                "from_peer_id": source_info["peer_id"],
+                "to_peer_id": target_info["peer_id"],
+                "method": "stream_records",
+            }
+        },
+        timeout=60,
+    )
+    assert_http_ok(replicate)
+
+    wait_for_collection_local_shards_count(target_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _assert_replica_can_open_current_sessions(target_url)
 
 
 @pytest.mark.parametrize("index_kind", ["hnsw", "result"])
