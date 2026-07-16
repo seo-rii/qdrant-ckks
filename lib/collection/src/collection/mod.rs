@@ -945,7 +945,7 @@ impl Collection {
         on_convert_to_listener: ChangePeerState,
         on_convert_from_listener: ChangePeerState,
     ) -> CollectionResult<()> {
-        let (encrypted_collection, private_oram_bucket_store_collection) = {
+        let (encrypted_collection, private_oram_bucket_store_collection, configured_shard_count) = {
             let config = self.collection_config.read().await;
             let encryption = config.params.effective_encryption();
             (
@@ -953,6 +953,7 @@ impl Collection {
                 encryption
                     .as_ref()
                     .is_some_and(collection_encryption_uses_private_oram_bucket_store),
+                config.params.shard_number.get() as usize,
             )
         };
 
@@ -1055,6 +1056,7 @@ impl Collection {
                 self.name(),
                 shard_id,
                 private_oram_bucket_store_collection,
+                configured_shard_count,
                 shard_holder.len(),
             ) {
                 log::warn!("{err}");
@@ -1545,15 +1547,18 @@ fn validate_private_oram_automatic_transfer_recovery_layout(
     _collection_name: &str,
     _shard_id: ShardId,
     private_oram_bucket_store_collection: bool,
+    configured_shard_count: usize,
     shard_count: usize,
 ) -> CollectionResult<()> {
-    if !private_oram_bucket_store_collection || shard_count == 1 {
+    if !private_oram_bucket_store_collection
+        || (shard_count > 0 && shard_count == configured_shard_count)
+    {
         return Ok(());
     }
 
     Err(CollectionError::bad_input(
-        "automatic shard transfer recovery for private ORAM collections requires an exact \
-         single-shard layout; multi-shard ORAM ownership remains unsupported",
+        "automatic shard transfer recovery for private ORAM collections requires the configured \
+         stable shard layout",
     ))
 }
 
@@ -1990,24 +1995,44 @@ mod tests {
     ];
 
     #[test]
-    fn private_oram_automatic_transfer_recovery_requires_single_shard_layout() {
+    fn private_oram_automatic_transfer_recovery_requires_configured_stable_layout() {
         for &collection_name in PRIVATE_ORAM_CLIENT_STATE_COLLECTION_NAMES {
-            validate_private_oram_automatic_transfer_recovery_layout(collection_name, 3, false, 2)
-                .unwrap();
-            validate_private_oram_automatic_transfer_recovery_layout(collection_name, 3, true, 1)
-                .unwrap();
+            validate_private_oram_automatic_transfer_recovery_layout(
+                collection_name,
+                3,
+                false,
+                1,
+                2,
+            )
+            .unwrap();
+            validate_private_oram_automatic_transfer_recovery_layout(
+                collection_name,
+                3,
+                true,
+                1,
+                1,
+            )
+            .unwrap();
+            validate_private_oram_automatic_transfer_recovery_layout(
+                collection_name,
+                3,
+                true,
+                2,
+                2,
+            )
+            .unwrap();
 
             let err = validate_private_oram_automatic_transfer_recovery_layout(
                 collection_name,
                 3,
                 true,
                 2,
+                0,
             )
             .unwrap_err();
             let rendered = format!("{err:?}");
             assert!(rendered.contains("private ORAM collections"));
-            assert!(rendered.contains("single-shard layout"));
-            assert!(rendered.contains("multi-shard ORAM ownership"));
+            assert!(rendered.contains("configured stable shard layout"));
             assert!(!rendered.contains(collection_name));
             for &leaked_alias in PRIVATE_ORAM_CLIENT_STATE_REDACTION_STEMS {
                 assert!(!rendered.contains(leaked_alias), "{rendered}");
@@ -2017,6 +2042,15 @@ mod tests {
             assert!(!rendered.contains("private_result_oram"));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+
+            validate_private_oram_automatic_transfer_recovery_layout(
+                collection_name,
+                3,
+                true,
+                2,
+                1,
+            )
+            .unwrap_err();
         }
     }
 

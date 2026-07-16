@@ -2520,12 +2520,11 @@ impl QdrantInternal for QdrantInternalService {
                 )
             })?;
         if index_keys.is_empty()
-            || state.config.params.shard_number.get() != 1
-            || state.shards.len() != 1
+            || state.config.params.shard_number.get() as usize != state.shards.len()
             || state.resharding.is_some()
         {
             return Err(Status::failed_precondition(
-                "private ORAM automatic shard recovery requires an exact single-shard layout",
+                "private ORAM automatic shard recovery requires a stable configured shard layout",
             ));
         }
         if state

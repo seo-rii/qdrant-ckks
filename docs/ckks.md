@@ -66,14 +66,15 @@ implementation.
 | Metadata encryption | `metadata/aes-256-gcm@v1` supports selected JSON string metadata values with `metadata-value/v1`; these values use the same server-side AEAD envelope, fail closed for plaintext indexing/filtering, and participate in `encrypted_payload:"decrypted"` reads under the same `payload_decrypt` access policy. `metadata_keys` selectors also support client-generated exact-match blind-index token fields with `metadata-exact-match-token/v1`. | Client-side metadata value encryption should use `payload/client-aead@v1` on the metadata field plus a separate blind-index token field for exact match. Qdrant stores opaque blind-index tokens and never computes them. | CKKS vector metadata sealing is separate from payload metadata value encryption. |
 
 `vector/private-hnsw-oram@v1` is stricter than the generic encrypted
-data-movement policy above. Manual movement and automatic dead-replica recovery
-are limited to exact single-shard `stream_records` transfers with source-side
-signed full-store preinstall and a verified transfer marker. `ReplicatePoints`,
-restart transfer, resharding progress, multi-shard layouts, shard-key layout
-changes, replica removal, and shard snapshot export/recovery remain fail closed.
-Consensus snapshot apply also rejects unsupported private ORAM transfer state,
-non-empty resharding state, and shard-info layout, membership, or shard layout
-config changes.
+data-movement policy above. On a fixed shard layout, every peer that owns any
+fully-active shard replica holds the same collection-global encrypted ORAM
+store. Manual movement and automatic dead-replica recovery move one shard at a
+time through `stream_records`, source-side signed full-store preinstall, and a
+verified transfer marker. `ReplicatePoints`, restart transfer, shard-count or
+shard-key layout changes, resharding progress, direct replica removal, and shard
+snapshot export/recovery remain fail closed. Consensus snapshot apply also
+rejects unsupported private ORAM transfer state, non-empty resharding state, and
+shard-info layout, membership, or shard layout config changes.
 
 Private ORAM search and result-fetch providers have their own client-led
 contract:
@@ -85,7 +86,7 @@ contract:
 | Normal Qdrant reads/writes | Dense vector upsert/update, point/vector delete, collection peer `SyncPoints`, `with_vector` reads, ordinary search/query/recommend/discover, grouped paths, search matrix, and `lookup_from`/point-id reference-vector resolution fail closed for the private vector; clients must use the private HNSW session APIs. | Point create/replace/delete, full payload replacement/clear, protected-path payload writes, indexes, filters, ordering, grouping, facets, formulas, and raw payload reads fail closed for the private result path; public non-overlapping payload merges remain ordinary. |
 | Dedicated APIs | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_paths`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_buckets`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. |
 | Snapshot/restore | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and paired result ORAM policy before accepting a restored store. | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and configured binding/runtime policy before accepting a restored store. |
-| Cluster mode | Initial upload installs the exact signed encrypted bundle on every derived active replica before the initial Raft ownership CAS. Session open acquires a hashed Raft lease after recovery; `read_paths` requires that exact live lease; commit renews it, durably prepares every replica, applies the digest-bound epoch/root CAS, then finalizes remote replicas before the owner. Close releases the exact lease. Exact single-shard manual movement and automatic dead-replica recovery use signed full-store preinstall before a marked `stream_records` transfer. Broader layout movement and consensus snapshot layout changes remain blocked. | Initial upload, session lease, `read_buckets`, replicated writeback, recovery, and close use the same coordinator contract as HNSW. Result ORAM movement follows the same exact single-shard transfer policy. |
+| Cluster mode | Initial upload installs the exact signed encrypted bundle on the union of all fully-active shard replica owners before the initial Raft ownership CAS. Session open acquires a hashed Raft lease after recovery; `read_paths` requires that exact live lease; commit renews it, durably prepares every owner peer, applies the digest-bound epoch/root CAS, then finalizes remote replicas before the owner. Close releases the exact lease. Fixed-layout manual movement and automatic dead-replica recovery use signed full-store preinstall before a marked per-shard `stream_records` transfer. Dynamic layout movement and consensus snapshot layout changes remain blocked. | Initial upload, session lease, `read_buckets`, replicated writeback, recovery, and close use the same coordinator contract as HNSW. Result ORAM movement follows the same fixed-layout per-shard transfer policy. |
 
 The internal Dispatcher writeback coordinator enforces durable local prepare,
 awaited Raft epoch/root CAS, then idempotent local finalize. A writeback epoch
@@ -197,8 +198,8 @@ Merkle root from all bucket commitments, and writes `current.json` only after
 the manifest, encrypted buckets, Merkle state, and digest-bearing completion
 record are durable. Installation is idempotent for an exactly matching store
 and refuses to replace a different current state. These storage primitives feed
-the supported exact single-shard manual and automatic recovery orchestration.
-Broader shard movement remains fail closed.
+the supported fixed-layout manual and automatic recovery orchestration. Broader
+shard layout changes remain fail closed.
 
 The internal Qdrant service exposes this store contract as a separate typed
 `InstallPrivateOramLiveReplica` RPC rather than overloading initial install.
@@ -216,10 +217,10 @@ and acknowledgement errors include the peer id only and do not reflect roots,
 digests, reservation hashes, signatures, or ciphertext. The receiver
 bounded-waits for delayed local Raft application of the exact reservation hash;
 it never accepts a missing or different reservation. For supported manual and
-automatic single-shard transfers, the source coordinator acquires the same
-hashed consensus reservation for every configured private HNSW/result index,
-installs all live bundles on the target, requires exact acknowledgements, and
-only then submits a transfer marked `private_oram_preinstalled`. New private
+automatic fixed-layout shard transfers, the source coordinator acquires the
+same hashed consensus reservation for every configured private HNSW/result
+index, installs all live bundles on the target, requires exact acknowledgements,
+and only then submits a transfer marked `private_oram_preinstalled`. New private
 sessions and writebacks remain frozen from reservation acquisition through the
 active transfer marker.
 
@@ -227,10 +228,11 @@ Automatic recovery uses the typed internal
 `RequestPrivateOramShardRecovery` RPC. The target schedules that request outside
 collection synchronization locks so the source can propose the reservation and
 the target can apply it without a Raft/collection-lock cycle. The source
-requires an exact one-shard layout, no resharding or competing transfer, an
-`Active` local source, and a `Dead` target. An exact already-marked retry is
-idempotently accepted; otherwise the source runs the same full-store preinstall
-and marked `ReplicateShard` path with explicit `stream_records`.
+requires the configured shard count to match the fixed actual layout, no
+resharding or competing transfer, an `Active` local source, and a `Dead` target.
+An exact already-marked retry is idempotently accepted; otherwise the source
+runs the same full-store preinstall and marked `ReplicateShard` path with
+explicit `stream_records`.
 
 The internal Qdrant service now also accepts a typed, provider-discriminated
 initial install RPC using the existing HNSW/result manifest, signature, and
@@ -1571,17 +1573,19 @@ peer with a different ORAM shape or signing verifier fails runtime capability pa
 before it can be treated as an equivalent private-ORAM-capable node. The mismatch diagnostic
 names the peer and fail-closed condition but does not echo the local or peer
 fingerprint strings.
-Manual shard transfer is supported only for a collection with exactly one shard,
-using `MoveShard` or `ReplicateShard` coordinated on the declared source peer,
-with explicit `stream_records` and no temporary `to_shard_id`. The coordinator
-acquires a bounded consensus lease reservation for every configured private
-HNSW/result index, installs the exact current encrypted bucket stores on the
-target, validates epoch/root/writeback-digest acknowledgements, and only then
-submits the marked shard transfer. Partial preinstalls are idempotent exact-state
-copies and do not change membership. The marked target accepts only the
-transfer's peer `SyncPoints` operation needed to initialize ordinary shard
-records, and normal peer crypto checks still reject protected vector or private
-result payload content. Before any initial or live peer install, the source
+Manual shard transfer is supported on a fixed non-empty shard layout, moving one
+shard at a time with `MoveShard` or `ReplicateShard` coordinated on the declared
+source peer, explicit `stream_records`, and no temporary `to_shard_id`. The
+collection-global private ORAM store is replicated to the union of all
+fully-active shard replica owners. The coordinator acquires a bounded consensus
+lease reservation for every configured private HNSW/result index, installs the
+exact current encrypted bucket stores on the target, validates
+epoch/root/writeback-digest acknowledgements, and only then submits the marked
+shard transfer. Partial preinstalls are idempotent exact-state copies and do not
+change membership. The marked target accepts only the transfer's peer
+`SyncPoints` operation needed to initialize ordinary shard records, and normal
+peer crypto checks still reject protected vector or private result payload
+content. Before any initial or live peer install, the source
 checks the complete protobuf request `encoded_len`, including the manifest and
 wire envelope, against `service.max_request_size_mb`. An oversized request
 therefore fails locally with a fixed redacted error instead of passing the
@@ -1590,6 +1594,10 @@ advance both private ORAM stores and
 run this preinstall/transfer path for both ReplicateShard (RF=1 to RF=2) and
 MoveShard, verify the resulting local shard ownership, wait for the target
 shard to become active, and reopen both committed sessions on the target.
+A three-peer, two-shard RF=1 process test verifies that initial upload and
+writeback reach the two disjoint shard owners but not the non-owner, then
+replicates one shard to that third peer and reopens both committed sessions from
+the newly preinstalled owner.
 Another process test injects a malformed target result-ORAM store after the
 HNSW live bundle is installed. The request fails before transfer submission,
 does not expose roots, signatures, or ciphertext, releases every reservation,
@@ -1618,7 +1626,7 @@ not starve peer health checks or Raft heartbeats. The complete protobuf request
 still must fit `service.max_request_size_mb`; larger stores fail closed at the
 source and require future chunked internal transport.
 `ReplicatePoints`, restart, snapshot, WAL, resharding transfer methods, and
-multi-shard layouts remain fail closed.
+dynamic shard-layout changes remain fail closed.
 Resharding start and progress operations are blocked for the same collection
 shape. The current resharding data path migrates point payload/vector records
 through a shard proxy, but it does not migrate collection-local private ORAM
@@ -1637,13 +1645,16 @@ not yet carry the collection-local private ORAM bucket store with epoch/root
 parity. Use collection snapshot/restore preflight for private ORAM collections
 until shard-level bucket parity is implemented.
 Automatic dead-replica recovery is supported only for the same exact
-single-shard source-preinstalled `ReplicateShard` shape. As a final guard, only
-consensus transfer records carrying the verified `private_oram_preinstalled`
-marker may start and finish the single-shard stream-records path. Unmarked,
-restart, filtered, temporary-shard, and other unsupported transfer progress
-records fail before moving shard data or replica state. Unsupported resharding
-progress records also fail before hash-ring or replica-state changes. `Abort`
-remains allowed for cleanup.
+source-preinstalled per-shard `ReplicateShard` shape on a stable configured
+layout. As a final guard, only consensus transfer records carrying the verified
+`private_oram_preinstalled` marker may start and finish the stream-records path.
+Unmarked, restart, filtered, temporary-shard, and other unsupported transfer
+progress records fail before moving shard data or replica state. Unsupported
+resharding progress records also fail before hash-ring or replica-state changes.
+`Abort` remains allowed for cleanup.
+A three-peer, two-shard RF=2 process test removes a target's collection-global
+HNSW ORAM store, restarts the dead replica, and verifies sequential marked
+recovery of its shard replicas followed by an epoch-43 session on that target.
 Consensus snapshot apply uses the same fail-closed stance. Incoming shard
 transfer state is accepted only for the same verified preinstalled transfer
 shape; unmarked transfer state, non-empty resharding state, and shard layout
@@ -1654,14 +1665,15 @@ replica states; otherwise snapshot apply fails before it can create, remove, or
 reassign local shard data without a private ORAM bucket migration protocol.
 Distributed initial private ORAM upload is coordinator-led: manifest upload
 stages only local owner-signed metadata, and complete bucket upload installs the
-validated encrypted bundle on every derived active replica before applying the
-initial consensus epoch/root ownership CAS. A missing consensus coordinator,
-incomplete replica set, invalid acknowledgement, or CAS failure fails the
-request closed. Session open, session-bound reads, commits, and close are
-coordinator-led when consensus state is available. They recover pending state,
-enforce a hashed per-index lease, and couple each encrypted writeback to the
-replicated epoch/root/writeback-digest transition. A distributed TOC without
-that coordinator remains fail closed.
+validated encrypted bundle on the union of fully-active shard replica owners
+before applying the initial consensus epoch/root ownership CAS. The coordinator
+must itself own at least one active shard replica. A missing consensus
+coordinator, incomplete replica set, invalid acknowledgement, or CAS failure
+fails the request closed. Session open, session-bound reads, commits, and close
+are coordinator-led when consensus state is available. They recover pending
+state, enforce a hashed per-index lease, and couple each encrypted writeback to
+the replicated epoch/root/writeback-digest transition. A distributed TOC
+without that coordinator remains fail closed.
 
 If replica finalization fails after the Raft epoch/root CAS, the owner and any
 prepared replicas retain their signed pending-writeback journals. The next

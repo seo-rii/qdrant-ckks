@@ -875,7 +875,6 @@ fn reject_private_oram_shard_transfer_until_supported(
     if let ShardTransferOperations::Start(transfer) | ShardTransferOperations::Finish(transfer) =
         transfer_operation
         && transfer.private_oram_preinstalled
-        && params.shard_number.get() == 1
         && transfer.to_shard_id.is_none()
         && transfer.method == Some(ShardTransferMethod::StreamRecords)
         && transfer.filter.is_none()
@@ -884,9 +883,9 @@ fn reject_private_oram_shard_transfer_until_supported(
     }
 
     Err(StorageError::bad_input(format!(
-        "private ORAM shard transfer requires a single-shard, unfiltered stream-records transfer \
-         with encrypted ORAM stores preinstalled and consensus-backed epoch/root ownership \
-         verified; abort the transfer or use the private ORAM transfer coordinator",
+        "private ORAM shard transfer requires an unfiltered stream-records transfer with \
+         encrypted ORAM stores preinstalled and consensus-backed epoch/root ownership verified; \
+         abort the transfer or use the private ORAM transfer coordinator",
     )))
 }
 
@@ -1082,6 +1081,7 @@ fn validate_encrypted_operation_crypto_runtime_parity(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::num::NonZeroU32;
 
     use collection::config::{
         CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
@@ -1147,6 +1147,7 @@ mod tests {
     #[test]
     fn private_oram_consensus_guard_redacts_client_state_aliases() {
         let params = CollectionParams {
+            shard_number: NonZeroU32::new(2).unwrap(),
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
                 key_id: Some("clientStateCiphertextHash.json".to_string()),

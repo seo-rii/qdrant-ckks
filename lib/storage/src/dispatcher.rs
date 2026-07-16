@@ -575,8 +575,8 @@ impl Dispatcher {
     }
 
     /// Resolve the exact peers that must durably prepare a collection-local private ORAM
-    /// writeback. Private ORAM storage is not shard-local, so v1 only permits collections whose
-    /// shards all have the same fully-active replica membership.
+    /// writeback. Private ORAM storage is not shard-local, so every peer that owns any fully
+    /// active shard replica must hold the same encrypted store.
     pub async fn private_oram_replication_peers(
         &self,
         collection_name: &CollectionName,
@@ -1274,11 +1274,11 @@ fn derive_private_oram_replication_peers(
     shard_peer_states: &[HashMap<PeerId, ReplicaState>],
     this_peer_id: PeerId,
 ) -> Result<BTreeSet<PeerId>, StorageError> {
-    let Some(first_shard) = shard_peer_states.first() else {
+    if shard_peer_states.is_empty() {
         return Err(StorageError::service_error(
             "private ORAM replication requires at least one shard",
         ));
-    };
+    }
     if shard_peer_states
         .iter()
         .any(|peers| peers.is_empty() || peers.values().any(|state| *state != ReplicaState::Active))
@@ -1288,18 +1288,16 @@ fn derive_private_oram_replication_peers(
         ));
     }
 
-    let expected = first_shard.keys().copied().collect::<BTreeSet<_>>();
-    if !expected.contains(&this_peer_id)
-        || shard_peer_states
-            .iter()
-            .skip(1)
-            .any(|peers| peers.keys().copied().collect::<BTreeSet<_>>() != expected)
-    {
+    let replica_peers = shard_peer_states
+        .iter()
+        .flat_map(|peers| peers.keys().copied())
+        .collect::<BTreeSet<_>>();
+    if !replica_peers.contains(&this_peer_id) {
         return Err(StorageError::service_error(
-            "private ORAM replication requires identical shard replica membership",
+            "private ORAM replication coordinator must own an active shard replica",
         ));
     }
-    Ok(expected)
+    Ok(replica_peers)
 }
 
 fn validate_private_oram_writeback_digest(digest: &str) -> Result<(), StorageError> {
@@ -1544,7 +1542,7 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_replication_peers_require_identical_fully_active_membership() {
+    fn private_oram_replication_peers_union_fully_active_shard_membership() {
         let active = HashMap::from([(7, ReplicaState::Active), (9, ReplicaState::Active)]);
         let reversed = HashMap::from([(9, ReplicaState::Active), (7, ReplicaState::Active)]);
         assert_eq!(
@@ -1565,18 +1563,20 @@ mod tests {
                 .to_string();
         assert!(transitioning.contains("fully active shard replicas"));
 
-        let mismatched = derive_private_oram_replication_peers(
-            &[active.clone(), HashMap::from([(7, ReplicaState::Active)])],
+        let distributed = derive_private_oram_replication_peers(
+            &[
+                active.clone(),
+                HashMap::from([(9, ReplicaState::Active), (11, ReplicaState::Active)]),
+            ],
             7,
         )
-        .unwrap_err()
-        .to_string();
-        assert!(mismatched.contains("identical shard replica membership"));
+        .unwrap();
+        assert_eq!(distributed, BTreeSet::from([7, 9, 11]));
 
         let local_missing = derive_private_oram_replication_peers(&[active], 11)
             .unwrap_err()
             .to_string();
-        assert!(local_missing.contains("identical shard replica membership"));
+        assert!(local_missing.contains("coordinator must own an active shard replica"));
         assert!(!local_missing.contains("11"));
     }
 

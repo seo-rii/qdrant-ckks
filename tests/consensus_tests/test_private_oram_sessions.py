@@ -175,6 +175,7 @@ def _start_private_oram_cluster(
     tmp_path: pathlib.Path,
     peer_count: int,
     replication_factor: int,
+    shard_number: int = 1,
     extra_env: dict[str, str] | None = None,
     fixture_profile: str | None = None,
     include_result_oram: bool = True,
@@ -229,7 +230,7 @@ def _start_private_oram_cluster(
         f"{bootstrap_api}/collections/{COLLECTION}",
         json={
             "vectors": vectors,
-            "shard_number": 1,
+            "shard_number": shard_number,
             "replication_factor": replication_factor,
             "write_consistency_factor": (
                 replication_factor
@@ -472,6 +473,7 @@ def test_private_oram_dead_replica_automatically_recovers_from_source(
         tmp_path,
         3,
         2,
+        shard_number=2,
         include_result_oram=False,
         include_public_vector=True,
         write_consistency_factor=1,
@@ -483,7 +485,7 @@ def test_private_oram_dead_replica_automatically_recovers_from_source(
     replica_indices = [
         index for index, info in enumerate(cluster_infos) if info["local_shards"]
     ]
-    assert len(replica_indices) == 2
+    assert len(replica_indices) >= 2
     target_index = next(
         index for index in replica_indices if peer_ids[index] != leader
     )
@@ -660,6 +662,62 @@ def test_private_oram_shard_transfer_preinstalls_live_store(
     )
     wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _assert_replica_can_open_current_sessions(target_url)
+
+
+def test_private_oram_multi_shard_union_replication_and_transfer(
+    tmp_path: pathlib.Path,
+):
+    peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(
+        tmp_path,
+        3,
+        1,
+        shard_number=2,
+    )
+    cluster_infos = [
+        get_collection_cluster_info(peer_url, COLLECTION) for peer_url in peer_urls
+    ]
+    owner_indices = [
+        index for index, info in enumerate(cluster_infos) if info["local_shards"]
+    ]
+    target_indices = [
+        index for index, info in enumerate(cluster_infos) if not info["local_shards"]
+    ]
+    assert len(owner_indices) == 2
+    assert len(target_indices) == 1
+
+    source_index, other_owner_index = owner_indices
+    target_index = target_indices[0]
+    source_url = peer_urls[source_index]
+    other_owner_url = peer_urls[other_owner_index]
+    target_url = peer_urls[target_index]
+    source_info = cluster_infos[source_index]
+    target_info = cluster_infos[target_index]
+    shard_id = source_info["local_shards"][0]["shard_id"]
+
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    _upload_result_oram(source_url, fixture)
+    _exercise_result_owner_session(source_url, fixture)
+    _assert_replica_can_open_current_sessions(other_owner_url)
+    assert not list(
+        peer_dirs[target_index].rglob(f"private_hnsw_oram/{VECTOR}/buckets")
+    )
+    assert not list(peer_dirs[target_index].rglob("private_result_oram/buckets"))
+
+    transfer = _request_private_oram_shard_transfer(
+        source_url,
+        "replicate_shard",
+        shard_id,
+        source_info["peer_id"],
+        target_info["peer_id"],
+    )
+    assert_http_ok(transfer)
+    wait_for_collection_local_shards_count(target_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    assert _private_oram_buckets_dir(peer_dirs[target_index], "hnsw").is_dir()
+    assert _private_oram_buckets_dir(peer_dirs[target_index], "result").is_dir()
     _assert_replica_can_open_current_sessions(target_url)
 
 

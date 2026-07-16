@@ -1251,15 +1251,15 @@ fn validate_private_oram_cluster_transfer(
         }
         _ => false,
     };
-    if config.params.shard_number.get() == 1 && supported_shape {
+    if supported_shape {
         return Ok(true);
     }
 
     Err(StorageError::BadRequest {
-        description: "private ORAM collections support shard transfer only for single-shard \
-                      MoveShard or ReplicateShard requests with explicit stream_records and no \
-                      temporary shard id; restart, point replication, snapshot, WAL, and \
-                      resharding transfers remain unsupported"
+        description: "private ORAM collections support shard transfer only for MoveShard or \
+                      ReplicateShard requests with explicit stream_records and no temporary \
+                      shard id; restart, point replication, snapshot, WAL, and resharding \
+                      transfers remain unsupported"
             .to_string(),
     })
 }
@@ -1963,13 +1963,11 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_transfer_guard_requires_single_shard_collection() {
+    fn private_oram_transfer_guard_supports_fixed_multi_shard_collection() {
         let mut config = private_hnsw_collection_config();
         config.params.shard_number = NonZeroU32::new(2).unwrap();
         for operation in supported_private_oram_transfer_operations() {
-            let err = validate_private_oram_cluster_transfer("docs", &config, &operation)
-                .expect_err("multi-shard private ORAM transfer must fail closed");
-            assert!(err.to_string().contains("single-shard"));
+            assert!(validate_private_oram_cluster_transfer("docs", &config, &operation).unwrap());
         }
 
         for operation in supported_private_oram_transfer_operations() {
