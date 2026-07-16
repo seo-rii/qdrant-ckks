@@ -1568,10 +1568,11 @@ submits the marked shard transfer. Partial preinstalls are idempotent exact-stat
 copies and do not change membership. The marked target accepts only the
 transfer's peer `SyncPoints` operation needed to initialize ordinary shard
 records, and normal peer crypto checks still reject protected vector or private
-result payload content. A two-process RF=1-to-RF=2 replication test advances
-both private ORAM stores, runs this preinstall/transfer path, waits for the
-target shard to become active, and reopens both committed sessions on the
-target. `ReplicatePoints`, restart, snapshot, WAL,
+result payload content. Two-process tests advance both private ORAM stores and
+run this preinstall/transfer path for both ReplicateShard (RF=1 to RF=2) and
+MoveShard, verify the resulting local shard ownership, wait for the target
+shard to become active, and reopen both committed sessions on the target.
+`ReplicatePoints`, restart, snapshot, WAL,
 resharding transfer methods, multi-shard layouts, and automatic dead-replica
 transfer recovery remain fail closed.
 Resharding start and progress operations are blocked for the same collection

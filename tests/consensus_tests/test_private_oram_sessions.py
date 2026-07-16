@@ -413,8 +413,9 @@ def test_private_oram_sessions_replicate_through_public_routes(tmp_path: pathlib
     _assert_replica_can_open_current_sessions(replica_api)
 
 
-def test_private_oram_shard_replication_preinstalls_live_store(
-    tmp_path: pathlib.Path,
+@pytest.mark.parametrize("transfer_operation", ["replicate_shard", "move_shard"])
+def test_private_oram_shard_transfer_preinstalls_live_store(
+    tmp_path: pathlib.Path, transfer_operation: str
 ):
     peer_urls, _, fixture, _, _ = _start_private_oram_cluster(tmp_path, 2, 1)
     cluster_infos = [
@@ -442,7 +443,7 @@ def test_private_oram_shard_replication_preinstalls_live_store(
     replicate = requests.post(
         f"{source_url}/collections/{COLLECTION}/cluster",
         json={
-            "replicate_shard": {
+            transfer_operation: {
                 "shard_id": shard_id,
                 "from_peer_id": source_info["peer_id"],
                 "to_peer_id": target_info["peer_id"],
@@ -454,6 +455,11 @@ def test_private_oram_shard_replication_preinstalls_live_store(
     assert_http_ok(replicate)
 
     wait_for_collection_local_shards_count(target_url, COLLECTION, 1)
+    wait_for_collection_local_shards_count(
+        source_url,
+        COLLECTION,
+        1 if transfer_operation == "replicate_shard" else 0,
+    )
     wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
     _assert_replica_can_open_current_sessions(target_url)
