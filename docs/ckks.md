@@ -203,16 +203,21 @@ The internal Qdrant service exposes this store contract as a separate typed
 The HNSW/result oneof carries current epoch/root, optional writeback digest,
 and complete provider bucket records. Before touching the target store, the
 receiver checks aggregate wire bounds, reads its local Raft ownership record,
-requires an exact epoch/root/digest match, rejects a still-live consensus
-session lease, and then runs the provider signature and full-state install
-validation under the private-ORAM mutation lock. The source helper likewise
+requires an exact epoch/root/digest match, and authorizes a still-live consensus
+lease only when the request carries the exact canonical transfer-reservation
+hash. It then runs the provider signature and full-state install validation
+under the private-ORAM mutation lock. The source helper likewise
 exports under the collection write reservation, compares the exported state to
 its local Raft record, sends the typed request to the selected peer, and
 requires the acknowledgement to repeat the exact epoch/root/digest. Transport
 and acknowledgement errors include the peer id only and do not reflect roots,
-digests, signatures, or ciphertext. The helper is not yet called from ordinary
-shard transfer; the existing transfer guards remain the public gate until
-preinstall and membership sequencing are implemented.
+digests, reservation hashes, signatures, or ciphertext. For supported manual
+single-shard transfers, the source coordinator acquires the same hashed
+consensus reservation for every configured private HNSW/result index, installs
+all live bundles on the target, requires exact acknowledgements, and only then
+submits a transfer marked `private_oram_preinstalled`. New private sessions and
+writebacks remain frozen from reservation acquisition through the active
+transfer marker.
 
 The internal Qdrant service now also accepts a typed, provider-discriminated
 initial install RPC using the existing HNSW/result manifest, signature, and
@@ -1547,12 +1552,16 @@ with a different ORAM shape or signing verifier fails runtime capability parity
 before it can be treated as an equivalent private-ORAM-capable node. The mismatch diagnostic
 names the peer and fail-closed condition but does not echo the local or peer
 fingerprint strings.
-Shard transfer start operations are also blocked while a collection is configured
-with private HNSW ORAM or private result ORAM bucket stores. The MVP stores
-those private indexes as collection-level encrypted ORAM buckets, and shard
-transfer does not yet copy bucket files or move epoch/root ownership through
-consensus, so transfer start operations fail closed instead of producing a
-partial private index on the receiver.
+Manual shard transfer is supported only for a collection with exactly one shard,
+using `MoveShard` or `ReplicateShard` coordinated on the declared source peer,
+with explicit `stream_records` and no temporary `to_shard_id`. The coordinator
+acquires a bounded consensus lease reservation for every configured private
+HNSW/result index, installs the exact current encrypted bucket stores on the
+target, validates epoch/root/writeback-digest acknowledgements, and only then
+submits the marked shard transfer. Partial preinstalls are idempotent exact-state
+copies and do not change membership. `ReplicatePoints`, restart, snapshot, WAL,
+resharding transfer methods, multi-shard layouts, and automatic dead-replica
+transfer recovery remain fail closed.
 Resharding start and progress operations are blocked for the same collection
 shape. The current resharding data path migrates point payload/vector records
 through a shard proxy, but it does not migrate collection-local private ORAM
@@ -1570,18 +1579,18 @@ and shard snapshot recovery fail closed for the same reason: shard snapshots do
 not yet carry the collection-local private ORAM bucket store with epoch/root
 parity. Use collection snapshot/restore preflight for private ORAM collections
 until shard-level bucket parity is implemented.
-Automatic dead-replica shard transfer recovery also skips private ORAM bucket
-store collections for the same reason; parity alone is insufficient until bucket
-movement and epoch/root ownership are consensus-backed. As a final guard,
-existing consensus transfer and resharding progress records for private ORAM
-collections are rejected before the local transfer task starts moving shard data,
-the transfer progresses replica state, or resharding commits hash-ring or
-replica-state progress. `Abort` remains allowed so unsupported transfer and
-resharding records can be cleaned up without moving encrypted ORAM buckets.
+Automatic dead-replica shard transfer recovery still skips private ORAM bucket
+store collections. As a final guard, only consensus transfer records carrying
+the verified `private_oram_preinstalled` marker may start and finish the
+single-shard stream-records path. Unmarked, restart, filtered, temporary-shard,
+and other unsupported transfer progress records fail before moving shard data
+or replica state. Unsupported resharding progress records also fail before
+hash-ring or replica-state changes. `Abort` remains allowed for cleanup.
 Consensus snapshot apply uses the same fail-closed stance. Incoming shard
-transfer state, non-empty resharding state, and shard layout config changes are
-rejected for private ORAM collections, while empty cleanup state remains
-allowed. Incoming shard-info state must preserve the current shard id set,
+transfer state is accepted only for the same verified preinstalled transfer
+shape; unmarked transfer state, non-empty resharding state, and shard layout
+config changes are rejected, while empty cleanup state remains allowed.
+Incoming shard-info state must preserve the current shard id set,
 shard-key mapping, and replica membership, and must not introduce resharding
 replica states; otherwise snapshot apply fails before it can create, remove, or
 reassign local shard data without a private ORAM bucket migration protocol.
@@ -1602,9 +1611,10 @@ session open classifies the journal against the consensus epoch and digest,
 finalizes replicas before the local owner, and only then admits a new session.
 Recovery updates an in-process busy session when it still exists. After an
 owner process restart, where the node-local session registry is empty, recovery
-releases the old consensus lease by exact CAS only when that lease is owned by
-the current peer; it never takes over another peer's live lease. The same rule
-applies to private HNSW and private result ORAM indexes.
+releases an old consensus lease by exact CAS only after it has expired and only
+when that lease is owned by the current peer; it never removes a live transfer
+reservation or takes over another peer's live lease. The same rule applies to
+private HNSW and private result ORAM indexes.
 
 The Rust reference SDK helpers in `qdrant-sec` now cover the MVP build/upload
 preparation loop. `build_private_hnsw_oram_plaintext_index_from_f32_points`
