@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -15,6 +15,10 @@ use api::grpc::{
     install_private_oram_index_request, install_private_oram_live_replica_request,
 };
 use chrono::DateTime;
+use collection::config::{
+    CollectionConfigInternal, EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
+    encryption_rule_uses_private_result_oram,
+};
 use collection::operations::verification::new_unchecked_verification_pass;
 use collection::private_hnsw_oram_store::{
     PrivateHnswOramConsensusWriteback, PrivateHnswOramEpochState,
@@ -49,6 +53,7 @@ use storage::dispatcher::{
 use storage::rbac::{Access, Auth};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
+use uuid::Uuid;
 
 use crate::common::telemetry::TelemetryCollector;
 use crate::common::{private_hnsw, private_result_oram};
@@ -333,6 +338,7 @@ const BYTES_PER_MIB: usize = 1024 * 1024;
 const PRIVATE_ORAM_SESSION_LEASE_HASH_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-session-lease-id/v1";
 const PRIVATE_ORAM_SESSION_LEASE_RENEW_SECS: u64 = 300;
+const PRIVATE_ORAM_TRANSFER_RESERVATION_SECS: u64 = 3_600;
 
 pub(crate) fn private_oram_session_lease_hash(session_id: &str) -> Result<String, StorageError> {
     if session_id.is_empty() || session_id.len() > 256 {
@@ -477,6 +483,179 @@ pub(crate) async fn release_private_oram_session_lease(
         .await
 }
 
+pub(crate) struct PrivateOramTransferReservation {
+    session_id: String,
+    keys: Vec<PrivateOramEpochKey>,
+}
+
+pub(crate) fn private_oram_transfer_index_keys(
+    config: &CollectionConfigInternal,
+    collection_name: &str,
+) -> Result<Vec<PrivateOramEpochKey>, StorageError> {
+    let collection_id = config.stable_crypto_id(collection_name)?;
+    let Some(encryption) = config.params.effective_encryption() else {
+        return Ok(Vec::new());
+    };
+    let mut hnsw_vectors = BTreeSet::new();
+    let mut has_result_payload = false;
+    for rule in &encryption.rules {
+        if encryption_rule_uses_private_hnsw_oram(rule) {
+            let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                return Err(StorageError::bad_request(
+                    "private ORAM transfer configuration is invalid",
+                ));
+            };
+            hnsw_vectors.extend(names.iter().cloned());
+        } else if encryption_rule_uses_private_result_oram(rule) {
+            has_result_payload = true;
+        }
+    }
+
+    let mut keys = hnsw_vectors
+        .into_iter()
+        .map(|index_name| PrivateOramEpochKey {
+            collection_id: collection_id.clone(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name,
+        })
+        .collect::<Vec<_>>();
+    if has_result_payload {
+        keys.push(PrivateOramEpochKey {
+            collection_id,
+            index_kind: PrivateOramIndexKind::ResultPayload,
+            index_name: String::new(),
+        });
+    }
+    Ok(keys)
+}
+
+async fn release_private_oram_transfer_reservation_keys(
+    dispatcher: &Dispatcher,
+    keys: &[PrivateOramEpochKey],
+    session_id: &str,
+) -> Result<(), StorageError> {
+    let mut first_error = None;
+    for key in keys.iter().rev() {
+        if let Err(error) =
+            release_private_oram_session_lease(dispatcher, key.clone(), session_id).await
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
+}
+
+pub(crate) async fn prepare_private_oram_shard_transfer(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    target_peer: PeerId,
+) -> Result<PrivateOramTransferReservation, StorageError> {
+    let keys = private_oram_transfer_index_keys(config, collection_name)?;
+    if keys.is_empty() {
+        return Err(StorageError::bad_request(
+            "private ORAM transfer requires at least one encrypted ORAM index",
+        ));
+    }
+    let session_id = Uuid::new_v4().to_string();
+    let lease_id_hash = private_oram_session_lease_hash(&session_id)?;
+    let issued_at_unix = current_private_oram_unix_secs()?;
+    let expires_at_unix = issued_at_unix
+        .checked_add(PRIVATE_ORAM_TRANSFER_RESERVATION_SECS)
+        .ok_or_else(|| StorageError::service_error("private ORAM transfer clock overflow"))?;
+
+    let mut acquired_keys = Vec::with_capacity(keys.len());
+    for key in &keys {
+        if let Err(error) = acquire_private_oram_session_lease(
+            dispatcher,
+            key.clone(),
+            &session_id,
+            issued_at_unix,
+            expires_at_unix,
+        )
+        .await
+        {
+            if release_private_oram_transfer_reservation_keys(
+                dispatcher,
+                &acquired_keys,
+                &session_id,
+            )
+            .await
+            .is_err()
+            {
+                log::warn!(
+                    "failed to release private ORAM transfer reservation after lease acquisition failure"
+                );
+            }
+            return Err(error);
+        }
+        acquired_keys.push(key.clone());
+    }
+
+    for key in &keys {
+        let install_result = match key.index_kind {
+            PrivateOramIndexKind::Hnsw => {
+                install_private_hnsw_live_replica_on_peer(
+                    dispatcher,
+                    auth,
+                    settings,
+                    collection_name,
+                    &key.index_name,
+                    target_peer,
+                    &lease_id_hash,
+                )
+                .await
+            }
+            PrivateOramIndexKind::ResultPayload => {
+                install_private_result_oram_live_replica_on_peer(
+                    dispatcher,
+                    auth,
+                    settings,
+                    collection_name,
+                    target_peer,
+                    &lease_id_hash,
+                )
+                .await
+            }
+        };
+        if let Err(error) = install_result {
+            if release_private_oram_transfer_reservation_keys(
+                dispatcher,
+                &acquired_keys,
+                &session_id,
+            )
+            .await
+            .is_err()
+            {
+                log::warn!(
+                    "failed to release private ORAM transfer reservation after live install failure"
+                );
+            }
+            return Err(error);
+        }
+    }
+
+    Ok(PrivateOramTransferReservation {
+        session_id,
+        keys: acquired_keys,
+    })
+}
+
+pub(crate) async fn release_private_oram_transfer_reservation(
+    dispatcher: &Dispatcher,
+    reservation: &PrivateOramTransferReservation,
+) -> Result<(), StorageError> {
+    release_private_oram_transfer_reservation_keys(
+        dispatcher,
+        &reservation.keys,
+        &reservation.session_id,
+    )
+    .await
+}
+
 async fn release_orphaned_private_oram_session_lease(
     dispatcher: &Dispatcher,
     key: PrivateOramEpochKey,
@@ -488,7 +667,8 @@ async fn release_orphaned_private_oram_session_lease(
     let Some(lease) = dispatcher.private_oram_consensus_session_lease(&key)? else {
         return Ok(());
     };
-    if lease.owner_peer_id != dispatcher.this_peer_id() {
+    let now_unix = current_private_oram_unix_secs()?;
+    if !private_oram_orphaned_lease_releasable(&lease, dispatcher.this_peer_id(), now_unix) {
         return Ok(());
     }
     let result = dispatcher
@@ -509,6 +689,14 @@ async fn release_orphaned_private_oram_session_lease(
         return Ok(());
     }
     result
+}
+
+fn private_oram_orphaned_lease_releasable(
+    lease: &PrivateOramSessionLease,
+    local_peer_id: PeerId,
+    now_unix: u64,
+) -> bool {
+    lease.owner_peer_id == local_peer_id && lease.expires_at_unix <= now_unix
 }
 
 fn current_private_oram_unix_secs() -> Result<u64, StorageError> {
@@ -673,7 +861,6 @@ pub(crate) async fn coordinate_private_result_oram_initial_upload(
         .await
 }
 
-#[allow(dead_code)]
 pub(crate) async fn install_private_hnsw_live_replica_on_peer(
     dispatcher: &Dispatcher,
     auth: &Auth,
@@ -746,7 +933,6 @@ pub(crate) async fn install_private_hnsw_live_replica_on_peer(
     validate_live_install_ack(target_peer, &expected, response)
 }
 
-#[allow(dead_code)]
 pub(crate) async fn install_private_result_oram_live_replica_on_peer(
     dispatcher: &Dispatcher,
     auth: &Auth,
@@ -2251,6 +2437,19 @@ mod tests {
         assert_eq!(private_oram_renewal_expiry(&current, 101).unwrap(), 401);
         assert_eq!(private_oram_renewal_expiry(&current, 200).unwrap(), 500);
         assert!(private_oram_renewal_expiry(&current, u64::MAX).is_err());
+    }
+
+    #[test]
+    fn private_oram_orphaned_lease_cleanup_waits_for_expiry() {
+        let lease = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: BASE64URL_NOPAD.encode(&[14; 32]),
+            issued_at_unix: 100,
+            expires_at_unix: 400,
+        };
+        assert!(!private_oram_orphaned_lease_releasable(&lease, 7, 399));
+        assert!(private_oram_orphaned_lease_releasable(&lease, 7, 400));
+        assert!(!private_oram_orphaned_lease_releasable(&lease, 8, 400));
     }
 
     #[test]

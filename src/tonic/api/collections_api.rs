@@ -303,6 +303,7 @@ impl Collections for CollectionsService {
         } = request.into_inner();
         let result = do_update_collection_cluster(
             self.dispatcher.as_ref(),
+            &self.settings,
             collection_name,
             operation
                 .ok_or_else(|| Status::new(tonic::Code::InvalidArgument, "empty operation"))?
@@ -362,6 +363,7 @@ impl Collections for CollectionsService {
 
         let result = do_update_collection_cluster(
             self.dispatcher.as_ref(),
+            &self.settings,
             collection_name,
             operation,
             auth,
@@ -396,6 +398,7 @@ impl Collections for CollectionsService {
 
         let result = do_update_collection_cluster(
             self.dispatcher.as_ref(),
+            &self.settings,
             collection_name,
             operation,
             auth,

@@ -13,6 +13,7 @@ use crate::actix::api::collections_api::WaitTimeout;
 use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::{self, process_response};
 use crate::common::collections::{do_get_collection_shard_keys, do_update_collection_cluster};
+use crate::settings::Settings;
 
 #[get("/collections/{collection_name}/shards")]
 async fn list_shard_keys(
@@ -34,6 +35,7 @@ async fn list_shard_keys(
 #[put("/collections/{collection_name}/shards")]
 async fn create_shard_key(
     dispatcher: web::Data<Dispatcher>,
+    settings: web::Data<Settings>,
     collection: Path<CollectionPath>,
     request: Json<CreateShardingKey>,
     Query(query): Query<WaitTimeout>,
@@ -51,6 +53,7 @@ async fn create_shard_key(
 
     let response = do_update_collection_cluster(
         &dispatcher,
+        settings.get_ref(),
         collection.collection_name.clone(),
         operation,
         auth,
@@ -64,6 +67,7 @@ async fn create_shard_key(
 #[post("/collections/{collection_name}/shards/delete")]
 async fn delete_shard_key(
     dispatcher: web::Data<Dispatcher>,
+    settings: web::Data<Settings>,
     collection: Path<CollectionPath>,
     request: Json<DropShardingKey>,
     Query(query): Query<WaitTimeout>,
@@ -81,6 +85,7 @@ async fn delete_shard_key(
 
     let response = do_update_collection_cluster(
         &dispatcher,
+        settings.get_ref(),
         collection.collection_name.clone(),
         operation,
         auth,

@@ -26,7 +26,9 @@ use collection::shards::replica_set;
 use collection::shards::replica_set::replica_set_state;
 use collection::shards::resharding::ReshardKey;
 use collection::shards::shard::{PeerId, ShardId, ShardsPlacement};
-use collection::shards::transfer::{ShardTransfer, ShardTransferKey, ShardTransferRestart};
+use collection::shards::transfer::{
+    ShardTransfer, ShardTransferKey, ShardTransferMethod, ShardTransferRestart,
+};
 use itertools::Itertools;
 use qdrant_sec::{PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING};
 use rand::prelude::SliceRandom;
@@ -47,6 +49,10 @@ use uuid::Uuid;
 use super::auth::Auth;
 use super::private_hnsw::begin_private_hnsw_collection_snapshot;
 use super::private_result_oram::begin_private_result_oram_collection_snapshot;
+use crate::settings::Settings;
+use crate::tonic::api::qdrant_internal_api::{
+    prepare_private_oram_shard_transfer, release_private_oram_transfer_reservation,
+};
 pub async fn do_collection_exists(
     toc: &TableOfContent,
     auth: &Auth,
@@ -261,6 +267,7 @@ pub async fn do_get_collection_cluster(
 
 pub async fn do_update_collection_cluster(
     dispatcher: &Dispatcher,
+    settings: &Settings,
     collection_name: String,
     operation: ClusterOperations,
     auth: Auth,
@@ -313,11 +320,16 @@ pub async fn do_update_collection_cluster(
         .await?;
 
     let collection_state = collection.state().await;
-    reject_private_oram_cluster_transfer_until_supported(
+    let private_oram_transfer = validate_private_oram_cluster_transfer(
         &collection_name,
         &collection_state.config,
         &operation,
     )?;
+    if private_oram_transfer && !collection_state.transfers.is_empty() {
+        return Err(StorageError::bad_request(
+            "cannot start private ORAM shard transfer while another shard transfer is active",
+        ));
+    }
     reject_private_oram_cluster_resharding_until_supported(
         &collection_name,
         &collection_state.config,
@@ -363,26 +375,26 @@ pub async fn do_update_collection_cluster(
             validate_peer_exists(move_shard.to_peer_id)?;
             validate_peer_exists(move_shard.from_peer_id)?;
 
-            // submit operation to consensus
-            dispatcher
-                .submit_collection_meta_op(
-                    CollectionMetaOperations::TransferShard(
-                        collection_name,
-                        Start(ShardTransfer {
-                            shard_id: move_shard.shard_id,
-                            to_shard_id: move_shard.to_shard_id,
-                            to: move_shard.to_peer_id,
-                            from: move_shard.from_peer_id,
-                            sync: false,
-                            method: move_shard.method,
-                            private_oram_preinstalled: false,
-                            filter: None,
-                        }),
-                    ),
-                    auth,
-                    wait_timeout,
-                )
-                .await
+            submit_shard_transfer_with_private_oram_preinstall(
+                dispatcher,
+                settings,
+                &collection_state.config,
+                collection_name,
+                ShardTransfer {
+                    shard_id: move_shard.shard_id,
+                    to_shard_id: move_shard.to_shard_id,
+                    to: move_shard.to_peer_id,
+                    from: move_shard.from_peer_id,
+                    sync: false,
+                    method: move_shard.method,
+                    private_oram_preinstalled: false,
+                    filter: None,
+                },
+                private_oram_transfer,
+                auth,
+                wait_timeout,
+            )
+            .await
         }
         ClusterOperations::ReplicateShard(ReplicateShardOperation { replicate_shard }) => {
             // validate shard to move
@@ -401,26 +413,26 @@ pub async fn do_update_collection_cluster(
             // validate source peer exists
             validate_peer_exists(replicate_shard.from_peer_id)?;
 
-            // submit operation to consensus
-            dispatcher
-                .submit_collection_meta_op(
-                    CollectionMetaOperations::TransferShard(
-                        collection_name,
-                        Start(ShardTransfer {
-                            shard_id: replicate_shard.shard_id,
-                            to_shard_id: replicate_shard.to_shard_id,
-                            to: replicate_shard.to_peer_id,
-                            from: replicate_shard.from_peer_id,
-                            sync: true,
-                            method: replicate_shard.method,
-                            private_oram_preinstalled: false,
-                            filter: None,
-                        }),
-                    ),
-                    auth,
-                    wait_timeout,
-                )
-                .await
+            submit_shard_transfer_with_private_oram_preinstall(
+                dispatcher,
+                settings,
+                &collection_state.config,
+                collection_name,
+                ShardTransfer {
+                    shard_id: replicate_shard.shard_id,
+                    to_shard_id: replicate_shard.to_shard_id,
+                    to: replicate_shard.to_peer_id,
+                    from: replicate_shard.from_peer_id,
+                    sync: true,
+                    method: replicate_shard.method,
+                    private_oram_preinstalled: false,
+                    filter: None,
+                },
+                private_oram_transfer,
+                auth,
+                wait_timeout,
+            )
+            .await
         }
         ClusterOperations::ReplicatePoints(ReplicatePointsOperation { replicate_points }) => {
             let ReplicatePoints {
@@ -1063,6 +1075,64 @@ pub async fn do_update_collection_cluster(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn submit_shard_transfer_with_private_oram_preinstall(
+    dispatcher: &Dispatcher,
+    settings: &Settings,
+    config: &CollectionConfigInternal,
+    collection_name: String,
+    mut transfer: ShardTransfer,
+    private_oram_transfer: bool,
+    auth: Auth,
+    wait_timeout: Option<Duration>,
+) -> Result<bool, StorageError> {
+    if !private_oram_transfer {
+        return dispatcher
+            .submit_collection_meta_op(
+                CollectionMetaOperations::TransferShard(collection_name, Start(transfer)),
+                auth,
+                wait_timeout,
+            )
+            .await;
+    }
+    if transfer.from != dispatcher.this_peer_id() {
+        return Err(StorageError::bad_request(
+            "private ORAM shard transfer must be coordinated by its current source peer",
+        ));
+    }
+
+    let reservation = prepare_private_oram_shard_transfer(
+        dispatcher,
+        &auth,
+        settings,
+        &collection_name,
+        config,
+        transfer.to,
+    )
+    .await?;
+    transfer.private_oram_preinstalled = true;
+    let result = dispatcher
+        .submit_collection_meta_op(
+            CollectionMetaOperations::TransferShard(collection_name, Start(transfer)),
+            auth,
+            wait_timeout,
+        )
+        .await;
+    if result.is_ok() {
+        if release_private_oram_transfer_reservation(dispatcher, &reservation)
+            .await
+            .is_err()
+        {
+            log::warn!("failed to release private ORAM shard transfer reservation");
+        }
+    } else {
+        log::warn!(
+            "retaining private ORAM shard transfer reservation after uncertain consensus submission"
+        );
+    }
+    result
+}
+
 fn validate_encrypted_cluster_data_movement_parity(
     collection_name: &str,
     encrypted_collection: bool,
@@ -1159,22 +1229,37 @@ fn validate_encrypted_cluster_data_movement_parity(
     Ok(())
 }
 
-fn reject_private_oram_cluster_transfer_until_supported(
+fn validate_private_oram_cluster_transfer(
     _collection_name: &str,
     config: &CollectionConfigInternal,
     operation: &ClusterOperations,
-) -> Result<(), StorageError> {
+) -> Result<bool, StorageError> {
     if !cluster_operation_starts_shard_transfer(operation)
         || !collection_uses_private_oram_bucket_store(config)
     {
-        return Ok(());
+        return Ok(false);
+    }
+
+    let supported_shape = match operation {
+        ClusterOperations::MoveShard(MoveShardOperation { move_shard }) => {
+            move_shard.to_shard_id.is_none()
+                && move_shard.method == Some(ShardTransferMethod::StreamRecords)
+        }
+        ClusterOperations::ReplicateShard(ReplicateShardOperation { replicate_shard }) => {
+            replicate_shard.to_shard_id.is_none()
+                && replicate_shard.method == Some(ShardTransferMethod::StreamRecords)
+        }
+        _ => false,
+    };
+    if config.params.shard_number.get() == 1 && supported_shape {
+        return Ok(true);
     }
 
     Err(StorageError::BadRequest {
-        description: "cannot start shard transfer for private ORAM collections: encrypted ORAM \
-                      bucket transfer and consensus-backed epoch/root ownership are not \
-                      implemented for shard transfer; use collection snapshot/restore preflight or \
-                      keep the private ORAM collection on the current shard owner"
+        description: "private ORAM collections support shard transfer only for single-shard \
+                      MoveShard or ReplicateShard requests with explicit stream_records and no \
+                      temporary shard id; restart, point replication, snapshot, WAL, and \
+                      resharding transfers remain unsupported"
             .to_string(),
     })
 }
@@ -1568,6 +1653,47 @@ mod tests {
                     method: collection::shards::transfer::ShardTransferMethod::StreamRecords,
                 },
             }),
+            ClusterOperations::MoveShard(MoveShardOperation {
+                move_shard: collection::operations::cluster_ops::MoveShard {
+                    shard_id: 1,
+                    to_shard_id: Some(2),
+                    from_peer_id: 1,
+                    to_peer_id: 2,
+                    method: Some(ShardTransferMethod::StreamRecords),
+                },
+            }),
+            ClusterOperations::MoveShard(MoveShardOperation {
+                move_shard: collection::operations::cluster_ops::MoveShard {
+                    shard_id: 1,
+                    to_shard_id: None,
+                    from_peer_id: 1,
+                    to_peer_id: 2,
+                    method: Some(ShardTransferMethod::Snapshot),
+                },
+            }),
+        ]
+    }
+
+    fn supported_private_oram_transfer_operations() -> Vec<ClusterOperations> {
+        vec![
+            ClusterOperations::MoveShard(MoveShardOperation {
+                move_shard: collection::operations::cluster_ops::MoveShard {
+                    shard_id: 1,
+                    to_shard_id: None,
+                    from_peer_id: 1,
+                    to_peer_id: 2,
+                    method: Some(ShardTransferMethod::StreamRecords),
+                },
+            }),
+            ClusterOperations::ReplicateShard(ReplicateShardOperation {
+                replicate_shard: collection::operations::cluster_ops::ReplicateShard {
+                    shard_id: 1,
+                    to_shard_id: None,
+                    from_peer_id: 1,
+                    to_peer_id: 2,
+                    method: Some(ShardTransferMethod::StreamRecords),
+                },
+            }),
         ]
     }
 
@@ -1755,18 +1881,31 @@ mod tests {
     }
 
     #[test]
-    fn private_hnsw_transfer_guard_blocks_until_bucket_transfer_is_supported() {
+    fn private_hnsw_transfer_guard_allows_only_preinstall_supported_shape() {
         let config = private_hnsw_collection_config();
         let collection_name = "private-oram-transfer-secret-collection";
-        for operation in private_hnsw_transfer_start_operations() {
-            let err = reject_private_oram_cluster_transfer_until_supported(
-                collection_name,
-                &config,
-                &operation,
-            )
-            .expect_err("private HNSW ORAM transfer must fail closed until bucket transfer exists");
+        let keys = crate::tonic::api::qdrant_internal_api::private_oram_transfer_index_keys(
+            &config,
+            collection_name,
+        )
+        .unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(
+            keys[0].index_kind,
+            storage::content_manager::consensus_ops::PrivateOramIndexKind::Hnsw
+        );
+        assert_eq!(keys[0].index_name, "text");
+        for operation in supported_private_oram_transfer_operations() {
             assert!(
-                err.to_string().contains("encrypted ORAM bucket transfer"),
+                validate_private_oram_cluster_transfer(collection_name, &config, &operation)
+                    .unwrap()
+            );
+        }
+        for operation in private_hnsw_transfer_start_operations() {
+            let err = validate_private_oram_cluster_transfer(collection_name, &config, &operation)
+                .expect_err("unsupported private HNSW ORAM transfer must fail closed");
+            assert!(
+                err.to_string().contains("explicit stream_records"),
                 "unexpected error for {operation:?}: {err}",
             );
             assert_no_private_oram_config_leak(
@@ -1783,20 +1922,31 @@ mod tests {
     }
 
     #[test]
-    fn private_result_oram_transfer_guard_blocks_until_bucket_transfer_is_supported() {
+    fn private_result_oram_transfer_guard_allows_only_preinstall_supported_shape() {
         let config = private_result_oram_collection_config();
         let collection_name = "private-result-oram-transfer-secret-collection";
-        for operation in private_hnsw_transfer_start_operations() {
-            let err = reject_private_oram_cluster_transfer_until_supported(
-                collection_name,
-                &config,
-                &operation,
-            )
-            .expect_err(
-                "private result ORAM transfer must fail closed until bucket transfer exists",
-            );
+        let keys = crate::tonic::api::qdrant_internal_api::private_oram_transfer_index_keys(
+            &config,
+            collection_name,
+        )
+        .unwrap();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(
+            keys[0].index_kind,
+            storage::content_manager::consensus_ops::PrivateOramIndexKind::ResultPayload
+        );
+        assert!(keys[0].index_name.is_empty());
+        for operation in supported_private_oram_transfer_operations() {
             assert!(
-                err.to_string().contains("encrypted ORAM bucket transfer"),
+                validate_private_oram_cluster_transfer(collection_name, &config, &operation)
+                    .unwrap()
+            );
+        }
+        for operation in private_hnsw_transfer_start_operations() {
+            let err = validate_private_oram_cluster_transfer(collection_name, &config, &operation)
+                .expect_err("unsupported private result ORAM transfer must fail closed");
+            assert!(
+                err.to_string().contains("explicit stream_records"),
                 "unexpected error for {operation:?}: {err}",
             );
             assert_no_private_oram_config_leak(
@@ -1810,6 +1960,63 @@ mod tests {
                 ],
             );
         }
+    }
+
+    #[test]
+    fn private_oram_transfer_guard_requires_single_shard_collection() {
+        let mut config = private_hnsw_collection_config();
+        config.params.shard_number = NonZeroU32::new(2).unwrap();
+        for operation in supported_private_oram_transfer_operations() {
+            let err = validate_private_oram_cluster_transfer("docs", &config, &operation)
+                .expect_err("multi-shard private ORAM transfer must fail closed");
+            assert!(err.to_string().contains("single-shard"));
+        }
+
+        for operation in supported_private_oram_transfer_operations() {
+            assert!(
+                !validate_private_oram_cluster_transfer(
+                    "docs",
+                    &ordinary_collection_config(),
+                    &operation,
+                )
+                .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn private_oram_transfer_index_keys_are_deterministic() {
+        let mut config = private_hnsw_collection_config();
+        let mut result_encryption = private_result_oram_collection_config()
+            .params
+            .encryption
+            .unwrap();
+        let result_rule = result_encryption.rules.remove(0);
+        let encryption = config.params.encryption.as_mut().unwrap();
+        encryption
+            .rules
+            .push(collection::config::EncryptionRuleRef {
+                id: "docs_alpha_private_hnsw".to_string(),
+                selector: collection::config::EncryptionSelector::VectorNames {
+                    names: vec!["alpha".to_string()],
+                },
+                instance: "docs_alpha_private_hnsw".to_string(),
+                binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+            });
+        encryption.rules.push(result_rule);
+
+        let keys = crate::tonic::api::qdrant_internal_api::private_oram_transfer_index_keys(
+            &config, "docs",
+        )
+        .unwrap();
+        assert_eq!(keys.len(), 3);
+        assert_eq!(keys[0].index_name, "alpha");
+        assert_eq!(keys[1].index_name, "text");
+        assert_eq!(
+            keys[2].index_kind,
+            storage::content_manager::consensus_ops::PrivateOramIndexKind::ResultPayload
+        );
+        assert!(keys[2].index_name.is_empty());
     }
 
     #[test]
@@ -2011,14 +2218,14 @@ mod tests {
         let errors = [
             (
                 "transfer",
-                reject_private_oram_cluster_transfer_until_supported(
+                validate_private_oram_cluster_transfer(
                     collection_name,
                     &config,
                     &transfer_operation,
                 )
                 .expect_err("private ORAM transfer must fail closed without alias leaks")
                 .to_string(),
-                "encrypted ORAM bucket transfer",
+                "explicit stream_records",
             ),
             (
                 "resharding",
@@ -2321,18 +2528,22 @@ mod tests {
             },
         });
 
-        reject_private_oram_cluster_transfer_until_supported(
-            "docs",
-            &private_hnsw_collection_config(),
-            &abort_transfer,
-        )
-        .expect("private HNSW ORAM transfer cleanup abort must remain allowed");
-        reject_private_oram_cluster_transfer_until_supported(
-            "docs",
-            &private_result_oram_collection_config(),
-            &abort_transfer,
-        )
-        .expect("private result ORAM transfer cleanup abort must remain allowed");
+        assert!(
+            !validate_private_oram_cluster_transfer(
+                "docs",
+                &private_hnsw_collection_config(),
+                &abort_transfer,
+            )
+            .expect("private HNSW ORAM transfer cleanup abort must remain allowed")
+        );
+        assert!(
+            !validate_private_oram_cluster_transfer(
+                "docs",
+                &private_result_oram_collection_config(),
+                &abort_transfer,
+            )
+            .expect("private result ORAM transfer cleanup abort must remain allowed")
+        );
 
         let abort_resharding = private_oram_abort_resharding_operation();
         reject_private_oram_cluster_resharding_until_supported(

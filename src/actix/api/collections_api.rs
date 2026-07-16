@@ -1270,6 +1270,7 @@ async fn get_cluster_info(
 #[post("/collections/{collection_name}/cluster")]
 async fn update_collection_cluster(
     dispatcher: web::Data<Dispatcher>,
+    settings: web::Data<Settings>,
     collection: Path<CollectionPath>,
     operation: Json<ClusterOperations>,
     Query(query): Query<WaitTimeout>,
@@ -1279,6 +1280,7 @@ async fn update_collection_cluster(
     let wait_timeout = query.timeout();
     let response = do_update_collection_cluster(
         &dispatcher.into_inner(),
+        settings.get_ref(),
         collection.collection_name.clone(),
         operation.0,
         auth,
