@@ -12,6 +12,7 @@ use collection::private_result_oram_store::{
     PrivateResultOramLiveReplicationBundle, PrivateResultOramStore,
     PrivateResultOramWritebackBatch,
 };
+use collection::shards::transfer::ShardTransfer;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER, PRIVATE_RESULT_ORAM_BINDING,
@@ -1105,6 +1106,7 @@ async fn do_open_private_result_oram_session_inner(
     }
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
+    ensure_no_private_oram_shard_transfer(&collection).await?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
     let collection_crypto_id = config.stable_crypto_id(collection.name())?;
     validate_collection_crypto_runtime_with_crypto_id(
@@ -1545,6 +1547,13 @@ pub(crate) async fn do_stage_private_result_oram_owner_writeback(
             "private result ORAM owner writeback staging requires distributed mode",
         ));
     }
+    let transfer_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new().write(),
+        "private_result_oram_distributed_commit",
+    )?;
+    let transfer_collection = toc.get_collection(&transfer_pass).await?;
+    ensure_no_private_oram_shard_transfer(&transfer_collection).await?;
     let request_context = collection_context_for_request(
         toc,
         auth,
@@ -1658,6 +1667,23 @@ pub(crate) async fn do_stage_private_result_oram_owner_writeback(
                 })
             },
         )
+}
+
+fn private_oram_shard_transfer_active(transfers: &HashSet<ShardTransfer>) -> bool {
+    transfers
+        .iter()
+        .any(|transfer| transfer.private_oram_preinstalled)
+}
+
+async fn ensure_no_private_oram_shard_transfer(
+    collection: &collection::collection::Collection,
+) -> StorageResult<()> {
+    if private_oram_shard_transfer_active(&collection.state().await.transfers) {
+        return Err(StorageError::bad_request(
+            "private result ORAM sessions are unavailable while shard transfer is active",
+        ));
+    }
+    Ok(())
 }
 
 pub async fn do_commit_private_result_oram_buckets(
@@ -3162,6 +3188,29 @@ mod private_result_oram_tests {
     use crate::settings::CryptoSettings;
 
     const SIGNING_KEY_ID: &str = "tenant-a/private-result-signing-v1";
+
+    #[test]
+    fn transfer_freeze_requires_verified_private_oram_preinstall() {
+        let ordinary = ShardTransfer {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 1,
+            to: 2,
+            sync: true,
+            method: Some(collection::shards::transfer::ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: false,
+            filter: None,
+        };
+        assert!(!private_oram_shard_transfer_active(&HashSet::from([
+            ordinary.clone()
+        ])));
+        assert!(private_oram_shard_transfer_active(&HashSet::from([
+            ShardTransfer {
+                private_oram_preinstalled: true,
+                ..ordinary
+            }
+        ])));
+    }
 
     #[test]
     fn client_id_shape_rejects_oversized_or_malformed_values_without_reflecting_value() {

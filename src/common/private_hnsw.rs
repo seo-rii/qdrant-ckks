@@ -14,6 +14,7 @@ use collection::private_hnsw_oram_store::{
     PrivateHnswOramEpochState, PrivateHnswOramLiveReplicationBundle, PrivateHnswOramMerkleProof,
     PrivateHnswOramStore, PrivateHnswOramWritebackBatch,
 };
+use collection::shards::transfer::ShardTransfer;
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::{
     DistanceKind, FixedBudgetParams, OramParams, PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER,
@@ -1480,6 +1481,7 @@ async fn do_open_private_hnsw_session_inner(
     }
     let collection: std::sync::Arc<collection::collection::Collection> =
         toc.get_collection(&pass).await?;
+    ensure_no_private_oram_shard_transfer(&collection).await?;
     let config: CollectionConfigInternal = collection.config_snapshot().await;
     let collection_crypto_id = config.stable_crypto_id(collection.name())?;
     validate_collection_crypto_runtime_with_crypto_id(
@@ -1837,6 +1839,13 @@ pub(crate) async fn do_stage_private_hnsw_owner_writeback(
             "private HNSW ORAM owner writeback staging requires distributed mode",
         ));
     }
+    let transfer_pass = auth.check_collection_access(
+        collection_name,
+        AccessRequirements::new().write(),
+        "private_hnsw_oram_distributed_commit",
+    )?;
+    let transfer_collection = toc.get_collection(&transfer_pass).await?;
+    ensure_no_private_oram_shard_transfer(&transfer_collection).await?;
     let request_context = collection_context_for_request(
         toc,
         auth,
@@ -1962,6 +1971,23 @@ pub(crate) async fn do_stage_private_hnsw_owner_writeback(
                 })
             },
         )
+}
+
+fn private_oram_shard_transfer_active(transfers: &HashSet<ShardTransfer>) -> bool {
+    transfers
+        .iter()
+        .any(|transfer| transfer.private_oram_preinstalled)
+}
+
+async fn ensure_no_private_oram_shard_transfer(
+    collection: &collection::collection::Collection,
+) -> StorageResult<()> {
+    if private_oram_shard_transfer_active(&collection.state().await.transfers) {
+        return Err(StorageError::bad_request(
+            "private HNSW ORAM sessions are unavailable while shard transfer is active",
+        ));
+    }
+    Ok(())
 }
 
 pub async fn do_commit_private_hnsw_paths(
@@ -3701,6 +3727,29 @@ mod private_hnsw_tests {
 
     use super::*;
     use crate::settings::CryptoSettings;
+
+    #[test]
+    fn transfer_freeze_requires_verified_private_oram_preinstall() {
+        let ordinary = ShardTransfer {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 1,
+            to: 2,
+            sync: true,
+            method: Some(collection::shards::transfer::ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: false,
+            filter: None,
+        };
+        assert!(!private_oram_shard_transfer_active(&HashSet::from([
+            ordinary.clone()
+        ])));
+        assert!(private_oram_shard_transfer_active(&HashSet::from([
+            ShardTransfer {
+                private_oram_preinstalled: true,
+                ..ordinary
+            }
+        ])));
+    }
 
     #[test]
     fn path_oram_leaf_labels_map_to_heap_bucket_paths() {
