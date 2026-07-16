@@ -1879,7 +1879,7 @@ pub async fn do_install_private_result_oram_replica_bundle(
     settings: &Settings,
     collection_name: &str,
     collection_id: &str,
-    bundle: &PrivateResultOramUploadBundle,
+    bundle: PrivateResultOramUploadBundle,
 ) -> StorageResult<PrivateResultOramEpochState> {
     validate_private_result_oram_manifest_signature_shape(&bundle.manifest_signature)
         .map_err(private_result_oram_error)?;
@@ -1904,14 +1904,19 @@ pub async fn do_install_private_result_oram_replica_bundle(
     }
     resolved.validate_manifest_runtime_policy(&bundle.manifest)?;
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&bundle.manifest.oram)?;
-    let _guard = begin_private_result_oram_upload_write_window(collection_id)?;
-    PrivateResultOramStore::new(&resolved.collection_path)
-        .write_initial_upload_bundle_with_signature(
-            bundle,
-            max_ciphertext_bytes,
-            resolved.manifest_context(&bundle.manifest_signature.key_id),
-        )
-        .map_err(private_result_oram_upload_store_error)
+    let collection_id = collection_id.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let _guard = begin_private_result_oram_upload_write_window(&collection_id)?;
+        PrivateResultOramStore::new(&resolved.collection_path)
+            .write_initial_upload_bundle_with_signature(
+                &bundle,
+                max_ciphertext_bytes,
+                resolved.manifest_context(&bundle.manifest_signature.key_id),
+            )
+            .map_err(private_result_oram_upload_store_error)
+    })
+    .await
+    .map_err(|_| StorageError::service_error("private result ORAM replica install worker failed"))?
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1921,9 +1926,9 @@ pub async fn do_install_private_result_oram_live_replica_bundle(
     settings: &Settings,
     collection_name: &str,
     collection_id: &str,
-    bundle: &PrivateResultOramLiveReplicationBundle,
-    expected_current: &PrivateResultOramEpochState,
-    expected_writeback_digest: Option<&str>,
+    bundle: PrivateResultOramLiveReplicationBundle,
+    expected_current: PrivateResultOramEpochState,
+    expected_writeback_digest: Option<String>,
 ) -> StorageResult<PrivateResultOramEpochState> {
     validate_private_result_oram_manifest_signature_shape(&bundle.manifest_signature)
         .map_err(private_result_oram_error)?;
@@ -1948,16 +1953,23 @@ pub async fn do_install_private_result_oram_live_replica_bundle(
     }
     resolved.validate_manifest_runtime_policy(&bundle.manifest)?;
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&bundle.manifest.oram)?;
-    let _guard = begin_private_result_oram_upload_write_window(collection_id)?;
-    PrivateResultOramStore::new(&resolved.collection_path)
-        .write_live_replication_bundle_with_signature(
-            bundle,
-            max_ciphertext_bytes,
-            resolved.manifest_context(&bundle.manifest_signature.key_id),
-            expected_current,
-            expected_writeback_digest,
-        )
-        .map_err(private_result_oram_upload_store_error)
+    let collection_id = collection_id.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let _guard = begin_private_result_oram_upload_write_window(&collection_id)?;
+        PrivateResultOramStore::new(&resolved.collection_path)
+            .write_live_replication_bundle_with_signature(
+                &bundle,
+                max_ciphertext_bytes,
+                resolved.manifest_context(&bundle.manifest_signature.key_id),
+                &expected_current,
+                expected_writeback_digest.as_deref(),
+            )
+            .map_err(private_result_oram_upload_store_error)
+    })
+    .await
+    .map_err(|_| {
+        StorageError::service_error("private result ORAM live replica install worker failed")
+    })?
 }
 
 pub async fn do_complete_private_result_oram_replica_writeback(

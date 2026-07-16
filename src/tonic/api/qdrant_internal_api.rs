@@ -2194,7 +2194,7 @@ impl QdrantInternal for QdrantInternalService {
                     &request.collection_name,
                     &request.vector_name,
                     &request.collection_id,
-                    &bundle,
+                    bundle,
                 )
                 .await?;
                 (epoch.index_epoch, epoch.root_hash)
@@ -2206,7 +2206,7 @@ impl QdrantInternal for QdrantInternalService {
                     &self.settings,
                     &request.collection_name,
                     &request.collection_id,
-                    &bundle,
+                    bundle,
                 )
                 .await?;
                 (epoch.index_epoch, epoch.root_hash)
@@ -2384,6 +2384,7 @@ impl QdrantInternal for QdrantInternalService {
 
         let (index_epoch, root_hash) = match bundle {
             LiveBundle::Hnsw(bundle) => {
+                let expected_current = bundle.current.clone();
                 let epoch = private_hnsw::do_install_private_hnsw_live_replica_bundle(
                     &self.toc,
                     &auth,
@@ -2391,14 +2392,15 @@ impl QdrantInternal for QdrantInternalService {
                     &request.collection_name,
                     &request.vector_name,
                     &request.collection_id,
-                    &bundle,
-                    &bundle.current,
-                    writeback_digest.as_deref(),
+                    bundle,
+                    expected_current,
+                    writeback_digest.clone(),
                 )
                 .await?;
                 (epoch.index_epoch, epoch.root_hash)
             }
             LiveBundle::Result(bundle) => {
+                let expected_current = bundle.current.clone();
                 let epoch =
                     private_result_oram::do_install_private_result_oram_live_replica_bundle(
                         &self.toc,
@@ -2406,9 +2408,9 @@ impl QdrantInternal for QdrantInternalService {
                         &self.settings,
                         &request.collection_name,
                         &request.collection_id,
-                        &bundle,
-                        &bundle.current,
-                        writeback_digest.as_deref(),
+                        bundle,
+                        expected_current,
+                        writeback_digest.clone(),
                     )
                     .await?;
                 (epoch.index_epoch, epoch.root_hash)

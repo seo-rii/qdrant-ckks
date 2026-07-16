@@ -31,20 +31,50 @@ const RK_EPOCH: u64 = 7;
 const BASE_EPOCH: u64 = 42;
 const NEXT_EPOCH: u64 = 43;
 
+#[derive(Clone, Copy)]
+struct FixtureProfile {
+    tree_height: u32,
+    hnsw_block_size_bytes: usize,
+    result_block_size_bytes: u32,
+}
+
+impl FixtureProfile {
+    const DEFAULT: Self = Self {
+        tree_height: 2,
+        hnsw_block_size_bytes: 4096,
+        result_block_size_bytes: 1024,
+    };
+
+    const LARGE: Self = Self {
+        tree_height: 5,
+        hnsw_block_size_bytes: 65536,
+        result_block_size_bytes: 32768,
+    };
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let collection_id = env::args()
-        .nth(1)
-        .ok_or("usage: private_oram_cluster_fixture <stable-collection-uuid>")?;
+    let mut args = env::args().skip(1);
+    let collection_id = args
+        .next()
+        .ok_or("usage: private_oram_cluster_fixture <stable-collection-uuid> [default|large]")?;
     if collection_id.is_empty() {
         return Err("stable collection UUID must be non-empty".into());
+    }
+    let profile = match args.next().as_deref() {
+        None | Some("default") => FixtureProfile::DEFAULT,
+        Some("large") => FixtureProfile::LARGE,
+        Some(_) => return Err("fixture profile must be default or large".into()),
+    };
+    if args.next().is_some() {
+        return Err("private ORAM fixture received unexpected arguments".into());
     }
 
     let hnsw_signing_key = Ed25519KeyPair::from_seed_unchecked(&[7; 32])
         .map_err(|_| std::io::Error::other("failed to create HNSW fixture signing key"))?;
     let result_signing_key = Ed25519KeyPair::from_seed_unchecked(&[9; 32])
         .map_err(|_| std::io::Error::other("failed to create result fixture signing key"))?;
-    let hnsw = hnsw_fixture(&collection_id, &hnsw_signing_key)?;
-    let result = result_fixture(&collection_id, &result_signing_key)?;
+    let hnsw = hnsw_fixture(&collection_id, &hnsw_signing_key, profile)?;
+    let result = result_fixture(&collection_id, &result_signing_key, profile)?;
 
     let output = json!({
         "hnsw_public_key": BASE64URL_NOPAD.encode(hnsw_signing_key.public_key().as_ref()),
@@ -59,11 +89,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn hnsw_fixture(
     collection_id: &str,
     signing_key: &Ed25519KeyPair,
+    profile: FixtureProfile,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let config = PrivateHnswOramClientConfig {
-        tree_height: 2,
+        tree_height: profile.tree_height,
         bucket_size: 2,
-        block_size_bytes: 4096,
+        block_size_bytes: profile.hnsw_block_size_bytes,
         fixed_neighbor_slots: 4,
     };
     let points = vec![
@@ -134,8 +165,8 @@ fn hnsw_fixture(
             oram: OramParams {
                 kind: OramKind::PathOram,
                 bucket_size: 2,
-                block_size_bytes: 4096,
-                tree_height: 2,
+                block_size_bytes: profile.hnsw_block_size_bytes as u32,
+                tree_height: profile.tree_height,
                 path_batch_size: 1,
             },
             fixed_budget: FixedBudgetParams {
@@ -221,12 +252,13 @@ fn hnsw_fixture(
 fn result_fixture(
     collection_id: &str,
     signing_key: &Ed25519KeyPair,
+    profile: FixtureProfile,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let oram = OramParams {
         kind: OramKind::PathOram,
         bucket_size: 2,
-        block_size_bytes: 1024,
-        tree_height: 2,
+        block_size_bytes: profile.result_block_size_bytes,
+        tree_height: profile.tree_height,
         path_batch_size: 1,
     };
     let bucket_count = (1_u64 << (oram.tree_height + 1)) - 1;
@@ -255,7 +287,9 @@ fn result_fixture(
     manifest.root_hash = private_result_oram_merkle_root_for_commitments(&commitments)?;
     let buckets = result_buckets(&manifest)?;
     let manifest_signature = sign_private_result_oram_manifest(signing_key, &manifest)?;
-    let read_bucket_ids = vec![0, 1, 3];
+    let read_bucket_ids = (0..=manifest.oram.tree_height)
+        .map(|level| (1_u64 << level) - 1)
+        .collect::<Vec<_>>();
     let read_signature = sign_private_result_oram_read_buckets(
         signing_key,
         PrivateResultOramReadBucketsSignatureContext {

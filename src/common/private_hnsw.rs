@@ -21,13 +21,14 @@ use qdrant_sec::{
     PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, PrivateHnswBucketAeadContext,
     PrivateHnswManifestValidationContext, PrivateHnswOramBucket, PrivateHnswOramCommitBucketRef,
     PrivateHnswOramCommitSignatureInput, PrivateHnswOramError, PrivateHnswOramManifest,
-    PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswParams,
-    PrivateHnswSignatureVerification, ResultPrivacyMode, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
-    decode_private_hnsw_oram_leaf_label, private_hnsw_bucket_commitment,
-    private_hnsw_oram_bucket_ciphertext_bytes, private_hnsw_oram_bucket_count,
-    private_hnsw_oram_bucket_ids_for_leaf, private_hnsw_oram_fixed_writeback_bucket_budget,
-    private_hnsw_oram_writeback_digest, validate_private_hnsw_oram_commit_signature,
-    validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_manifest_signature_shape,
+    PrivateHnswOramReadPathsSignatureInput, PrivateHnswOramSignature, PrivateHnswOramUploadBundle,
+    PrivateHnswParams, PrivateHnswSignatureVerification, ResultPrivacyMode,
+    VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, decode_private_hnsw_oram_leaf_label,
+    private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
+    private_hnsw_oram_bucket_count, private_hnsw_oram_bucket_ids_for_leaf,
+    private_hnsw_oram_fixed_writeback_bucket_budget, private_hnsw_oram_writeback_digest,
+    validate_private_hnsw_oram_commit_signature, validate_private_hnsw_oram_manifest,
+    validate_private_hnsw_oram_manifest_signature_shape,
     validate_private_hnsw_oram_read_paths_signature,
 };
 use segment::types::Distance;
@@ -2195,7 +2196,7 @@ pub async fn do_install_private_hnsw_replica_bundle(
     collection_name: &str,
     vector_name: &str,
     collection_id: &str,
-    bundle: &qdrant_sec::PrivateHnswOramUploadBundle,
+    bundle: PrivateHnswOramUploadBundle,
 ) -> StorageResult<PrivateHnswOramEpochState> {
     validate_private_hnsw_oram_manifest_signature_shape(&bundle.manifest_signature)
         .map_err(private_hnsw_error)?;
@@ -2221,14 +2222,20 @@ pub async fn do_install_private_hnsw_replica_bundle(
     }
     resolved.validate_manifest_runtime_policy(&bundle.manifest)?;
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&bundle.manifest)?;
-    let _guard = begin_private_hnsw_upload_write_window(collection_id, vector_name)?;
-    PrivateHnswOramStore::new(&resolved.collection_path, vector_name)?
-        .write_initial_upload_bundle_with_signature(
-            bundle,
-            max_ciphertext_bytes,
-            resolved.manifest_context(&bundle.manifest_signature.key_id),
-        )
-        .map_err(private_hnsw_upload_store_error)
+    let collection_id = collection_id.to_owned();
+    let vector_name = vector_name.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let _guard = begin_private_hnsw_upload_write_window(&collection_id, &vector_name)?;
+        PrivateHnswOramStore::new(&resolved.collection_path, &vector_name)?
+            .write_initial_upload_bundle_with_signature(
+                &bundle,
+                max_ciphertext_bytes,
+                resolved.manifest_context(&bundle.manifest_signature.key_id),
+            )
+            .map_err(private_hnsw_upload_store_error)
+    })
+    .await
+    .map_err(|_| StorageError::service_error("private HNSW ORAM replica install worker failed"))?
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2239,9 +2246,9 @@ pub async fn do_install_private_hnsw_live_replica_bundle(
     collection_name: &str,
     vector_name: &str,
     collection_id: &str,
-    bundle: &PrivateHnswOramLiveReplicationBundle,
-    expected_current: &PrivateHnswOramEpochState,
-    expected_writeback_digest: Option<&str>,
+    bundle: PrivateHnswOramLiveReplicationBundle,
+    expected_current: PrivateHnswOramEpochState,
+    expected_writeback_digest: Option<String>,
 ) -> StorageResult<PrivateHnswOramEpochState> {
     validate_private_hnsw_oram_manifest_signature_shape(&bundle.manifest_signature)
         .map_err(private_hnsw_error)?;
@@ -2267,16 +2274,24 @@ pub async fn do_install_private_hnsw_live_replica_bundle(
     }
     resolved.validate_manifest_runtime_policy(&bundle.manifest)?;
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&bundle.manifest)?;
-    let _guard = begin_private_hnsw_upload_write_window(collection_id, vector_name)?;
-    PrivateHnswOramStore::new(&resolved.collection_path, vector_name)?
-        .write_live_replication_bundle_with_signature(
-            bundle,
-            max_ciphertext_bytes,
-            resolved.manifest_context(&bundle.manifest_signature.key_id),
-            expected_current,
-            expected_writeback_digest,
-        )
-        .map_err(private_hnsw_upload_store_error)
+    let collection_id = collection_id.to_owned();
+    let vector_name = vector_name.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let _guard = begin_private_hnsw_upload_write_window(&collection_id, &vector_name)?;
+        PrivateHnswOramStore::new(&resolved.collection_path, &vector_name)?
+            .write_live_replication_bundle_with_signature(
+                &bundle,
+                max_ciphertext_bytes,
+                resolved.manifest_context(&bundle.manifest_signature.key_id),
+                &expected_current,
+                expected_writeback_digest.as_deref(),
+            )
+            .map_err(private_hnsw_upload_store_error)
+    })
+    .await
+    .map_err(|_| {
+        StorageError::service_error("private HNSW ORAM live replica install worker failed")
+    })?
 }
 
 pub async fn do_complete_private_hnsw_replica_writeback(

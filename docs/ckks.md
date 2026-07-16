@@ -1587,6 +1587,23 @@ aborts it. The abort removes the transfer marker, leaves the target replica
 `Dead`, preserves its preinstalled encrypted stores, and releases source
 sessions. An exact ReplicateShard retry then activates the target and reopens
 both committed sessions there.
+The opt-in large-bundle process benchmark runs with
+`QDRANT_RUN_PRIVATE_ORAM_LARGE_BUNDLE_BENCHMARK=1` and exercises the same live
+ReplicateShard path with tree-height-5 HNSW and result stores (63 buckets each).
+Its fixture carries 10.504 MiB and 5.254 MiB of base64 ciphertext field bytes,
+respectively. Three local unoptimized runs observed 5.891-6.924 seconds for
+HNSW upload/commit, 4.202-5.036 seconds for result upload/commit,
+11.040-14.592 seconds for the preinstall transfer request, and 11.064-15.662
+seconds until the replicated shard was active. The benchmark also rejects any
+new peer timeout, health-check timeout, or Raft election logged during the
+transfer window. These values are regression observations, not a latency
+target or SLA.
+Full-store initial/live install RPCs use a dedicated five-minute deadline and
+one retry. Receiver-side signature verification, full-store hashing, file
+writes, and fsync run on Tokio's blocking worker pool so that an install does
+not starve peer health checks or Raft heartbeats. The complete protobuf request
+still must fit `service.max_request_size_mb`; larger stores fail closed at the
+source and require future chunked internal transport.
 `ReplicatePoints`, restart, snapshot, WAL,
 resharding transfer methods, multi-shard layouts, and automatic dead-replica
 transfer recovery remain fail closed.

@@ -9,7 +9,7 @@ use api::grpc::qdrant::{
     InstallPrivateOramLiveReplicaResponse, PreparePrivateOramWritebackRequest,
     WaitOnConsensusCommitRequest,
 };
-use api::grpc::transport_channel_pool::{AddTimeout, TransportChannelPool};
+use api::grpc::transport_channel_pool::{AddTimeout, DEFAULT_RETRIES, TransportChannelPool};
 use futures::Future;
 use futures::future::try_join_all;
 use semver::Version;
@@ -20,6 +20,10 @@ use url::Url;
 
 use crate::operations::types::{CollectionError, CollectionResult, PeerMetadata};
 use crate::shards::shard::PeerId;
+
+// Full-store validation and fsync can outlive the normal peer RPC deadline.
+const PRIVATE_ORAM_INSTALL_GRPC_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const PRIVATE_ORAM_INSTALL_RETRIES: usize = 1;
 
 #[derive(Clone)]
 pub struct ChannelService {
@@ -198,14 +202,19 @@ impl ChannelService {
         peer_id: PeerId,
         request: InstallPrivateOramIndexRequest,
     ) -> CollectionResult<InstallPrivateOramIndexResponse> {
-        self.with_qdrant_client(peer_id, |mut client| {
-            let request = request.clone();
-            async move {
-                client
-                    .install_private_oram_index(Request::new(request))
-                    .await
-            }
-        })
+        self.with_qdrant_client_timeout(
+            peer_id,
+            Some(PRIVATE_ORAM_INSTALL_GRPC_TIMEOUT),
+            PRIVATE_ORAM_INSTALL_RETRIES,
+            |mut client| {
+                let request = request.clone();
+                async move {
+                    client
+                        .install_private_oram_index(Request::new(request))
+                        .await
+                }
+            },
+        )
         .await
         .map(tonic::Response::into_inner)
         .map_err(|_| {
@@ -220,14 +229,19 @@ impl ChannelService {
         peer_id: PeerId,
         request: InstallPrivateOramLiveReplicaRequest,
     ) -> CollectionResult<InstallPrivateOramLiveReplicaResponse> {
-        self.with_qdrant_client(peer_id, |mut client| {
-            let request = request.clone();
-            async move {
-                client
-                    .install_private_oram_live_replica(Request::new(request))
-                    .await
-            }
-        })
+        self.with_qdrant_client_timeout(
+            peer_id,
+            Some(PRIVATE_ORAM_INSTALL_GRPC_TIMEOUT),
+            PRIVATE_ORAM_INSTALL_RETRIES,
+            |mut client| {
+                let request = request.clone();
+                async move {
+                    client
+                        .install_private_oram_live_replica(Request::new(request))
+                        .await
+                }
+            },
+        )
         .await
         .map(tonic::Response::into_inner)
         .map_err(|_| {
@@ -271,6 +285,17 @@ impl ChannelService {
         peer_id: PeerId,
         f: impl Fn(QdrantInternalClient<InterceptedService<Channel, AddTimeout>>) -> O,
     ) -> CollectionResult<T> {
+        self.with_qdrant_client_timeout(peer_id, None, DEFAULT_RETRIES, f)
+            .await
+    }
+
+    async fn with_qdrant_client_timeout<T, O: Future<Output = Result<T, Status>>>(
+        &self,
+        peer_id: PeerId,
+        timeout: Option<Duration>,
+        retries: usize,
+        f: impl Fn(QdrantInternalClient<InterceptedService<Channel, AddTimeout>>) -> O,
+    ) -> CollectionResult<T> {
         let address = self
             .id_to_address
             .read()
@@ -278,11 +303,16 @@ impl ChannelService {
             .ok_or_else(|| CollectionError::service_error("Address for peer ID is not found."))?
             .clone();
         self.channel_pool
-            .with_channel(&address, |channel| {
-                let client = QdrantInternalClient::new(channel);
-                let client = client.max_decoding_message_size(usize::MAX);
-                f(client)
-            })
+            .with_channel_timeout(
+                &address,
+                |channel| {
+                    let client = QdrantInternalClient::new(channel);
+                    let client = client.max_decoding_message_size(usize::MAX);
+                    f(client)
+                },
+                timeout,
+                retries,
+            )
             .await
             .map_err(Into::into)
     }

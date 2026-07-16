@@ -1,8 +1,10 @@
 import json
+import os
 import pathlib
 import shutil
 import stat
 import subprocess
+import time
 
 import pytest
 import requests
@@ -13,6 +15,7 @@ from .utils import (
     get_cluster_info,
     get_collection_cluster_info,
     get_uri,
+    init_pytest_log_folder,
     kill_all_processes,
     make_peer_folders,
     processes,
@@ -34,6 +37,8 @@ BASE_EPOCH = 42
 NEXT_EPOCH = 43
 FIXTURE_EXAMPLE = "private_oram_cluster_fixture"
 PLACEHOLDER_COLLECTION_ID = "12345678-90ab-cdef-1234-567890abcdef"
+LARGE_FIXTURE_PROFILE = "large"
+RUN_LARGE_BUNDLE_BENCHMARK = "QDRANT_RUN_PRIVATE_ORAM_LARGE_BUNDLE_BENCHMARK"
 
 
 @pytest.fixture(autouse=True)
@@ -42,19 +47,22 @@ def cleanup_private_oram_peers():
     kill_all_processes()
 
 
-def _private_oram_fixture(collection_id: str) -> dict:
+def _private_oram_fixture(collection_id: str, profile: str | None = None) -> dict:
+    command = [
+        "cargo",
+        "run",
+        "--quiet",
+        "-p",
+        "qdrant-sec",
+        "--example",
+        FIXTURE_EXAMPLE,
+        "--",
+        collection_id,
+    ]
+    if profile is not None:
+        command.append(profile)
     completed = subprocess.run(
-        [
-            "cargo",
-            "run",
-            "--quiet",
-            "-p",
-            "qdrant-sec",
-            "--example",
-            FIXTURE_EXAMPLE,
-            "--",
-            collection_id,
-        ],
+        command,
         cwd=PROJECT_ROOT,
         check=True,
         capture_output=True,
@@ -65,8 +73,13 @@ def _private_oram_fixture(collection_id: str) -> dict:
 
 
 def _write_private_oram_runtime_config(
-    peer_dir: pathlib.Path, hnsw_public_key: str, result_public_key: str
+    peer_dir: pathlib.Path,
+    fixture: dict,
 ) -> None:
+    hnsw_public_key = fixture["hnsw_public_key"]
+    result_public_key = fixture["result_public_key"]
+    hnsw_oram = fixture["hnsw"]["manifest"]["oram"]
+    result_oram = fixture["result"]["manifest"]["oram"]
     local_config = f"""
 crypto:
   zero_trust_profile: strict
@@ -92,8 +105,8 @@ crypto:
         oram:
           kind: path_oram
           bucket_size: 2
-          block_size_bytes: 4096
-          tree_height: 2
+          block_size_bytes: {hnsw_oram["block_size_bytes"]}
+          tree_height: {hnsw_oram["tree_height"]}
           path_batch_size: 1
         fixed_budget:
           enabled: true
@@ -118,8 +131,8 @@ crypto:
         oram:
           kind: path_oram
           bucket_size: 2
-          block_size_bytes: 1024
-          tree_height: 2
+          block_size_bytes: {result_oram["block_size_bytes"]}
+          tree_height: {result_oram["tree_height"]}
           path_batch_size: 1
         integrity:
           manifest_signature_required: true
@@ -152,15 +165,14 @@ def _start_private_oram_cluster(
     peer_count: int,
     replication_factor: int,
     extra_env: dict[str, str] | None = None,
+    fixture_profile: str | None = None,
 ) -> tuple[list[str], list[pathlib.Path], dict, int, str]:
-    bootstrap_fixture = _private_oram_fixture(PLACEHOLDER_COLLECTION_ID)
+    bootstrap_fixture = _private_oram_fixture(
+        PLACEHOLDER_COLLECTION_ID, fixture_profile
+    )
     peer_dirs = make_peer_folders(tmp_path, peer_count)
     for peer_dir in peer_dirs:
-        _write_private_oram_runtime_config(
-            peer_dir,
-            bootstrap_fixture["hnsw_public_key"],
-            bootstrap_fixture["result_public_key"],
-        )
+        _write_private_oram_runtime_config(peer_dir, bootstrap_fixture)
 
     bootstrap_api, bootstrap_uri = start_first_peer(
         peer_dirs[0], "private_oram_peer_0.log", extra_env=extra_env
@@ -212,7 +224,7 @@ def _start_private_oram_cluster(
     assert_http_ok(create)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
 
-    fixture = _private_oram_fixture(_collection_uuid(bootstrap_api))
+    fixture = _private_oram_fixture(_collection_uuid(bootstrap_api), fixture_profile)
     assert fixture["hnsw_public_key"] == bootstrap_fixture["hnsw_public_key"]
     assert fixture["result_public_key"] == bootstrap_fixture["result_public_key"]
     return peer_urls, peer_dirs, fixture, leader, bootstrap_uri
@@ -264,7 +276,7 @@ def _read_hnsw_owner_session(peer_url: str, fixture: dict, session: dict) -> Non
     )
     assert read["index_epoch"] == BASE_EPOCH
     assert read["root_hash"] == session["root_hash"]
-    assert len(read["buckets"]) == 3
+    assert len(read["buckets"]) == hnsw["manifest"]["oram"]["tree_height"] + 1
 
 
 def _exercise_hnsw_owner_session(peer_url: str, fixture: dict) -> None:
@@ -339,7 +351,7 @@ def _read_result_owner_session(peer_url: str, fixture: dict, session: dict) -> N
     )
     assert read["index_epoch"] == BASE_EPOCH
     assert read["root_hash"] == session["root_hash"]
-    assert len(read["buckets"]) == 3
+    assert len(read["buckets"]) == len(result["read"]["bucket_ids"])
 
 
 def _exercise_result_owner_session(peer_url: str, fixture: dict) -> None:
@@ -497,6 +509,93 @@ def test_private_oram_shard_transfer_preinstalls_live_store(
     wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
     _assert_replica_can_open_current_sessions(target_url)
+
+
+@pytest.mark.skipif(
+    os.environ.get(RUN_LARGE_BUNDLE_BENCHMARK) != "1",
+    reason=f"set {RUN_LARGE_BUNDLE_BENCHMARK}=1 to run the large bundle benchmark",
+)
+def test_private_oram_large_live_bundle_transfer_benchmark(tmp_path: pathlib.Path):
+    peer_urls, _, fixture, _, _ = _start_private_oram_cluster(
+        tmp_path,
+        2,
+        1,
+        fixture_profile=LARGE_FIXTURE_PROFILE,
+    )
+    _, _, source_url, target_url, source_info, target_info = (
+        _private_oram_transfer_peers(peer_urls)
+    )
+    shard_id = source_info["local_shards"][0]["shard_id"]
+    mib = 1024 * 1024
+    hnsw_ciphertext_base64_bytes = sum(
+        len(bucket["ciphertext"].encode("ascii"))
+        for bucket in fixture["hnsw"]["buckets"]
+    )
+    result_ciphertext_base64_bytes = sum(
+        len(bucket["ciphertext"].encode("ascii"))
+        for bucket in fixture["result"]["buckets"]
+    )
+    assert hnsw_ciphertext_base64_bytes >= 10 * mib
+    assert result_ciphertext_base64_bytes >= 5 * mib
+
+    hnsw_started = time.perf_counter()
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    hnsw_seconds = time.perf_counter() - hnsw_started
+
+    result_started = time.perf_counter()
+    _upload_result_oram(source_url, fixture)
+    _exercise_result_owner_session(source_url, fixture)
+    result_seconds = time.perf_counter() - result_started
+
+    log_folder = pathlib.Path(init_pytest_log_folder())
+    log_paths = [
+        log_folder / "private_oram_peer_0.log",
+        log_folder / "private_oram_peer_1.log",
+    ]
+    log_offsets = {path: path.stat().st_size for path in log_paths}
+    transfer_started = time.perf_counter()
+    transfer = _request_private_oram_shard_transfer(
+        source_url,
+        "replicate_shard",
+        shard_id,
+        source_info["peer_id"],
+        target_info["peer_id"],
+    )
+    preinstall_seconds = time.perf_counter() - transfer_started
+    assert_http_ok(transfer)
+    wait_for_collection_local_shards_count(target_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    transfer_seconds = time.perf_counter() - transfer_started
+    _assert_replica_can_open_current_sessions(target_url)
+    transfer_logs = "".join(
+        path.read_bytes()[log_offsets[path] :].decode("utf-8", errors="replace")
+        for path in log_paths
+    )
+    assert "Timeout expired" not in transfer_logs
+    assert "Healthcheck timeout" not in transfer_logs
+    assert "starting a new election" not in transfer_logs
+
+    print(
+        "PRIVATE_ORAM_LARGE_BUNDLE_BENCHMARK "
+        + json.dumps(
+            {
+                "bucket_count": len(fixture["hnsw"]["buckets"]),
+                "hnsw_ciphertext_base64_mib": round(
+                    hnsw_ciphertext_base64_bytes / mib, 3
+                ),
+                "result_ciphertext_base64_mib": round(
+                    result_ciphertext_base64_bytes / mib, 3
+                ),
+                "hnsw_upload_commit_seconds": round(hnsw_seconds, 3),
+                "result_upload_commit_seconds": round(result_seconds, 3),
+                "live_preinstall_submit_seconds": round(preinstall_seconds, 3),
+                "replicate_active_seconds": round(transfer_seconds, 3),
+            },
+            sort_keys=True,
+        )
+    )
 
 
 def test_private_oram_partial_live_preinstall_fails_closed_and_retries(
