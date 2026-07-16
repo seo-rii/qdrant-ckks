@@ -2875,11 +2875,29 @@ pub fn crypto_runtime_capability_fingerprint(settings: &Settings) -> String {
             "backends": backends,
         },
     });
-    let canonical = serde_json::to_vec(&view).unwrap_or_else(|_| {
+    let canonical_view = canonicalize_json_value(view);
+    let canonical = serde_json::to_vec(&canonical_view).unwrap_or_else(|_| {
         b"qdrant-sec/crypto-runtime-capability-fingerprint-serialization-error/v1".to_vec()
     });
     let digest = Sha256::digest(&canonical);
     BASE64URL_NOPAD.encode(&digest)
+}
+
+fn canonicalize_json_value(value: Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(
+            fields
+                .into_iter()
+                .map(|(key, value)| (key, canonicalize_json_value(value)))
+                .collect::<BTreeMap<_, _>>()
+                .into_iter()
+                .collect(),
+        ),
+        Value::Array(values) => {
+            Value::Array(values.into_iter().map(canonicalize_json_value).collect())
+        }
+        value => value,
+    }
 }
 
 fn cluster_key_attestation_storage_error(_err: CryptoSetupError) -> StorageError {
@@ -13408,6 +13426,39 @@ mod tests {
             validate_crypto_settings(&settings),
             Err(CryptoSetupError::InvalidInstanceOption { .. })
         ));
+    }
+
+    #[test]
+    fn crypto_runtime_capability_fingerprint_canonicalizes_nested_option_order() {
+        let settings_with_options = |options| Settings {
+            crypto: CryptoSettings {
+                instances: HashMap::from([(
+                    "ordered_instance".to_string(),
+                    CryptoInstanceConfig {
+                        provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                        materials: HashMap::new(),
+                        backend_ref: None,
+                        options,
+                    },
+                )]),
+                ..CryptoSettings::default()
+            },
+            ..Settings::new(None).unwrap()
+        };
+        let first = settings_with_options(
+            serde_json::from_str(r#"{"outer":{"beta":2,"alpha":1},"items":[{"y":4,"x":3}]}"#)
+                .unwrap(),
+        );
+        let second = settings_with_options(
+            serde_json::from_str(r#"{"items":[{"x":3,"y":4}],"outer":{"alpha":1,"beta":2}}"#)
+                .unwrap(),
+        );
+
+        assert_eq!(
+            crypto_runtime_capability_fingerprint(&first),
+            crypto_runtime_capability_fingerprint(&second),
+            "runtime parity must not depend on process-local JSON map insertion order",
+        );
     }
 
     #[test]
