@@ -11,6 +11,7 @@ use api::grpc::{
     InstallPrivateOramLiveReplicaResponse, PeerTelemetry, PreparePrivateOramWritebackRequest,
     PreparePrivateOramWritebackResponse, PrivateOramReplicationEpochState,
     PrivateOramReplicationIndexKind, PrivateOramReplicationTransition,
+    RequestPrivateOramShardRecoveryRequest, RequestPrivateOramShardRecoveryResponse,
     WaitOnConsensusCommitRequest, WaitOnConsensusCommitResponse,
     install_private_oram_index_request, install_private_oram_live_replica_request,
 };
@@ -18,6 +19,9 @@ use chrono::DateTime;
 use collection::config::{
     CollectionConfigInternal, EncryptionSelector, encryption_rule_uses_private_hnsw_oram,
     encryption_rule_uses_private_result_oram,
+};
+use collection::operations::cluster_ops::{
+    ClusterOperations, ReplicateShard, ReplicateShardOperation,
 };
 use collection::operations::verification::new_unchecked_verification_pass;
 use collection::private_hnsw_oram_store::{
@@ -28,7 +32,9 @@ use collection::private_result_oram_store::{
     PrivateResultOramConsensusWriteback, PrivateResultOramEpochState,
     PrivateResultOramLiveReplicationBundle, PrivateResultOramWritebackBatch,
 };
+use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::PeerId;
+use collection::shards::transfer::{ShardTransfer, ShardTransferMethod};
 use common::types::{DetailsLevel, TelemetryDetail};
 use data_encoding::BASE64URL_NOPAD;
 use prost::Message;
@@ -51,11 +57,12 @@ use storage::dispatcher::{
     Dispatcher, PrivateOramEpochRef, PrivateOramPendingTransitionRef, PrivateOramRecoveryAction,
     classify_private_oram_recovery,
 };
-use storage::rbac::{Access, Auth};
+use storage::rbac::{Access, AccessRequirements, Auth};
 use tokio::sync::Mutex;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
+use crate::common::collections::do_update_collection_cluster;
 use crate::common::telemetry::TelemetryCollector;
 use crate::common::{private_hnsw, private_result_oram};
 use crate::settings::Settings;
@@ -89,6 +96,36 @@ impl QdrantInternalService {
             audit_config,
             toc,
             private_oram_replication_lock: Mutex::new(()),
+        }
+    }
+
+    async fn wait_for_live_install_transfer_lease(
+        &self,
+        key: &PrivateOramEpochKey,
+        transfer_lease_id_hash: &str,
+    ) -> Result<(), Status> {
+        let deadline = Instant::now() + PRIVATE_ORAM_TRANSFER_RESERVATION_APPLY_TIMEOUT;
+        loop {
+            let now_unix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| Status::internal("private ORAM live install clock is invalid"))?
+                .as_secs();
+            let lease = self.consensus_state.private_oram_session_lease(key);
+            match validate_live_install_transfer_lease(
+                lease.as_ref(),
+                transfer_lease_id_hash,
+                now_unix,
+            ) {
+                Ok(()) => return Ok(()),
+                Err(error)
+                    if error.code() == tonic::Code::FailedPrecondition
+                        && !transfer_lease_id_hash.is_empty()
+                        && Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(PRIVATE_ORAM_TRANSFER_RESERVATION_APPLY_POLL_INTERVAL).await;
+                }
+                Err(error) => return Err(error),
+            }
         }
     }
 
@@ -340,6 +377,8 @@ const PRIVATE_ORAM_SESSION_LEASE_HASH_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-session-lease-id/v1";
 const PRIVATE_ORAM_SESSION_LEASE_RENEW_SECS: u64 = 300;
 const PRIVATE_ORAM_TRANSFER_RESERVATION_SECS: u64 = 3_600;
+const PRIVATE_ORAM_TRANSFER_RESERVATION_APPLY_TIMEOUT: Duration = Duration::from_secs(10);
+const PRIVATE_ORAM_TRANSFER_RESERVATION_APPLY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 fn validate_private_oram_wire_request_budget(
     request: &impl Message,
@@ -672,6 +711,7 @@ async fn release_orphaned_private_oram_session_lease(
     dispatcher: &Dispatcher,
     key: PrivateOramEpochKey,
     has_local_session: bool,
+    completed_pending_recovery: bool,
 ) -> Result<(), StorageError> {
     if has_local_session {
         return Ok(());
@@ -680,7 +720,12 @@ async fn release_orphaned_private_oram_session_lease(
         return Ok(());
     };
     let now_unix = current_private_oram_unix_secs()?;
-    if !private_oram_orphaned_lease_releasable(&lease, dispatcher.this_peer_id(), now_unix) {
+    if !private_oram_orphaned_lease_releasable(
+        &lease,
+        dispatcher.this_peer_id(),
+        now_unix,
+        completed_pending_recovery,
+    ) {
         return Ok(());
     }
     let result = dispatcher
@@ -707,8 +752,10 @@ fn private_oram_orphaned_lease_releasable(
     lease: &PrivateOramSessionLease,
     local_peer_id: PeerId,
     now_unix: u64,
+    completed_pending_recovery: bool,
 ) -> bool {
-    lease.owner_peer_id == local_peer_id && lease.expires_at_unix <= now_unix
+    lease.owner_peer_id == local_peer_id
+        && (completed_pending_recovery || lease.expires_at_unix <= now_unix)
 }
 
 fn current_private_oram_unix_secs() -> Result<u64, StorageError> {
@@ -1099,7 +1146,8 @@ pub(crate) async fn recover_private_hnsw_replication(
         PrivateOramRecoveryAction::Clean => {
             let has_local_session =
                 private_hnsw::private_hnsw_has_active_session(&context.collection_id, vector_name)?;
-            release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session).await?;
+            release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session, false)
+                .await?;
             return Ok(());
         }
         PrivateOramRecoveryAction::AbortPending => true,
@@ -1133,7 +1181,7 @@ pub(crate) async fn recover_private_hnsw_replication(
         },
         abort,
     )?;
-    release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session).await?;
+    release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session, true).await?;
     Ok(())
 }
 
@@ -1184,7 +1232,8 @@ pub(crate) async fn recover_private_result_oram_replication(
             let has_local_session = private_result_oram::private_result_oram_has_active_session(
                 &context.collection_id,
             )?;
-            release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session).await?;
+            release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session, false)
+                .await?;
             return Ok(());
         }
         PrivateOramRecoveryAction::AbortPending => true,
@@ -1216,7 +1265,7 @@ pub(crate) async fn recover_private_result_oram_replication(
         },
         abort,
     )?;
-    release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session).await?;
+    release_orphaned_private_oram_session_lease(dispatcher, key, has_local_session, true).await?;
     Ok(())
 }
 
@@ -1800,6 +1849,40 @@ fn required_transition(
     Ok(transition)
 }
 
+fn validate_private_oram_shard_recovery_request_shape(
+    request: &RequestPrivateOramShardRecoveryRequest,
+    this_peer_id: PeerId,
+) -> Result<(), Status> {
+    if request.collection_name.is_empty()
+        || request.collection_name.len() > 255
+        || request.source_peer_id == request.target_peer_id
+    {
+        return Err(Status::invalid_argument(
+            "private ORAM shard recovery request shape is invalid",
+        ));
+    }
+    if request.source_peer_id != this_peer_id {
+        return Err(Status::failed_precondition(
+            "private ORAM shard recovery must be coordinated by the source peer",
+        ));
+    }
+    Ok(())
+}
+
+fn private_oram_shard_recovery_matches_transfer(
+    request: &RequestPrivateOramShardRecoveryRequest,
+    transfer: &ShardTransfer,
+) -> bool {
+    transfer.shard_id == request.shard_id
+        && transfer.from == request.source_peer_id
+        && transfer.to == request.target_peer_id
+        && transfer.to_shard_id.is_none()
+        && transfer.sync
+        && transfer.method == Some(ShardTransferMethod::StreamRecords)
+        && transfer.private_oram_preinstalled
+        && transfer.filter.is_none()
+}
+
 fn parse_audit_log_time(
     value: Option<&str>,
     field: &'static str,
@@ -2371,16 +2454,8 @@ impl QdrantInternal for QdrantInternalService {
                 "private ORAM live install does not match consensus",
             ));
         }
-        let now_unix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| Status::internal("private ORAM live install clock is invalid"))?
-            .as_secs();
-        let lease = self.consensus_state.private_oram_session_lease(&key);
-        validate_live_install_transfer_lease(
-            lease.as_ref(),
-            &request.transfer_lease_id_hash,
-            now_unix,
-        )?;
+        self.wait_for_live_install_transfer_lease(&key, &request.transfer_lease_id_hash)
+            .await?;
 
         let (index_epoch, root_hash) = match bundle {
             LiveBundle::Hnsw(bundle) => {
@@ -2422,11 +2497,155 @@ impl QdrantInternal for QdrantInternalService {
             writeback_digest,
         }))
     }
+
+    async fn request_private_oram_shard_recovery(
+        &self,
+        request: Request<RequestPrivateOramShardRecoveryRequest>,
+    ) -> Result<Response<RequestPrivateOramShardRecoveryResponse>, Status> {
+        let request = request.into_inner();
+        validate_private_oram_shard_recovery_request_shape(&request, self.toc.this_peer_id)?;
+        let _lock = self.private_oram_replication_lock.lock().await;
+        let auth = Auth::new_internal(Access::full("private ORAM automatic shard recovery"));
+        let collection_pass = auth.check_collection_access(
+            &request.collection_name,
+            AccessRequirements::new().write().manage().extras(),
+            "private_oram_automatic_shard_recovery",
+        )?;
+        let collection = self.toc.get_collection(&collection_pass).await?;
+        let state = collection.state().await;
+        let index_keys = private_oram_transfer_index_keys(&state.config, &request.collection_name)
+            .map_err(|_| {
+                Status::failed_precondition(
+                    "private ORAM automatic shard recovery configuration is invalid",
+                )
+            })?;
+        if index_keys.is_empty()
+            || state.config.params.shard_number.get() != 1
+            || state.shards.len() != 1
+            || state.resharding.is_some()
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM automatic shard recovery requires an exact single-shard layout",
+            ));
+        }
+        if state
+            .transfers
+            .iter()
+            .any(|transfer| private_oram_shard_recovery_matches_transfer(&request, transfer))
+        {
+            return Ok(Response::new(RequestPrivateOramShardRecoveryResponse {
+                accepted: true,
+            }));
+        }
+        if !state.transfers.is_empty() {
+            return Err(Status::failed_precondition(
+                "private ORAM automatic shard recovery conflicts with an active transfer",
+            ));
+        }
+        let shard = state.shards.get(&request.shard_id).ok_or_else(|| {
+            Status::failed_precondition("private ORAM automatic recovery shard is unavailable")
+        })?;
+        if shard.replicas.get(&request.source_peer_id) != Some(&ReplicaState::Active)
+            || shard.replicas.get(&request.target_peer_id) != Some(&ReplicaState::Dead)
+        {
+            return Err(Status::failed_precondition(
+                "private ORAM automatic shard recovery replica state is invalid",
+            ));
+        }
+        drop(state);
+
+        let dispatcher = Dispatcher::new(self.toc.clone()).with_consensus(
+            self.consensus_state.clone(),
+            self.settings.cluster.resharding_enabled,
+        );
+        let accepted = do_update_collection_cluster(
+            &dispatcher,
+            &self.settings,
+            request.collection_name,
+            ClusterOperations::ReplicateShard(ReplicateShardOperation {
+                replicate_shard: ReplicateShard {
+                    shard_id: request.shard_id,
+                    to_shard_id: None,
+                    to_peer_id: request.target_peer_id,
+                    from_peer_id: request.source_peer_id,
+                    method: Some(ShardTransferMethod::StreamRecords),
+                },
+            }),
+            auth,
+            None,
+        )
+        .await?;
+        Ok(Response::new(RequestPrivateOramShardRecoveryResponse {
+            accepted,
+        }))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn automatic_recovery_request_fixture() -> RequestPrivateOramShardRecoveryRequest {
+        RequestPrivateOramShardRecoveryRequest {
+            collection_name: "private-oram-recovery-collection-sentinel".to_string(),
+            shard_id: 3,
+            source_peer_id: 7,
+            target_peer_id: 11,
+        }
+    }
+
+    #[test]
+    fn private_oram_automatic_recovery_request_requires_source_coordination() {
+        let request = automatic_recovery_request_fixture();
+        validate_private_oram_shard_recovery_request_shape(&request, 7).unwrap();
+
+        let rendered = validate_private_oram_shard_recovery_request_shape(&request, 13)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("source peer"));
+        assert!(!rendered.contains(&request.collection_name));
+
+        let mut same_peer = request.clone();
+        same_peer.target_peer_id = same_peer.source_peer_id;
+        let rendered = validate_private_oram_shard_recovery_request_shape(&same_peer, 7)
+            .unwrap_err()
+            .to_string();
+        assert!(rendered.contains("shape is invalid"));
+        assert!(!rendered.contains(&request.collection_name));
+    }
+
+    #[test]
+    fn private_oram_automatic_recovery_retry_requires_exact_marked_transfer() {
+        let request = automatic_recovery_request_fixture();
+        let transfer = ShardTransfer {
+            from: request.source_peer_id,
+            to: request.target_peer_id,
+            shard_id: request.shard_id,
+            to_shard_id: None,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: true,
+            filter: None,
+        };
+        assert!(private_oram_shard_recovery_matches_transfer(
+            &request, &transfer
+        ));
+
+        let mut unmarked = transfer.clone();
+        unmarked.private_oram_preinstalled = false;
+        let mut wrong_method = transfer.clone();
+        wrong_method.method = Some(ShardTransferMethod::WalDelta);
+        let mut wrong_target = transfer.clone();
+        wrong_target.to = 13;
+        let mut move_transfer = transfer.clone();
+        move_transfer.sync = false;
+        for conflicting in [unmarked, wrong_method, wrong_target, move_transfer] {
+            assert!(!private_oram_shard_recovery_matches_transfer(
+                &request,
+                &conflicting
+            ));
+        }
+    }
 
     #[test]
     fn private_oram_session_lease_hash_is_domain_separated_and_bounded() {
@@ -2474,16 +2693,26 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_orphaned_lease_cleanup_waits_for_expiry() {
+    fn private_oram_orphaned_lease_cleanup_requires_expiry_or_completed_recovery() {
         let lease = PrivateOramSessionLease {
             owner_peer_id: 7,
             lease_id_hash: BASE64URL_NOPAD.encode(&[14; 32]),
             issued_at_unix: 100,
             expires_at_unix: 400,
         };
-        assert!(!private_oram_orphaned_lease_releasable(&lease, 7, 399));
-        assert!(private_oram_orphaned_lease_releasable(&lease, 7, 400));
-        assert!(!private_oram_orphaned_lease_releasable(&lease, 8, 400));
+        assert!(!private_oram_orphaned_lease_releasable(
+            &lease, 7, 399, false
+        ));
+        assert!(private_oram_orphaned_lease_releasable(
+            &lease, 7, 400, false
+        ));
+        assert!(!private_oram_orphaned_lease_releasable(
+            &lease, 8, 400, false
+        ));
+        assert!(private_oram_orphaned_lease_releasable(&lease, 7, 399, true));
+        assert!(!private_oram_orphaned_lease_releasable(
+            &lease, 8, 399, true
+        ));
     }
 
     #[test]

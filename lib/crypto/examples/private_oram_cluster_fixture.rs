@@ -54,9 +54,10 @@ impl FixtureProfile {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
-    let collection_id = args
-        .next()
-        .ok_or("usage: private_oram_cluster_fixture <stable-collection-uuid> [default|large]")?;
+    let collection_id = args.next().ok_or(
+        "usage: private_oram_cluster_fixture <stable-collection-uuid> \
+             [default|large] [private_payload_oram_required|ids_visible]",
+    )?;
     if collection_id.is_empty() {
         return Err("stable collection UUID must be non-empty".into());
     }
@@ -64,6 +65,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None | Some("default") => FixtureProfile::DEFAULT,
         Some("large") => FixtureProfile::LARGE,
         Some(_) => return Err("fixture profile must be default or large".into()),
+    };
+    let result_privacy = match args.next().as_deref() {
+        None | Some("private_payload_oram_required") => {
+            ResultPrivacyMode::PrivatePayloadOramRequired
+        }
+        Some("ids_visible") => ResultPrivacyMode::IdsVisible,
+        Some(_) => {
+            return Err(
+                "fixture result privacy must be private_payload_oram_required or ids_visible"
+                    .into(),
+            );
+        }
     };
     if args.next().is_some() {
         return Err("private ORAM fixture received unexpected arguments".into());
@@ -73,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|_| std::io::Error::other("failed to create HNSW fixture signing key"))?;
     let result_signing_key = Ed25519KeyPair::from_seed_unchecked(&[9; 32])
         .map_err(|_| std::io::Error::other("failed to create result fixture signing key"))?;
-    let hnsw = hnsw_fixture(&collection_id, &hnsw_signing_key, profile)?;
+    let hnsw = hnsw_fixture(&collection_id, &hnsw_signing_key, profile, result_privacy)?;
     let result = result_fixture(&collection_id, &result_signing_key, profile)?;
 
     let output = json!({
@@ -90,6 +103,7 @@ fn hnsw_fixture(
     collection_id: &str,
     signing_key: &Ed25519KeyPair,
     profile: FixtureProfile,
+    result_privacy: ResultPrivacyMode,
 ) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     let config = PrivateHnswOramClientConfig {
         tree_height: profile.tree_height,
@@ -176,7 +190,7 @@ fn hnsw_fixture(
                 paths_per_round: 1,
                 fixed_result_k: 1,
             },
-            result_privacy: ResultPrivacyMode::PrivatePayloadOramRequired,
+            result_privacy,
             owner_signing_key_id: HNSW_SIGNING_KEY_ID,
             created_at_unix: 1_770_000_000,
         },

@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use api::grpc::qdrant::RequestPrivateOramShardRecoveryRequest;
 use clean::ShardCleanTasks;
 use common::budget::ResourceBudget;
 use common::save_on_disk::SaveOnDisk;
@@ -103,6 +104,7 @@ pub struct Collection {
     collection_stats_cache: CollectionSizeStatsCache,
     client_payload_nonce_replay_cache: Mutex<ClientPayloadNonceReplayCache>,
     crypto_payload_migration_lock: Mutex<()>,
+    private_oram_automatic_recovery_tasks: Arc<Mutex<HashSet<ShardId>>>,
     // Background tasks to clean shards
     shard_clean_tasks: ShardCleanTasks,
 }
@@ -382,6 +384,7 @@ impl Collection {
             collection_stats_cache,
             client_payload_nonce_replay_cache: Mutex::new(ClientPayloadNonceReplayCache::default()),
             crypto_payload_migration_lock: Mutex::new(()),
+            private_oram_automatic_recovery_tasks: Default::default(),
             shard_clean_tasks: Default::default(),
         })
     }
@@ -511,6 +514,7 @@ impl Collection {
                 ClientPayloadNonceReplayCache::default()
             }),
             crypto_payload_migration_lock: Mutex::new(()),
+            private_oram_automatic_recovery_tasks: Default::default(),
             shard_clean_tasks: Default::default(),
         };
 
@@ -1047,10 +1051,11 @@ impl Collection {
             if !is_dead {
                 continue;
             }
-            if let Err(err) = validate_private_oram_automatic_transfer_recovery_until_supported(
+            if let Err(err) = validate_private_oram_automatic_transfer_recovery_layout(
                 self.name(),
                 shard_id,
                 private_oram_bucket_store_collection,
+                shard_holder.len(),
             ) {
                 log::warn!("{err}");
                 continue;
@@ -1071,20 +1076,23 @@ impl Collection {
 
             // Select shard transfer method, prefer user configured method or choose one now
             // If all peers are 1.8+, we try WAL delta transfer, otherwise we use the default method
-            let default_method = self.default_shard_transfer_method().await;
-            let shard_transfer_method = self
-                .shared_storage_config
-                .default_shard_transfer_method
-                .unwrap_or_else(|| {
-                    let all_support_wal_delta = self
-                        .channel_service
-                        .all_peers_at_version(&Version::new(1, 8, 0));
-                    if all_support_wal_delta {
-                        ShardTransferMethod::WalDelta
-                    } else {
-                        default_method
-                    }
-                });
+            let shard_transfer_method = if private_oram_bucket_store_collection {
+                ShardTransferMethod::StreamRecords
+            } else {
+                let default_method = self.default_shard_transfer_method().await;
+                self.shared_storage_config
+                    .default_shard_transfer_method
+                    .unwrap_or_else(|| {
+                        let all_support_wal_delta = self
+                            .channel_service
+                            .all_peers_at_version(&Version::new(1, 8, 0));
+                        if all_support_wal_delta {
+                            ShardTransferMethod::WalDelta
+                        } else {
+                            default_method
+                        }
+                    })
+            };
 
             // Try to find a replica to transfer from
             //
@@ -1155,10 +1163,48 @@ impl Collection {
                     self.name(),
                 );
 
+                if private_oram_bucket_store_collection {
+                    let mut recovery_tasks =
+                        self.private_oram_automatic_recovery_tasks.lock().await;
+                    if !recovery_tasks.insert(shard_id) {
+                        break;
+                    }
+                    drop(recovery_tasks);
+
+                    let channel_service = self.channel_service.clone();
+                    let collection_name = self.name().to_string();
+                    let recovery_tasks = self.private_oram_automatic_recovery_tasks.clone();
+                    self.update_runtime.spawn(async move {
+                        let response = channel_service
+                            .request_private_oram_shard_recovery(
+                                replica_id,
+                                RequestPrivateOramShardRecoveryRequest {
+                                    collection_name,
+                                    shard_id,
+                                    source_peer_id: replica_id,
+                                    target_peer_id: this_peer_id,
+                                },
+                            )
+                            .await;
+                        match response {
+                            Ok(response) if response.accepted => {}
+                            Ok(_) => log::warn!(
+                                "Private ORAM automatic shard recovery was not accepted by source peer {replica_id}"
+                            ),
+                            Err(error) => log::warn!(
+                                "Failed to request private ORAM automatic shard recovery from peer {replica_id}: {error}"
+                            ),
+                        }
+                        recovery_tasks.lock().await.remove(&shard_id);
+                    });
+                }
+
                 // Update our counters for proposed transfers, then request (propose) shard transfer
                 *proposed.entry(transfer.from).or_default() += 1;
                 *proposed.entry(transfer.to).or_default() += 1;
-                self.request_shard_transfer(transfer);
+                if !private_oram_bucket_store_collection {
+                    self.request_shard_transfer(transfer);
+                }
                 break;
             }
         }
@@ -1495,18 +1541,19 @@ fn collection_encryption_uses_private_oram_bucket_store(
     })
 }
 
-fn validate_private_oram_automatic_transfer_recovery_until_supported(
+fn validate_private_oram_automatic_transfer_recovery_layout(
     _collection_name: &str,
     _shard_id: ShardId,
     private_oram_bucket_store_collection: bool,
+    shard_count: usize,
 ) -> CollectionResult<()> {
-    if !private_oram_bucket_store_collection {
+    if !private_oram_bucket_store_collection || shard_count == 1 {
         return Ok(());
     }
 
     Err(CollectionError::bad_input(
-        "automatic shard transfer recovery for private ORAM collections is disabled until \
-         encrypted ORAM bucket transfer and consensus-backed epoch/root ownership are implemented",
+        "automatic shard transfer recovery for private ORAM collections requires an exact \
+         single-shard layout; multi-shard ORAM ownership remains unsupported",
     ))
 }
 
@@ -1943,25 +1990,24 @@ mod tests {
     ];
 
     #[test]
-    fn private_oram_automatic_transfer_recovery_fails_closed_until_bucket_transfer_supported() {
+    fn private_oram_automatic_transfer_recovery_requires_single_shard_layout() {
         for &collection_name in PRIVATE_ORAM_CLIENT_STATE_COLLECTION_NAMES {
-            validate_private_oram_automatic_transfer_recovery_until_supported(
-                collection_name,
-                3,
-                false,
-            )
-            .unwrap();
+            validate_private_oram_automatic_transfer_recovery_layout(collection_name, 3, false, 2)
+                .unwrap();
+            validate_private_oram_automatic_transfer_recovery_layout(collection_name, 3, true, 1)
+                .unwrap();
 
-            let err = validate_private_oram_automatic_transfer_recovery_until_supported(
+            let err = validate_private_oram_automatic_transfer_recovery_layout(
                 collection_name,
                 3,
                 true,
+                2,
             )
             .unwrap_err();
             let rendered = format!("{err:?}");
             assert!(rendered.contains("private ORAM collections"));
-            assert!(rendered.contains("encrypted ORAM bucket transfer"));
-            assert!(rendered.contains("consensus-backed epoch/root"));
+            assert!(rendered.contains("single-shard layout"));
+            assert!(rendered.contains("multi-shard ORAM ownership"));
             assert!(!rendered.contains(collection_name));
             for &leaked_alias in PRIVATE_ORAM_CLIENT_STATE_REDACTION_STEMS {
                 assert!(!rendered.contains(leaked_alias), "{rendered}");

@@ -7,6 +7,7 @@ use api::grpc::qdrant::{
     CompletePrivateOramWritebackRequest, InstallPrivateOramIndexRequest,
     InstallPrivateOramIndexResponse, InstallPrivateOramLiveReplicaRequest,
     InstallPrivateOramLiveReplicaResponse, PreparePrivateOramWritebackRequest,
+    RequestPrivateOramShardRecoveryRequest, RequestPrivateOramShardRecoveryResponse,
     WaitOnConsensusCommitRequest,
 };
 use api::grpc::transport_channel_pool::{AddTimeout, DEFAULT_RETRIES, TransportChannelPool};
@@ -247,6 +248,33 @@ impl ChannelService {
         .map_err(|_| {
             CollectionError::service_error(format!(
                 "private ORAM live install failed on peer {peer_id}"
+            ))
+        })
+    }
+
+    pub async fn request_private_oram_shard_recovery(
+        &self,
+        peer_id: PeerId,
+        request: RequestPrivateOramShardRecoveryRequest,
+    ) -> CollectionResult<RequestPrivateOramShardRecoveryResponse> {
+        self.with_qdrant_client_timeout(
+            peer_id,
+            Some(PRIVATE_ORAM_INSTALL_GRPC_TIMEOUT),
+            PRIVATE_ORAM_INSTALL_RETRIES,
+            |mut client| {
+                let request = request.clone();
+                async move {
+                    client
+                        .request_private_oram_shard_recovery(Request::new(request))
+                        .await
+                }
+            },
+        )
+        .await
+        .map(tonic::Response::into_inner)
+        .map_err(|_| {
+            CollectionError::service_error(format!(
+                "Failed to request private ORAM shard recovery from peer {peer_id}"
             ))
         })
     }
@@ -527,6 +555,20 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("peer 11"));
+        assert!(!error.contains(collection_sentinel));
+
+        let recovery = RequestPrivateOramShardRecoveryRequest {
+            collection_name: collection_sentinel.to_string(),
+            shard_id: 3,
+            source_peer_id: 13,
+            target_peer_id: 17,
+        };
+        let error = service
+            .request_private_oram_shard_recovery(13, recovery)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("peer 13"));
         assert!(!error.contains(collection_sentinel));
 
         let complete = CompletePrivateOramWritebackRequest {

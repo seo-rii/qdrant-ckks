@@ -22,6 +22,7 @@ from .utils import (
     skip_if_no_feature,
     start_first_peer,
     start_peer,
+    wait_for,
     wait_collection_exists_and_active_on_all_peers,
     wait_for_collection_local_shards_count,
     wait_for_collection_shard_transfers_count,
@@ -38,6 +39,7 @@ NEXT_EPOCH = 43
 FIXTURE_EXAMPLE = "private_oram_cluster_fixture"
 PLACEHOLDER_COLLECTION_ID = "12345678-90ab-cdef-1234-567890abcdef"
 LARGE_FIXTURE_PROFILE = "large"
+IDS_VISIBLE_RESULT_PRIVACY = "ids_visible"
 RUN_LARGE_BUNDLE_BENCHMARK = "QDRANT_RUN_PRIVATE_ORAM_LARGE_BUNDLE_BENCHMARK"
 
 
@@ -47,7 +49,11 @@ def cleanup_private_oram_peers():
     kill_all_processes()
 
 
-def _private_oram_fixture(collection_id: str, profile: str | None = None) -> dict:
+def _private_oram_fixture(
+    collection_id: str,
+    profile: str | None = None,
+    result_privacy: str | None = None,
+) -> dict:
     command = [
         "cargo",
         "run",
@@ -61,6 +67,10 @@ def _private_oram_fixture(collection_id: str, profile: str | None = None) -> dic
     ]
     if profile is not None:
         command.append(profile)
+    elif result_privacy is not None:
+        command.append("default")
+    if result_privacy is not None:
+        command.append(result_privacy)
     completed = subprocess.run(
         command,
         cwd=PROJECT_ROOT,
@@ -79,6 +89,7 @@ def _write_private_oram_runtime_config(
     hnsw_public_key = fixture["hnsw_public_key"]
     result_public_key = fixture["result_public_key"]
     hnsw_oram = fixture["hnsw"]["manifest"]["oram"]
+    hnsw_result_privacy = fixture["hnsw"]["manifest"]["result_privacy"]
     result_oram = fixture["result"]["manifest"]["oram"]
     local_config = f"""
 crypto:
@@ -94,7 +105,7 @@ crypto:
         max_rk_epoch: 7
         search_execution: client_led
         search_mode: private_hnsw_oram
-        result_privacy: private_payload_oram_required
+        result_privacy: {hnsw_result_privacy}
         distance: euclid
         dim: 2
         hnsw:
@@ -166,9 +177,13 @@ def _start_private_oram_cluster(
     replication_factor: int,
     extra_env: dict[str, str] | None = None,
     fixture_profile: str | None = None,
+    include_result_oram: bool = True,
+    include_public_vector: bool = False,
+    write_consistency_factor: int | None = None,
 ) -> tuple[list[str], list[pathlib.Path], dict, int, str]:
+    result_privacy = None if include_result_oram else IDS_VISIBLE_RESULT_PRIVACY
     bootstrap_fixture = _private_oram_fixture(
-        PLACEHOLDER_COLLECTION_ID, fixture_profile
+        PLACEHOLDER_COLLECTION_ID, fixture_profile, result_privacy
     )
     peer_dirs = make_peer_folders(tmp_path, peer_count)
     for peer_dir in peer_dirs:
@@ -190,33 +205,44 @@ def _start_private_oram_cluster(
         )
     wait_for_uniform_cluster_status(peer_urls, leader)
 
+    vectors = {VECTOR: {"size": 2, "distance": "Euclid"}}
+    if include_public_vector:
+        vectors["public"] = {"size": 2, "distance": "Euclid"}
+    encryption_rules = [
+        {
+            "id": "text_private_hnsw",
+            "selector": {"kind": "vector_names", "names": [VECTOR]},
+            "instance": "docs_private_hnsw_v1",
+            "binding": "private-hnsw-oram/v1",
+        }
+    ]
+    if include_result_oram:
+        encryption_rules.append(
+            {
+                "id": "payload_private_result_oram",
+                "selector": {"kind": "payload_paths", "paths": ["body"]},
+                "instance": "docs_private_result_oram_v1",
+                "binding": "private-result-oram/v1",
+            }
+        )
     create = requests.put(
         f"{bootstrap_api}/collections/{COLLECTION}",
         json={
-            "vectors": {VECTOR: {"size": 2, "distance": "Euclid"}},
+            "vectors": vectors,
             "shard_number": 1,
             "replication_factor": replication_factor,
-            "write_consistency_factor": replication_factor,
+            "write_consistency_factor": (
+                replication_factor
+                if write_consistency_factor is None
+                else write_consistency_factor
+            ),
             "encryption": {
                 "version": 1,
                 "key_id": "tenant-a/vector-private-rk",
                 "crypto_schema_version": 1,
                 "encryption_epoch": 7,
                 "migration_state": "active",
-                "rules": [
-                    {
-                        "id": "text_private_hnsw",
-                        "selector": {"kind": "vector_names", "names": [VECTOR]},
-                        "instance": "docs_private_hnsw_v1",
-                        "binding": "private-hnsw-oram/v1",
-                    },
-                    {
-                        "id": "payload_private_result_oram",
-                        "selector": {"kind": "payload_paths", "paths": ["body"]},
-                        "instance": "docs_private_result_oram_v1",
-                        "binding": "private-result-oram/v1",
-                    },
-                ],
+                "rules": encryption_rules,
             },
         },
         timeout=30,
@@ -224,7 +250,9 @@ def _start_private_oram_cluster(
     assert_http_ok(create)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
 
-    fixture = _private_oram_fixture(_collection_uuid(bootstrap_api), fixture_profile)
+    fixture = _private_oram_fixture(
+        _collection_uuid(bootstrap_api), fixture_profile, result_privacy
+    )
     assert fixture["hnsw_public_key"] == bootstrap_fixture["hnsw_public_key"]
     assert fixture["result_public_key"] == bootstrap_fixture["result_public_key"]
     return peer_urls, peer_dirs, fixture, leader, bootstrap_uri
@@ -249,14 +277,18 @@ def _upload_hnsw(peer_url: str, fixture: dict) -> None:
     )
 
 
-def _open_hnsw_owner_session(peer_url: str, desired_epoch: int) -> dict:
+def _open_hnsw_owner_session(
+    peer_url: str,
+    desired_epoch: int,
+    result_privacy: str = "private_payload_oram_required",
+) -> dict:
     return _post_result(
         f"{peer_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session",
         {
             "client_id": "tenant-a/multi-peer-hnsw-sdk",
             "desired_epoch": desired_epoch,
             "fixed_budget": True,
-            "result_privacy": "private_payload_oram_required",
+            "result_privacy": result_privacy,
         },
     )
 
@@ -281,7 +313,9 @@ def _read_hnsw_owner_session(peer_url: str, fixture: dict, session: dict) -> Non
 
 def _exercise_hnsw_owner_session(peer_url: str, fixture: dict) -> None:
     hnsw = fixture["hnsw"]
-    session = _open_hnsw_owner_session(peer_url, BASE_EPOCH)
+    session = _open_hnsw_owner_session(
+        peer_url, BASE_EPOCH, hnsw["manifest"]["result_privacy"]
+    )
     _read_hnsw_owner_session(peer_url, fixture, session)
 
     commit = hnsw["commit"]
@@ -429,6 +463,124 @@ def test_private_oram_sessions_replicate_through_public_routes(tmp_path: pathlib
     _upload_result_oram(bootstrap_api, fixture)
     _exercise_result_owner_session(bootstrap_api, fixture)
     _assert_replica_can_open_current_sessions(replica_api)
+
+
+def test_private_oram_dead_replica_automatically_recovers_from_source(
+    tmp_path: pathlib.Path,
+):
+    peer_urls, peer_dirs, fixture, leader, _ = _start_private_oram_cluster(
+        tmp_path,
+        3,
+        2,
+        include_result_oram=False,
+        include_public_vector=True,
+        write_consistency_factor=1,
+    )
+    peer_ids = [get_cluster_info(peer_url)["peer_id"] for peer_url in peer_urls]
+    cluster_infos = [
+        get_collection_cluster_info(peer_url, COLLECTION) for peer_url in peer_urls
+    ]
+    replica_indices = [
+        index for index, info in enumerate(cluster_infos) if info["local_shards"]
+    ]
+    assert len(replica_indices) == 2
+    target_index = next(
+        index for index in replica_indices if peer_ids[index] != leader
+    )
+    source_index = next(index for index in replica_indices if index != target_index)
+    source_url = peer_urls[source_index]
+    target_url = peer_urls[target_index]
+    target_peer_id = peer_ids[target_index]
+    shard_id = cluster_infos[target_index]["local_shards"][0]["shard_id"]
+
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    replicated_session = _open_hnsw_owner_session(
+        target_url,
+        NEXT_EPOCH,
+        IDS_VISIBLE_RESULT_PRIVACY,
+    )
+    assert replicated_session["root_hash"] == fixture["hnsw"]["commit"][
+        "new_root_hash"
+    ]
+    assert (
+        _post_result(
+            f"{target_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session/{replicated_session['session_id']}/close",
+            {},
+        )
+        is True
+    )
+
+    initial_write = requests.put(
+        f"{source_url}/collections/{COLLECTION}/points?wait=true",
+        json={"points": [{"id": 1, "vector": {"public": [1.0, 0.0]}}]},
+        timeout=30,
+    )
+    assert_http_ok(initial_write)
+
+    target_port = processes[target_index].p2p_port
+    restart_bootstrap_uri = get_uri(processes[source_index].p2p_port)
+    processes.pop(target_index).kill()
+
+    dead_replica_write = requests.put(
+        f"{source_url}/collections/{COLLECTION}/points?wait=true",
+        json={
+            "points": [
+                {"id": point_id, "vector": {"public": [float(point_id), 1.0]}}
+                for point_id in range(2, 10)
+            ]
+        },
+        timeout=30,
+    )
+    assert_http_ok(dead_replica_write)
+
+    def target_replica_is_dead() -> bool:
+        info = get_collection_cluster_info(source_url, COLLECTION)
+        return any(
+            shard["shard_id"] == shard_id
+            and shard.get("peer_id") == target_peer_id
+            and shard["state"] == "Dead"
+            for shard in info["remote_shards"]
+        )
+
+    wait_for(target_replica_is_dead, wait_for_timeout=60)
+
+    target_hnsw_store = _private_oram_buckets_dir(
+        peer_dirs[target_index], "hnsw"
+    ).parents[1]
+    shutil.rmtree(target_hnsw_store)
+
+    restarted_url = start_peer(
+        peer_dirs[target_index],
+        "private_oram_peer_automatic_recovery.log",
+        restart_bootstrap_uri,
+        port=target_port,
+    )
+    peer_urls[target_index] = restarted_url
+    wait_for_peer_online(restarted_url, path="/cluster")
+    wait_for_uniform_cluster_status(peer_urls, leader)
+    wait_for(
+        lambda: target_hnsw_store.is_dir(),
+        wait_for_timeout=60,
+    )
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+
+    recovered_session = _open_hnsw_owner_session(
+        restarted_url,
+        NEXT_EPOCH,
+        IDS_VISIBLE_RESULT_PRIVACY,
+    )
+    assert recovered_session["root_hash"] == fixture["hnsw"]["commit"][
+        "new_root_hash"
+    ]
+    assert (
+        _post_result(
+            f"{restarted_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session/{recovered_session['session_id']}/close",
+            {},
+        )
+        is True
+    )
 
 
 def _private_oram_transfer_peers(

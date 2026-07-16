@@ -41,6 +41,10 @@ service QdrantInternal {
   // Idempotently install one consensus-bound live encrypted index for movement.
   rpc InstallPrivateOramLiveReplica(InstallPrivateOramLiveReplicaRequest)
       returns (InstallPrivateOramLiveReplicaResponse) {}
+
+  // Ask the active source peer to preinstall and submit automatic shard recovery.
+  rpc RequestPrivateOramShardRecovery(RequestPrivateOramShardRecoveryRequest)
+      returns (RequestPrivateOramShardRecoveryResponse) {}
 }
 
 message GetConsensusCommitRequest {}
@@ -209,4 +213,15 @@ message InstallPrivateOramLiveReplicaResponse {
   uint64 index_epoch = 1;
   string root_hash = 2;
   optional string writeback_digest = 3;
+}
+
+message RequestPrivateOramShardRecoveryRequest {
+  string collection_name = 1;
+  uint32 shard_id = 2;
+  uint64 source_peer_id = 3;
+  uint64 target_peer_id = 4;
+}
+
+message RequestPrivateOramShardRecoveryResponse {
+  bool accepted = 1;
 }
