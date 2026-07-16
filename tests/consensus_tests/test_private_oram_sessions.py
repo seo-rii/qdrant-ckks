@@ -1,5 +1,6 @@
 import json
 import pathlib
+import shutil
 import stat
 import subprocess
 
@@ -413,11 +414,9 @@ def test_private_oram_sessions_replicate_through_public_routes(tmp_path: pathlib
     _assert_replica_can_open_current_sessions(replica_api)
 
 
-@pytest.mark.parametrize("transfer_operation", ["replicate_shard", "move_shard"])
-def test_private_oram_shard_transfer_preinstalls_live_store(
-    tmp_path: pathlib.Path, transfer_operation: str
-):
-    peer_urls, _, fixture, _, _ = _start_private_oram_cluster(tmp_path, 2, 1)
+def _private_oram_transfer_peers(
+    peer_urls: list[str],
+) -> tuple[int, int, str, str, dict, dict]:
     cluster_infos = [
         get_collection_cluster_info(peer_url, COLLECTION) for peer_url in peer_urls
     ]
@@ -427,10 +426,45 @@ def test_private_oram_shard_transfer_preinstalls_live_store(
     assert len(source_indices) == 1
     source_index = source_indices[0]
     target_index = 1 - source_index
-    source_url = peer_urls[source_index]
-    target_url = peer_urls[target_index]
-    source_info = cluster_infos[source_index]
-    target_info = cluster_infos[target_index]
+    return (
+        source_index,
+        target_index,
+        peer_urls[source_index],
+        peer_urls[target_index],
+        cluster_infos[source_index],
+        cluster_infos[target_index],
+    )
+
+
+def _request_private_oram_shard_transfer(
+    source_url: str,
+    transfer_operation: str,
+    shard_id: int,
+    source_peer_id: int,
+    target_peer_id: int,
+) -> requests.Response:
+    return requests.post(
+        f"{source_url}/collections/{COLLECTION}/cluster",
+        json={
+            transfer_operation: {
+                "shard_id": shard_id,
+                "from_peer_id": source_peer_id,
+                "to_peer_id": target_peer_id,
+                "method": "stream_records",
+            }
+        },
+        timeout=60,
+    )
+
+
+@pytest.mark.parametrize("transfer_operation", ["replicate_shard", "move_shard"])
+def test_private_oram_shard_transfer_preinstalls_live_store(
+    tmp_path: pathlib.Path, transfer_operation: str
+):
+    peer_urls, _, fixture, _, _ = _start_private_oram_cluster(tmp_path, 2, 1)
+    _, _, source_url, target_url, source_info, target_info = (
+        _private_oram_transfer_peers(peer_urls)
+    )
 
     assert not target_info["local_shards"]
     shard_id = source_info["local_shards"][0]["shard_id"]
@@ -440,19 +474,14 @@ def test_private_oram_shard_transfer_preinstalls_live_store(
     _upload_result_oram(source_url, fixture)
     _exercise_result_owner_session(source_url, fixture)
 
-    replicate = requests.post(
-        f"{source_url}/collections/{COLLECTION}/cluster",
-        json={
-            transfer_operation: {
-                "shard_id": shard_id,
-                "from_peer_id": source_info["peer_id"],
-                "to_peer_id": target_info["peer_id"],
-                "method": "stream_records",
-            }
-        },
-        timeout=60,
+    transfer = _request_private_oram_shard_transfer(
+        source_url,
+        transfer_operation,
+        shard_id,
+        source_info["peer_id"],
+        target_info["peer_id"],
     )
-    assert_http_ok(replicate)
+    assert_http_ok(transfer)
 
     wait_for_collection_local_shards_count(target_url, COLLECTION, 1)
     wait_for_collection_local_shards_count(
@@ -460,6 +489,72 @@ def test_private_oram_shard_transfer_preinstalls_live_store(
         COLLECTION,
         1 if transfer_operation == "replicate_shard" else 0,
     )
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _assert_replica_can_open_current_sessions(target_url)
+
+
+def test_private_oram_partial_live_preinstall_fails_closed_and_retries(
+    tmp_path: pathlib.Path,
+):
+    peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(tmp_path, 2, 1)
+    _, target_index, source_url, target_url, source_info, target_info = (
+        _private_oram_transfer_peers(peer_urls)
+    )
+    shard_id = source_info["local_shards"][0]["shard_id"]
+
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    _upload_result_oram(source_url, fixture)
+    _exercise_result_owner_session(source_url, fixture)
+
+    malformed_store = (
+        peer_dirs[target_index]
+        / "storage"
+        / "collections"
+        / COLLECTION
+        / "private_result_oram"
+    )
+    malformed_epochs = malformed_store / "epochs"
+    malformed_epochs.mkdir(parents=True)
+    (malformed_epochs / "current.json").write_text("{}")
+    try:
+        failed = _request_private_oram_shard_transfer(
+            source_url,
+            "replicate_shard",
+            shard_id,
+            source_info["peer_id"],
+            target_info["peer_id"],
+        )
+    finally:
+        shutil.rmtree(malformed_store)
+
+    assert 400 <= failed.status_code < 600
+    for secret in [
+        fixture["hnsw"]["commit"]["new_root_hash"],
+        fixture["result"]["commit"]["new_root_hash"],
+        fixture["hnsw"]["commit"]["signature"]["sig"],
+        fixture["result"]["commit"]["signature"]["sig"],
+        fixture["hnsw"]["commit"]["updated_buckets"][0]["ciphertext"],
+        fixture["result"]["commit"]["updated_buckets"][0]["ciphertext"],
+    ]:
+        assert secret not in failed.text
+
+    assert _private_oram_buckets_dir(peer_dirs[target_index], "hnsw").is_dir()
+    assert not get_collection_cluster_info(source_url, COLLECTION)["shard_transfers"]
+    assert len(get_collection_cluster_info(source_url, COLLECTION)["local_shards"]) == 1
+    assert not get_collection_cluster_info(target_url, COLLECTION)["local_shards"]
+    _assert_replica_can_open_current_sessions(source_url)
+
+    retried = _request_private_oram_shard_transfer(
+        source_url,
+        "replicate_shard",
+        shard_id,
+        source_info["peer_id"],
+        target_info["peer_id"],
+    )
+    assert_http_ok(retried)
+    wait_for_collection_local_shards_count(target_url, COLLECTION, 1)
     wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
     _assert_replica_can_open_current_sessions(target_url)

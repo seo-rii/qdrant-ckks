@@ -1572,6 +1572,10 @@ result payload content. Two-process tests advance both private ORAM stores and
 run this preinstall/transfer path for both ReplicateShard (RF=1 to RF=2) and
 MoveShard, verify the resulting local shard ownership, wait for the target
 shard to become active, and reopen both committed sessions on the target.
+Another process test injects a malformed target result-ORAM store after the
+HNSW live bundle is installed. The request fails before transfer submission,
+does not expose roots, signatures, or ciphertext, releases every reservation,
+and succeeds on exact retry after the malformed store is removed.
 `ReplicatePoints`, restart, snapshot, WAL,
 resharding transfer methods, multi-shard layouts, and automatic dead-replica
 transfer recovery remain fail closed.
