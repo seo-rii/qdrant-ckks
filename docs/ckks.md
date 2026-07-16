@@ -1568,7 +1568,12 @@ submits the marked shard transfer. Partial preinstalls are idempotent exact-stat
 copies and do not change membership. The marked target accepts only the
 transfer's peer `SyncPoints` operation needed to initialize ordinary shard
 records, and normal peer crypto checks still reject protected vector or private
-result payload content. Two-process tests advance both private ORAM stores and
+result payload content. Before any initial or live peer install, the source
+checks the complete protobuf request `encoded_len`, including the manifest and
+wire envelope, against `service.max_request_size_mb`. An oversized request
+therefore fails locally with a fixed redacted error instead of passing the
+bucket estimate and failing later in internal gRPC decoding. Two-process tests
+advance both private ORAM stores and
 run this preinstall/transfer path for both ReplicateShard (RF=1 to RF=2) and
 MoveShard, verify the resulting local shard ownership, wait for the target
 shard to become active, and reopen both committed sessions on the target.

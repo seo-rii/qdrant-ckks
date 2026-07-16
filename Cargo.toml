@@ -91,6 +91,7 @@ actix-web = { workspace = true }
 actix-files = { workspace = true }
 tonic = { workspace = true }
 tonic-reflection = { workspace = true }
+prost = { workspace = true }
 tower = { version = "0.5.3", features = ["util"] }
 tower-layer = "0.3.3"
 reqwest = { workspace = true }

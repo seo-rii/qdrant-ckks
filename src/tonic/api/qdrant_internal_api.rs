@@ -31,6 +31,7 @@ use collection::private_result_oram_store::{
 use collection::shards::shard::PeerId;
 use common::types::{DetailsLevel, TelemetryDetail};
 use data_encoding::BASE64URL_NOPAD;
+use prost::Message;
 use qdrant_sec::{
     PrivateHnswOramBucket, PrivateHnswOramSignature, PrivateHnswOramUploadBundle,
     PrivateResultOramBucket, PrivateResultOramSignature, PrivateResultOramUploadBundle,
@@ -339,6 +340,17 @@ const PRIVATE_ORAM_SESSION_LEASE_HASH_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-session-lease-id/v1";
 const PRIVATE_ORAM_SESSION_LEASE_RENEW_SECS: u64 = 300;
 const PRIVATE_ORAM_TRANSFER_RESERVATION_SECS: u64 = 3_600;
+
+fn validate_private_oram_wire_request_budget(
+    request: &impl Message,
+    max_request_bytes: usize,
+    error_message: &'static str,
+) -> Result<(), StorageError> {
+    if max_request_bytes == 0 || request.encoded_len() > max_request_bytes {
+        return Err(StorageError::bad_request(error_message));
+    }
+    Ok(())
+}
 
 pub(crate) fn private_oram_session_lease_hash(session_id: &str) -> Result<String, StorageError> {
     if session_id.is_empty() || session_id.len() > 256 {
@@ -788,6 +800,11 @@ pub(crate) async fn coordinate_private_hnsw_initial_upload(
             },
         )),
     };
+    validate_private_oram_wire_request_budget(
+        &request,
+        max_bundle_bytes,
+        "private HNSW ORAM initial install request exceeds service request limit",
+    )?;
     dispatcher
         .coordinate_private_oram_initial_install(
             &collection_name.to_string(),
@@ -845,6 +862,11 @@ pub(crate) async fn coordinate_private_result_oram_initial_upload(
             },
         )),
     };
+    validate_private_oram_wire_request_budget(
+        &request,
+        max_bundle_bytes,
+        "private result ORAM initial install request exceeds service request limit",
+    )?;
     dispatcher
         .coordinate_private_oram_initial_install(
             &collection_name.to_string(),
@@ -925,6 +947,11 @@ pub(crate) async fn install_private_hnsw_live_replica_on_peer(
         )),
         transfer_lease_id_hash: transfer_lease_id_hash.to_string(),
     };
+    validate_private_oram_wire_request_budget(
+        &request,
+        max_bundle_bytes,
+        "private HNSW ORAM live install request exceeds service request limit",
+    )?;
     let response = dispatcher
         .toc(auth, &pass)
         .get_channel_service()
@@ -995,6 +1022,11 @@ pub(crate) async fn install_private_result_oram_live_replica_on_peer(
         )),
         transfer_lease_id_hash: transfer_lease_id_hash.to_string(),
     };
+    validate_private_oram_wire_request_budget(
+        &request,
+        max_bundle_bytes,
+        "private result ORAM live install request exceeds service request limit",
+    )?;
     let response = dispatcher
         .toc(auth, &pass)
         .get_channel_service()
@@ -2631,6 +2663,39 @@ mod tests {
             oversized_ciphertext.message(),
             "private ORAM initial install bucket shape is invalid"
         );
+    }
+
+    #[test]
+    fn private_oram_wire_request_budget_uses_full_protobuf_envelope() {
+        let sentinel = "private-oram-wire-budget-sentinel".repeat(8);
+        let request = InstallPrivateOramLiveReplicaRequest {
+            collection_name: "docs".to_string(),
+            collection_id: "collection-crypto-id".to_string(),
+            index_kind: PrivateOramReplicationIndexKind::Hnsw as i32,
+            vector_name: "text".to_string(),
+            bundle: None,
+            transfer_lease_id_hash: sentinel.clone(),
+        };
+        let encoded_len = request.encoded_len();
+        assert!(encoded_len > sentinel.len());
+        validate_private_oram_wire_request_budget(
+            &request,
+            encoded_len,
+            "private ORAM wire request is oversized",
+        )
+        .unwrap();
+
+        for limit in [0, encoded_len - 1] {
+            let rendered = validate_private_oram_wire_request_budget(
+                &request,
+                limit,
+                "private ORAM wire request is oversized",
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(rendered.contains("wire request is oversized"));
+            assert!(!rendered.contains(&sentinel));
+        }
     }
 
     #[test]
