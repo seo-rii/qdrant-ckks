@@ -201,6 +201,8 @@ message InstallPrivateOramLiveReplicaRequest {
     PrivateHnswLiveReplicationBundle hnsw = 5;
     PrivateResultOramLiveReplicationBundle result = 6;
   }
+  // Hash of the consensus lease reserved by a shard-transfer coordinator.
+  string transfer_lease_id_hash = 7;
 }
 
 message InstallPrivateOramLiveReplicaResponse {

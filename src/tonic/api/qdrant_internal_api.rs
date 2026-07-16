@@ -299,6 +299,36 @@ fn validate_live_install_digest(writeback_digest: Option<&str>) -> Result<(), St
     Ok(())
 }
 
+fn validate_live_install_transfer_lease(
+    lease: Option<&PrivateOramSessionLease>,
+    transfer_lease_id_hash: &str,
+    now_unix: u64,
+) -> Result<(), Status> {
+    if !transfer_lease_id_hash.is_empty() {
+        let decoded = BASE64URL_NOPAD
+            .decode(transfer_lease_id_hash.as_bytes())
+            .map_err(|_| {
+                Status::invalid_argument(
+                    "private ORAM live install transfer reservation is invalid",
+                )
+            })?;
+        if decoded.len() != 32 || BASE64URL_NOPAD.encode(&decoded) != transfer_lease_id_hash {
+            return Err(Status::invalid_argument(
+                "private ORAM live install transfer reservation is invalid",
+            ));
+        }
+    }
+
+    let active_lease = lease.filter(|lease| lease.expires_at_unix > now_unix);
+    match (active_lease, transfer_lease_id_hash.is_empty()) {
+        (None, true) => Ok(()),
+        (Some(lease), false) if lease.lease_id_hash == transfer_lease_id_hash => Ok(()),
+        _ => Err(Status::failed_precondition(
+            "private ORAM live install transfer reservation does not match consensus",
+        )),
+    }
+}
+
 const BYTES_PER_MIB: usize = 1024 * 1024;
 const PRIVATE_ORAM_SESSION_LEASE_HASH_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-session-lease-id/v1";
@@ -651,6 +681,7 @@ pub(crate) async fn install_private_hnsw_live_replica_on_peer(
     collection_name: &str,
     vector_name: &str,
     target_peer: PeerId,
+    transfer_lease_id_hash: &str,
 ) -> Result<(), StorageError> {
     let pass = new_unchecked_verification_pass();
     let max_bundle_bytes = settings
@@ -705,6 +736,7 @@ pub(crate) async fn install_private_hnsw_live_replica_on_peer(
                     .collect(),
             },
         )),
+        transfer_lease_id_hash: transfer_lease_id_hash.to_string(),
     };
     let response = dispatcher
         .toc(auth, &pass)
@@ -721,6 +753,7 @@ pub(crate) async fn install_private_result_oram_live_replica_on_peer(
     settings: &Settings,
     collection_name: &str,
     target_peer: PeerId,
+    transfer_lease_id_hash: &str,
 ) -> Result<(), StorageError> {
     let pass = new_unchecked_verification_pass();
     let max_bundle_bytes = settings
@@ -774,6 +807,7 @@ pub(crate) async fn install_private_result_oram_live_replica_on_peer(
                     .collect(),
             },
         )),
+        transfer_lease_id_hash: transfer_lease_id_hash.to_string(),
     };
     let response = dispatcher
         .toc(auth, &pass)
@@ -2123,15 +2157,12 @@ impl QdrantInternal for QdrantInternalService {
             .duration_since(UNIX_EPOCH)
             .map_err(|_| Status::internal("private ORAM live install clock is invalid"))?
             .as_secs();
-        if self
-            .consensus_state
-            .private_oram_session_lease(&key)
-            .is_some_and(|lease| lease.expires_at_unix > now_unix)
-        {
-            return Err(Status::failed_precondition(
-                "private ORAM live install requires no active session",
-            ));
-        }
+        let lease = self.consensus_state.private_oram_session_lease(&key);
+        validate_live_install_transfer_lease(
+            lease.as_ref(),
+            &request.transfer_lease_id_hash,
+            now_unix,
+        )?;
 
         let (index_epoch, root_hash) = match bundle {
             LiveBundle::Hnsw(bundle) => {
@@ -2449,6 +2480,43 @@ mod tests {
             };
             assert!(!err.message().contains(sentinel));
         }
+    }
+
+    #[test]
+    fn private_oram_live_install_requires_exact_transfer_reservation() {
+        let lease_hash = BASE64URL_NOPAD.encode(&[12; 32]);
+        let lease = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: lease_hash.clone(),
+            issued_at_unix: 100,
+            expires_at_unix: 400,
+        };
+
+        validate_live_install_transfer_lease(None, "", 200).unwrap();
+        validate_live_install_transfer_lease(Some(&lease), &lease_hash, 200).unwrap();
+        validate_live_install_transfer_lease(Some(&lease), "", 400).unwrap();
+
+        for requested in [
+            "".to_string(),
+            BASE64URL_NOPAD.encode(&[13; 32]),
+            "transfer-reservation-sentinel".to_string(),
+        ] {
+            let err =
+                validate_live_install_transfer_lease(Some(&lease), &requested, 200).unwrap_err();
+            assert!(!err.message().contains(&lease_hash));
+            if !requested.is_empty() {
+                assert!(!err.message().contains(&requested));
+            }
+        }
+
+        let expired =
+            validate_live_install_transfer_lease(Some(&lease), &lease_hash, 400).unwrap_err();
+        assert_eq!(expired.code(), tonic::Code::FailedPrecondition);
+        assert!(!expired.message().contains(&lease_hash));
+
+        let missing = validate_live_install_transfer_lease(None, &lease_hash, 200).unwrap_err();
+        assert_eq!(missing.code(), tonic::Code::FailedPrecondition);
+        assert!(!missing.message().contains(&lease_hash));
     }
 
     #[test]

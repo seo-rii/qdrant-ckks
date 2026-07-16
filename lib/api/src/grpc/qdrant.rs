@@ -15968,6 +15968,9 @@ pub struct InstallPrivateOramLiveReplicaRequest {
     pub index_kind: i32,
     #[prost(string, tag = "4")]
     pub vector_name: ::prost::alloc::string::String,
+    /// Hash of the consensus lease reserved by a shard-transfer coordinator.
+    #[prost(string, tag = "7")]
+    pub transfer_lease_id_hash: ::prost::alloc::string::String,
     #[prost(oneof = "install_private_oram_live_replica_request::Bundle", tags = "5, 6")]
     pub bundle: ::core::option::Option<
         install_private_oram_live_replica_request::Bundle,
