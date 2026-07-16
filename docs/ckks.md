@@ -1576,6 +1576,12 @@ Another process test injects a malformed target result-ORAM store after the
 HNSW live bundle is installed. The request fails before transfer submission,
 does not expose roots, signatures, or ciphertext, releases every reservation,
 and succeeds on exact retry after the malformed store is removed.
+The post-submit abort process test uses the staging transfer delay to keep a
+marked transfer active, verifies that source sessions remain frozen, and then
+aborts it. The abort removes the transfer marker, leaves the target replica
+`Dead`, preserves its preinstalled encrypted stores, and releases source
+sessions. An exact ReplicateShard retry then activates the target and reopens
+both committed sessions there.
 `ReplicatePoints`, restart, snapshot, WAL,
 resharding transfer methods, multi-shard layouts, and automatic dead-replica
 transfer recovery remain fail closed.

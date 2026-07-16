@@ -16,6 +16,7 @@ from .utils import (
     kill_all_processes,
     make_peer_folders,
     processes,
+    skip_if_no_feature,
     start_first_peer,
     start_peer,
     wait_collection_exists_and_active_on_all_peers,
@@ -147,7 +148,10 @@ def _collection_uuid(peer_url: str) -> str:
 
 
 def _start_private_oram_cluster(
-    tmp_path: pathlib.Path, peer_count: int, replication_factor: int
+    tmp_path: pathlib.Path,
+    peer_count: int,
+    replication_factor: int,
+    extra_env: dict[str, str] | None = None,
 ) -> tuple[list[str], list[pathlib.Path], dict, int, str]:
     bootstrap_fixture = _private_oram_fixture(PLACEHOLDER_COLLECTION_ID)
     peer_dirs = make_peer_folders(tmp_path, peer_count)
@@ -159,7 +163,7 @@ def _start_private_oram_cluster(
         )
 
     bootstrap_api, bootstrap_uri = start_first_peer(
-        peer_dirs[0], "private_oram_peer_0.log"
+        peer_dirs[0], "private_oram_peer_0.log", extra_env=extra_env
     )
     leader = wait_peer_added(bootstrap_api)
     peer_urls = [bootstrap_api]
@@ -169,6 +173,7 @@ def _start_private_oram_cluster(
                 peer_dir,
                 f"private_oram_peer_{peer_index}.log",
                 bootstrap_uri,
+                extra_env=extra_env,
             )
         )
     wait_for_uniform_cluster_status(peer_urls, leader)
@@ -555,6 +560,90 @@ def test_private_oram_partial_live_preinstall_fails_closed_and_retries(
     )
     assert_http_ok(retried)
     wait_for_collection_local_shards_count(target_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _assert_replica_can_open_current_sessions(target_url)
+
+
+def test_private_oram_post_submit_abort_releases_sessions_and_retries(
+    tmp_path: pathlib.Path,
+):
+    peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(
+        tmp_path,
+        2,
+        1,
+        extra_env={"QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "2"},
+    )
+    skip_if_no_feature(peer_urls[0], "staging")
+    _, target_index, source_url, target_url, source_info, target_info = (
+        _private_oram_transfer_peers(peer_urls)
+    )
+    shard_id = source_info["local_shards"][0]["shard_id"]
+
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    _upload_result_oram(source_url, fixture)
+    _exercise_result_owner_session(source_url, fixture)
+
+    started = _request_private_oram_shard_transfer(
+        source_url,
+        "replicate_shard",
+        shard_id,
+        source_info["peer_id"],
+        target_info["peer_id"],
+    )
+    assert_http_ok(started)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
+
+    blocked_session = requests.post(
+        f"{source_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session",
+        json={
+            "client_id": "tenant-a/blocked-transfer-sdk",
+            "desired_epoch": NEXT_EPOCH,
+            "fixed_budget": True,
+            "result_privacy": "private_payload_oram_required",
+        },
+        timeout=30,
+    )
+    assert 400 <= blocked_session.status_code < 600
+    for secret in [
+        fixture["hnsw"]["commit"]["new_root_hash"],
+        fixture["result"]["commit"]["new_root_hash"],
+    ]:
+        assert secret not in blocked_session.text
+
+    aborted = requests.post(
+        f"{source_url}/collections/{COLLECTION}/cluster",
+        json={
+            "abort_transfer": {
+                "shard_id": shard_id,
+                "from_peer_id": source_info["peer_id"],
+                "to_peer_id": target_info["peer_id"],
+            }
+        },
+        timeout=30,
+    )
+    assert_http_ok(aborted)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 0)
+
+    aborted_target = get_collection_cluster_info(target_url, COLLECTION)
+    assert len(aborted_target["local_shards"]) == 1
+    assert aborted_target["local_shards"][0]["state"] == "Dead"
+    assert _private_oram_buckets_dir(peer_dirs[target_index], "hnsw").is_dir()
+    assert _private_oram_buckets_dir(peer_dirs[target_index], "result").is_dir()
+    _assert_replica_can_open_current_sessions(source_url)
+
+    retried = _request_private_oram_shard_transfer(
+        source_url,
+        "replicate_shard",
+        shard_id,
+        source_info["peer_id"],
+        target_info["peer_id"],
+    )
+    assert_http_ok(retried)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
     wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
     _assert_replica_can_open_current_sessions(target_url)
