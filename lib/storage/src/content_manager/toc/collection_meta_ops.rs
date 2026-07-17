@@ -10,7 +10,7 @@ use collection::operations::types::PeerMetadata;
 use collection::shards::collection_shard_distribution::CollectionShardDistribution;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::PeerId;
-use collection::shards::transfer::{ShardTransfer, ShardTransferMethod};
+use collection::shards::transfer::{ShardTransfer, ShardTransferMethod, ShardTransferRestart};
 use collection::shards::{CollectionId, replica_set, transfer};
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use common::fs::safe_delete_in_tmp;
@@ -627,12 +627,12 @@ impl TableOfContent {
                     )));
                 };
 
-                if old_transfer.method == Some(transfer_restart.method) {
-                    return Err(StorageError::bad_request(format!(
-                        "Cannot restart transfer for shard {} from {} to {}, its configuration did not change",
-                        transfer_restart.shard_id, transfer_restart.from, transfer_restart.to,
-                    )));
-                }
+                validate_private_oram_restart_apply(
+                    &collection_config.params,
+                    &transfers,
+                    &old_transfer,
+                    &transfer_restart,
+                )?;
 
                 // Abort and start transfer
                 Box::pin(self.handle_transfer(
@@ -882,11 +882,55 @@ fn reject_private_oram_shard_transfer_until_supported(
         return Ok(());
     }
 
+    if let ShardTransferOperations::Restart(restart) = transfer_operation
+        && restart.to_shard_id.is_none()
+        && restart.method == ShardTransferMethod::StreamRecords
+    {
+        return Ok(());
+    }
+
     Err(StorageError::bad_input(format!(
         "private ORAM shard transfer requires an unfiltered stream-records transfer with \
          encrypted ORAM stores preinstalled and consensus-backed epoch/root ownership verified; \
          abort the transfer or use the private ORAM transfer coordinator",
     )))
+}
+
+fn validate_private_oram_restart_apply(
+    params: &CollectionParams,
+    active_transfers: &HashSet<ShardTransfer>,
+    old_transfer: &ShardTransfer,
+    restart: &ShardTransferRestart,
+) -> Result<(), StorageError> {
+    if !collection_params_use_private_oram_bucket_store(params) {
+        if old_transfer.method == Some(restart.method) {
+            return Err(StorageError::bad_request(format!(
+                "Cannot restart transfer for shard {} from {} to {}, its configuration did not change",
+                restart.shard_id, restart.from, restart.to,
+            )));
+        }
+        return Ok(());
+    }
+
+    let valid = active_transfers.len() == 1
+        && active_transfers
+            .iter()
+            .next()
+            .is_some_and(|transfer| transfer == old_transfer)
+        && old_transfer.key() == restart.key()
+        && old_transfer.private_oram_preinstalled
+        && old_transfer.to_shard_id.is_none()
+        && old_transfer.method == Some(ShardTransferMethod::StreamRecords)
+        && old_transfer.filter.is_none()
+        && restart.to_shard_id.is_none()
+        && restart.method == ShardTransferMethod::StreamRecords;
+    if valid {
+        return Ok(());
+    }
+
+    Err(StorageError::bad_input(
+        "private ORAM restart transfer requires the exact active marked stream-records transfer",
+    ))
 }
 
 fn reject_private_oram_resharding_until_supported(
@@ -1080,7 +1124,7 @@ fn validate_encrypted_operation_crypto_runtime_parity(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::num::NonZeroU32;
 
     use collection::config::{
@@ -1108,7 +1152,7 @@ mod tests {
         reject_private_oram_shard_transfer_until_supported,
         validate_encrypted_create_shard_key_crypto_runtime_parity,
         validate_encrypted_resharding_crypto_runtime_parity,
-        validate_encrypted_transfer_crypto_runtime_parity,
+        validate_encrypted_transfer_crypto_runtime_parity, validate_private_oram_restart_apply,
     };
     use crate::content_manager::collection_meta_ops::{
         ReshardingOperation, SetShardReplicaState, ShardTransferOperations,
@@ -1448,6 +1492,123 @@ mod tests {
             &ShardTransferOperations::Finish(authorized_transfer),
         )
         .expect("verified private ORAM preinstall must allow transfer finish");
+        reject_private_oram_shard_transfer_until_supported(
+            "docs",
+            &params,
+            &ShardTransferOperations::Restart(ShardTransferRestart {
+                shard_id: 1,
+                to_shard_id: None,
+                from: 2,
+                to: 3,
+                method: ShardTransferMethod::StreamRecords,
+            }),
+        )
+        .expect("exact private ORAM stream-records restart must reach apply validation");
+    }
+
+    #[test]
+    fn private_oram_restart_apply_requires_exact_active_marked_transfer() {
+        let private_params = CollectionParams {
+            encryption: Some(CollectionEncryptionConfig {
+                version: 1,
+                key_id: Some("tenant-a/vector-private-rk".to_string()),
+                crypto_schema_version: 1,
+                encryption_epoch: 7,
+                migration_state: CryptoMigrationState::Active,
+                rules: vec![EncryptionRuleRef {
+                    id: "text_private_hnsw".to_string(),
+                    selector: EncryptionSelector::VectorNames {
+                        names: vec!["text".to_string()],
+                    },
+                    instance: "docs_private_hnsw_v1".to_string(),
+                    binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+                }],
+            }),
+            ..CollectionParams::empty()
+        };
+        let restart = ShardTransferRestart {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 2,
+            to: 3,
+            method: ShardTransferMethod::StreamRecords,
+        };
+        let transfer = ShardTransfer {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 2,
+            to: 3,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: true,
+            filter: None,
+        };
+        validate_private_oram_restart_apply(
+            &private_params,
+            &HashSet::from([transfer.clone()]),
+            &transfer,
+            &restart,
+        )
+        .unwrap();
+
+        let mut unmarked = transfer.clone();
+        unmarked.private_oram_preinstalled = false;
+        let mut old_wrong_method = transfer.clone();
+        old_wrong_method.method = Some(ShardTransferMethod::Snapshot);
+        let mut wrong_key = restart.clone();
+        wrong_key.to = 4;
+        for (candidate, request, active) in [
+            (unmarked, restart.clone(), HashSet::from([transfer.clone()])),
+            (
+                old_wrong_method.clone(),
+                restart.clone(),
+                HashSet::from([old_wrong_method]),
+            ),
+            (
+                transfer.clone(),
+                wrong_key,
+                HashSet::from([transfer.clone()]),
+            ),
+            (
+                transfer.clone(),
+                restart.clone(),
+                HashSet::from([
+                    transfer.clone(),
+                    ShardTransfer {
+                        shard_id: 2,
+                        ..transfer.clone()
+                    },
+                ]),
+            ),
+        ] {
+            let rendered =
+                validate_private_oram_restart_apply(&private_params, &active, &candidate, &request)
+                    .unwrap_err()
+                    .to_string();
+            assert!(rendered.contains("exact active marked stream-records transfer"));
+            assert_private_oram_consensus_guard_redacts_config(&rendered);
+        }
+
+        let ordinary_params = CollectionParams::empty();
+        let unchanged = validate_private_oram_restart_apply(
+            &ordinary_params,
+            &HashSet::from([transfer.clone()]),
+            &transfer,
+            &restart,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(unchanged.contains("configuration did not change"));
+
+        let mut changed_method = restart;
+        changed_method.method = ShardTransferMethod::Snapshot;
+        validate_private_oram_restart_apply(
+            &ordinary_params,
+            &HashSet::from([transfer.clone()]),
+            &transfer,
+            &changed_method,
+        )
+        .unwrap();
     }
 
     #[test]
