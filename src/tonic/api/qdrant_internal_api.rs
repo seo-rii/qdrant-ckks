@@ -41,6 +41,7 @@ use collection::shards::shard::PeerId;
 use collection::shards::transfer::{ShardTransfer, ShardTransferMethod};
 use common::types::{DetailsLevel, TelemetryDetail};
 use data_encoding::BASE64URL_NOPAD;
+use futures::{Stream, StreamExt};
 use prost::Message;
 use qdrant_sec::{
     PrivateHnswOramBucket, PrivateHnswOramSignature, PrivateHnswOramUploadBundle,
@@ -62,7 +63,8 @@ use storage::dispatcher::{
     classify_private_oram_recovery,
 };
 use storage::rbac::{Access, AccessRequirements, Auth};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
+use tokio::time::timeout;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
@@ -82,20 +84,39 @@ fn private_oram_install_chunk_status(error: PrivateOramInstallChunkError) -> Sta
     }
 }
 
-async fn decode_private_oram_install_stream<M: Message + Default>(
-    mut stream: tonic::Streaming<PrivateOramInstallChunk>,
-) -> Result<M, Status> {
-    let mut decoder = PrivateOramInstallChunkDecoder::default();
-    while let Some(chunk) = stream
-        .message()
-        .await
-        .map_err(|_| Status::invalid_argument("private ORAM install chunk stream is invalid"))?
-    {
-        decoder
-            .push(chunk)
-            .map_err(private_oram_install_chunk_status)?;
-    }
-    decoder.finish().map_err(private_oram_install_chunk_status)
+const PRIVATE_ORAM_INSTALL_STREAM_CONCURRENCY: usize = 1;
+const PRIVATE_ORAM_INSTALL_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
+async fn decode_private_oram_install_stream<M, S>(
+    mut stream: S,
+    idle_timeout: Duration,
+    total_timeout: Duration,
+) -> Result<M, Status>
+where
+    M: Message + Default,
+    S: Stream<Item = Result<PrivateOramInstallChunk, Status>> + Unpin,
+{
+    timeout(total_timeout, async {
+        let mut decoder = PrivateOramInstallChunkDecoder::default();
+        loop {
+            let next = timeout(idle_timeout, stream.next()).await.map_err(|_| {
+                Status::deadline_exceeded("private ORAM install chunk stream timed out")
+            })?;
+            let Some(chunk) = next else {
+                break;
+            };
+            let chunk = chunk.map_err(|_| {
+                Status::invalid_argument("private ORAM install chunk stream is invalid")
+            })?;
+            decoder
+                .push(chunk)
+                .map_err(private_oram_install_chunk_status)?;
+        }
+        decoder.finish().map_err(private_oram_install_chunk_status)
+    })
+    .await
+    .map_err(|_| Status::deadline_exceeded("private ORAM install chunk stream timed out"))?
 }
 
 pub struct QdrantInternalService {
@@ -109,6 +130,7 @@ pub struct QdrantInternalService {
     audit_config: Option<AuditConfig>,
     toc: Arc<TableOfContent>,
     private_oram_replication_lock: Mutex<()>,
+    private_oram_install_stream_slots: Semaphore,
 }
 
 impl QdrantInternalService {
@@ -126,6 +148,9 @@ impl QdrantInternalService {
             audit_config,
             toc,
             private_oram_replication_lock: Mutex::new(()),
+            private_oram_install_stream_slots: Semaphore::new(
+                PRIVATE_ORAM_INSTALL_STREAM_CONCURRENCY,
+            ),
         }
     }
 
@@ -2346,7 +2371,19 @@ impl QdrantInternal for QdrantInternalService {
         &self,
         request: Request<tonic::Streaming<PrivateOramInstallChunk>>,
     ) -> Result<Response<InstallPrivateOramIndexResponse>, Status> {
-        let request = decode_private_oram_install_stream(request.into_inner()).await?;
+        let _stream_slot = timeout(
+            PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+            self.private_oram_install_stream_slots.acquire(),
+        )
+        .await
+        .map_err(|_| Status::deadline_exceeded("private ORAM install stream wait timed out"))?
+        .map_err(|_| Status::unavailable("private ORAM install stream is unavailable"))?;
+        let request = decode_private_oram_install_stream(
+            request.into_inner(),
+            PRIVATE_ORAM_INSTALL_STREAM_IDLE_TIMEOUT,
+            PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+        )
+        .await?;
         self.install_private_oram_index(Request::new(request)).await
     }
 
@@ -2551,7 +2588,19 @@ impl QdrantInternal for QdrantInternalService {
         &self,
         request: Request<tonic::Streaming<PrivateOramInstallChunk>>,
     ) -> Result<Response<InstallPrivateOramLiveReplicaResponse>, Status> {
-        let request = decode_private_oram_install_stream(request.into_inner()).await?;
+        let _stream_slot = timeout(
+            PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+            self.private_oram_install_stream_slots.acquire(),
+        )
+        .await
+        .map_err(|_| Status::deadline_exceeded("private ORAM install stream wait timed out"))?
+        .map_err(|_| Status::unavailable("private ORAM install stream is unavailable"))?;
+        let request = decode_private_oram_install_stream(
+            request.into_inner(),
+            PRIVATE_ORAM_INSTALL_STREAM_IDLE_TIMEOUT,
+            PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT,
+        )
+        .await?;
         self.install_private_oram_live_replica(Request::new(request))
             .await
     }
@@ -2970,6 +3019,74 @@ mod tests {
                 tonic::Code::InvalidArgument | tonic::Code::ResourceExhausted
             ));
         }
+    }
+
+    #[tokio::test]
+    async fn private_oram_install_stream_decodes_valid_request() {
+        let request = InstallPrivateOramIndexRequest {
+            collection_name: "docs".to_string(),
+            collection_id: "collection-crypto-id".to_string(),
+            index_kind: PrivateOramReplicationIndexKind::Hnsw as i32,
+            vector_name: "text".to_string(),
+            bundle: None,
+        };
+        let chunks =
+            api::grpc::private_oram_chunking::encode_private_oram_install_chunks(&request).unwrap();
+        let stream = futures::stream::iter(chunks.into_iter().map(Ok::<_, Status>));
+        let decoded = decode_private_oram_install_stream::<InstallPrivateOramIndexRequest, _>(
+            stream,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[tokio::test]
+    async fn private_oram_install_stream_times_out_and_redacts_transport_errors() {
+        let stalled = futures::stream::pending::<Result<PrivateOramInstallChunk, Status>>();
+        let timeout_error =
+            decode_private_oram_install_stream::<InstallPrivateOramIndexRequest, _>(
+                stalled,
+                Duration::from_millis(1),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(timeout_error.code(), tonic::Code::DeadlineExceeded);
+        assert_eq!(
+            timeout_error.message(),
+            "private ORAM install chunk stream timed out"
+        );
+
+        let total_stalled = futures::stream::pending::<Result<PrivateOramInstallChunk, Status>>();
+        let total_timeout_error =
+            decode_private_oram_install_stream::<InstallPrivateOramIndexRequest, _>(
+                total_stalled,
+                Duration::from_secs(1),
+                Duration::from_millis(1),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(total_timeout_error.code(), tonic::Code::DeadlineExceeded);
+        assert_eq!(
+            total_timeout_error.message(),
+            "private ORAM install chunk stream timed out"
+        );
+
+        let sentinel = "private-oram-stream-transport-sentinel";
+        let failed = futures::stream::iter([Err(Status::internal(sentinel))]);
+        let transport_error =
+            decode_private_oram_install_stream::<InstallPrivateOramIndexRequest, _>(
+                failed,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(transport_error.code(), tonic::Code::InvalidArgument);
+        assert!(!transport_error.message().contains(sentinel));
     }
 
     #[test]

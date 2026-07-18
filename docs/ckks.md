@@ -1602,8 +1602,12 @@ frames no larger than 1 MiB. Every frame carries the protocol version, exact
 sequential index/count, total encoded length, and SHA-256 of the complete typed
 request. The receiver bounds allocation, rejects missing, reordered, malformed,
 or metadata-drifting frames, verifies the final digest, and only then invokes
-the existing typed install validation. Partial or corrupt streams therefore
-cannot reach the store mutation lock or filesystem. Two-process tests
+the existing typed install validation. It admits one chunked full-store stream
+at a time, holds that permit through atomic install, and terminates a stream
+that is idle between frames for 30 seconds or exceeds the five-minute permit
+wait/decode budget. Partial, stalled, or corrupt streams therefore cannot reach
+the store mutation lock or filesystem or accumulate multiple aggregate decode
+buffers. Two-process tests
 advance both private ORAM stores and
 run this preinstall/transfer path for both ReplicateShard (RF=1 to RF=2) and
 MoveShard, verify the resulting local shard ownership, wait for the target
