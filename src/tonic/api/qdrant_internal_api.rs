@@ -53,8 +53,8 @@ use storage::audit::AuditConfig;
 use storage::audit_reader::{AuditLogQuery, read_local_audit_logs};
 use storage::content_manager::consensus_manager::ConsensusStateRef;
 use storage::content_manager::consensus_ops::{
-    CompareAndSwapPrivateOramSessionLease, PrivateOramConsensusEpoch, PrivateOramEpochKey,
-    PrivateOramIndexKind, PrivateOramSessionLease,
+    CompareAndSwapPrivateOramSessionLease, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
+    PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramSessionLease,
 };
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
@@ -684,6 +684,47 @@ async fn acquire_private_oram_collection_reservation(
     })
 }
 
+pub(crate) async fn private_oram_current_layout_candidate_for_reservation(
+    dispatcher: &Dispatcher,
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    reservation: &PrivateOramTransferReservation,
+) -> Result<PrivateOramConsensusLayout, StorageError> {
+    let keys = private_oram_transfer_index_keys(config, collection_name)?;
+    if keys.is_empty() || keys != reservation.keys {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus layout reservation is invalid",
+        ));
+    }
+    let collection_id = config.stable_crypto_id(collection_name).map_err(|_| {
+        StorageError::bad_request("private ORAM consensus layout identity is invalid")
+    })?;
+    let layout_key = PrivateOramLayoutKey {
+        collection_id: collection_id.clone(),
+    };
+    let current = dispatcher.private_oram_consensus_layout(&layout_key)?;
+    let generation = current.as_ref().map_or(1, |layout| layout.generation);
+    let lease_id_hash = private_oram_session_lease_hash(&reservation.session_id)?;
+    let candidate = dispatcher
+        .private_oram_reserved_layout_candidate(
+            &collection_name.to_string(),
+            &collection_id,
+            &keys,
+            &lease_id_hash,
+            generation,
+        )
+        .await?;
+    if current
+        .as_ref()
+        .is_some_and(|current| current != &candidate)
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus layout state does not match the stable collection layout",
+        ));
+    }
+    Ok(candidate)
+}
+
 pub(crate) async fn prepare_private_oram_shard_transfer(
     dispatcher: &Dispatcher,
     auth: &Auth,
@@ -784,7 +825,26 @@ pub(crate) async fn prepare_private_oram_replica_removal(
         }
     }
 
-    acquire_private_oram_collection_reservation(dispatcher, keys).await
+    let reservation = acquire_private_oram_collection_reservation(dispatcher, keys).await?;
+    if let Err(error) = private_oram_current_layout_candidate_for_reservation(
+        dispatcher,
+        collection_name,
+        config,
+        &reservation,
+    )
+    .await
+    {
+        if release_private_oram_transfer_reservation(dispatcher, &reservation)
+            .await
+            .is_err()
+        {
+            log::warn!(
+                "failed to release private ORAM replica removal reservation after layout validation failure"
+            );
+        }
+        return Err(error);
+    }
+    Ok(reservation)
 }
 
 pub(crate) async fn release_private_oram_transfer_reservation(

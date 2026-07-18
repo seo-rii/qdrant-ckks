@@ -99,6 +99,20 @@ snapshot is loaded and is included in newly generated Raft snapshots; legacy
 snapshots default it to empty. Resharding does not consume this record yet, so
 all resharding and dynamic shard-layout guards described here remain active.
 
+The canonical shard-layout digest uses domain
+`qdrant-sec/private-oram-shard-layout-digest/v1` and binds the stable collection
+identity, sharding mode, sorted shard ids, typed shard keys, and the sorted
+fully-active owner set of every shard. The canonical index-state digest uses
+domain `qdrant-sec/private-oram-index-state-digest/v1` and binds every configured
+private HNSW/result index kind and name, epoch, root, and optional writeback
+completion digest. Both encodings use fixed big-endian numeric fields and
+length-prefixed byte strings. Replica-removal preflight now freezes every
+configured private ORAM index with the same live consensus lease, derives both
+digests, and rejects an existing layout record that differs from the stable
+collection. This is read-only when no layout record exists; generation-1
+bootstrap and topology-transition CAS remain blocked until fixed transfer and
+removal completion update the record coherently.
+
 Private ORAM search and result-fetch providers have their own client-led
 contract:
 

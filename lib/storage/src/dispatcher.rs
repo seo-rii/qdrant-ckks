@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt::{self, Debug, Formatter};
 use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use api::grpc::qdrant::{
     CompletePrivateOramWritebackRequest, InstallPrivateOramIndexRequest,
@@ -34,6 +34,8 @@ use crate::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
     CompareAndSwapPrivateOramSessionLease, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
     PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramSessionLease,
+    PrivateOramShardLayoutEntry, canonical_private_oram_index_state_digest,
+    canonical_private_oram_shard_layout_digest,
 };
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
 use crate::rbac::{Auth, CollectionMultipass};
@@ -627,6 +629,124 @@ impl Dispatcher {
             ));
         }
         Ok(peers)
+    }
+
+    pub async fn private_oram_stable_shard_layout_digest(
+        &self,
+        collection_name: &CollectionName,
+        collection_id: &str,
+    ) -> Result<(Vec<PeerId>, String), StorageError> {
+        let collection = self
+            .toc
+            .get_collection(&CollectionMultipass.issue_pass(collection_name))
+            .await?;
+        let config = collection.config_snapshot().await;
+        let stable_collection_id = config.stable_crypto_id(collection_name).map_err(|_| {
+            StorageError::bad_request("private ORAM consensus layout identity is invalid")
+        })?;
+        if stable_collection_id != collection_id {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus layout identity is invalid",
+            ));
+        }
+
+        let shard_holder = collection.shards_holder().read_owned().await;
+        if shard_holder.resharding_state().is_some()
+            || !shard_holder.get_transfers(|_| true).is_empty()
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus layout requires a stable shard layout",
+            ));
+        }
+        let mut entries = Vec::new();
+        for (shard_id, replica_set) in shard_holder.get_shards() {
+            let peers = replica_set.peers();
+            if peers.is_empty() || peers.values().any(|state| *state != ReplicaState::Active) {
+                return Err(StorageError::bad_request(
+                    "private ORAM consensus layout requires fully active shard replicas",
+                ));
+            }
+            entries.push(PrivateOramShardLayoutEntry {
+                shard_id,
+                shard_key: replica_set.shard_key().cloned(),
+                owner_peer_ids: peers.keys().copied().collect(),
+            });
+        }
+        let (owner_peer_ids, layout_digest) = canonical_private_oram_shard_layout_digest(
+            collection_id,
+            shard_holder.get_sharding_method(),
+            &entries,
+        )?;
+        if !owner_peer_ids.contains(&self.toc.this_peer_id) {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus layout coordinator must own an active shard replica",
+            ));
+        }
+        Ok((owner_peer_ids, layout_digest))
+    }
+
+    pub async fn private_oram_reserved_layout_candidate(
+        &self,
+        collection_name: &CollectionName,
+        collection_id: &str,
+        keys: &[PrivateOramEpochKey],
+        reservation_lease_id_hash: &str,
+        generation: u64,
+    ) -> Result<PrivateOramConsensusLayout, StorageError> {
+        if generation == 0
+            || keys.is_empty()
+            || decode_private_oram_sha256_digest(reservation_lease_id_hash).is_none()
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus layout reservation is invalid",
+            ));
+        }
+        let now_unix = current_private_oram_unix_secs()?;
+        let mut states = Vec::with_capacity(keys.len());
+        for key in keys {
+            let lease = self
+                .private_oram_consensus_session_lease(key)?
+                .ok_or_else(invalid_private_oram_layout_reservation)?;
+            if !private_oram_layout_reservation_matches(
+                &lease,
+                self.toc.this_peer_id,
+                reservation_lease_id_hash,
+                now_unix,
+            ) {
+                return Err(invalid_private_oram_layout_reservation());
+            }
+            let state = self.private_oram_consensus_epoch(key)?.ok_or_else(|| {
+                StorageError::bad_request("private ORAM consensus layout index state is incomplete")
+            })?;
+            states.push((key.clone(), state));
+        }
+        let index_state_digest = canonical_private_oram_index_state_digest(collection_id, &states)?;
+        let (owner_peer_ids, layout_digest) = self
+            .private_oram_stable_shard_layout_digest(collection_name, collection_id)
+            .await?;
+
+        let now_unix = current_private_oram_unix_secs()?;
+        for (key, expected_state) in &states {
+            let lease = self
+                .private_oram_consensus_session_lease(key)?
+                .ok_or_else(invalid_private_oram_layout_reservation)?;
+            if !private_oram_layout_reservation_matches(
+                &lease,
+                self.toc.this_peer_id,
+                reservation_lease_id_hash,
+                now_unix,
+            ) || self.private_oram_consensus_epoch(key)?.as_ref() != Some(expected_state)
+            {
+                return Err(invalid_private_oram_layout_reservation());
+            }
+        }
+
+        Ok(PrivateOramConsensusLayout {
+            generation,
+            owner_peer_ids,
+            layout_digest,
+            index_state_digest,
+        })
     }
 
     /// Require this peer to own at least one active shard replica before it coordinates a
@@ -1361,6 +1481,35 @@ fn derive_private_oram_replication_peers(
     Ok(replica_peers)
 }
 
+fn current_private_oram_unix_secs() -> Result<u64, StorageError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| StorageError::service_error("private ORAM consensus layout clock is invalid"))
+}
+
+fn private_oram_layout_reservation_matches(
+    lease: &PrivateOramSessionLease,
+    owner_peer_id: PeerId,
+    lease_id_hash: &str,
+    now_unix: u64,
+) -> bool {
+    lease.owner_peer_id == owner_peer_id
+        && lease.lease_id_hash == lease_id_hash
+        && lease.issued_at_unix <= now_unix
+        && lease.expires_at_unix > now_unix
+}
+
+fn decode_private_oram_sha256_digest(value: &str) -> Option<[u8; 32]> {
+    let decoded = BASE64URL_NOPAD.decode(value.as_bytes()).ok()?;
+    let digest: [u8; 32] = decoded.try_into().ok()?;
+    (BASE64URL_NOPAD.encode(&digest) == value).then_some(digest)
+}
+
+fn invalid_private_oram_layout_reservation() -> StorageError {
+    StorageError::bad_request("private ORAM consensus layout reservation is invalid")
+}
+
 fn validate_private_oram_writeback_digest(digest: &str) -> Result<(), StorageError> {
     let decoded = BASE64URL_NOPAD.decode(digest.as_bytes()).map_err(|_| {
         StorageError::bad_request("private ORAM replicated writeback digest is invalid")
@@ -1639,6 +1788,49 @@ mod tests {
             .to_string();
         assert!(local_missing.contains("coordinator must own an active shard replica"));
         assert!(!local_missing.contains("11"));
+    }
+
+    #[test]
+    fn private_oram_layout_reservation_requires_exact_live_lease() {
+        let lease_hash = BASE64URL_NOPAD.encode(&[31; 32]);
+        let lease = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: lease_hash.clone(),
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        };
+        assert!(private_oram_layout_reservation_matches(
+            &lease,
+            7,
+            &lease_hash,
+            120,
+        ));
+        assert!(!private_oram_layout_reservation_matches(
+            &lease,
+            9,
+            &lease_hash,
+            120,
+        ));
+        assert!(!private_oram_layout_reservation_matches(
+            &lease,
+            7,
+            &BASE64URL_NOPAD.encode(&[32; 32]),
+            120,
+        ));
+        assert!(!private_oram_layout_reservation_matches(
+            &lease,
+            7,
+            &lease_hash,
+            99,
+        ));
+        assert!(!private_oram_layout_reservation_matches(
+            &lease,
+            7,
+            &lease_hash,
+            160,
+        ));
+        assert!(decode_private_oram_sha256_digest(&lease_hash).is_some());
+        assert!(decode_private_oram_sha256_digest("private-oram-layout-lease-sentinel").is_none());
     }
 
     #[test]

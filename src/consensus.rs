@@ -1555,7 +1555,9 @@ mod tests {
         commit_private_hnsw_paths_coordinated, commit_private_result_oram_buckets_coordinated,
         coordinate_private_hnsw_initial_upload, coordinate_private_result_oram_initial_upload,
         open_private_hnsw_session_coordinated, open_private_result_oram_session_coordinated,
-        read_private_hnsw_paths_coordinated, read_private_result_oram_buckets_coordinated,
+        prepare_private_oram_replica_removal,
+        private_oram_current_layout_candidate_for_reservation, read_private_hnsw_paths_coordinated,
+        read_private_result_oram_buckets_coordinated, release_private_oram_transfer_reservation,
     };
 
     #[test]
@@ -2494,6 +2496,100 @@ mod tests {
                     .unwrap()
                     .is_none()
             );
+
+            let reservation = prepare_private_oram_replica_removal(
+                &dispatcher,
+                &auth,
+                &settings,
+                COLLECTION_NAME,
+                &collection_config,
+            )
+            .await
+            .unwrap();
+            let layout_candidate = private_oram_current_layout_candidate_for_reservation(
+                &dispatcher,
+                COLLECTION_NAME,
+                &collection_config,
+                &reservation,
+            )
+            .await
+            .unwrap();
+            assert_eq!(layout_candidate.generation, 1);
+            assert_eq!(
+                layout_candidate.owner_peer_ids,
+                vec![dispatcher.this_peer_id()]
+            );
+            assert_eq!(layout_candidate.layout_digest.len(), 43);
+            assert_eq!(layout_candidate.index_state_digest.len(), 43);
+            let layout_key = PrivateOramLayoutKey {
+                collection_id: collection_id.to_string(),
+            };
+            assert!(
+                dispatcher
+                    .private_oram_consensus_layout(&layout_key)
+                    .unwrap()
+                    .is_none()
+            );
+            dispatcher
+                .submit_private_oram_layout_cas(
+                    CompareAndSwapPrivateOramLayout {
+                        key: layout_key.clone(),
+                        expected: None,
+                        new: layout_candidate.clone(),
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                private_oram_current_layout_candidate_for_reservation(
+                    &dispatcher,
+                    COLLECTION_NAME,
+                    &collection_config,
+                    &reservation,
+                )
+                .await
+                .unwrap(),
+                layout_candidate,
+            );
+
+            let drifted_layout = PrivateOramConsensusLayout {
+                generation: 2,
+                layout_digest: data_encoding::BASE64URL_NOPAD.encode(&[71; 32]),
+                ..layout_candidate.clone()
+            };
+            dispatcher
+                .submit_private_oram_layout_cas(
+                    CompareAndSwapPrivateOramLayout {
+                        key: layout_key,
+                        expected: Some(layout_candidate),
+                        new: drifted_layout.clone(),
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            let drift_error = private_oram_current_layout_candidate_for_reservation(
+                &dispatcher,
+                COLLECTION_NAME,
+                &collection_config,
+                &reservation,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(
+                drift_error.contains("does not match the stable collection layout"),
+                "{drift_error}"
+            );
+            assert!(!drift_error.contains(collection_id), "{drift_error}");
+            assert!(
+                !drift_error.contains(&drifted_layout.layout_digest),
+                "{drift_error}"
+            );
+            release_private_oram_transfer_reservation(&dispatcher, &reservation)
+                .await
+                .unwrap();
         });
     }
 }

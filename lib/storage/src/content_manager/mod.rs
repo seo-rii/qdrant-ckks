@@ -19,23 +19,36 @@ pub mod staging;
 pub mod toc;
 
 pub mod consensus_ops {
+    use std::collections::BTreeSet;
     use std::fmt;
 
+    use collection::config::ShardingMethod;
     use collection::operations::types::PeerMetadata;
     use collection::shards::replica_set::replica_set_state::ReplicaState;
     use collection::shards::replica_set::replica_set_state::ReplicaState::Initializing;
     use collection::shards::resharding::ReshardKey;
-    use collection::shards::shard::PeerId;
+    use collection::shards::shard::{PeerId, ShardId};
     use collection::shards::transfer::ShardTransfer;
     use collection::shards::{CollectionId, replica_set};
+    use data_encoding::BASE64URL_NOPAD;
     use raft::eraftpb::Entry as RaftEntry;
+    use segment::types::ShardKey;
     use serde::{Deserialize, Serialize};
+    use sha2::{Digest, Sha256};
 
     use super::collection_meta_ops::ReshardingOperation;
     use crate::content_manager::collection_meta_ops::{
         CollectionMetaOperations, SetShardReplicaState, ShardTransferOperations, UpdateCollection,
         UpdateCollectionOperation,
     };
+    use crate::content_manager::errors::StorageError;
+
+    const PRIVATE_ORAM_SHARD_LAYOUT_DIGEST_DOMAIN: &[u8] =
+        b"qdrant-sec/private-oram-shard-layout-digest/v1";
+    const PRIVATE_ORAM_INDEX_STATE_DIGEST_DOMAIN: &[u8] =
+        b"qdrant-sec/private-oram-index-state-digest/v1";
+    const PRIVATE_ORAM_CONSENSUS_MAX_RECORDS: usize = 1_000_000;
+    const PRIVATE_ORAM_LAYOUT_MAX_OWNERS: usize = 10_000;
 
     #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone, Copy)]
     #[serde(rename_all = "snake_case")]
@@ -144,7 +157,7 @@ pub mod consensus_ops {
         pub owner_peer_ids: Vec<PeerId>,
         /// Base64url SHA-256 of the canonical shard layout.
         pub layout_digest: String,
-        /// Base64url SHA-256 of the private ORAM index epoch/root set at this transition.
+        /// Base64url SHA-256 of the private ORAM index epoch/root/completion set.
         pub index_state_digest: String,
     }
 
@@ -164,6 +177,198 @@ pub mod consensus_ops {
         pub key: PrivateOramLayoutKey,
         pub expected: Option<PrivateOramConsensusLayout>,
         pub new: PrivateOramConsensusLayout,
+    }
+
+    #[derive(PartialEq, Eq, Clone)]
+    pub struct PrivateOramShardLayoutEntry {
+        pub shard_id: ShardId,
+        pub shard_key: Option<ShardKey>,
+        pub owner_peer_ids: Vec<PeerId>,
+    }
+
+    impl fmt::Debug for PrivateOramShardLayoutEntry {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramShardLayoutEntry")
+                .field("shard_id", &self.shard_id)
+                .field("shard_key_present", &self.shard_key.is_some())
+                .field("owner_peer_count", &self.owner_peer_ids.len())
+                .finish()
+        }
+    }
+
+    pub fn canonical_private_oram_shard_layout_digest(
+        collection_id: &str,
+        sharding_method: ShardingMethod,
+        entries: &[PrivateOramShardLayoutEntry],
+    ) -> Result<(Vec<PeerId>, String), StorageError> {
+        if !valid_private_oram_collection_id(collection_id)
+            || entries.is_empty()
+            || entries.len() > PRIVATE_ORAM_CONSENSUS_MAX_RECORDS
+        {
+            return Err(invalid_private_oram_layout_digest_input());
+        }
+
+        let mut entries = entries.to_vec();
+        entries.sort_by_key(|entry| entry.shard_id);
+        if entries
+            .windows(2)
+            .any(|entries| entries[0].shard_id == entries[1].shard_id)
+        {
+            return Err(invalid_private_oram_layout_digest_input());
+        }
+
+        let mut owner_union = BTreeSet::new();
+        for entry in &mut entries {
+            let valid_shard_key = matches!(
+                (sharding_method, entry.shard_key.as_ref()),
+                (ShardingMethod::Auto, None) | (ShardingMethod::Custom, Some(_))
+            );
+            if !valid_shard_key
+                || entry.owner_peer_ids.is_empty()
+                || entry.owner_peer_ids.len() > PRIVATE_ORAM_LAYOUT_MAX_OWNERS
+            {
+                return Err(invalid_private_oram_layout_digest_input());
+            }
+            entry.owner_peer_ids.sort_unstable();
+            if entry
+                .owner_peer_ids
+                .windows(2)
+                .any(|owners| owners[0] == owners[1])
+            {
+                return Err(invalid_private_oram_layout_digest_input());
+            }
+            owner_union.extend(entry.owner_peer_ids.iter().copied());
+        }
+        if owner_union.len() > PRIVATE_ORAM_LAYOUT_MAX_OWNERS {
+            return Err(invalid_private_oram_layout_digest_input());
+        }
+
+        let mut hasher = Sha256::new();
+        hasher.update(PRIVATE_ORAM_SHARD_LAYOUT_DIGEST_DOMAIN);
+        update_private_oram_length_prefixed(&mut hasher, collection_id.as_bytes());
+        hasher.update([match sharding_method {
+            ShardingMethod::Auto => 1,
+            ShardingMethod::Custom => 2,
+        }]);
+        hasher.update((entries.len() as u64).to_be_bytes());
+        for entry in entries {
+            hasher.update(entry.shard_id.to_be_bytes());
+            match entry.shard_key {
+                None => hasher.update([0]),
+                Some(ShardKey::Keyword(value)) => {
+                    hasher.update([1]);
+                    update_private_oram_length_prefixed(&mut hasher, value.as_bytes());
+                }
+                Some(ShardKey::Number(value)) => {
+                    hasher.update([2]);
+                    hasher.update(value.to_be_bytes());
+                }
+            }
+            hasher.update((entry.owner_peer_ids.len() as u64).to_be_bytes());
+            for peer_id in entry.owner_peer_ids {
+                hasher.update(peer_id.to_be_bytes());
+            }
+        }
+
+        Ok((
+            owner_union.into_iter().collect(),
+            BASE64URL_NOPAD.encode(&hasher.finalize()),
+        ))
+    }
+
+    pub fn canonical_private_oram_index_state_digest(
+        collection_id: &str,
+        states: &[(PrivateOramEpochKey, PrivateOramConsensusEpoch)],
+    ) -> Result<String, StorageError> {
+        if !valid_private_oram_collection_id(collection_id)
+            || states.is_empty()
+            || states.len() > PRIVATE_ORAM_CONSENSUS_MAX_RECORDS
+        {
+            return Err(invalid_private_oram_index_state_digest_input());
+        }
+
+        let mut states = states.to_vec();
+        states.sort_by(|(left, _), (right, _)| {
+            private_oram_index_kind_tag(left.index_kind)
+                .cmp(&private_oram_index_kind_tag(right.index_kind))
+                .then_with(|| left.index_name.as_bytes().cmp(right.index_name.as_bytes()))
+        });
+        if states.windows(2).any(|states| {
+            states[0].0.index_kind == states[1].0.index_kind
+                && states[0].0.index_name == states[1].0.index_name
+        }) {
+            return Err(invalid_private_oram_index_state_digest_input());
+        }
+
+        let mut hasher = Sha256::new();
+        hasher.update(PRIVATE_ORAM_INDEX_STATE_DIGEST_DOMAIN);
+        update_private_oram_length_prefixed(&mut hasher, collection_id.as_bytes());
+        hasher.update((states.len() as u64).to_be_bytes());
+        for (key, state) in states {
+            let valid_key = key.collection_id == collection_id
+                && match key.index_kind {
+                    PrivateOramIndexKind::Hnsw => {
+                        !key.index_name.is_empty() && key.index_name.len() <= 128
+                    }
+                    PrivateOramIndexKind::ResultPayload => key.index_name.is_empty(),
+                };
+            let Some(root_hash) = decode_private_oram_sha256_digest(&state.root_hash) else {
+                return Err(invalid_private_oram_index_state_digest_input());
+            };
+            let writeback_digest = match state.writeback_digest {
+                Some(digest) => Some(
+                    decode_private_oram_sha256_digest(&digest)
+                        .ok_or_else(invalid_private_oram_index_state_digest_input)?,
+                ),
+                None => None,
+            };
+            if !valid_key {
+                return Err(invalid_private_oram_index_state_digest_input());
+            }
+
+            hasher.update([private_oram_index_kind_tag(key.index_kind)]);
+            update_private_oram_length_prefixed(&mut hasher, key.index_name.as_bytes());
+            hasher.update(state.index_epoch.to_be_bytes());
+            hasher.update(root_hash);
+            match writeback_digest {
+                Some(digest) => {
+                    hasher.update([1]);
+                    hasher.update(digest);
+                }
+                None => hasher.update([0]),
+            }
+        }
+        Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+    }
+
+    fn valid_private_oram_collection_id(collection_id: &str) -> bool {
+        !collection_id.is_empty() && collection_id.len() <= 1024
+    }
+
+    fn private_oram_index_kind_tag(index_kind: PrivateOramIndexKind) -> u8 {
+        match index_kind {
+            PrivateOramIndexKind::Hnsw => 1,
+            PrivateOramIndexKind::ResultPayload => 2,
+        }
+    }
+
+    fn decode_private_oram_sha256_digest(value: &str) -> Option<[u8; 32]> {
+        let decoded = BASE64URL_NOPAD.decode(value.as_bytes()).ok()?;
+        let digest: [u8; 32] = decoded.try_into().ok()?;
+        (BASE64URL_NOPAD.encode(&digest) == value).then_some(digest)
+    }
+
+    fn update_private_oram_length_prefixed(hasher: &mut Sha256, value: &[u8]) {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value);
+    }
+
+    fn invalid_private_oram_layout_digest_input() -> StorageError {
+        StorageError::bad_request("private ORAM consensus layout digest input is invalid")
+    }
+
+    fn invalid_private_oram_index_state_digest_input() -> StorageError {
+        StorageError::bad_request("private ORAM consensus index-state digest input is invalid")
     }
 
     /// Operation that should pass consensus
@@ -439,13 +644,17 @@ pub trait CollectionContainer {
 
 #[cfg(test)]
 mod test {
+    use collection::config::ShardingMethod;
+    use data_encoding::BASE64URL_NOPAD;
+    use segment::types::ShardKey;
     use serde_json::json;
 
     use super::consensus_ops::{
         CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
         CompareAndSwapPrivateOramSessionLease, ConsensusOperations, PrivateOramConsensusEpoch,
         PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramIndexKind,
-        PrivateOramLayoutKey, PrivateOramSessionLease,
+        PrivateOramLayoutKey, PrivateOramSessionLease, PrivateOramShardLayoutEntry,
+        canonical_private_oram_index_state_digest, canonical_private_oram_shard_layout_digest,
     };
 
     // Consensus messages are serialized to CBOR when sent over network and written into WAL.
@@ -610,6 +819,157 @@ mod test {
             assert!(!rendered.contains(collection_sentinel), "{rendered}");
             assert!(!rendered.contains(layout_digest_sentinel), "{rendered}");
             assert!(!rendered.contains(index_digest_sentinel), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn private_oram_shard_layout_digest_is_canonical_and_context_bound() {
+        let collection_id = "collection-uuid-1";
+        let entries = vec![
+            PrivateOramShardLayoutEntry {
+                shard_id: 7,
+                shard_key: None,
+                owner_peer_ids: vec![9, 7],
+            },
+            PrivateOramShardLayoutEntry {
+                shard_id: 2,
+                shard_key: None,
+                owner_peer_ids: vec![11, 7],
+            },
+        ];
+        let (owners, digest) = canonical_private_oram_shard_layout_digest(
+            collection_id,
+            ShardingMethod::Auto,
+            &entries,
+        )
+        .unwrap();
+        assert_eq!(owners, vec![7, 9, 11]);
+        assert_eq!(digest, "qi72wYzZybKDizqgH4R6vJgGR9su3NW21ud7WGBDTXo");
+
+        let mut reordered = entries.clone();
+        reordered.reverse();
+        for entry in &mut reordered {
+            entry.owner_peer_ids.reverse();
+        }
+        assert_eq!(
+            canonical_private_oram_shard_layout_digest(
+                collection_id,
+                ShardingMethod::Auto,
+                &reordered,
+            )
+            .unwrap(),
+            (owners, digest.clone()),
+        );
+        assert_ne!(
+            canonical_private_oram_shard_layout_digest(
+                "collection-uuid-2",
+                ShardingMethod::Auto,
+                &entries,
+            )
+            .unwrap()
+            .1,
+            digest,
+        );
+
+        for invalid_entries in [
+            Vec::new(),
+            vec![entries[0].clone(), entries[0].clone()],
+            vec![PrivateOramShardLayoutEntry {
+                shard_id: 1,
+                shard_key: None,
+                owner_peer_ids: vec![7, 7],
+            }],
+        ] {
+            let error = canonical_private_oram_shard_layout_digest(
+                collection_id,
+                ShardingMethod::Auto,
+                &invalid_entries,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("layout digest input is invalid"), "{error}");
+        }
+
+        let shard_key_sentinel = "qdrant-sec-layout-shard-key-sentinel";
+        let custom_entry = PrivateOramShardLayoutEntry {
+            shard_id: 1,
+            shard_key: Some(ShardKey::from(shard_key_sentinel)),
+            owner_peer_ids: vec![7],
+        };
+        let rendered = format!("{custom_entry:?}");
+        assert!(!rendered.contains(shard_key_sentinel), "{rendered}");
+        assert!(
+            canonical_private_oram_shard_layout_digest(
+                collection_id,
+                ShardingMethod::Auto,
+                &[custom_entry],
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("layout digest input is invalid"),
+        );
+    }
+
+    #[test]
+    fn private_oram_index_state_digest_is_canonical_and_context_bound() {
+        let collection_id = "collection-uuid-1";
+        let hnsw = (
+            PrivateOramEpochKey {
+                collection_id: collection_id.to_string(),
+                index_kind: PrivateOramIndexKind::Hnsw,
+                index_name: "text".to_string(),
+            },
+            PrivateOramConsensusEpoch {
+                index_epoch: 42,
+                root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+                writeback_digest: Some(BASE64URL_NOPAD.encode(&[12; 32])),
+            },
+        );
+        let result = (
+            PrivateOramEpochKey {
+                collection_id: collection_id.to_string(),
+                index_kind: PrivateOramIndexKind::ResultPayload,
+                index_name: String::new(),
+            },
+            PrivateOramConsensusEpoch {
+                index_epoch: 43,
+                root_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+                writeback_digest: None,
+            },
+        );
+        let digest = canonical_private_oram_index_state_digest(
+            collection_id,
+            &[result.clone(), hnsw.clone()],
+        )
+        .unwrap();
+        assert_eq!(digest, "n7nIXIYcknwRMw-RNISCQyIc51XTAfh2mKJDV3-qvFQ");
+        assert_eq!(
+            canonical_private_oram_index_state_digest(collection_id, &[hnsw.clone(), result])
+                .unwrap(),
+            digest,
+        );
+
+        let malformed_digest_sentinel = "qdrant-sec-index-state-digest-sentinel";
+        let malformed = (
+            hnsw.0.clone(),
+            PrivateOramConsensusEpoch {
+                root_hash: malformed_digest_sentinel.to_string(),
+                ..hnsw.1.clone()
+            },
+        );
+        for invalid_states in [
+            Vec::new(),
+            vec![hnsw.clone(), hnsw.clone()],
+            vec![malformed],
+        ] {
+            let error = canonical_private_oram_index_state_digest(collection_id, &invalid_states)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("index-state digest input is invalid"),
+                "{error}"
+            );
+            assert!(!error.contains(malformed_digest_sentinel), "{error}");
         }
     }
 
