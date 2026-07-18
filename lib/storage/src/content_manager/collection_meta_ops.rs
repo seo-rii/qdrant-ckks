@@ -290,6 +290,8 @@ pub struct UpdateCollectionOperation {
     pub collection_name: String,
     pub update_collection: UpdateCollection,
     shard_replica_changes: Option<Vec<replica_set::Change>>,
+    #[serde(default)]
+    private_oram_replica_removal_reserved: bool,
 }
 
 impl UpdateCollectionOperation {
@@ -307,6 +309,7 @@ impl UpdateCollectionOperation {
                 metadata: None,
             },
             shard_replica_changes: None,
+            private_oram_replica_removal_reserved: false,
         }
     }
 
@@ -315,6 +318,7 @@ impl UpdateCollectionOperation {
             collection_name,
             update_collection,
             shard_replica_changes: None,
+            private_oram_replica_removal_reserved: false,
         }
     }
 
@@ -328,6 +332,14 @@ impl UpdateCollectionOperation {
         } else {
             self.shard_replica_changes = Some(changes);
         }
+    }
+
+    pub fn mark_private_oram_replica_removal_reserved(&mut self) {
+        self.private_oram_replica_removal_reserved = true;
+    }
+
+    pub fn private_oram_replica_removal_reserved(&self) -> bool {
+        self.private_oram_replica_removal_reserved
     }
 }
 
@@ -584,6 +596,10 @@ impl fmt::Debug for RedactedCollectionMetaOperation<'_> {
                 .field(
                     "metadata_present",
                     &operation.update_collection.metadata.is_some(),
+                )
+                .field(
+                    "private_oram_replica_removal_reserved",
+                    &operation.private_oram_replica_removal_reserved(),
                 )
                 .finish(),
             CollectionMetaOperations::ApplyCryptoMigration(operation) => f
@@ -894,6 +910,34 @@ mod tests {
         assert!(
             format!("{err:?}").contains("invalid_crypto_migration_transition"),
             "nested ApplyCryptoMigrationPlan validation must reject unsafe migration plans: {err:?}",
+        );
+    }
+
+    #[test]
+    fn private_oram_replica_removal_reservation_marker_round_trips_and_defaults_closed() {
+        let operation = UpdateCollectionOperation::new_empty("docs".to_string());
+        assert!(!operation.private_oram_replica_removal_reserved());
+
+        let mut legacy_value = serde_json::to_value(&operation).unwrap();
+        legacy_value
+            .as_object_mut()
+            .unwrap()
+            .remove("private_oram_replica_removal_reserved");
+        let legacy_operation: UpdateCollectionOperation =
+            serde_json::from_value(legacy_value).unwrap();
+        assert!(!legacy_operation.private_oram_replica_removal_reserved());
+
+        let mut reserved = operation;
+        reserved.mark_private_oram_replica_removal_reserved();
+        let encoded = serde_json::to_value(&reserved).unwrap();
+        let decoded: UpdateCollectionOperation = serde_json::from_value(encoded).unwrap();
+        assert!(decoded.private_oram_replica_removal_reserved());
+
+        let meta_operation = CollectionMetaOperations::UpdateCollection(decoded);
+        let log_line = format!("{:?}", meta_operation.redacted_log());
+        assert!(
+            log_line.contains("private_oram_replica_removal_reserved: true"),
+            "{log_line}",
         );
     }
 

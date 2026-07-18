@@ -466,6 +466,92 @@ def test_private_oram_sessions_replicate_through_public_routes(tmp_path: pathlib
     _assert_replica_can_open_current_sessions(replica_api)
 
 
+def test_private_oram_replica_removal_requires_idle_index_and_retains_owner(
+    tmp_path: pathlib.Path,
+):
+    peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(tmp_path, 2, 2)
+    coordinator_url, removed_url = peer_urls
+    coordinator_info = get_collection_cluster_info(coordinator_url, COLLECTION)
+    removed_peer_id = get_cluster_info(removed_url)["peer_id"]
+    shard_id = coordinator_info["local_shards"][0]["shard_id"]
+
+    _upload_hnsw(coordinator_url, fixture)
+    _exercise_hnsw_owner_session(coordinator_url, fixture)
+    _upload_result_oram(coordinator_url, fixture)
+    _exercise_result_owner_session(coordinator_url, fixture)
+
+    active_session = _open_hnsw_owner_session(coordinator_url, NEXT_EPOCH)
+    drop_body = {
+        "drop_replica": {
+            "shard_id": shard_id,
+            "peer_id": removed_peer_id,
+        }
+    }
+    blocked = requests.post(
+        f"{coordinator_url}/collections/{COLLECTION}/cluster",
+        json=drop_body,
+        timeout=60,
+    )
+    assert 400 <= blocked.status_code < 600
+    for secret in [active_session["session_id"], active_session["root_hash"]]:
+        assert secret not in blocked.text
+
+    assert (
+        _post_result(
+            f"{coordinator_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session/{active_session['session_id']}/close",
+            {},
+        )
+        is True
+    )
+
+    removed = requests.post(
+        f"{coordinator_url}/collections/{COLLECTION}/cluster",
+        json=drop_body,
+        timeout=60,
+    )
+    assert_http_ok(removed)
+    wait_for_collection_local_shards_count(removed_url, COLLECTION, 0)
+    wait_for_collection_local_shards_count(coordinator_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(coordinator_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+
+    assert _private_oram_buckets_dir(peer_dirs[1], "hnsw").is_dir()
+    assert _private_oram_buckets_dir(peer_dirs[1], "result").is_dir()
+    _assert_replica_can_open_current_sessions(coordinator_url)
+
+    rejected_sessions = [
+        (
+            f"private-hnsw/{VECTOR}",
+            {
+                "client_id": "tenant-a/removed-hnsw-sdk",
+                "desired_epoch": NEXT_EPOCH,
+                "fixed_budget": True,
+                "result_privacy": "private_payload_oram_required",
+            },
+        ),
+        (
+            "private-result-oram",
+            {
+                "client_id": "tenant-a/removed-result-sdk",
+                "desired_epoch": NEXT_EPOCH,
+                "fixed_budget": True,
+            },
+        ),
+    ]
+    for endpoint, body in rejected_sessions:
+        response = requests.post(
+            f"{removed_url}/collections/{COLLECTION}/{endpoint}/session",
+            json=body,
+            timeout=30,
+        )
+        assert 400 <= response.status_code < 600
+        for secret in [
+            fixture["hnsw"]["commit"]["new_root_hash"],
+            fixture["result"]["commit"]["new_root_hash"],
+        ]:
+            assert secret not in response.text
+
+
 def test_private_oram_dead_replica_automatically_recovers_from_source(
     tmp_path: pathlib.Path,
 ):
@@ -881,7 +967,7 @@ def test_private_oram_post_submit_abort_releases_sessions_and_retries(
         tmp_path,
         2,
         1,
-        extra_env={"QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "2"},
+        extra_env={"QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "5"},
     )
     skip_if_no_feature(peer_urls[0], "staging")
     _, target_index, source_url, target_url, source_info, target_info = (

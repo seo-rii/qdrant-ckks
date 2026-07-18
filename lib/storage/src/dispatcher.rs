@@ -604,6 +604,30 @@ impl Dispatcher {
         Ok(peers)
     }
 
+    /// Require this peer to own at least one active shard replica before it coordinates a
+    /// collection-local private ORAM session. Other replicas may be recovering; the stricter
+    /// fully-active owner union is resolved only when a replicated writeback or layout change
+    /// needs every owner.
+    pub async fn require_private_oram_active_owner(
+        &self,
+        collection_name: &CollectionName,
+    ) -> Result<(), StorageError> {
+        let collection = self
+            .toc
+            .get_collection(&CollectionMultipass.issue_pass(collection_name))
+            .await?;
+        let shard_holder = collection.shards_holder().read_owned().await;
+        let owns_active_shard = shard_holder.all_shards().any(|replica_set| {
+            replica_set.peers().get(&self.toc.this_peer_id) == Some(&ReplicaState::Active)
+        });
+        if !owns_active_shard {
+            return Err(StorageError::service_error(
+                "private ORAM session coordinator must own an active shard replica",
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn prepare_private_hnsw_oram_replicas(
         &self,
         replica_peers: &BTreeSet<PeerId>,

@@ -11,7 +11,7 @@ use collection::config::{CollectionConfigInternal, ShardingMethod};
 #[cfg(feature = "staging")]
 use collection::operations::cluster_ops::TestSlowDownOperation;
 use collection::operations::cluster_ops::{
-    AbortTransferOperation, ClusterOperations, DropReplicaOperation, MoveShardOperation,
+    AbortTransferOperation, ClusterOperations, DropReplicaOperation, MoveShardOperation, Replica,
     ReplicatePoints, ReplicatePointsOperation, ReplicateShardOperation, ReshardingDirection,
     RestartTransfer, RestartTransferOperation, StartResharding,
 };
@@ -51,7 +51,8 @@ use super::private_hnsw::begin_private_hnsw_collection_snapshot;
 use super::private_result_oram::begin_private_result_oram_collection_snapshot;
 use crate::settings::Settings;
 use crate::tonic::api::qdrant_internal_api::{
-    prepare_private_oram_shard_transfer, release_private_oram_transfer_reservation,
+    prepare_private_oram_replica_removal, prepare_private_oram_shard_transfer,
+    release_private_oram_transfer_reservation,
 };
 pub async fn do_collection_exists(
     toc: &TableOfContent,
@@ -342,10 +343,11 @@ pub async fn do_update_collection_cluster(
         &collection_state.config,
         &operation,
     )?;
-    reject_private_oram_cluster_replica_remove_until_supported(
+    let private_oram_replica_removal = validate_private_oram_cluster_replica_removal(
         &collection_name,
-        &collection_state.config,
+        &collection_state,
         &operation,
+        dispatcher.this_peer_id(),
     )?;
     let peer_metadata_by_id = consensus_state.persistent.read().peer_metadata_by_id();
     validate_encrypted_cluster_data_movement_parity(
@@ -555,20 +557,18 @@ pub async fn do_update_collection_cluster(
 
             validate_peer_exists(drop_replica.peer_id)?;
 
-            let mut update_operation = UpdateCollectionOperation::new_empty(collection_name);
-
-            update_operation.set_shard_replica_changes(vec![replica_set::Change::Remove(
-                drop_replica.shard_id,
-                drop_replica.peer_id,
-            )]);
-
-            dispatcher
-                .submit_collection_meta_op(
-                    CollectionMetaOperations::UpdateCollection(update_operation),
-                    auth,
-                    wait_timeout,
-                )
-                .await
+            submit_replica_removal_with_private_oram_reservation(
+                dispatcher,
+                settings,
+                &collection,
+                &collection_state.config,
+                collection_name,
+                drop_replica,
+                private_oram_replica_removal,
+                auth,
+                wait_timeout,
+            )
+            .await
         }
         ClusterOperations::CreateShardingKey(create_sharding_key_op) => {
             let create_sharding_key = create_sharding_key_op.create_sharding_key;
@@ -1207,6 +1207,91 @@ async fn submit_restart_transfer_with_private_oram_preinstall(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn submit_replica_removal_with_private_oram_reservation(
+    dispatcher: &Dispatcher,
+    settings: &Settings,
+    collection: &collection::collection::Collection,
+    config: &CollectionConfigInternal,
+    collection_name: String,
+    drop_replica: Replica,
+    private_oram_replica_removal: bool,
+    auth: Auth,
+    wait_timeout: Option<Duration>,
+) -> Result<bool, StorageError> {
+    let build_update = |reserved: bool| {
+        let mut update = UpdateCollectionOperation::new_empty(collection_name.clone());
+        update.set_shard_replica_changes(vec![replica_set::Change::Remove(
+            drop_replica.shard_id,
+            drop_replica.peer_id,
+        )]);
+        if reserved {
+            update.mark_private_oram_replica_removal_reserved();
+        }
+        update
+    };
+    if !private_oram_replica_removal {
+        return dispatcher
+            .submit_collection_meta_op(
+                CollectionMetaOperations::UpdateCollection(build_update(false)),
+                auth,
+                wait_timeout,
+            )
+            .await;
+    }
+
+    let reservation =
+        prepare_private_oram_replica_removal(dispatcher, &auth, settings, &collection_name, config)
+            .await?;
+    let revalidation = validate_private_oram_cluster_replica_removal(
+        &collection_name,
+        &collection.state().await,
+        &ClusterOperations::DropReplica(DropReplicaOperation {
+            drop_replica: drop_replica.clone(),
+        }),
+        dispatcher.this_peer_id(),
+    );
+    let revalidation_error = match revalidation {
+        Ok(true) => None,
+        Ok(false) => Some(StorageError::bad_request(
+            "private ORAM replica removal reservation is no longer valid",
+        )),
+        Err(error) => Some(error),
+    };
+    if let Some(error) = revalidation_error {
+        if release_private_oram_transfer_reservation(dispatcher, &reservation)
+            .await
+            .is_err()
+        {
+            log::warn!(
+                "failed to release private ORAM replica removal reservation after revalidation failure"
+            );
+        }
+        return Err(error);
+    }
+
+    let result = dispatcher
+        .submit_collection_meta_op(
+            CollectionMetaOperations::UpdateCollection(build_update(true)),
+            auth,
+            wait_timeout,
+        )
+        .await;
+    if result.is_ok() {
+        if release_private_oram_transfer_reservation(dispatcher, &reservation)
+            .await
+            .is_err()
+        {
+            log::warn!("failed to release private ORAM replica removal reservation");
+        }
+    } else {
+        log::warn!(
+            "retaining private ORAM replica removal reservation after uncertain consensus submission"
+        );
+    }
+    result
+}
+
 fn validate_encrypted_cluster_data_movement_parity(
     collection_name: &str,
     encrypted_collection: bool,
@@ -1431,21 +1516,31 @@ fn cluster_operation_changes_shard_keys(operation: &ClusterOperations) -> bool {
     )
 }
 
-fn reject_private_oram_cluster_replica_remove_until_supported(
+fn validate_private_oram_cluster_replica_removal(
     _collection_name: &str,
-    config: &CollectionConfigInternal,
+    state: &collection::collection_state::State,
     operation: &ClusterOperations,
-) -> Result<(), StorageError> {
-    if !matches!(operation, ClusterOperations::DropReplica(_))
-        || !collection_uses_private_oram_bucket_store(config)
-    {
-        return Ok(());
+    local_peer_id: PeerId,
+) -> Result<bool, StorageError> {
+    let ClusterOperations::DropReplica(DropReplicaOperation { drop_replica }) = operation else {
+        return Ok(false);
+    };
+    if !collection_uses_private_oram_bucket_store(&state.config) {
+        return Ok(false);
+    }
+    if state.private_oram_replica_removal_preserves_fully_active_layout(
+        drop_replica.shard_id,
+        drop_replica.peer_id,
+        Some(local_peer_id),
+    ) {
+        return Ok(true);
     }
 
     Err(StorageError::BadRequest {
-        description: "cannot drop shard replica for private ORAM collections: collection-local \
-                      ORAM bucket migration and consensus-backed epoch/root ownership are not \
-                      implemented for replica removal"
+        description: "private ORAM collections require replica removal to retain a coordinator \
+                      owner, have no active transfer or resharding, and preserve a fully-active \
+                      fixed shard layout with at least one replica per shard under \
+                      consensus-backed epoch/root ownership"
             .to_string(),
     })
 }
@@ -1885,6 +1980,29 @@ mod tests {
                 peer_id: 2,
             },
         })
+    }
+
+    fn replica_removal_state(
+        config: CollectionConfigInternal,
+    ) -> collection::collection_state::State {
+        collection::collection_state::State {
+            config,
+            shards: [(
+                1,
+                collection::collection_state::ShardInfo {
+                    replicas: HashMap::from([
+                        (1, replica_set_state::ReplicaState::Active),
+                        (2, replica_set_state::ReplicaState::Active),
+                    ]),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            resharding: None,
+            transfers: HashSet::new(),
+            shards_key_mapping: Default::default(),
+            payload_index_schema: Default::default(),
+        }
     }
 
     fn private_hnsw_collection_config() -> CollectionConfigInternal {
@@ -2416,10 +2534,11 @@ mod tests {
             ),
             (
                 "replica-removal",
-                reject_private_oram_cluster_replica_remove_until_supported(
+                validate_private_oram_cluster_replica_removal(
                     collection_name,
-                    &config,
+                    &replica_removal_state(config.clone()),
                     &replica_operation,
+                    2,
                 )
                 .expect_err("private ORAM replica removal must fail closed without alias leaks")
                 .to_string(),
@@ -2630,7 +2749,7 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_drop_replica_guard_blocks_until_bucket_migration_supported() {
+    fn private_oram_drop_replica_guard_requires_fully_active_remaining_owner_layout() {
         let operation = private_oram_drop_replica_operation();
         let collection_name = "private-oram-drop-replica-secret-collection";
 
@@ -2658,12 +2777,25 @@ mod tests {
                 ],
             ),
         ] {
-            let err = reject_private_oram_cluster_replica_remove_until_supported(
+            let state = replica_removal_state(config.clone());
+            assert!(
+                validate_private_oram_cluster_replica_removal(
+                    collection_name,
+                    &state,
+                    &operation,
+                    1,
+                )
+                .expect("fixed-layout private ORAM replica removal must be authorized"),
+                "{label} removal must require a reservation",
+            );
+
+            let err = validate_private_oram_cluster_replica_removal(
                 collection_name,
-                &config,
+                &state,
                 &operation,
+                2,
             )
-            .expect_err("private ORAM replica removal must fail closed");
+            .expect_err("the removed peer cannot coordinate private ORAM replica removal");
             assert!(
                 err.to_string().contains("replica removal")
                     && err
@@ -2672,14 +2804,42 @@ mod tests {
                 "unexpected {label} replica removal error: {err}",
             );
             assert_no_private_oram_config_leak(&err.to_string(), &sentinels);
+
+            let mut last_replica = replica_removal_state(config.clone());
+            last_replica.shards.get_mut(&1).unwrap().replicas.remove(&1);
+            validate_private_oram_cluster_replica_removal(
+                collection_name,
+                &last_replica,
+                &operation,
+                1,
+            )
+            .expect_err("the final shard replica must not be removed");
+
+            let mut inactive = replica_removal_state(config);
+            inactive
+                .shards
+                .get_mut(&1)
+                .unwrap()
+                .replicas
+                .insert(2, replica_set_state::ReplicaState::Dead);
+            validate_private_oram_cluster_replica_removal(
+                collection_name,
+                &inactive,
+                &operation,
+                1,
+            )
+            .expect_err("private ORAM replica removal requires fully-active replicas");
         }
 
-        reject_private_oram_cluster_replica_remove_until_supported(
-            collection_name,
-            &ordinary_collection_config(),
-            &operation,
-        )
-        .expect("ordinary collection replica removal must stay open");
+        assert!(
+            !validate_private_oram_cluster_replica_removal(
+                collection_name,
+                &replica_removal_state(ordinary_collection_config()),
+                &operation,
+                1,
+            )
+            .expect("ordinary collection replica removal must stay open")
+        );
     }
 
     #[test]

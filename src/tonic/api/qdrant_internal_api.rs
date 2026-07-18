@@ -597,29 +597,18 @@ async fn release_private_oram_transfer_reservation_keys(
     first_error.map_or(Ok(()), Err)
 }
 
-pub(crate) async fn prepare_private_oram_shard_transfer(
+async fn acquire_private_oram_collection_reservation(
     dispatcher: &Dispatcher,
-    auth: &Auth,
-    settings: &Settings,
-    collection_name: &str,
-    config: &CollectionConfigInternal,
-    target_peer: PeerId,
+    keys: Vec<PrivateOramEpochKey>,
 ) -> Result<PrivateOramTransferReservation, StorageError> {
-    let keys = private_oram_transfer_index_keys(config, collection_name)?;
-    if keys.is_empty() {
-        return Err(StorageError::bad_request(
-            "private ORAM transfer requires at least one encrypted ORAM index",
-        ));
-    }
     let session_id = Uuid::new_v4().to_string();
-    let lease_id_hash = private_oram_session_lease_hash(&session_id)?;
     let issued_at_unix = current_private_oram_unix_secs()?;
     let expires_at_unix = issued_at_unix
         .checked_add(PRIVATE_ORAM_TRANSFER_RESERVATION_SECS)
-        .ok_or_else(|| StorageError::service_error("private ORAM transfer clock overflow"))?;
+        .ok_or_else(|| StorageError::service_error("private ORAM reservation clock overflow"))?;
 
     let mut acquired_keys = Vec::with_capacity(keys.len());
-    for key in &keys {
+    for key in keys {
         if let Err(error) = acquire_private_oram_session_lease(
             dispatcher,
             key.clone(),
@@ -638,15 +627,38 @@ pub(crate) async fn prepare_private_oram_shard_transfer(
             .is_err()
             {
                 log::warn!(
-                    "failed to release private ORAM transfer reservation after lease acquisition failure"
+                    "failed to release private ORAM reservation after lease acquisition failure"
                 );
             }
             return Err(error);
         }
-        acquired_keys.push(key.clone());
+        acquired_keys.push(key);
     }
 
-    for key in &keys {
+    Ok(PrivateOramTransferReservation {
+        session_id,
+        keys: acquired_keys,
+    })
+}
+
+pub(crate) async fn prepare_private_oram_shard_transfer(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    target_peer: PeerId,
+) -> Result<PrivateOramTransferReservation, StorageError> {
+    let keys = private_oram_transfer_index_keys(config, collection_name)?;
+    if keys.is_empty() {
+        return Err(StorageError::bad_request(
+            "private ORAM transfer requires at least one encrypted ORAM index",
+        ));
+    }
+    let reservation = acquire_private_oram_collection_reservation(dispatcher, keys).await?;
+    let lease_id_hash = private_oram_session_lease_hash(&reservation.session_id)?;
+
+    for key in &reservation.keys {
         let install_result = match key.index_kind {
             PrivateOramIndexKind::Hnsw => {
                 install_private_hnsw_live_replica_on_peer(
@@ -673,13 +685,9 @@ pub(crate) async fn prepare_private_oram_shard_transfer(
             }
         };
         if let Err(error) = install_result {
-            if release_private_oram_transfer_reservation_keys(
-                dispatcher,
-                &acquired_keys,
-                &session_id,
-            )
-            .await
-            .is_err()
+            if release_private_oram_transfer_reservation(dispatcher, &reservation)
+                .await
+                .is_err()
             {
                 log::warn!(
                     "failed to release private ORAM transfer reservation after live install failure"
@@ -689,10 +697,51 @@ pub(crate) async fn prepare_private_oram_shard_transfer(
         }
     }
 
-    Ok(PrivateOramTransferReservation {
-        session_id,
-        keys: acquired_keys,
-    })
+    Ok(reservation)
+}
+
+pub(crate) async fn prepare_private_oram_replica_removal(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+) -> Result<PrivateOramTransferReservation, StorageError> {
+    dispatcher
+        .private_oram_replication_peers(&collection_name.to_string())
+        .await?;
+    let keys = private_oram_transfer_index_keys(config, collection_name)?;
+    if keys.is_empty() {
+        return Err(StorageError::bad_request(
+            "private ORAM replica removal requires at least one encrypted ORAM index",
+        ));
+    }
+
+    for key in &keys {
+        match key.index_kind {
+            PrivateOramIndexKind::Hnsw => {
+                recover_private_hnsw_replication(
+                    dispatcher,
+                    auth,
+                    settings,
+                    collection_name,
+                    &key.index_name,
+                )
+                .await?;
+            }
+            PrivateOramIndexKind::ResultPayload => {
+                recover_private_result_oram_replication(
+                    dispatcher,
+                    auth,
+                    settings,
+                    collection_name,
+                )
+                .await?;
+            }
+        }
+    }
+
+    acquire_private_oram_collection_reservation(dispatcher, keys).await
 }
 
 pub(crate) async fn release_private_oram_transfer_reservation(
@@ -1281,6 +1330,9 @@ pub(crate) async fn open_private_hnsw_session_coordinated(
     fixed_budget: bool,
     result_privacy: ResultPrivacyMode,
 ) -> Result<private_hnsw::PrivateHnswSessionResponse, StorageError> {
+    dispatcher
+        .require_private_oram_active_owner(&collection_name.to_string())
+        .await?;
     recover_private_hnsw_replication(dispatcher, auth, settings, collection_name, vector_name)
         .await?;
     let pass = new_unchecked_verification_pass();
@@ -1564,6 +1616,9 @@ pub(crate) async fn open_private_result_oram_session_coordinated(
     desired_epoch: u64,
     fixed_budget: bool,
 ) -> Result<private_result_oram::PrivateResultOramSessionResponse, StorageError> {
+    dispatcher
+        .require_private_oram_active_owner(&collection_name.to_string())
+        .await?;
     recover_private_result_oram_replication(dispatcher, auth, settings, collection_name).await?;
     let pass = new_unchecked_verification_pass();
     let session = private_result_oram::do_open_private_result_oram_session_coordinated(

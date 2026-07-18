@@ -300,13 +300,17 @@ impl Collection {
     pub async fn handle_replica_changes(
         &self,
         replica_changes: Vec<Change>,
+        private_oram_replica_removal_reserved: bool,
     ) -> CollectionResult<()> {
         if replica_changes.is_empty() {
             return Ok(());
         }
 
-        self.validate_private_oram_replica_remove_until_supported(&replica_changes)
-            .await?;
+        self.validate_private_oram_replica_removal(
+            &replica_changes,
+            private_oram_replica_removal_reserved,
+        )
+        .await?;
 
         let shard_holder = self.shards_holder.read().await;
 
@@ -593,9 +597,10 @@ impl Collection {
 }
 
 impl Collection {
-    async fn validate_private_oram_replica_remove_until_supported(
+    async fn validate_private_oram_replica_removal(
         &self,
         replica_changes: &[Change],
+        private_oram_replica_removal_reserved: bool,
     ) -> CollectionResult<()> {
         let private_oram_bucket_store_collection = {
             let config = self.collection_config.read().await;
@@ -606,30 +611,61 @@ impl Collection {
                 .is_some_and(collection_encryption_uses_private_oram_bucket_store)
         };
 
-        validate_private_oram_replica_remove_until_supported(
+        validate_private_oram_replica_removal_authorization(
             replica_changes,
             private_oram_bucket_store_collection,
-        )
+            private_oram_replica_removal_reserved,
+        )?;
+        if !private_oram_bucket_store_collection || !private_oram_replica_removal_reserved {
+            return Ok(());
+        }
+
+        let [Change::Remove(shard_id, peer_id)] = replica_changes else {
+            return Err(private_oram_replica_removal_error());
+        };
+        if !self
+            .state()
+            .await
+            .private_oram_replica_removal_preserves_fully_active_layout(*shard_id, *peer_id, None)
+        {
+            return Err(private_oram_replica_removal_error());
+        }
+        Ok(())
     }
 }
 
-fn validate_private_oram_replica_remove_until_supported(
+fn validate_private_oram_replica_removal_authorization(
     replica_changes: &[Change],
     private_oram_bucket_store_collection: bool,
+    private_oram_replica_removal_reserved: bool,
 ) -> CollectionResult<()> {
-    if !private_oram_bucket_store_collection
-        || !replica_changes
-            .iter()
-            .any(|change| matches!(change, Change::Remove(_, _)))
+    let removes_replica = replica_changes
+        .iter()
+        .any(|change| matches!(change, Change::Remove(_, _)));
+    if !private_oram_bucket_store_collection && !private_oram_replica_removal_reserved {
+        return Ok(());
+    }
+    if private_oram_bucket_store_collection
+        && !removes_replica
+        && !private_oram_replica_removal_reserved
+    {
+        return Ok(());
+    }
+    if private_oram_bucket_store_collection
+        && private_oram_replica_removal_reserved
+        && matches!(replica_changes, [Change::Remove(_, _)])
     {
         return Ok(());
     }
 
-    Err(CollectionError::bad_input(
-        "cannot drop shard replica for private ORAM collections: collection-local encrypted ORAM \
-         buckets cannot be moved or deleted by replica removal until ORAM bucket migration and \
-         consensus-backed epoch/root ownership are implemented",
-    ))
+    Err(private_oram_replica_removal_error())
+}
+
+fn private_oram_replica_removal_error() -> CollectionError {
+    CollectionError::bad_input(
+        "private ORAM replica removal requires a reserved exact single-replica update that \
+         preserves a fully-active fixed shard layout and consensus-backed epoch/root ownership",
+    )
 }
 
 fn invalid_crypto_migration_plan_error(_err: impl std::fmt::Debug) -> CollectionError {
@@ -767,13 +803,14 @@ mod tests {
     fn private_oram_replica_remove_guard_redacts_collection_details() {
         let changes = [Change::Remove(1, 2)];
 
-        validate_private_oram_replica_remove_until_supported(&changes, false).unwrap();
+        validate_private_oram_replica_removal_authorization(&changes, false, false).unwrap();
 
-        let err = validate_private_oram_replica_remove_until_supported(&changes, true).unwrap_err();
+        let err =
+            validate_private_oram_replica_removal_authorization(&changes, true, false).unwrap_err();
         let rendered = format!("{err:?}");
 
-        assert!(rendered.contains("cannot drop shard replica for private ORAM collections"));
-        assert!(rendered.contains("collection-local encrypted ORAM buckets"));
+        assert!(rendered.contains("private ORAM replica removal"));
+        assert!(rendered.contains("reserved exact single-replica update"));
         assert!(rendered.contains("consensus-backed epoch/root"));
         assert!(!rendered.contains("private_hnsw_oram"));
         assert!(!rendered.contains("private_result_oram"));
@@ -782,5 +819,13 @@ mod tests {
         for sentinel in PRIVATE_ORAM_REPLICA_REMOVE_REDACTION_STEMS {
             assert!(!rendered.contains(sentinel), "{rendered}");
         }
+
+        validate_private_oram_replica_removal_authorization(&changes, true, true).unwrap();
+        let multiple = [Change::Remove(1, 2), Change::Remove(2, 3)];
+        validate_private_oram_replica_removal_authorization(&multiple, true, true).unwrap_err();
+
+        validate_private_oram_replica_removal_authorization(&[], true, false).unwrap();
+        validate_private_oram_replica_removal_authorization(&[], true, true).unwrap_err();
+        validate_private_oram_replica_removal_authorization(&changes, false, true).unwrap_err();
     }
 }
