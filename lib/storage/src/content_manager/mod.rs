@@ -22,7 +22,10 @@ pub mod consensus_ops {
     use std::collections::BTreeSet;
     use std::fmt;
 
-    use collection::config::ShardingMethod;
+    use collection::config::{
+        CollectionConfigInternal, EncryptionSelector, ShardingMethod,
+        encryption_rule_uses_private_hnsw_oram, encryption_rule_uses_private_result_oram,
+    };
     use collection::operations::types::PeerMetadata;
     use collection::shards::replica_set::replica_set_state::ReplicaState;
     use collection::shards::replica_set::replica_set_state::ReplicaState::Initializing;
@@ -157,7 +160,7 @@ pub mod consensus_ops {
         pub owner_peer_ids: Vec<PeerId>,
         /// Base64url SHA-256 of the canonical shard layout.
         pub layout_digest: String,
-        /// Base64url SHA-256 of the private ORAM index epoch/root/completion set.
+        /// Base64url SHA-256 of the index epoch/root/completion set at this layout transition.
         pub index_state_digest: String,
     }
 
@@ -177,6 +180,47 @@ pub mod consensus_ops {
         pub key: PrivateOramLayoutKey,
         pub expected: Option<PrivateOramConsensusLayout>,
         pub new: PrivateOramConsensusLayout,
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramLayoutLeaseBinding {
+        pub key: PrivateOramEpochKey,
+        pub lease: PrivateOramSessionLease,
+    }
+
+    impl fmt::Debug for PrivateOramLayoutLeaseBinding {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramLayoutLeaseBinding")
+                .field("index_kind", &self.key.index_kind)
+                .field("owner_peer_id", &self.lease.owner_peer_id)
+                .field("issued_at_unix", &self.lease.issued_at_unix)
+                .field("expires_at_unix", &self.lease.expires_at_unix)
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramCollectionLayoutTransition {
+        pub layout: CompareAndSwapPrivateOramLayout,
+        pub leases: Vec<PrivateOramLayoutLeaseBinding>,
+        pub collection_meta: Box<CollectionMetaOperations>,
+    }
+
+    impl fmt::Debug for PrivateOramCollectionLayoutTransition {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramCollectionLayoutTransition")
+                .field("has_expected", &self.layout.expected.is_some())
+                .field("new_generation", &self.layout.new.generation)
+                .field("lease_count", &self.leases.len())
+                .field("collection_meta", &self.collection_meta.redacted_log())
+                .finish()
+        }
+    }
+
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    pub enum PrivateOramLayoutTransitionState {
+        Pending,
+        Applied,
     }
 
     #[derive(PartialEq, Eq, Clone)]
@@ -276,6 +320,65 @@ pub mod consensus_ops {
         ))
     }
 
+    pub fn classify_private_oram_replica_removal_layout_transition(
+        collection_id: &str,
+        sharding_method: ShardingMethod,
+        entries: &[PrivateOramShardLayoutEntry],
+        shard_id: ShardId,
+        peer_id: PeerId,
+        expected: &PrivateOramConsensusLayout,
+        new: &PrivateOramConsensusLayout,
+    ) -> Result<PrivateOramLayoutTransitionState, StorageError> {
+        let (owner_peer_ids, layout_digest) =
+            canonical_private_oram_shard_layout_digest(collection_id, sharding_method, entries)?;
+        if private_oram_layout_topology_matches(expected, &owner_peer_ids, &layout_digest) {
+            let mut post_entries = entries.to_vec();
+            let entry = post_entries
+                .iter_mut()
+                .find(|entry| entry.shard_id == shard_id)
+                .ok_or_else(invalid_private_oram_layout_transition_input)?;
+            let owner_index = entry
+                .owner_peer_ids
+                .iter()
+                .position(|owner| *owner == peer_id)
+                .ok_or_else(invalid_private_oram_layout_transition_input)?;
+            entry.owner_peer_ids.remove(owner_index);
+            let (new_owner_peer_ids, new_layout_digest) =
+                canonical_private_oram_shard_layout_digest(
+                    collection_id,
+                    sharding_method,
+                    &post_entries,
+                )?;
+            if private_oram_layout_topology_matches(new, &new_owner_peer_ids, &new_layout_digest) {
+                return Ok(PrivateOramLayoutTransitionState::Pending);
+            }
+        } else if private_oram_layout_topology_matches(new, &owner_peer_ids, &layout_digest) {
+            let mut pre_entries = entries.to_vec();
+            let entry = pre_entries
+                .iter_mut()
+                .find(|entry| entry.shard_id == shard_id)
+                .ok_or_else(invalid_private_oram_layout_transition_input)?;
+            if entry.owner_peer_ids.contains(&peer_id) {
+                return Err(invalid_private_oram_layout_transition_input());
+            }
+            entry.owner_peer_ids.push(peer_id);
+            let (old_owner_peer_ids, old_layout_digest) =
+                canonical_private_oram_shard_layout_digest(
+                    collection_id,
+                    sharding_method,
+                    &pre_entries,
+                )?;
+            if private_oram_layout_topology_matches(
+                expected,
+                &old_owner_peer_ids,
+                &old_layout_digest,
+            ) {
+                return Ok(PrivateOramLayoutTransitionState::Applied);
+            }
+        }
+        Err(invalid_private_oram_layout_transition_input())
+    }
+
     pub fn canonical_private_oram_index_state_digest(
         collection_id: &str,
         states: &[(PrivateOramEpochKey, PrivateOramConsensusEpoch)],
@@ -341,6 +444,47 @@ pub mod consensus_ops {
         Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
     }
 
+    pub fn private_oram_index_keys_for_config(
+        config: &CollectionConfigInternal,
+        collection_name: &str,
+    ) -> Result<Vec<PrivateOramEpochKey>, StorageError> {
+        let collection_id = config.stable_crypto_id(collection_name)?;
+        let Some(encryption) = config.params.effective_encryption() else {
+            return Ok(Vec::new());
+        };
+        let mut hnsw_vectors = BTreeSet::new();
+        let mut has_result_payload = false;
+        for rule in &encryption.rules {
+            if encryption_rule_uses_private_hnsw_oram(rule) {
+                let EncryptionSelector::VectorNames { names } = &rule.selector else {
+                    return Err(StorageError::bad_request(
+                        "private ORAM consensus index configuration is invalid",
+                    ));
+                };
+                hnsw_vectors.extend(names.iter().cloned());
+            } else if encryption_rule_uses_private_result_oram(rule) {
+                has_result_payload = true;
+            }
+        }
+
+        let mut keys = hnsw_vectors
+            .into_iter()
+            .map(|index_name| PrivateOramEpochKey {
+                collection_id: collection_id.clone(),
+                index_kind: PrivateOramIndexKind::Hnsw,
+                index_name,
+            })
+            .collect::<Vec<_>>();
+        if has_result_payload {
+            keys.push(PrivateOramEpochKey {
+                collection_id,
+                index_kind: PrivateOramIndexKind::ResultPayload,
+                index_name: String::new(),
+            });
+        }
+        Ok(keys)
+    }
+
     fn valid_private_oram_collection_id(collection_id: &str) -> bool {
         !collection_id.is_empty() && collection_id.len() <= 1024
     }
@@ -371,6 +515,18 @@ pub mod consensus_ops {
         StorageError::bad_request("private ORAM consensus index-state digest input is invalid")
     }
 
+    fn private_oram_layout_topology_matches(
+        layout: &PrivateOramConsensusLayout,
+        owner_peer_ids: &[PeerId],
+        layout_digest: &str,
+    ) -> bool {
+        layout.owner_peer_ids == owner_peer_ids && layout.layout_digest == layout_digest
+    }
+
+    fn invalid_private_oram_layout_transition_input() -> StorageError {
+        StorageError::bad_request("private ORAM collection layout transition is invalid")
+    }
+
     /// Operation that should pass consensus
     #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
     pub enum ConsensusOperations {
@@ -396,6 +552,7 @@ pub mod consensus_ops {
             peer_id: PeerId,
             status: SnapshotStatus,
         },
+        ApplyPrivateOramCollectionLayout(PrivateOramCollectionLayoutTransition),
     }
 
     impl TryFrom<&RaftEntry> for ConsensusOperations {
@@ -573,6 +730,13 @@ pub mod consensus_ops {
                     .field("new_generation", &operation.new.generation)
                     .field("owner_peer_count", &operation.new.owner_peer_ids.len())
                     .finish(),
+                ConsensusOperations::ApplyPrivateOramCollectionLayout(operation) => f
+                    .debug_struct("ApplyPrivateOramCollectionLayout")
+                    .field("has_expected", &operation.layout.expected.is_some())
+                    .field("new_generation", &operation.layout.new.generation)
+                    .field("lease_count", &operation.leases.len())
+                    .field("collection_meta", &operation.collection_meta.redacted_log())
+                    .finish(),
                 ConsensusOperations::RequestSnapshot => f.write_str("RequestSnapshot"),
                 ConsensusOperations::ReportSnapshot { peer_id, status } => f
                     .debug_struct("ReportSnapshot")
@@ -633,6 +797,11 @@ pub trait CollectionContainer {
         operation: CollectionMetaOperations,
     ) -> Result<bool, StorageError>;
 
+    fn private_oram_layout_transition_state(
+        &self,
+        transition: &consensus_ops::PrivateOramCollectionLayoutTransition,
+    ) -> Result<consensus_ops::PrivateOramLayoutTransitionState, StorageError>;
+
     fn collections_snapshot(&self) -> CollectionsSnapshot;
 
     fn apply_collections_snapshot(&self, data: CollectionsSnapshot) -> Result<(), StorageError>;
@@ -649,12 +818,16 @@ mod test {
     use segment::types::ShardKey;
     use serde_json::json;
 
+    use super::collection_meta_ops::CollectionMetaOperations;
     use super::consensus_ops::{
         CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
-        CompareAndSwapPrivateOramSessionLease, ConsensusOperations, PrivateOramConsensusEpoch,
+        CompareAndSwapPrivateOramSessionLease, ConsensusOperations,
+        PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
         PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramIndexKind,
-        PrivateOramLayoutKey, PrivateOramSessionLease, PrivateOramShardLayoutEntry,
+        PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding, PrivateOramLayoutTransitionState,
+        PrivateOramSessionLease, PrivateOramShardLayoutEntry,
         canonical_private_oram_index_state_digest, canonical_private_oram_shard_layout_digest,
+        classify_private_oram_replica_removal_layout_transition,
     };
 
     // Consensus messages are serialized to CBOR when sent over network and written into WAL.
@@ -823,6 +996,58 @@ mod test {
     }
 
     #[test]
+    fn private_oram_collection_layout_transition_logs_redact_bound_state() {
+        let collection_sentinel = "qdrant-sec-layout-transition-collection-sentinel";
+        let lease_sentinel = "qdrant-sec-layout-transition-lease-sentinel";
+        let operation = ConsensusOperations::ApplyPrivateOramCollectionLayout(
+            PrivateOramCollectionLayoutTransition {
+                layout: CompareAndSwapPrivateOramLayout {
+                    key: PrivateOramLayoutKey {
+                        collection_id: collection_sentinel.to_string(),
+                    },
+                    expected: Some(PrivateOramConsensusLayout {
+                        generation: 1,
+                        owner_peer_ids: vec![7, 9],
+                        layout_digest: BASE64URL_NOPAD.encode(&[51; 32]),
+                        index_state_digest: BASE64URL_NOPAD.encode(&[52; 32]),
+                    }),
+                    new: PrivateOramConsensusLayout {
+                        generation: 2,
+                        owner_peer_ids: vec![7],
+                        layout_digest: BASE64URL_NOPAD.encode(&[53; 32]),
+                        index_state_digest: BASE64URL_NOPAD.encode(&[54; 32]),
+                    },
+                },
+                leases: vec![PrivateOramLayoutLeaseBinding {
+                    key: PrivateOramEpochKey {
+                        collection_id: collection_sentinel.to_string(),
+                        index_kind: PrivateOramIndexKind::Hnsw,
+                        index_name: "qdrant-sec-layout-transition-index-sentinel".to_string(),
+                    },
+                    lease: PrivateOramSessionLease {
+                        owner_peer_id: 7,
+                        lease_id_hash: lease_sentinel.to_string(),
+                        issued_at_unix: 100,
+                        expires_at_unix: 160,
+                    },
+                }],
+                collection_meta: Box::new(CollectionMetaOperations::Nop { token: 7 }),
+            },
+        );
+
+        for rendered in [
+            format!("{operation:?}"),
+            format!("{:?}", operation.redacted_log()),
+        ] {
+            assert!(rendered.contains("ApplyPrivateOramCollectionLayout"));
+            assert!(rendered.contains("new_generation: 2"), "{rendered}");
+            assert!(!rendered.contains(collection_sentinel), "{rendered}");
+            assert!(!rendered.contains(lease_sentinel), "{rendered}");
+            assert!(!rendered.contains("layout-transition-index-sentinel"));
+        }
+    }
+
+    #[test]
     fn private_oram_shard_layout_digest_is_canonical_and_context_bound() {
         let collection_id = "collection-uuid-1";
         let entries = vec![
@@ -908,6 +1133,95 @@ mod test {
             .to_string()
             .contains("layout digest input is invalid"),
         );
+    }
+
+    #[test]
+    fn private_oram_replica_removal_layout_classifier_is_replay_safe() {
+        let collection_id = "collection-uuid-1";
+        let pre_entries = vec![
+            PrivateOramShardLayoutEntry {
+                shard_id: 1,
+                shard_key: None,
+                owner_peer_ids: vec![7, 9],
+            },
+            PrivateOramShardLayoutEntry {
+                shard_id: 2,
+                shard_key: None,
+                owner_peer_ids: vec![7],
+            },
+        ];
+        let mut post_entries = pre_entries.clone();
+        post_entries[0].owner_peer_ids.retain(|owner| *owner != 9);
+        let (pre_owners, pre_digest) = canonical_private_oram_shard_layout_digest(
+            collection_id,
+            ShardingMethod::Auto,
+            &pre_entries,
+        )
+        .unwrap();
+        let (post_owners, post_digest) = canonical_private_oram_shard_layout_digest(
+            collection_id,
+            ShardingMethod::Auto,
+            &post_entries,
+        )
+        .unwrap();
+        let expected = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: pre_owners,
+            layout_digest: pre_digest,
+            index_state_digest: BASE64URL_NOPAD.encode(&[61; 32]),
+        };
+        let new = PrivateOramConsensusLayout {
+            generation: 2,
+            owner_peer_ids: post_owners,
+            layout_digest: post_digest,
+            index_state_digest: BASE64URL_NOPAD.encode(&[62; 32]),
+        };
+
+        assert_eq!(
+            classify_private_oram_replica_removal_layout_transition(
+                collection_id,
+                ShardingMethod::Auto,
+                &pre_entries,
+                1,
+                9,
+                &expected,
+                &new,
+            )
+            .unwrap(),
+            PrivateOramLayoutTransitionState::Pending,
+        );
+        assert_eq!(
+            classify_private_oram_replica_removal_layout_transition(
+                collection_id,
+                ShardingMethod::Auto,
+                &post_entries,
+                1,
+                9,
+                &expected,
+                &new,
+            )
+            .unwrap(),
+            PrivateOramLayoutTransitionState::Applied,
+        );
+
+        let wrong_new = PrivateOramConsensusLayout {
+            layout_digest: BASE64URL_NOPAD.encode(&[63; 32]),
+            ..new
+        };
+        let error = classify_private_oram_replica_removal_layout_transition(
+            collection_id,
+            ShardingMethod::Auto,
+            &pre_entries,
+            1,
+            9,
+            &expected,
+            &wrong_new,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("layout transition is invalid"), "{error}");
+        assert!(!error.contains(collection_id), "{error}");
+        assert!(!error.contains(&wrong_new.layout_digest), "{error}");
     }
 
     #[test]

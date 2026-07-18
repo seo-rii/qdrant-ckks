@@ -2553,16 +2553,50 @@ mod tests {
                 layout_candidate,
             );
 
-            let drifted_layout = PrivateOramConsensusLayout {
+            let stale_index_layout = PrivateOramConsensusLayout {
                 generation: 2,
-                layout_digest: data_encoding::BASE64URL_NOPAD.encode(&[71; 32]),
+                index_state_digest: data_encoding::BASE64URL_NOPAD.encode(&[70; 32]),
                 ..layout_candidate.clone()
             };
             dispatcher
                 .submit_private_oram_layout_cas(
                     CompareAndSwapPrivateOramLayout {
+                        key: layout_key.clone(),
+                        expected: Some(layout_candidate.clone()),
+                        new: stale_index_layout.clone(),
+                    },
+                    None,
+                )
+                .await
+                .unwrap();
+            let refreshed_candidate = private_oram_current_layout_candidate_for_reservation(
+                &dispatcher,
+                COLLECTION_NAME,
+                &collection_config,
+                &reservation,
+            )
+            .await
+            .unwrap();
+            assert_eq!(refreshed_candidate.generation, 2);
+            assert_eq!(
+                refreshed_candidate.layout_digest,
+                stale_index_layout.layout_digest
+            );
+            assert_ne!(
+                refreshed_candidate.index_state_digest,
+                stale_index_layout.index_state_digest
+            );
+
+            let drifted_layout = PrivateOramConsensusLayout {
+                generation: 3,
+                layout_digest: data_encoding::BASE64URL_NOPAD.encode(&[71; 32]),
+                ..stale_index_layout.clone()
+            };
+            dispatcher
+                .submit_private_oram_layout_cas(
+                    CompareAndSwapPrivateOramLayout {
                         key: layout_key,
-                        expected: Some(layout_candidate),
+                        expected: Some(stale_index_layout),
                         new: drifted_layout.clone(),
                     },
                     None,

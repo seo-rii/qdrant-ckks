@@ -21,7 +21,7 @@ use collection::private_result_oram_store::{
     PrivateResultOramConsensusWriteback, PrivateResultOramWritebackBatch,
 };
 use collection::shards::replica_set::replica_set_state::ReplicaState;
-use collection::shards::shard::PeerId;
+use collection::shards::shard::{PeerId, ShardId};
 use common::counter::hardware_accumulator::HwSharedDrain;
 use common::defaults::CONSENSUS_META_OP_WAIT;
 use data_encoding::BASE64URL_NOPAD;
@@ -32,10 +32,11 @@ use segment::types::ShardKey;
 use crate::content_manager::collection_meta_ops::AliasOperations;
 use crate::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
-    CompareAndSwapPrivateOramSessionLease, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
-    PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramSessionLease,
-    PrivateOramShardLayoutEntry, canonical_private_oram_index_state_digest,
-    canonical_private_oram_shard_layout_digest,
+    CompareAndSwapPrivateOramSessionLease, PrivateOramCollectionLayoutTransition,
+    PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramEpochKey,
+    PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding,
+    PrivateOramSessionLease, PrivateOramShardLayoutEntry,
+    canonical_private_oram_index_state_digest, canonical_private_oram_shard_layout_digest,
 };
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
 use crate::rbac::{Auth, CollectionMultipass};
@@ -405,6 +406,26 @@ impl Dispatcher {
         Ok(())
     }
 
+    pub async fn submit_private_oram_collection_layout_transition(
+        &self,
+        transition: PrivateOramCollectionLayoutTransition,
+        auth: Auth,
+        wait_timeout: Option<Duration>,
+    ) -> Result<bool, StorageError> {
+        auth.check_collection_meta_operation(&transition.collection_meta)?;
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM collection layout transition requires distributed mode",
+            )
+        })?;
+        consensus_state
+            .propose_consensus_op_with_await(
+                ConsensusOperations::ApplyPrivateOramCollectionLayout(transition),
+                wait_timeout,
+            )
+            .await
+    }
+
     pub fn private_hnsw_oram_writeback_cas(
         &self,
         collection_id: String,
@@ -747,6 +768,128 @@ impl Dispatcher {
             layout_digest,
             index_state_digest,
         })
+    }
+
+    pub async fn private_oram_reserved_replica_removal_layouts(
+        &self,
+        collection_name: &CollectionName,
+        collection_id: &str,
+        keys: &[PrivateOramEpochKey],
+        reservation_lease_id_hash: &str,
+        generation: u64,
+        shard_id: ShardId,
+        peer_id: PeerId,
+    ) -> Result<
+        (
+            PrivateOramConsensusLayout,
+            PrivateOramConsensusLayout,
+            Vec<PrivateOramLayoutLeaseBinding>,
+        ),
+        StorageError,
+    > {
+        let current = self
+            .private_oram_reserved_layout_candidate(
+                collection_name,
+                collection_id,
+                keys,
+                reservation_lease_id_hash,
+                generation,
+            )
+            .await?;
+        let collection = self
+            .toc
+            .get_collection(&CollectionMultipass.issue_pass(collection_name))
+            .await?;
+        let config = collection.config_snapshot().await;
+        if config
+            .stable_crypto_id(collection_name)
+            .map_err(|_| invalid_private_oram_layout_transition())?
+            != collection_id
+        {
+            return Err(invalid_private_oram_layout_transition());
+        }
+
+        let shard_holder = collection.shards_holder().read_owned().await;
+        if shard_holder.resharding_state().is_some()
+            || !shard_holder.get_transfers(|_| true).is_empty()
+        {
+            return Err(invalid_private_oram_layout_transition());
+        }
+        let mut entries = Vec::new();
+        for (current_shard_id, replica_set) in shard_holder.get_shards() {
+            let peers = replica_set.peers();
+            if peers.is_empty() || peers.values().any(|state| *state != ReplicaState::Active) {
+                return Err(invalid_private_oram_layout_transition());
+            }
+            entries.push(PrivateOramShardLayoutEntry {
+                shard_id: current_shard_id,
+                shard_key: replica_set.shard_key().cloned(),
+                owner_peer_ids: peers.keys().copied().collect(),
+            });
+        }
+        let sharding_method = shard_holder.get_sharding_method();
+        let (current_owners, current_layout_digest) =
+            canonical_private_oram_shard_layout_digest(collection_id, sharding_method, &entries)?;
+        if current.owner_peer_ids != current_owners
+            || current.layout_digest != current_layout_digest
+        {
+            return Err(invalid_private_oram_layout_transition());
+        }
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.shard_id == shard_id)
+            .ok_or_else(invalid_private_oram_layout_transition)?;
+        let owner_index = entry
+            .owner_peer_ids
+            .iter()
+            .position(|owner| *owner == peer_id)
+            .ok_or_else(invalid_private_oram_layout_transition)?;
+        entry.owner_peer_ids.remove(owner_index);
+        let (new_owner_peer_ids, new_layout_digest) =
+            canonical_private_oram_shard_layout_digest(collection_id, sharding_method, &entries)?;
+        drop(shard_holder);
+        if !new_owner_peer_ids.contains(&self.toc.this_peer_id) {
+            return Err(invalid_private_oram_layout_transition());
+        }
+
+        let now_unix = current_private_oram_unix_secs()?;
+        let mut states = Vec::with_capacity(keys.len());
+        let mut leases = Vec::with_capacity(keys.len());
+        for key in keys {
+            let lease = self
+                .private_oram_consensus_session_lease(key)?
+                .ok_or_else(invalid_private_oram_layout_reservation)?;
+            if !private_oram_layout_reservation_matches(
+                &lease,
+                self.toc.this_peer_id,
+                reservation_lease_id_hash,
+                now_unix,
+            ) {
+                return Err(invalid_private_oram_layout_reservation());
+            }
+            let state = self.private_oram_consensus_epoch(key)?.ok_or_else(|| {
+                StorageError::bad_request("private ORAM consensus layout index state is incomplete")
+            })?;
+            states.push((key.clone(), state));
+            leases.push(PrivateOramLayoutLeaseBinding {
+                key: key.clone(),
+                lease,
+            });
+        }
+        let index_state_digest = canonical_private_oram_index_state_digest(collection_id, &states)?;
+        if current.index_state_digest != index_state_digest {
+            return Err(invalid_private_oram_layout_reservation());
+        }
+        let new_generation = generation
+            .checked_add(1)
+            .ok_or_else(invalid_private_oram_layout_transition)?;
+        let new = PrivateOramConsensusLayout {
+            generation: new_generation,
+            owner_peer_ids: new_owner_peer_ids,
+            layout_digest: new_layout_digest,
+            index_state_digest,
+        };
+        Ok((current, new, leases))
     }
 
     /// Require this peer to own at least one active shard replica before it coordinates a
@@ -1508,6 +1651,10 @@ fn decode_private_oram_sha256_digest(value: &str) -> Option<[u8; 32]> {
 
 fn invalid_private_oram_layout_reservation() -> StorageError {
     StorageError::bad_request("private ORAM consensus layout reservation is invalid")
+}
+
+fn invalid_private_oram_layout_transition() -> StorageError {
+    StorageError::bad_request("private ORAM collection layout transition is invalid")
 }
 
 fn validate_private_oram_writeback_digest(digest: &str) -> Result<(), StorageError> {

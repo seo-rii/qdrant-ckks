@@ -30,8 +30,9 @@ use tonic::transport::Uri;
 use super::CollectionContainer;
 use super::alias_mapping::AliasMapping;
 use super::consensus_ops::{
-    ConsensusOperations, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
-    PrivateOramEpochKey, PrivateOramLayoutKey, PrivateOramSessionLease, SnapshotStatus,
+    ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
+    PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramLayoutKey,
+    PrivateOramLayoutTransitionState, PrivateOramSessionLease, SnapshotStatus,
 };
 use super::errors::StorageError;
 use crate::content_manager::consensus::consensus_wal::ConsensusOpWal;
@@ -572,6 +573,9 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 .write()
                 .compare_and_swap_private_oram_layout(&operation)
                 .map(|()| true),
+            ConsensusOperations::ApplyPrivateOramCollectionLayout(operation) => {
+                self.apply_private_oram_collection_layout_transition(&operation)
+            }
 
             ConsensusOperations::RequestSnapshot | ConsensusOperations::ReportSnapshot { .. } => {
                 Err(StorageError::service_error(
@@ -588,6 +592,41 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             )
         }
         result
+    }
+
+    fn apply_private_oram_collection_layout_transition(
+        &self,
+        transition: &PrivateOramCollectionLayoutTransition,
+    ) -> Result<bool, StorageError> {
+        let topology_state = self.toc.private_oram_layout_transition_state(transition)?;
+        self.persistent
+            .read()
+            .validate_private_oram_collection_layout_transition(transition)?;
+        self.persistent
+            .write()
+            .compare_and_swap_private_oram_layout(&transition.layout)?;
+
+        if topology_state == PrivateOramLayoutTransitionState::Pending {
+            let apply_result = self
+                .toc
+                .perform_collection_meta_op((*transition.collection_meta).clone());
+            if !matches!(apply_result, Ok(true))
+                && self.toc.private_oram_layout_transition_state(transition)?
+                    != PrivateOramLayoutTransitionState::Applied
+            {
+                return Err(StorageError::service_error(
+                    "private ORAM collection layout transition was not applied",
+                ));
+            }
+        }
+        if self.toc.private_oram_layout_transition_state(transition)?
+            != PrivateOramLayoutTransitionState::Applied
+        {
+            return Err(StorageError::service_error(
+                "private ORAM collection layout transition did not reach its committed state",
+            ));
+        }
+        Ok(true)
     }
 
     // Outer `Result` is "fatal" error, inner `Result` is "transient"/"local" error.
@@ -1208,6 +1247,7 @@ pub fn raft_error_other(e: impl std::error::Error) -> raft::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
     use std::sync::{Arc, mpsc};
 
     use collection::operations::types::PeerMetadata;
@@ -1228,9 +1268,11 @@ mod tests {
     use crate::content_manager::consensus::persistent::Persistent;
     use crate::content_manager::consensus_ops::{
         CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
-        CompareAndSwapPrivateOramSessionLease, ConsensusOperations, PrivateOramConsensusEpoch,
+        CompareAndSwapPrivateOramSessionLease, ConsensusOperations,
+        PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
         PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramIndexKind,
-        PrivateOramLayoutKey, PrivateOramSessionLease,
+        PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding, PrivateOramLayoutTransitionState,
+        PrivateOramSessionLease, canonical_private_oram_index_state_digest,
     };
 
     #[test]
@@ -1348,6 +1390,18 @@ mod tests {
             Ok(true)
         }
 
+        fn private_oram_layout_transition_state(
+            &self,
+            _transition: &crate::content_manager::consensus_ops::PrivateOramCollectionLayoutTransition,
+        ) -> Result<
+            crate::content_manager::consensus_ops::PrivateOramLayoutTransitionState,
+            crate::content_manager::errors::StorageError,
+        > {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "private ORAM collection layout transitions require a collection container",
+            ))
+        }
+
         fn collections_snapshot(&self) -> super::CollectionsSnapshot {
             super::CollectionsSnapshot::default()
         }
@@ -1369,6 +1423,186 @@ mod tests {
         fn sync_local_state(&self) -> Result<(), crate::content_manager::errors::StorageError> {
             Ok(())
         }
+    }
+
+    struct LayoutTransitionCollections {
+        state: AtomicU8,
+        apply_count: AtomicUsize,
+        fail_after_apply: bool,
+    }
+
+    impl LayoutTransitionCollections {
+        fn new(fail_after_apply: bool) -> Self {
+            Self {
+                state: AtomicU8::new(0),
+                apply_count: AtomicUsize::new(0),
+                fail_after_apply,
+            }
+        }
+    }
+
+    impl CollectionContainer for LayoutTransitionCollections {
+        fn perform_collection_meta_op(
+            &self,
+            operation: crate::content_manager::collection_meta_ops::CollectionMetaOperations,
+        ) -> Result<bool, crate::content_manager::errors::StorageError> {
+            assert!(matches!(
+                operation,
+                crate::content_manager::collection_meta_ops::CollectionMetaOperations::Nop {
+                    token: 7
+                }
+            ));
+            self.apply_count.fetch_add(1, Ordering::SeqCst);
+            self.state.store(1, Ordering::SeqCst);
+            if self.fail_after_apply {
+                Err(crate::content_manager::errors::StorageError::service_error(
+                    "injected post-apply failure",
+                ))
+            } else {
+                Ok(true)
+            }
+        }
+
+        fn private_oram_layout_transition_state(
+            &self,
+            _transition: &PrivateOramCollectionLayoutTransition,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            Ok(if self.state.load(Ordering::SeqCst) == 0 {
+                PrivateOramLayoutTransitionState::Pending
+            } else {
+                PrivateOramLayoutTransitionState::Applied
+            })
+        }
+
+        fn collections_snapshot(&self) -> super::CollectionsSnapshot {
+            super::CollectionsSnapshot::default()
+        }
+
+        fn apply_collections_snapshot(
+            &self,
+            _data: super::CollectionsSnapshot,
+        ) -> Result<(), crate::content_manager::errors::StorageError> {
+            Ok(())
+        }
+
+        fn remove_peer(
+            &self,
+            _peer_id: PeerId,
+        ) -> Result<(), crate::content_manager::errors::StorageError> {
+            Ok(())
+        }
+
+        fn sync_local_state(&self) -> Result<(), crate::content_manager::errors::StorageError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn private_oram_collection_layout_transition_applies_layout_before_meta_and_replays() {
+        let dir = Builder::new()
+            .prefix("private_oram_collection_layout_transition")
+            .tempdir()
+            .unwrap();
+        let collection_id = "collection-uuid-1";
+        let epoch_key = PrivateOramEpochKey {
+            collection_id: collection_id.to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let epoch = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+            writeback_digest: Some(BASE64URL_NOPAD.encode(&[43; 32])),
+        };
+        let lease = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: BASE64URL_NOPAD.encode(&[44; 32]),
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        };
+        let layout_key = PrivateOramLayoutKey {
+            collection_id: collection_id.to_string(),
+        };
+        let current = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7, 9],
+            layout_digest: BASE64URL_NOPAD.encode(&[45; 32]),
+            index_state_digest: BASE64URL_NOPAD.encode(&[46; 32]),
+        };
+        let next = PrivateOramConsensusLayout {
+            generation: 2,
+            owner_peer_ids: vec![7],
+            layout_digest: BASE64URL_NOPAD.encode(&[47; 32]),
+            index_state_digest: canonical_private_oram_index_state_digest(
+                collection_id,
+                &[(epoch_key.clone(), epoch.clone())],
+            )
+            .unwrap(),
+        };
+        let transition = PrivateOramCollectionLayoutTransition {
+            layout: CompareAndSwapPrivateOramLayout {
+                key: layout_key.clone(),
+                expected: Some(current.clone()),
+                new: next.clone(),
+            },
+            leases: vec![PrivateOramLayoutLeaseBinding {
+                key: epoch_key.clone(),
+                lease: lease.clone(),
+            }],
+            collection_meta: Box::new(
+                crate::content_manager::collection_meta_ops::CollectionMetaOperations::Nop {
+                    token: 7,
+                },
+            ),
+        };
+        let entry = Entry {
+            data: serde_cbor::to_vec(&ConsensusOperations::ApplyPrivateOramCollectionLayout(
+                transition,
+            ))
+            .unwrap(),
+            ..Default::default()
+        };
+
+        let mut persistent = Persistent::load_or_init(dir.path(), true, false, Some(7)).unwrap();
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: epoch_key.clone(),
+                expected: None,
+                new: epoch,
+            })
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: epoch_key,
+                expected: None,
+                new: Some(lease),
+            })
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: layout_key.clone(),
+                expected: None,
+                new: current,
+            })
+            .unwrap();
+        let collections = Arc::new(LayoutTransitionCollections::new(true));
+        let (sender, _) = mpsc::channel();
+        let manager = ConsensusManager::new(
+            persistent,
+            collections.clone(),
+            OperationSender::new(sender),
+            dir.path(),
+            PeerMetadata::current(),
+        )
+        .unwrap();
+
+        assert!(manager.apply_normal_entry(&entry).unwrap());
+        assert_eq!(manager.private_oram_layout(&layout_key), Some(next.clone()));
+        assert_eq!(collections.apply_count.load(Ordering::SeqCst), 1);
+        assert!(manager.apply_normal_entry(&entry).unwrap());
+        assert_eq!(manager.private_oram_layout(&layout_key), Some(next));
+        assert_eq!(collections.apply_count.load(Ordering::SeqCst), 1);
     }
 
     fn setup_storages(

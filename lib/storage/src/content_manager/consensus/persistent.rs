@@ -22,8 +22,10 @@ use crate::StorageError;
 use crate::content_manager::consensus::entry_queue::{EntryApplyProgressQueue, EntryId};
 use crate::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
-    CompareAndSwapPrivateOramSessionLease, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
-    PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramSessionLease,
+    CompareAndSwapPrivateOramSessionLease, PrivateOramCollectionLayoutTransition,
+    PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramEpochKey,
+    PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramSessionLease,
+    canonical_private_oram_index_state_digest,
 };
 use crate::types::{PeerAddressById, PeerMetadataById};
 
@@ -462,6 +464,62 @@ impl Persistent {
             .cloned()
     }
 
+    pub fn validate_private_oram_collection_layout_transition(
+        &self,
+        transition: &PrivateOramCollectionLayoutTransition,
+    ) -> Result<(), StorageError> {
+        validate_private_oram_layout_cas(&transition.layout)?;
+        let Some(expected_layout) = transition.layout.expected.as_ref() else {
+            return Err(invalid_private_oram_collection_layout_transition());
+        };
+        if transition.leases.is_empty()
+            || transition.leases.len() > PRIVATE_ORAM_EPOCH_MAX_RECORDS
+            || expected_layout.layout_digest == transition.layout.new.layout_digest
+        {
+            return Err(invalid_private_oram_collection_layout_transition());
+        }
+
+        let mut states = Vec::with_capacity(transition.leases.len());
+        let mut previous_key = None;
+        let expected_lease = &transition.leases[0].lease;
+        for binding in &transition.leases {
+            if binding.key.collection_id != transition.layout.key.collection_id
+                || &binding.lease != expected_lease
+                || self.private_oram_session_lease(&binding.key).as_ref() != Some(&binding.lease)
+            {
+                return Err(invalid_private_oram_collection_layout_transition());
+            }
+            let key_order = private_oram_epoch_key_order(&binding.key);
+            if previous_key
+                .as_ref()
+                .is_some_and(|previous| previous >= &key_order)
+            {
+                return Err(invalid_private_oram_collection_layout_transition());
+            }
+            previous_key = Some(key_order);
+            let state = self
+                .private_oram_epoch(&binding.key)
+                .ok_or_else(invalid_private_oram_collection_layout_transition)?;
+            states.push((binding.key.clone(), state));
+        }
+
+        let index_state_digest = canonical_private_oram_index_state_digest(
+            &transition.layout.key.collection_id,
+            &states,
+        )?;
+        if transition.layout.new.index_state_digest != index_state_digest {
+            return Err(invalid_private_oram_collection_layout_transition());
+        }
+
+        let current = self.private_oram_layout(&transition.layout.key);
+        if current.as_ref() != Some(expected_layout)
+            && current.as_ref() != Some(&transition.layout.new)
+        {
+            return Err(invalid_private_oram_collection_layout_transition());
+        }
+        Ok(())
+    }
+
     pub fn compare_and_swap_private_oram_layout(
         &mut self,
         operation: &CompareAndSwapPrivateOramLayout,
@@ -713,6 +771,18 @@ fn validate_private_oram_layout_cas(
         None => {}
     }
     Ok(())
+}
+
+fn private_oram_epoch_key_order(key: &PrivateOramEpochKey) -> (u8, &[u8]) {
+    let kind = match key.index_kind {
+        PrivateOramIndexKind::Hnsw => 1,
+        PrivateOramIndexKind::ResultPayload => 2,
+    };
+    (kind, key.index_name.as_bytes())
+}
+
+fn invalid_private_oram_collection_layout_transition() -> StorageError {
+    StorageError::bad_request("private ORAM collection layout transition is invalid")
 }
 
 fn validate_private_oram_layout_key(key: &PrivateOramLayoutKey) -> Result<(), StorageError> {
@@ -1310,6 +1380,101 @@ mod tests {
 
         let reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
         assert_eq!(reloaded.private_oram_layout(&key), Some(next));
+    }
+
+    #[test]
+    fn private_oram_collection_layout_transition_binds_exact_lease_and_current_index_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let collection_id = "collection-uuid-1";
+        let epoch_key = PrivateOramEpochKey {
+            collection_id: collection_id.to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let epoch = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+            writeback_digest: Some(BASE64URL_NOPAD.encode(&[43; 32])),
+        };
+        let lease = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: BASE64URL_NOPAD.encode(&[44; 32]),
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        };
+        let layout_key = PrivateOramLayoutKey {
+            collection_id: collection_id.to_string(),
+        };
+        let current = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7, 9],
+            layout_digest: BASE64URL_NOPAD.encode(&[45; 32]),
+            index_state_digest: BASE64URL_NOPAD.encode(&[46; 32]),
+        };
+        let current_index_state_digest = canonical_private_oram_index_state_digest(
+            collection_id,
+            &[(epoch_key.clone(), epoch.clone())],
+        )
+        .unwrap();
+        let next = PrivateOramConsensusLayout {
+            generation: 2,
+            owner_peer_ids: vec![7],
+            layout_digest: BASE64URL_NOPAD.encode(&[47; 32]),
+            index_state_digest: current_index_state_digest,
+        };
+        let transition = PrivateOramCollectionLayoutTransition {
+            layout: CompareAndSwapPrivateOramLayout {
+                key: layout_key.clone(),
+                expected: Some(current.clone()),
+                new: next,
+            },
+            leases: vec![
+                crate::content_manager::consensus_ops::PrivateOramLayoutLeaseBinding {
+                    key: epoch_key.clone(),
+                    lease: lease.clone(),
+                },
+            ],
+            collection_meta: Box::new(
+                crate::content_manager::collection_meta_ops::CollectionMetaOperations::Nop {
+                    token: 7,
+                },
+            ),
+        };
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: epoch_key.clone(),
+                expected: None,
+                new: epoch,
+            })
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: epoch_key,
+                expected: None,
+                new: Some(lease),
+            })
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: layout_key,
+                expected: None,
+                new: current,
+            })
+            .unwrap();
+
+        persistent
+            .validate_private_oram_collection_layout_transition(&transition)
+            .unwrap();
+
+        let mut wrong_lease = transition.clone();
+        wrong_lease.leases[0].lease.lease_id_hash = BASE64URL_NOPAD.encode(&[48; 32]);
+        let error = persistent
+            .validate_private_oram_collection_layout_transition(&wrong_lease)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("layout transition is invalid"), "{error}");
+        assert!(!error.contains(&wrong_lease.leases[0].lease.lease_id_hash));
     }
 
     #[test]

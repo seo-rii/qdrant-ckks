@@ -40,6 +40,7 @@ use storage::content_manager::collection_meta_ops::{
     CollectionMetaOperations, CreateShardKey, DropShardKey, ReshardingOperation,
     SetShardReplicaState, ShardTransferOperations, UpdateCollectionOperation,
 };
+use storage::content_manager::consensus_ops::PrivateOramLayoutKey;
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
@@ -52,7 +53,7 @@ use super::private_result_oram::begin_private_result_oram_collection_snapshot;
 use crate::settings::Settings;
 use crate::tonic::api::qdrant_internal_api::{
     prepare_private_oram_replica_removal, prepare_private_oram_shard_transfer,
-    release_private_oram_transfer_reservation,
+    private_oram_replica_removal_layout_transition, release_private_oram_transfer_reservation,
 };
 pub async fn do_collection_exists(
     toc: &TableOfContent,
@@ -1111,6 +1112,7 @@ async fn submit_shard_transfer_with_private_oram_preinstall(
             "private ORAM shard transfer must be coordinated by its current source peer",
         ));
     }
+    reject_private_oram_transfer_after_layout_bootstrap(dispatcher, config, &collection_name)?;
 
     let reservation = prepare_private_oram_shard_transfer(
         dispatcher,
@@ -1121,6 +1123,19 @@ async fn submit_shard_transfer_with_private_oram_preinstall(
         transfer.to,
     )
     .await?;
+    if let Err(error) =
+        reject_private_oram_transfer_after_layout_bootstrap(dispatcher, config, &collection_name)
+    {
+        if release_private_oram_transfer_reservation(dispatcher, &reservation)
+            .await
+            .is_err()
+        {
+            log::warn!(
+                "failed to release private ORAM shard transfer reservation after layout revalidation failure"
+            );
+        }
+        return Err(error);
+    }
     transfer.private_oram_preinstalled = true;
     let result = dispatcher
         .submit_collection_meta_op(
@@ -1172,6 +1187,7 @@ async fn submit_restart_transfer_with_private_oram_preinstall(
             "private ORAM restart transfer must be coordinated by its current source peer",
         ));
     }
+    reject_private_oram_transfer_after_layout_bootstrap(dispatcher, config, &collection_name)?;
 
     let reservation = prepare_private_oram_shard_transfer(
         dispatcher,
@@ -1182,6 +1198,19 @@ async fn submit_restart_transfer_with_private_oram_preinstall(
         transfer_restart.to,
     )
     .await?;
+    if let Err(error) =
+        reject_private_oram_transfer_after_layout_bootstrap(dispatcher, config, &collection_name)
+    {
+        if release_private_oram_transfer_reservation(dispatcher, &reservation)
+            .await
+            .is_err()
+        {
+            log::warn!(
+                "failed to release private ORAM restart transfer reservation after layout revalidation failure"
+            );
+        }
+        return Err(error);
+    }
     let result = dispatcher
         .submit_collection_meta_op(
             CollectionMetaOperations::TransferShard(
@@ -1205,6 +1234,25 @@ async fn submit_restart_transfer_with_private_oram_preinstall(
         );
     }
     result
+}
+
+fn reject_private_oram_transfer_after_layout_bootstrap(
+    dispatcher: &Dispatcher,
+    config: &CollectionConfigInternal,
+    collection_name: &str,
+) -> Result<(), StorageError> {
+    let collection_id = config.stable_crypto_id(collection_name).map_err(|_| {
+        StorageError::bad_request("private ORAM shard transfer layout state is invalid")
+    })?;
+    if dispatcher
+        .private_oram_consensus_layout(&PrivateOramLayoutKey { collection_id })?
+        .is_some()
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM shard transfer is unavailable after layout bootstrap until transfer completion updates the consensus layout generation",
+        ));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1270,12 +1318,32 @@ async fn submit_replica_removal_with_private_oram_reservation(
         return Err(error);
     }
 
+    let transition = private_oram_replica_removal_layout_transition(
+        dispatcher,
+        &collection_name,
+        config,
+        &reservation,
+        drop_replica.shard_id,
+        drop_replica.peer_id,
+        CollectionMetaOperations::UpdateCollection(build_update(true)),
+    )
+    .await;
+    let transition = match transition {
+        Ok(transition) => transition,
+        Err(error) => {
+            if release_private_oram_transfer_reservation(dispatcher, &reservation)
+                .await
+                .is_err()
+            {
+                log::warn!(
+                    "failed to release private ORAM replica removal reservation after layout transition preparation failure"
+                );
+            }
+            return Err(error);
+        }
+    };
     let result = dispatcher
-        .submit_collection_meta_op(
-            CollectionMetaOperations::UpdateCollection(build_update(true)),
-            auth,
-            wait_timeout,
-        )
+        .submit_private_oram_collection_layout_transition(transition, auth, wait_timeout)
         .await;
     if result.is_ok() {
         if release_private_oram_transfer_reservation(dispatcher, &reservation)

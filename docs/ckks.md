@@ -106,12 +106,25 @@ fully-active owner set of every shard. The canonical index-state digest uses
 domain `qdrant-sec/private-oram-index-state-digest/v1` and binds every configured
 private HNSW/result index kind and name, epoch, root, and optional writeback
 completion digest. Both encodings use fixed big-endian numeric fields and
-length-prefixed byte strings. Replica-removal preflight now freezes every
-configured private ORAM index with the same live consensus lease, derives both
-digests, and rejects an existing layout record that differs from the stable
-collection. This is read-only when no layout record exists; generation-1
-bootstrap and topology-transition CAS remain blocked until fixed transfer and
-removal completion update the record coherently.
+length-prefixed byte strings. The index-state digest is a checkpoint captured
+at a layout transition, not an invariant that changes on every ordinary ORAM
+search writeback. A later transition therefore requires the existing record's
+topology to match but binds the then-current consensus epoch/root/completion set
+into the new generation.
+
+Fixed-layout replica removal freezes every configured private ORAM index with
+the same live consensus lease. If no layout record exists, it first bootstraps
+generation 1 with the stable pre-removal topology. It then submits one Raft
+operation that validates the exact leases and current index-state digest,
+advances the layout generation, applies the reserved exact single-replica
+removal, and verifies the post-removal topology. Pre-state and already-applied
+post-state classification makes exact replay idempotent; mismatched shard,
+owner, digest, lease, or index state fails closed without reflecting bound
+values. Transfer-finish generation transitions are not connected yet, so a new
+private ORAM shard transfer is rejected after a layout record has been
+bootstrapped. Existing transfer support remains available for collections that
+do not yet have a layout record. Resharding and dynamic shard-layout guards
+remain active.
 
 Private ORAM search and result-fetch providers have their own client-led
 contract:

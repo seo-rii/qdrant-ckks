@@ -341,6 +341,27 @@ impl UpdateCollectionOperation {
     pub fn private_oram_replica_removal_reserved(&self) -> bool {
         self.private_oram_replica_removal_reserved
     }
+
+    pub fn private_oram_replica_removal_only(&self) -> Option<(ShardId, PeerId)> {
+        if !self.private_oram_replica_removal_reserved
+            || self.update_collection.vectors.is_some()
+            || self.update_collection.hnsw_config.is_some()
+            || self.update_collection.params.is_some()
+            || self.update_collection.optimizers_config.is_some()
+            || self.update_collection.quantization_config.is_some()
+            || self.update_collection.sparse_vectors.is_some()
+            || self.update_collection.strict_mode_config.is_some()
+            || self.update_collection.metadata.is_some()
+        {
+            return None;
+        }
+        let [replica_set::Change::Remove(shard_id, peer_id)] =
+            self.shard_replica_changes.as_deref()?
+        else {
+            return None;
+        };
+        Some((*shard_id, *peer_id))
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, PartialEq, Eq, Hash, Clone)]
@@ -929,9 +950,13 @@ mod tests {
 
         let mut reserved = operation;
         reserved.mark_private_oram_replica_removal_reserved();
+        assert_eq!(reserved.private_oram_replica_removal_only(), None);
+        reserved.set_shard_replica_changes(vec![replica_set::Change::Remove(1, 9)]);
+        assert_eq!(reserved.private_oram_replica_removal_only(), Some((1, 9)));
         let encoded = serde_json::to_value(&reserved).unwrap();
         let decoded: UpdateCollectionOperation = serde_json::from_value(encoded).unwrap();
         assert!(decoded.private_oram_replica_removal_reserved());
+        assert_eq!(decoded.private_oram_replica_removal_only(), Some((1, 9)));
 
         let meta_operation = CollectionMetaOperations::UpdateCollection(decoded);
         let log_line = format!("{:?}", meta_operation.redacted_log());
