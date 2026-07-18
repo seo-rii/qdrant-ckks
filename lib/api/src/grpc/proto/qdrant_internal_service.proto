@@ -38,8 +38,16 @@ service QdrantInternal {
   rpc InstallPrivateOramIndex(InstallPrivateOramIndexRequest)
       returns (InstallPrivateOramIndexResponse) {}
 
+  // Install one complete encrypted index through bounded ordered chunks.
+  rpc InstallPrivateOramIndexChunks(stream PrivateOramInstallChunk)
+      returns (InstallPrivateOramIndexResponse) {}
+
   // Idempotently install one consensus-bound live encrypted index for movement.
   rpc InstallPrivateOramLiveReplica(InstallPrivateOramLiveReplicaRequest)
+      returns (InstallPrivateOramLiveReplicaResponse) {}
+
+  // Install one live encrypted index through bounded ordered chunks.
+  rpc InstallPrivateOramLiveReplicaChunks(stream PrivateOramInstallChunk)
       returns (InstallPrivateOramLiveReplicaResponse) {}
 
   // Ask the active source peer to preinstall and submit automatic shard recovery.
@@ -178,6 +186,15 @@ message InstallPrivateOramIndexRequest {
 message InstallPrivateOramIndexResponse {
   uint64 index_epoch = 1;
   string root_hash = 2;
+}
+
+message PrivateOramInstallChunk {
+  uint32 version = 1;
+  uint64 chunk_index = 2;
+  uint64 chunk_count = 3;
+  uint64 total_bytes = 4;
+  bytes request_sha256 = 5;
+  bytes data = 6;
 }
 
 message PrivateHnswLiveReplicationBundle {

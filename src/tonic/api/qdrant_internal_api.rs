@@ -2,6 +2,10 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use api::grpc::private_oram_chunking::{
+    PRIVATE_ORAM_INSTALL_MAX_ENCODED_BYTES, PrivateOramInstallChunkDecoder,
+    PrivateOramInstallChunkError,
+};
 use api::grpc::qdrant_internal_server::QdrantInternal;
 use api::grpc::{
     CompletePrivateOramWritebackRequest, CompletePrivateOramWritebackResponse, GetAuditLogRequest,
@@ -9,7 +13,7 @@ use api::grpc::{
     GetTelemetryRequest, GetTelemetryResponse, InstallPrivateOramIndexRequest,
     InstallPrivateOramIndexResponse, InstallPrivateOramLiveReplicaRequest,
     InstallPrivateOramLiveReplicaResponse, PeerTelemetry, PreparePrivateOramWritebackRequest,
-    PreparePrivateOramWritebackResponse, PrivateOramReplicationEpochState,
+    PreparePrivateOramWritebackResponse, PrivateOramInstallChunk, PrivateOramReplicationEpochState,
     PrivateOramReplicationIndexKind, PrivateOramReplicationTransition,
     RequestPrivateOramShardRecoveryRequest, RequestPrivateOramShardRecoveryResponse,
     WaitOnConsensusCommitRequest, WaitOnConsensusCommitResponse,
@@ -67,6 +71,32 @@ use crate::common::telemetry::TelemetryCollector;
 use crate::common::{private_hnsw, private_result_oram};
 use crate::settings::Settings;
 use crate::tonic::api::{private_hnsw_api, private_result_oram_api};
+
+fn private_oram_install_chunk_status(error: PrivateOramInstallChunkError) -> Status {
+    match error {
+        PrivateOramInstallChunkError::Oversized
+        | PrivateOramInstallChunkError::AllocationFailed => {
+            Status::resource_exhausted("private ORAM install chunk stream is oversized")
+        }
+        _ => Status::invalid_argument("private ORAM install chunk stream is invalid"),
+    }
+}
+
+async fn decode_private_oram_install_stream<M: Message + Default>(
+    mut stream: tonic::Streaming<PrivateOramInstallChunk>,
+) -> Result<M, Status> {
+    let mut decoder = PrivateOramInstallChunkDecoder::default();
+    while let Some(chunk) = stream
+        .message()
+        .await
+        .map_err(|_| Status::invalid_argument("private ORAM install chunk stream is invalid"))?
+    {
+        decoder
+            .push(chunk)
+            .map_err(private_oram_install_chunk_status)?;
+    }
+    decoder.finish().map_err(private_oram_install_chunk_status)
+}
 
 pub struct QdrantInternalService {
     /// Telemetry collector
@@ -372,24 +402,12 @@ fn validate_live_install_transfer_lease(
     }
 }
 
-const BYTES_PER_MIB: usize = 1024 * 1024;
 const PRIVATE_ORAM_SESSION_LEASE_HASH_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-session-lease-id/v1";
 const PRIVATE_ORAM_SESSION_LEASE_RENEW_SECS: u64 = 300;
 const PRIVATE_ORAM_TRANSFER_RESERVATION_SECS: u64 = 3_600;
 const PRIVATE_ORAM_TRANSFER_RESERVATION_APPLY_TIMEOUT: Duration = Duration::from_secs(10);
 const PRIVATE_ORAM_TRANSFER_RESERVATION_APPLY_POLL_INTERVAL: Duration = Duration::from_millis(50);
-
-fn validate_private_oram_wire_request_budget(
-    request: &impl Message,
-    max_request_bytes: usize,
-    error_message: &'static str,
-) -> Result<(), StorageError> {
-    if max_request_bytes == 0 || request.encoded_len() > max_request_bytes {
-        return Err(StorageError::bad_request(error_message));
-    }
-    Ok(())
-}
 
 pub(crate) fn private_oram_session_lease_hash(session_id: &str) -> Result<String, StorageError> {
     if session_id.is_empty() || session_id.len() > 256 {
@@ -861,10 +879,7 @@ pub(crate) async fn coordinate_private_hnsw_initial_upload(
     vector_name: &str,
 ) -> Result<(), StorageError> {
     let pass = new_unchecked_verification_pass();
-    let max_bundle_bytes = settings
-        .service
-        .max_request_size_mb
-        .saturating_mul(BYTES_PER_MIB);
+    let max_bundle_bytes = PRIVATE_ORAM_INSTALL_MAX_ENCODED_BYTES;
     let bundle = private_hnsw::do_export_private_hnsw_initial_replication_bundle(
         dispatcher.toc(auth, &pass),
         auth,
@@ -896,11 +911,6 @@ pub(crate) async fn coordinate_private_hnsw_initial_upload(
             },
         )),
     };
-    validate_private_oram_wire_request_budget(
-        &request,
-        max_bundle_bytes,
-        "private HNSW ORAM initial install request exceeds service request limit",
-    )?;
     dispatcher
         .coordinate_private_oram_initial_install(
             &collection_name.to_string(),
@@ -924,10 +934,7 @@ pub(crate) async fn coordinate_private_result_oram_initial_upload(
     collection_name: &str,
 ) -> Result<(), StorageError> {
     let pass = new_unchecked_verification_pass();
-    let max_bundle_bytes = settings
-        .service
-        .max_request_size_mb
-        .saturating_mul(BYTES_PER_MIB);
+    let max_bundle_bytes = PRIVATE_ORAM_INSTALL_MAX_ENCODED_BYTES;
     let bundle = private_result_oram::do_export_private_result_oram_initial_replication_bundle(
         dispatcher.toc(auth, &pass),
         auth,
@@ -958,11 +965,6 @@ pub(crate) async fn coordinate_private_result_oram_initial_upload(
             },
         )),
     };
-    validate_private_oram_wire_request_budget(
-        &request,
-        max_bundle_bytes,
-        "private result ORAM initial install request exceeds service request limit",
-    )?;
     dispatcher
         .coordinate_private_oram_initial_install(
             &collection_name.to_string(),
@@ -989,10 +991,7 @@ pub(crate) async fn install_private_hnsw_live_replica_on_peer(
     transfer_lease_id_hash: &str,
 ) -> Result<(), StorageError> {
     let pass = new_unchecked_verification_pass();
-    let max_bundle_bytes = settings
-        .service
-        .max_request_size_mb
-        .saturating_mul(BYTES_PER_MIB);
+    let max_bundle_bytes = PRIVATE_ORAM_INSTALL_MAX_ENCODED_BYTES;
     let bundle = private_hnsw::do_export_private_hnsw_live_replication_bundle(
         dispatcher.toc(auth, &pass),
         auth,
@@ -1043,11 +1042,6 @@ pub(crate) async fn install_private_hnsw_live_replica_on_peer(
         )),
         transfer_lease_id_hash: transfer_lease_id_hash.to_string(),
     };
-    validate_private_oram_wire_request_budget(
-        &request,
-        max_bundle_bytes,
-        "private HNSW ORAM live install request exceeds service request limit",
-    )?;
     let response = dispatcher
         .toc(auth, &pass)
         .get_channel_service()
@@ -1065,10 +1059,7 @@ pub(crate) async fn install_private_result_oram_live_replica_on_peer(
     transfer_lease_id_hash: &str,
 ) -> Result<(), StorageError> {
     let pass = new_unchecked_verification_pass();
-    let max_bundle_bytes = settings
-        .service
-        .max_request_size_mb
-        .saturating_mul(BYTES_PER_MIB);
+    let max_bundle_bytes = PRIVATE_ORAM_INSTALL_MAX_ENCODED_BYTES;
     let bundle = private_result_oram::do_export_private_result_oram_live_replication_bundle(
         dispatcher.toc(auth, &pass),
         auth,
@@ -1118,11 +1109,6 @@ pub(crate) async fn install_private_result_oram_live_replica_on_peer(
         )),
         transfer_lease_id_hash: transfer_lease_id_hash.to_string(),
     };
-    validate_private_oram_wire_request_budget(
-        &request,
-        max_bundle_bytes,
-        "private result ORAM live install request exceeds service request limit",
-    )?;
     let response = dispatcher
         .toc(auth, &pass)
         .get_channel_service()
@@ -2356,6 +2342,14 @@ impl QdrantInternal for QdrantInternalService {
         }))
     }
 
+    async fn install_private_oram_index_chunks(
+        &self,
+        request: Request<tonic::Streaming<PrivateOramInstallChunk>>,
+    ) -> Result<Response<InstallPrivateOramIndexResponse>, Status> {
+        let request = decode_private_oram_install_stream(request.into_inner()).await?;
+        self.install_private_oram_index(Request::new(request)).await
+    }
+
     async fn install_private_oram_live_replica(
         &self,
         request: Request<InstallPrivateOramLiveReplicaRequest>,
@@ -2551,6 +2545,15 @@ impl QdrantInternal for QdrantInternalService {
             root_hash,
             writeback_digest,
         }))
+    }
+
+    async fn install_private_oram_live_replica_chunks(
+        &self,
+        request: Request<tonic::Streaming<PrivateOramInstallChunk>>,
+    ) -> Result<Response<InstallPrivateOramLiveReplicaResponse>, Status> {
+        let request = decode_private_oram_install_stream(request.into_inner()).await?;
+        self.install_private_oram_live_replica(Request::new(request))
+            .await
     }
 
     async fn request_private_oram_shard_recovery(
@@ -2951,35 +2954,21 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_wire_request_budget_uses_full_protobuf_envelope() {
-        let sentinel = "private-oram-wire-budget-sentinel".repeat(8);
-        let request = InstallPrivateOramLiveReplicaRequest {
-            collection_name: "docs".to_string(),
-            collection_id: "collection-crypto-id".to_string(),
-            index_kind: PrivateOramReplicationIndexKind::Hnsw as i32,
-            vector_name: "text".to_string(),
-            bundle: None,
-            transfer_lease_id_hash: sentinel.clone(),
-        };
-        let encoded_len = request.encoded_len();
-        assert!(encoded_len > sentinel.len());
-        validate_private_oram_wire_request_budget(
-            &request,
-            encoded_len,
-            "private ORAM wire request is oversized",
-        )
-        .unwrap();
-
-        for limit in [0, encoded_len - 1] {
-            let rendered = validate_private_oram_wire_request_budget(
-                &request,
-                limit,
-                "private ORAM wire request is oversized",
-            )
-            .unwrap_err()
-            .to_string();
-            assert!(rendered.contains("wire request is oversized"));
-            assert!(!rendered.contains(&sentinel));
+    fn private_oram_chunk_errors_do_not_reflect_request_values() {
+        for error in [
+            PrivateOramInstallChunkError::Empty,
+            PrivateOramInstallChunkError::Oversized,
+            PrivateOramInstallChunkError::InvalidChunk,
+            PrivateOramInstallChunkError::IntegrityMismatch,
+            PrivateOramInstallChunkError::AllocationFailed,
+            PrivateOramInstallChunkError::InvalidRequest,
+        ] {
+            let status = private_oram_install_chunk_status(error);
+            assert!(!status.message().contains("private-request-sentinel"));
+            assert!(matches!(
+                status.code(),
+                tonic::Code::InvalidArgument | tonic::Code::ResourceExhausted
+            ));
         }
     }
 

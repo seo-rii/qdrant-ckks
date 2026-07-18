@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use api::grpc::private_oram_chunking::encode_private_oram_install_chunks;
 use api::grpc::qdrant::qdrant_internal_client::QdrantInternalClient;
 use api::grpc::qdrant::{
     CompletePrivateOramWritebackRequest, InstallPrivateOramIndexRequest,
@@ -11,8 +12,8 @@ use api::grpc::qdrant::{
     WaitOnConsensusCommitRequest,
 };
 use api::grpc::transport_channel_pool::{AddTimeout, DEFAULT_RETRIES, TransportChannelPool};
-use futures::Future;
 use futures::future::try_join_all;
+use futures::{Future, stream};
 use semver::Version;
 use tonic::codegen::InterceptedService;
 use tonic::transport::{Channel, Uri};
@@ -203,15 +204,22 @@ impl ChannelService {
         peer_id: PeerId,
         request: InstallPrivateOramIndexRequest,
     ) -> CollectionResult<InstallPrivateOramIndexResponse> {
+        let chunks = Arc::new(
+            encode_private_oram_install_chunks(&request)
+                .map_err(|error| CollectionError::bad_request(error.to_string()))?,
+        );
         self.with_qdrant_client_timeout(
             peer_id,
             Some(PRIVATE_ORAM_INSTALL_GRPC_TIMEOUT),
             PRIVATE_ORAM_INSTALL_RETRIES,
             |mut client| {
-                let request = request.clone();
+                let chunks = Arc::clone(&chunks);
                 async move {
+                    let chunk_count = chunks.len();
+                    let chunk_stream =
+                        stream::iter((0..chunk_count).map(move |index| chunks[index].clone()));
                     client
-                        .install_private_oram_index(Request::new(request))
+                        .install_private_oram_index_chunks(Request::new(chunk_stream))
                         .await
                 }
             },
@@ -230,15 +238,22 @@ impl ChannelService {
         peer_id: PeerId,
         request: InstallPrivateOramLiveReplicaRequest,
     ) -> CollectionResult<InstallPrivateOramLiveReplicaResponse> {
+        let chunks = Arc::new(
+            encode_private_oram_install_chunks(&request)
+                .map_err(|error| CollectionError::bad_request(error.to_string()))?,
+        );
         self.with_qdrant_client_timeout(
             peer_id,
             Some(PRIVATE_ORAM_INSTALL_GRPC_TIMEOUT),
             PRIVATE_ORAM_INSTALL_RETRIES,
             |mut client| {
-                let request = request.clone();
+                let chunks = Arc::clone(&chunks);
                 async move {
+                    let chunk_count = chunks.len();
+                    let chunk_stream =
+                        stream::iter((0..chunk_count).map(move |index| chunks[index].clone()));
                     client
-                        .install_private_oram_live_replica(Request::new(request))
+                        .install_private_oram_live_replica_chunks(Request::new(chunk_stream))
                         .await
                 }
             },

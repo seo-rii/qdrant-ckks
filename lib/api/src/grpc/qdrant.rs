@@ -15929,6 +15929,23 @@ pub struct InstallPrivateOramIndexResponse {
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateOramInstallChunk {
+    #[prost(uint32, tag = "1")]
+    pub version: u32,
+    #[prost(uint64, tag = "2")]
+    pub chunk_index: u64,
+    #[prost(uint64, tag = "3")]
+    pub chunk_count: u64,
+    #[prost(uint64, tag = "4")]
+    pub total_bytes: u64,
+    #[prost(bytes = "vec", tag = "5")]
+    pub request_sha256: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", tag = "6")]
+    pub data: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PrivateHnswLiveReplicationBundle {
     #[prost(message, optional, tag = "1")]
     pub manifest: ::core::option::Option<PrivateHnswManifest>,
@@ -16367,6 +16384,39 @@ pub mod qdrant_internal_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /// Install one complete encrypted index through bounded ordered chunks.
+        pub async fn install_private_oram_index_chunks(
+            &mut self,
+            request: impl tonic::IntoStreamingRequest<
+                Message = super::PrivateOramInstallChunk,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::InstallPrivateOramIndexResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/InstallPrivateOramIndexChunks",
+            );
+            let mut req = request.into_streaming_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "InstallPrivateOramIndexChunks",
+                    ),
+                );
+            self.inner.client_streaming(req, path, codec).await
+        }
         /// Idempotently install one consensus-bound live encrypted index for movement.
         pub async fn install_private_oram_live_replica(
             &mut self,
@@ -16397,6 +16447,39 @@ pub mod qdrant_internal_client {
                     ),
                 );
             self.inner.unary(req, path, codec).await
+        }
+        /// Install one live encrypted index through bounded ordered chunks.
+        pub async fn install_private_oram_live_replica_chunks(
+            &mut self,
+            request: impl tonic::IntoStreamingRequest<
+                Message = super::PrivateOramInstallChunk,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::InstallPrivateOramLiveReplicaResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/InstallPrivateOramLiveReplicaChunks",
+            );
+            let mut req = request.into_streaming_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "InstallPrivateOramLiveReplicaChunks",
+                    ),
+                );
+            self.inner.client_streaming(req, path, codec).await
         }
         /// Ask the active source peer to preinstall and submit automatic shard recovery.
         pub async fn request_private_oram_shard_recovery(
@@ -16504,10 +16587,26 @@ pub mod qdrant_internal_server {
             tonic::Response<super::InstallPrivateOramIndexResponse>,
             tonic::Status,
         >;
+        /// Install one complete encrypted index through bounded ordered chunks.
+        async fn install_private_oram_index_chunks(
+            &self,
+            request: tonic::Request<tonic::Streaming<super::PrivateOramInstallChunk>>,
+        ) -> std::result::Result<
+            tonic::Response<super::InstallPrivateOramIndexResponse>,
+            tonic::Status,
+        >;
         /// Idempotently install one consensus-bound live encrypted index for movement.
         async fn install_private_oram_live_replica(
             &self,
             request: tonic::Request<super::InstallPrivateOramLiveReplicaRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::InstallPrivateOramLiveReplicaResponse>,
+            tonic::Status,
+        >;
+        /// Install one live encrypted index through bounded ordered chunks.
+        async fn install_private_oram_live_replica_chunks(
+            &self,
+            request: tonic::Request<tonic::Streaming<super::PrivateOramInstallChunk>>,
         ) -> std::result::Result<
             tonic::Response<super::InstallPrivateOramLiveReplicaResponse>,
             tonic::Status,
@@ -17002,6 +17101,61 @@ pub mod qdrant_internal_server {
                     };
                     Box::pin(fut)
                 }
+                "/qdrant.QdrantInternal/InstallPrivateOramIndexChunks" => {
+                    #[allow(non_camel_case_types)]
+                    struct InstallPrivateOramIndexChunksSvc<T: QdrantInternal>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::ClientStreamingService<
+                        super::PrivateOramInstallChunk,
+                    > for InstallPrivateOramIndexChunksSvc<T> {
+                        type Response = super::InstallPrivateOramIndexResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                tonic::Streaming<super::PrivateOramInstallChunk>,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::install_private_oram_index_chunks(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = InstallPrivateOramIndexChunksSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.client_streaming(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/qdrant.QdrantInternal/InstallPrivateOramLiveReplica" => {
                     #[allow(non_camel_case_types)]
                     struct InstallPrivateOramLiveReplicaSvc<T: QdrantInternal>(
@@ -17053,6 +17207,61 @@ pub mod qdrant_internal_server {
                                 max_encoding_message_size,
                             );
                         let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.QdrantInternal/InstallPrivateOramLiveReplicaChunks" => {
+                    #[allow(non_camel_case_types)]
+                    struct InstallPrivateOramLiveReplicaChunksSvc<T: QdrantInternal>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::ClientStreamingService<
+                        super::PrivateOramInstallChunk,
+                    > for InstallPrivateOramLiveReplicaChunksSvc<T> {
+                        type Response = super::InstallPrivateOramLiveReplicaResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                tonic::Streaming<super::PrivateOramInstallChunk>,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::install_private_oram_live_replica_chunks(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = InstallPrivateOramLiveReplicaChunksSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.client_streaming(method, req).await;
                         Ok(res)
                     };
                     Box::pin(fut)

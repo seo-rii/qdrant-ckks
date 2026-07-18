@@ -25,6 +25,7 @@ schemars = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
 rand = { workspace = true }
+sha2 = { workspace = true }
 chrono = { workspace = true }
 data-encoding = { workspace = true }
 thiserror = { workspace = true }

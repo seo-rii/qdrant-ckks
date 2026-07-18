@@ -8,6 +8,7 @@ pub mod dynamic_pool;
 #[path = "grpc.health.v1.rs"]
 pub mod grpc_health_v1;
 pub mod ops;
+pub mod private_oram_chunking;
 pub mod transport_channel_pool;
 pub mod validate;
 

@@ -1596,11 +1596,14 @@ shard transfer. Partial preinstalls are idempotent exact-state copies and do not
 change membership. The marked target accepts only the transfer's peer
 `SyncPoints` operation needed to initialize ordinary shard records, and normal
 peer crypto checks still reject protected vector or private result payload
-content. Before any initial or live peer install, the source
-checks the complete protobuf request `encoded_len`, including the manifest and
-wire envelope, against `service.max_request_size_mb`. An oversized request
-therefore fails locally with a fixed redacted error instead of passing the
-bucket estimate and failing later in internal gRPC decoding. Two-process tests
+content. Before any initial or live peer install, the source bounds the complete
+encoded request to 512 MiB and splits it into deterministic internal gRPC stream
+frames no larger than 1 MiB. Every frame carries the protocol version, exact
+sequential index/count, total encoded length, and SHA-256 of the complete typed
+request. The receiver bounds allocation, rejects missing, reordered, malformed,
+or metadata-drifting frames, verifies the final digest, and only then invokes
+the existing typed install validation. Partial or corrupt streams therefore
+cannot reach the store mutation lock or filesystem. Two-process tests
 advance both private ORAM stores and
 run this preinstall/transfer path for both ReplicateShard (RF=1 to RF=2) and
 MoveShard, verify the resulting local shard ownership, wait for the target
@@ -1646,9 +1649,9 @@ target or SLA.
 Full-store initial/live install RPCs use a dedicated five-minute deadline and
 one retry. Receiver-side signature verification, full-store hashing, file
 writes, and fsync run on Tokio's blocking worker pool so that an install does
-not starve peer health checks or Raft heartbeats. The complete protobuf request
-still must fit `service.max_request_size_mb`; larger stores fail closed at the
-source and require future chunked internal transport.
+not starve peer health checks or Raft heartbeats. `service.max_request_size_mb`
+applies to each bounded stream frame rather than the aggregate install request;
+the aggregate request still fails closed above the independent 512 MiB limit.
 `ReplicatePoints`, snapshot, WAL, resharding transfer methods, unmarked or
 method-changing restart requests, and dynamic shard-layout changes remain fail
 closed.
