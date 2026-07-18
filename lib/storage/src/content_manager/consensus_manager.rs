@@ -30,8 +30,8 @@ use tonic::transport::Uri;
 use super::CollectionContainer;
 use super::alias_mapping::AliasMapping;
 use super::consensus_ops::{
-    ConsensusOperations, PrivateOramConsensusEpoch, PrivateOramEpochKey, PrivateOramSessionLease,
-    SnapshotStatus,
+    ConsensusOperations, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
+    PrivateOramEpochKey, PrivateOramLayoutKey, PrivateOramSessionLease, SnapshotStatus,
 };
 use super::errors::StorageError;
 use crate::content_manager::consensus::consensus_wal::ConsensusOpWal;
@@ -65,6 +65,8 @@ pub struct SnapshotData {
     pub private_oram_epochs: HashMap<String, PrivateOramConsensusEpoch>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub private_oram_session_leases: HashMap<String, PrivateOramSessionLease>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_oram_layouts: HashMap<String, PrivateOramConsensusLayout>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -565,6 +567,11 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 .write()
                 .compare_and_swap_private_oram_session_lease(&operation)
                 .map(|()| true),
+            ConsensusOperations::CompareAndSwapPrivateOramLayout(operation) => self
+                .persistent
+                .write()
+                .compare_and_swap_private_oram_layout(&operation)
+                .map(|()| true),
 
             ConsensusOperations::RequestSnapshot | ConsensusOperations::ReportSnapshot { .. } => {
                 Err(StorageError::service_error(
@@ -597,6 +604,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             cluster_metadata,
             private_oram_epochs,
             private_oram_session_leases,
+            private_oram_layouts,
         } = snapshot.get_data().try_into()?;
 
         self.toc.apply_collections_snapshot(collections_data)?;
@@ -607,6 +615,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             cluster_metadata,
             private_oram_epochs,
             private_oram_session_leases,
+            private_oram_layouts,
         )?;
 
         // Clear now obsolete WAL entries after persisting new Raft state
@@ -850,6 +859,13 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         key: &PrivateOramEpochKey,
     ) -> Option<PrivateOramSessionLease> {
         self.persistent.read().private_oram_session_lease(key)
+    }
+
+    pub fn private_oram_layout(
+        &self,
+        key: &PrivateOramLayoutKey,
+    ) -> Option<PrivateOramConsensusLayout> {
+        self.persistent.read().private_oram_layout(key)
     }
 
     pub fn peer_count(&self) -> usize {
@@ -1099,6 +1115,7 @@ impl<C: CollectionContainer> Storage for ConsensusManager<C> {
             cluster_metadata: persistent.cluster_metadata.clone(),
             private_oram_epochs: persistent.private_oram_epochs.clone(),
             private_oram_session_leases: persistent.private_oram_session_leases.clone(),
+            private_oram_layouts: persistent.private_oram_layouts.clone(),
         };
 
         let raft_state = persistent.state();
@@ -1210,9 +1227,10 @@ mod tests {
     use crate::content_manager::consensus::operation_sender::OperationSender;
     use crate::content_manager::consensus::persistent::Persistent;
     use crate::content_manager::consensus_ops::{
-        CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramSessionLease, ConsensusOperations,
-        PrivateOramConsensusEpoch, PrivateOramEpochKey, PrivateOramIndexKind,
-        PrivateOramSessionLease,
+        CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
+        CompareAndSwapPrivateOramSessionLease, ConsensusOperations, PrivateOramConsensusEpoch,
+        PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramIndexKind,
+        PrivateOramLayoutKey, PrivateOramSessionLease,
     };
 
     #[test]
@@ -1519,6 +1537,51 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_layout_cas_replays_and_survives_raft_snapshot_restore() {
+        let source_dir = Builder::new()
+            .prefix("private_oram_layout_raft_source")
+            .tempdir()
+            .unwrap();
+        let (source, _) = setup_storages(Vec::new(), source_dir.path());
+        let key = PrivateOramLayoutKey {
+            collection_id: "collection-uuid-1".to_string(),
+        };
+        let initial = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7, 9],
+            layout_digest: BASE64URL_NOPAD.encode(&[51; 32]),
+            index_state_digest: BASE64URL_NOPAD.encode(&[52; 32]),
+        };
+        let next = PrivateOramConsensusLayout {
+            generation: 2,
+            owner_peer_ids: vec![7, 9, 11],
+            layout_digest: BASE64URL_NOPAD.encode(&[53; 32]),
+            index_state_digest: BASE64URL_NOPAD.encode(&[54; 32]),
+        };
+
+        let initial_entry = private_oram_layout_entry(key.clone(), None, initial.clone());
+        assert!(source.apply_normal_entry(&initial_entry).unwrap());
+        assert!(source.apply_normal_entry(&initial_entry).unwrap());
+        assert_eq!(source.private_oram_layout(&key), Some(initial.clone()));
+
+        let transition_entry = private_oram_layout_entry(key.clone(), Some(initial), next.clone());
+        assert!(source.apply_normal_entry(&transition_entry).unwrap());
+        assert!(source.apply_normal_entry(&transition_entry).unwrap());
+
+        let snapshot = source.snapshot(0, 0).unwrap();
+        let snapshot_data: SnapshotData = snapshot.get_data().try_into().unwrap();
+        assert_eq!(snapshot_data.private_oram_layouts.len(), 1);
+
+        let target_dir = Builder::new()
+            .prefix("private_oram_layout_raft_target")
+            .tempdir()
+            .unwrap();
+        let (target, _) = setup_storages(Vec::new(), target_dir.path());
+        target.apply_snapshot(&snapshot).unwrap().unwrap();
+        assert_eq!(target.private_oram_layout(&key), Some(next));
+    }
+
+    #[test]
     fn raft_snapshot_without_private_oram_epochs_remains_compatible() {
         let snapshot = SnapshotData {
             collections_data: Default::default(),
@@ -1527,6 +1590,7 @@ mod tests {
             cluster_metadata: Default::default(),
             private_oram_epochs: Default::default(),
             private_oram_session_leases: Default::default(),
+            private_oram_layouts: Default::default(),
         };
         let mut legacy_value = serde_json::to_value(snapshot).unwrap();
         legacy_value
@@ -1537,10 +1601,15 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("private_oram_session_leases");
+        legacy_value
+            .as_object_mut()
+            .unwrap()
+            .remove("private_oram_layouts");
 
         let decoded: SnapshotData = serde_json::from_value(legacy_value).unwrap();
         assert!(decoded.private_oram_epochs.is_empty());
         assert!(decoded.private_oram_session_leases.is_empty());
+        assert!(decoded.private_oram_layouts.is_empty());
     }
 
     #[test]
@@ -1579,6 +1648,23 @@ mod tests {
         let operation = ConsensusOperations::CompareAndSwapPrivateOramSessionLease(
             CompareAndSwapPrivateOramSessionLease { key, expected, new },
         );
+        Entry {
+            data: serde_cbor::to_vec(&operation).unwrap(),
+            ..Default::default()
+        }
+    }
+
+    fn private_oram_layout_entry(
+        key: PrivateOramLayoutKey,
+        expected: Option<PrivateOramConsensusLayout>,
+        new: PrivateOramConsensusLayout,
+    ) -> Entry {
+        let operation =
+            ConsensusOperations::CompareAndSwapPrivateOramLayout(CompareAndSwapPrivateOramLayout {
+                key,
+                expected,
+                new,
+            });
         Entry {
             data: serde_cbor::to_vec(&operation).unwrap(),
             ..Default::default()

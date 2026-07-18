@@ -1524,8 +1524,9 @@ mod tests {
     use storage::content_manager::consensus::persistent::Persistent;
     use storage::content_manager::consensus_manager::{ConsensusManager, ConsensusStateRef};
     use storage::content_manager::consensus_ops::{
-        CompareAndSwapPrivateOramEpoch, PrivateOramConsensusEpoch, PrivateOramEpochKey,
-        PrivateOramIndexKind,
+        CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout, PrivateOramConsensusEpoch,
+        PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramIndexKind,
+        PrivateOramLayoutKey,
     };
     use storage::content_manager::toc::TableOfContent;
     use storage::dispatcher::{Dispatcher, PrivateOramReplicaPrepareAck};
@@ -1596,7 +1597,7 @@ mod tests {
     }
 
     #[test]
-    fn collection_creation_and_private_oram_epoch_cas_pass_consensus() {
+    fn collection_creation_and_private_oram_consensus_cas_pass_consensus() {
         // Given
         let _route_guard = route_e2e_guard();
         let private_hnsw_settings_fixture = PrivateHnswRouteWireFixture::build_uploaded();
@@ -1803,6 +1804,55 @@ mod tests {
                 .private_oram_consensus_epoch(&private_oram_key)
                 .unwrap(),
             Some(initial_private_oram_epoch.clone()),
+        );
+
+        let private_oram_layout_key = PrivateOramLayoutKey {
+            collection_id: private_oram_key.collection_id.clone(),
+        };
+        let initial_private_oram_layout = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![dispatcher.this_peer_id()],
+            layout_digest: data_encoding::BASE64URL_NOPAD.encode(&[51; 32]),
+            index_state_digest: data_encoding::BASE64URL_NOPAD.encode(&[52; 32]),
+        };
+        handle
+            .block_on(dispatcher.submit_private_oram_layout_cas(
+                CompareAndSwapPrivateOramLayout {
+                    key: private_oram_layout_key.clone(),
+                    expected: None,
+                    new: initial_private_oram_layout.clone(),
+                },
+                None,
+            ))
+            .unwrap();
+        assert_eq!(
+            dispatcher
+                .private_oram_consensus_layout(&private_oram_layout_key)
+                .unwrap(),
+            Some(initial_private_oram_layout.clone()),
+        );
+
+        let next_private_oram_layout = PrivateOramConsensusLayout {
+            generation: 2,
+            owner_peer_ids: initial_private_oram_layout.owner_peer_ids.clone(),
+            layout_digest: data_encoding::BASE64URL_NOPAD.encode(&[53; 32]),
+            index_state_digest: data_encoding::BASE64URL_NOPAD.encode(&[54; 32]),
+        };
+        handle
+            .block_on(dispatcher.submit_private_oram_layout_cas(
+                CompareAndSwapPrivateOramLayout {
+                    key: private_oram_layout_key.clone(),
+                    expected: Some(initial_private_oram_layout),
+                    new: next_private_oram_layout.clone(),
+                },
+                None,
+            ))
+            .unwrap();
+        assert_eq!(
+            dispatcher
+                .private_oram_consensus_layout(&private_oram_layout_key)
+                .unwrap(),
+            Some(next_private_oram_layout),
         );
 
         let stale_prepare_count = Arc::new(AtomicUsize::new(0));

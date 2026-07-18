@@ -31,8 +31,9 @@ use segment::types::ShardKey;
 
 use crate::content_manager::collection_meta_ops::AliasOperations;
 use crate::content_manager::consensus_ops::{
-    CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramSessionLease,
-    PrivateOramConsensusEpoch, PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramSessionLease,
+    CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
+    CompareAndSwapPrivateOramSessionLease, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
+    PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramSessionLease,
 };
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
 use crate::rbac::{Auth, CollectionMultipass};
@@ -373,6 +374,30 @@ impl Dispatcher {
         if !applied {
             return Err(StorageError::service_error(
                 "private ORAM consensus session lease CAS was not applied",
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn submit_private_oram_layout_cas(
+        &self,
+        operation: CompareAndSwapPrivateOramLayout,
+        wait_timeout: Option<Duration>,
+    ) -> Result<(), StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM consensus layout CAS requires distributed mode",
+            )
+        })?;
+        let applied = consensus_state
+            .propose_consensus_op_with_await(
+                ConsensusOperations::CompareAndSwapPrivateOramLayout(operation),
+                wait_timeout,
+            )
+            .await?;
+        if !applied {
+            return Err(StorageError::service_error(
+                "private ORAM consensus layout CAS was not applied",
             ));
         }
         Ok(())
@@ -1038,6 +1063,18 @@ impl Dispatcher {
             )
         })?;
         Ok(consensus_state.private_oram_session_lease(key))
+    }
+
+    pub fn private_oram_consensus_layout(
+        &self,
+        key: &PrivateOramLayoutKey,
+    ) -> Result<Option<PrivateOramConsensusLayout>, StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM consensus layout state requires distributed mode",
+            )
+        })?;
+        Ok(consensus_state.private_oram_layout(key))
     }
 
     pub async fn await_consensus_sync(

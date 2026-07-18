@@ -21,8 +21,9 @@ use sha2::{Digest, Sha256};
 use crate::StorageError;
 use crate::content_manager::consensus::entry_queue::{EntryApplyProgressQueue, EntryId};
 use crate::content_manager::consensus_ops::{
-    CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramSessionLease,
-    PrivateOramConsensusEpoch, PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramSessionLease,
+    CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
+    CompareAndSwapPrivateOramSessionLease, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
+    PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramSessionLease,
 };
 use crate::types::{PeerAddressById, PeerMetadataById};
 
@@ -31,7 +32,9 @@ const STATE_FILE_NAME_CBOR: &str = "raft_state";
 
 const STATE_FILE_NAME: &str = "raft_state.json";
 const PRIVATE_ORAM_EPOCH_KEY_DOMAIN: &[u8] = b"qdrant-sec/private-oram-consensus-epoch-key/v1";
+const PRIVATE_ORAM_LAYOUT_KEY_DOMAIN: &[u8] = b"qdrant-sec/private-oram-consensus-layout-key/v1";
 const PRIVATE_ORAM_EPOCH_MAX_RECORDS: usize = 1_000_000;
+const PRIVATE_ORAM_LAYOUT_MAX_OWNERS: usize = 10_000;
 const PRIVATE_ORAM_SHA256_BASE64URL_LEN: usize = 43;
 const PRIVATE_ORAM_SESSION_LEASE_MAX_SECS: u64 = 3_600;
 
@@ -62,6 +65,8 @@ pub struct Persistent {
     pub private_oram_epochs: HashMap<String, PrivateOramConsensusEpoch>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub private_oram_session_leases: HashMap<String, PrivateOramSessionLease>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_oram_layouts: HashMap<String, PrivateOramConsensusLayout>,
     pub this_peer_id: PeerId,
     #[serde(skip)]
     pub path: PathBuf,
@@ -99,6 +104,10 @@ impl fmt::Debug for Persistent {
                 "private_oram_session_lease_count",
                 &self.private_oram_session_leases.len(),
             )
+            .field(
+                "private_oram_layout_count",
+                &self.private_oram_layouts.len(),
+            )
             .field("this_peer_id", &self.this_peer_id)
             .field("path", &self.path)
             .field("dirty", &self.dirty.load(Ordering::Relaxed))
@@ -123,9 +132,11 @@ impl Persistent {
         new_cluster_metadata: HashMap<String, serde_json::Value>,
         new_private_oram_epochs: HashMap<String, PrivateOramConsensusEpoch>,
         new_private_oram_session_leases: HashMap<String, PrivateOramSessionLease>,
+        new_private_oram_layouts: HashMap<String, PrivateOramConsensusLayout>,
     ) -> Result<(), StorageError> {
         validate_private_oram_epoch_snapshot(&new_private_oram_epochs)?;
         validate_private_oram_session_lease_snapshot(&new_private_oram_session_leases)?;
+        validate_private_oram_layout_snapshot(&new_private_oram_layouts)?;
         // IF YOU ADD NEW DATA INTO `PERSISTENT` STATE, DON'T FORGET TO ALSO ADD IT INTO RAFT SNAPSHOT!
         let Self {
             state,
@@ -137,6 +148,7 @@ impl Persistent {
             cluster_metadata,
             private_oram_epochs,
             private_oram_session_leases,
+            private_oram_layouts,
             this_peer_id: _,
             path: _,
             dirty: _,
@@ -156,6 +168,7 @@ impl Persistent {
         *cluster_metadata = new_cluster_metadata;
         *private_oram_epochs = new_private_oram_epochs;
         *private_oram_session_leases = new_private_oram_session_leases;
+        *private_oram_layouts = new_private_oram_layouts;
 
         // Last Raft commit and last snapshot index must be equal and persisted in one operation
         // Our `ConsensusManager::new` function relies on this for reconciling WAL clears
@@ -440,6 +453,55 @@ impl Persistent {
         Ok(())
     }
 
+    pub fn private_oram_layout(
+        &self,
+        key: &PrivateOramLayoutKey,
+    ) -> Option<PrivateOramConsensusLayout> {
+        self.private_oram_layouts
+            .get(&private_oram_layout_key_digest(key))
+            .cloned()
+    }
+
+    pub fn compare_and_swap_private_oram_layout(
+        &mut self,
+        operation: &CompareAndSwapPrivateOramLayout,
+    ) -> Result<(), StorageError> {
+        validate_private_oram_layout_cas(operation)?;
+        let key = private_oram_layout_key_digest(&operation.key);
+        let current = self.private_oram_layouts.get(&key);
+        if current == Some(&operation.new) {
+            return Ok(());
+        }
+        if current != operation.expected.as_ref() {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus layout CAS precondition failed",
+            ));
+        }
+        if operation.expected.is_none()
+            && self.private_oram_layouts.len() >= PRIVATE_ORAM_EPOCH_MAX_RECORDS
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus layout capacity exceeded",
+            ));
+        }
+
+        let previous = self
+            .private_oram_layouts
+            .insert(key.clone(), operation.new.clone());
+        if let Err(err) = self.save() {
+            match previous {
+                Some(previous) => {
+                    self.private_oram_layouts.insert(key, previous);
+                }
+                None => {
+                    self.private_oram_layouts.remove(&key);
+                }
+            }
+            return Err(err);
+        }
+        Ok(())
+    }
+
     pub fn last_applied_entry(&self) -> Option<u64> {
         self.apply_progress_queue.get_last_applied()
     }
@@ -517,6 +579,7 @@ impl Persistent {
             cluster_metadata: Default::default(),
             private_oram_epochs: Default::default(),
             private_oram_session_leases: Default::default(),
+            private_oram_layouts: Default::default(),
             this_peer_id,
             path,
             latest_snapshot_meta: Default::default(),
@@ -531,6 +594,7 @@ impl Persistent {
         let mut state: Self = serde_cbor::from_reader(reader)?;
         validate_private_oram_epoch_snapshot(&state.private_oram_epochs)?;
         validate_private_oram_session_lease_snapshot(&state.private_oram_session_leases)?;
+        validate_private_oram_layout_snapshot(&state.private_oram_layouts)?;
         state.path = path;
         Ok(state)
     }
@@ -540,6 +604,7 @@ impl Persistent {
         let mut state: Self = serde_json::from_reader(reader)?;
         validate_private_oram_epoch_snapshot(&state.private_oram_epochs)?;
         validate_private_oram_session_lease_snapshot(&state.private_oram_session_leases)?;
+        validate_private_oram_layout_snapshot(&state.private_oram_layouts)?;
         state.path = path;
         Ok(state)
     }
@@ -572,6 +637,13 @@ fn private_oram_epoch_key_digest(key: &PrivateOramEpochKey) -> String {
         PrivateOramIndexKind::ResultPayload => 2,
     }]);
     update_length_prefixed(&mut hasher, key.index_name.as_bytes());
+    BASE64URL_NOPAD.encode(&hasher.finalize())
+}
+
+fn private_oram_layout_key_digest(key: &PrivateOramLayoutKey) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(PRIVATE_ORAM_LAYOUT_KEY_DOMAIN);
+    update_length_prefixed(&mut hasher, key.collection_id.as_bytes());
     BASE64URL_NOPAD.encode(&hasher.finalize())
 }
 
@@ -612,6 +684,64 @@ fn validate_private_oram_epoch_key(key: &PrivateOramEpochKey) -> Result<(), Stor
         ));
     }
 
+    Ok(())
+}
+
+fn validate_private_oram_layout_cas(
+    operation: &CompareAndSwapPrivateOramLayout,
+) -> Result<(), StorageError> {
+    validate_private_oram_layout_key(&operation.key)?;
+    validate_private_oram_consensus_layout(&operation.new)?;
+    match &operation.expected {
+        Some(expected) => {
+            validate_private_oram_consensus_layout(expected)?;
+            if expected
+                .generation
+                .checked_add(1)
+                .is_none_or(|next_generation| operation.new.generation != next_generation)
+            {
+                return Err(StorageError::bad_request(
+                    "private ORAM consensus layout generation must increase by one",
+                ));
+            }
+        }
+        None if operation.new.generation != 1 => {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus layout must start at generation one",
+            ));
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+fn validate_private_oram_layout_key(key: &PrivateOramLayoutKey) -> Result<(), StorageError> {
+    if key.collection_id.is_empty() || key.collection_id.len() > 1024 {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus layout key is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_oram_consensus_layout(
+    layout: &PrivateOramConsensusLayout,
+) -> Result<(), StorageError> {
+    let owners_are_canonical = !layout.owner_peer_ids.is_empty()
+        && layout.owner_peer_ids.len() <= PRIVATE_ORAM_LAYOUT_MAX_OWNERS
+        && layout
+            .owner_peer_ids
+            .windows(2)
+            .all(|owners| owners[0] < owners[1]);
+    if layout.generation == 0 || !owners_are_canonical {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus layout is invalid",
+        ));
+    }
+    validate_private_oram_consensus_digest(&layout.layout_digest)
+        .map_err(|_| StorageError::bad_request("private ORAM consensus layout is invalid"))?;
+    validate_private_oram_consensus_digest(&layout.index_state_digest)
+        .map_err(|_| StorageError::bad_request("private ORAM consensus layout is invalid"))?;
     Ok(())
 }
 
@@ -736,6 +866,25 @@ fn validate_private_oram_session_lease_snapshot(
     Ok(())
 }
 
+fn validate_private_oram_layout_snapshot(
+    layouts: &HashMap<String, PrivateOramConsensusLayout>,
+) -> Result<(), StorageError> {
+    if layouts.len() > PRIVATE_ORAM_EPOCH_MAX_RECORDS {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus layout snapshot is invalid",
+        ));
+    }
+    for (key_digest, layout) in layouts {
+        validate_private_oram_consensus_digest(key_digest).map_err(|_| {
+            StorageError::bad_request("private ORAM consensus layout snapshot is invalid")
+        })?;
+        validate_private_oram_consensus_layout(layout).map_err(|_| {
+            StorageError::bad_request("private ORAM consensus layout snapshot is invalid")
+        })?;
+    }
+    Ok(())
+}
+
 fn validate_private_oram_consensus_digest(digest: &str) -> Result<(), StorageError> {
     if digest.len() != PRIVATE_ORAM_SHA256_BASE64URL_LEN {
         return Err(StorageError::bad_request(
@@ -795,6 +944,20 @@ mod tests {
                 writeback_digest: None,
             },
         )]);
+        let private_oram_layout_key = PrivateOramLayoutKey {
+            collection_id: "qdrant-sec-private-oram-layout-collection-sentinel".to_string(),
+        };
+        let private_oram_layout_digest = BASE64URL_NOPAD.encode(&[51; 32]);
+        let private_oram_index_state_digest = BASE64URL_NOPAD.encode(&[52; 32]);
+        let private_oram_layouts = HashMap::from([(
+            private_oram_layout_key_digest(&private_oram_layout_key),
+            PrivateOramConsensusLayout {
+                generation: 1,
+                owner_peer_ids: vec![7, 9],
+                layout_digest: private_oram_layout_digest.clone(),
+                index_state_digest: private_oram_index_state_digest.clone(),
+            },
+        )]);
 
         let persistent = Persistent {
             state: RaftState::default(),
@@ -806,6 +969,7 @@ mod tests {
             cluster_metadata,
             private_oram_epochs,
             private_oram_session_leases: Default::default(),
+            private_oram_layouts,
             this_peer_id: 7,
             path: PathBuf::from("/tmp/qdrant-sec-persistent-state"),
             dirty: AtomicBool::new(false),
@@ -821,6 +985,10 @@ mod tests {
         assert!(rendered.contains("crypto_policy"), "{rendered}");
         assert!(
             rendered.contains("private_oram_epoch_count: 1"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("private_oram_layout_count: 1"),
             "{rendered}"
         );
         assert!(
@@ -843,6 +1011,18 @@ mod tests {
         assert!(
             !rendered.contains("qdrant-sec-private-oram-vector-sentinel"),
             "{rendered}",
+        );
+        assert!(
+            !rendered.contains(&private_oram_layout_digest),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(&private_oram_index_state_digest),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("qdrant-sec-private-oram-layout-collection-sentinel"),
+            "{rendered}"
         );
     }
 
@@ -995,6 +1175,209 @@ mod tests {
             })
             .unwrap();
         assert_eq!(reloaded.private_oram_epoch(&key), Some(next));
+    }
+
+    #[test]
+    fn private_oram_layout_cas_persists_and_enforces_canonical_transitions() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = PrivateOramLayoutKey {
+            collection_id: "collection-uuid-1".to_string(),
+        };
+        let initial = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7, 9],
+            layout_digest: BASE64URL_NOPAD.encode(&[41; 32]),
+            index_state_digest: BASE64URL_NOPAD.encode(&[42; 32]),
+        };
+        let next = PrivateOramConsensusLayout {
+            generation: 2,
+            owner_peer_ids: vec![7, 9, 11],
+            layout_digest: BASE64URL_NOPAD.encode(&[43; 32]),
+            index_state_digest: BASE64URL_NOPAD.encode(&[44; 32]),
+        };
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+
+        let invalid_initial_generation = persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: key.clone(),
+                expected: None,
+                new: PrivateOramConsensusLayout {
+                    generation: 2,
+                    ..initial.clone()
+                },
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(
+            invalid_initial_generation.contains("layout must start at generation one"),
+            "{invalid_initial_generation}"
+        );
+
+        let initial_operation = CompareAndSwapPrivateOramLayout {
+            key: key.clone(),
+            expected: None,
+            new: initial.clone(),
+        };
+        persistent
+            .compare_and_swap_private_oram_layout(&initial_operation)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_layout(&initial_operation)
+            .unwrap();
+        assert_eq!(persistent.private_oram_layout(&key), Some(initial.clone()));
+
+        let stale = persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: key.clone(),
+                expected: None,
+                new: PrivateOramConsensusLayout {
+                    layout_digest: BASE64URL_NOPAD.encode(&[45; 32]),
+                    ..initial.clone()
+                },
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(stale.contains("layout CAS precondition failed"), "{stale}");
+
+        let skipped_generation = persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: key.clone(),
+                expected: Some(initial.clone()),
+                new: PrivateOramConsensusLayout {
+                    generation: 3,
+                    ..next.clone()
+                },
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(
+            skipped_generation.contains("layout generation must increase by one"),
+            "{skipped_generation}"
+        );
+
+        let invalid_owner_sets = [
+            Vec::new(),
+            vec![9, 7],
+            vec![7, 7],
+            (0..=PRIVATE_ORAM_LAYOUT_MAX_OWNERS as PeerId).collect(),
+        ];
+        for owner_peer_ids in invalid_owner_sets {
+            let noncanonical_owners = persistent
+                .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                    key: key.clone(),
+                    expected: Some(initial.clone()),
+                    new: PrivateOramConsensusLayout {
+                        owner_peer_ids,
+                        ..next.clone()
+                    },
+                })
+                .unwrap_err()
+                .to_string();
+            assert!(
+                noncanonical_owners.contains("consensus layout is invalid"),
+                "{noncanonical_owners}"
+            );
+        }
+
+        let invalid_digest_sentinel = "private-oram-layout-digest-sentinel";
+        let invalid_digest = persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: key.clone(),
+                expected: Some(initial.clone()),
+                new: PrivateOramConsensusLayout {
+                    layout_digest: invalid_digest_sentinel.to_string(),
+                    ..next.clone()
+                },
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(invalid_digest.contains("consensus layout is invalid"));
+        assert!(!invalid_digest.contains(invalid_digest_sentinel));
+
+        let transition = CompareAndSwapPrivateOramLayout {
+            key: key.clone(),
+            expected: Some(initial),
+            new: next.clone(),
+        };
+        persistent
+            .compare_and_swap_private_oram_layout(&transition)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_layout(&transition)
+            .unwrap();
+        assert_eq!(persistent.private_oram_layout(&key), Some(next.clone()));
+        drop(persistent);
+
+        let reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        assert_eq!(reloaded.private_oram_layout(&key), Some(next));
+    }
+
+    #[test]
+    fn private_oram_layout_snapshot_validation_rejects_malformed_records_before_replace() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = PrivateOramLayoutKey {
+            collection_id: "collection-uuid-1".to_string(),
+        };
+        let initial = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7, 9],
+            layout_digest: BASE64URL_NOPAD.encode(&[61; 32]),
+            index_state_digest: BASE64URL_NOPAD.encode(&[62; 32]),
+        };
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: key.clone(),
+                expected: None,
+                new: initial.clone(),
+            })
+            .unwrap();
+
+        let invalid_key_sentinel = "private-oram-layout-snapshot-key-sentinel";
+        let invalid_key_error = persistent
+            .update_from_snapshot(
+                &SnapshotMetadata::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                HashMap::from([(invalid_key_sentinel.to_string(), initial.clone())]),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            invalid_key_error.contains("consensus layout snapshot is invalid"),
+            "{invalid_key_error}"
+        );
+        assert!(!invalid_key_error.contains(invalid_key_sentinel));
+        assert_eq!(persistent.private_oram_layout(&key), Some(initial.clone()));
+
+        let invalid_digest_sentinel = "private-oram-layout-snapshot-digest-sentinel";
+        let invalid_layout_error = persistent
+            .update_from_snapshot(
+                &SnapshotMetadata::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                Default::default(),
+                HashMap::from([(
+                    private_oram_layout_key_digest(&key),
+                    PrivateOramConsensusLayout {
+                        layout_digest: invalid_digest_sentinel.to_string(),
+                        ..initial.clone()
+                    },
+                )]),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            invalid_layout_error.contains("consensus layout snapshot is invalid"),
+            "{invalid_layout_error}"
+        );
+        assert!(!invalid_layout_error.contains(invalid_digest_sentinel));
+        assert_eq!(persistent.private_oram_layout(&key), Some(initial));
     }
 
     #[test]
@@ -1206,6 +1589,7 @@ mod tests {
                 Default::default(),
                 malformed_key_digest,
                 Default::default(),
+                Default::default(),
             )
             .unwrap_err();
         assert!(
@@ -1238,6 +1622,7 @@ mod tests {
                 Default::default(),
                 malformed_writeback_digest,
                 Default::default(),
+                Default::default(),
             )
             .unwrap_err();
         assert!(
@@ -1268,6 +1653,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 malformed_root,
+                Default::default(),
                 Default::default(),
             )
             .unwrap_err();

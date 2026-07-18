@@ -123,6 +123,49 @@ pub mod consensus_ops {
         }
     }
 
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramLayoutKey {
+        pub collection_id: CollectionId,
+    }
+
+    impl fmt::Debug for PrivateOramLayoutKey {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramLayoutKey")
+                .field("collection_id", &"[redacted]")
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramConsensusLayout {
+        /// Starts at one and advances by exactly one for every accepted layout transition.
+        pub generation: u64,
+        /// Canonical strictly increasing union of peers that own fully-active shard replicas.
+        pub owner_peer_ids: Vec<PeerId>,
+        /// Base64url SHA-256 of the canonical shard layout.
+        pub layout_digest: String,
+        /// Base64url SHA-256 of the private ORAM index epoch/root set at this transition.
+        pub index_state_digest: String,
+    }
+
+    impl fmt::Debug for PrivateOramConsensusLayout {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramConsensusLayout")
+                .field("generation", &self.generation)
+                .field("owner_peer_count", &self.owner_peer_ids.len())
+                .field("layout_digest", &"[redacted]")
+                .field("index_state_digest", &"[redacted]")
+                .finish()
+        }
+    }
+
+    #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct CompareAndSwapPrivateOramLayout {
+        pub key: PrivateOramLayoutKey,
+        pub expected: Option<PrivateOramConsensusLayout>,
+        pub new: PrivateOramConsensusLayout,
+    }
+
     /// Operation that should pass consensus
     #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
     pub enum ConsensusOperations {
@@ -142,6 +185,7 @@ pub mod consensus_ops {
         },
         CompareAndSwapPrivateOramEpoch(CompareAndSwapPrivateOramEpoch),
         CompareAndSwapPrivateOramSessionLease(CompareAndSwapPrivateOramSessionLease),
+        CompareAndSwapPrivateOramLayout(CompareAndSwapPrivateOramLayout),
         RequestSnapshot,
         ReportSnapshot {
             peer_id: PeerId,
@@ -318,6 +362,12 @@ pub mod consensus_ops {
                     .field("has_expected", &operation.expected.is_some())
                     .field("has_new", &operation.new.is_some())
                     .finish(),
+                ConsensusOperations::CompareAndSwapPrivateOramLayout(operation) => f
+                    .debug_struct("CompareAndSwapPrivateOramLayout")
+                    .field("has_expected", &operation.expected.is_some())
+                    .field("new_generation", &operation.new.generation)
+                    .field("owner_peer_count", &operation.new.owner_peer_ids.len())
+                    .finish(),
                 ConsensusOperations::RequestSnapshot => f.write_str("RequestSnapshot"),
                 ConsensusOperations::ReportSnapshot { peer_id, status } => f
                     .debug_struct("ReportSnapshot")
@@ -392,9 +442,10 @@ mod test {
     use serde_json::json;
 
     use super::consensus_ops::{
-        CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramSessionLease, ConsensusOperations,
-        PrivateOramConsensusEpoch, PrivateOramEpochKey, PrivateOramIndexKind,
-        PrivateOramSessionLease,
+        CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
+        CompareAndSwapPrivateOramSessionLease, ConsensusOperations, PrivateOramConsensusEpoch,
+        PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramIndexKind,
+        PrivateOramLayoutKey, PrivateOramSessionLease,
     };
 
     // Consensus messages are serialized to CBOR when sent over network and written into WAL.
@@ -528,6 +579,37 @@ mod test {
                 "{rendered}"
             );
             assert!(!rendered.contains("lease-vector-sentinel"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn private_oram_layout_log_projection_redacts_identity_and_digests() {
+        let collection_sentinel = "qdrant-sec-private-oram-layout-collection-sentinel";
+        let layout_digest_sentinel = "qdrant-sec-private-oram-layout-digest-sentinel";
+        let index_digest_sentinel = "qdrant-sec-private-oram-index-digest-sentinel";
+        let operation =
+            ConsensusOperations::CompareAndSwapPrivateOramLayout(CompareAndSwapPrivateOramLayout {
+                key: PrivateOramLayoutKey {
+                    collection_id: collection_sentinel.to_string(),
+                },
+                expected: None,
+                new: PrivateOramConsensusLayout {
+                    generation: 1,
+                    owner_peer_ids: vec![7, 9],
+                    layout_digest: layout_digest_sentinel.to_string(),
+                    index_state_digest: index_digest_sentinel.to_string(),
+                },
+            });
+
+        for rendered in [
+            format!("{operation:?}"),
+            format!("{:?}", operation.redacted_log()),
+        ] {
+            assert!(rendered.contains("CompareAndSwapPrivateOramLayout"));
+            assert!(rendered.contains("generation: 1"), "{rendered}");
+            assert!(!rendered.contains(collection_sentinel), "{rendered}");
+            assert!(!rendered.contains(layout_digest_sentinel), "{rendered}");
+            assert!(!rendered.contains(index_digest_sentinel), "{rendered}");
         }
     }
 

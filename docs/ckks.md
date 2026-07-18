@@ -87,6 +87,18 @@ fail closed. Consensus snapshot apply also rejects unsupported private ORAM
 transfer state, non-empty resharding state, and shard-info layout, membership, or
 shard layout config changes.
 
+Raft now persists a separate collection-level private ORAM layout record as the
+foundation for dynamic layout changes. The record contains a monotonic
+generation, a canonical sorted owner-peer union, a shard-layout digest, and a
+digest of the private ORAM index epoch/root set. Collection identity is stored
+only through a domain-separated SHA-256 map key, and record debug/log output
+redacts collection identity and both digests. Initial creation must use
+generation 1; later CAS transitions must advance by exactly one, while exact
+replay is idempotent. The map is validated when persistent state or a Raft
+snapshot is loaded and is included in newly generated Raft snapshots; legacy
+snapshots default it to empty. Resharding does not consume this record yet, so
+all resharding and dynamic shard-layout guards described here remain active.
+
 Private ORAM search and result-fetch providers have their own client-led
 contract:
 
@@ -1663,7 +1675,9 @@ Resharding start and progress operations are blocked for the same collection
 shape. The current resharding data path migrates point payload/vector records
 through a shard proxy, but it does not migrate collection-local private ORAM
 bucket stores or establish consensus-backed epoch/root ownership for the new
-shard layout. `AbortResharding` remains allowed for cleanup, while commit,
+shard layout. The durable collection-level layout CAS record is available, but
+start/preinstall/finish orchestration does not update or verify it yet.
+`AbortResharding` remains allowed for cleanup, while commit,
 finish, and replica-state progress from resharding states fail closed.
 Shard-key layout changes are blocked for the same reason: `create_sharding_key`
 and `drop_sharding_key` would add or remove shard placement without migrating
