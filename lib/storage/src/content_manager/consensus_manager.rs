@@ -32,8 +32,8 @@ use super::alias_mapping::AliasMapping;
 use super::consensus_ops::{
     ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
     PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramLayoutKey,
-    PrivateOramLayoutTransitionState, PrivateOramSessionLease, PrivateOramShardTransferFinish,
-    PrivateOramShardTransferStart, SnapshotStatus,
+    PrivateOramLayoutTransitionState, PrivateOramReshardingOperation, PrivateOramSessionLease,
+    PrivateOramShardTransferFinish, PrivateOramShardTransferStart, SnapshotStatus,
 };
 use super::errors::StorageError;
 use crate::content_manager::consensus::consensus_wal::ConsensusOpWal;
@@ -583,6 +583,12 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             ConsensusOperations::FinishPrivateOramShardTransfer(operation) => {
                 self.apply_private_oram_shard_transfer_finish(&operation)
             }
+            ConsensusOperations::StartPrivateOramResharding(operation) => {
+                self.apply_private_oram_resharding_start(&operation)
+            }
+            ConsensusOperations::FinishPrivateOramResharding(operation) => {
+                self.apply_private_oram_resharding_finish(&operation)
+            }
 
             ConsensusOperations::RequestSnapshot | ConsensusOperations::ReportSnapshot { .. } => {
                 Err(StorageError::service_error(
@@ -709,6 +715,72 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         {
             return Err(StorageError::service_error(
                 "private ORAM shard transfer finish did not reach its committed state",
+            ));
+        }
+        Ok(true)
+    }
+
+    fn apply_private_oram_resharding_start(
+        &self,
+        operation: &PrivateOramReshardingOperation,
+    ) -> Result<bool, StorageError> {
+        let topology_state = self.toc.private_oram_resharding_state(operation)?;
+        self.persistent
+            .read()
+            .validate_private_oram_resharding_operation(operation)?;
+        if topology_state == PrivateOramLayoutTransitionState::Pending {
+            let apply_result = self
+                .toc
+                .perform_collection_meta_op((*operation.collection_meta).clone());
+            if !matches!(apply_result, Ok(true))
+                && self.toc.private_oram_resharding_state(operation)?
+                    != PrivateOramLayoutTransitionState::Applied
+            {
+                return Err(StorageError::service_error(
+                    "private ORAM resharding start was not applied",
+                ));
+            }
+        }
+        if self.toc.private_oram_resharding_state(operation)?
+            != PrivateOramLayoutTransitionState::Applied
+        {
+            return Err(StorageError::service_error(
+                "private ORAM resharding start did not reach its committed state",
+            ));
+        }
+        Ok(true)
+    }
+
+    fn apply_private_oram_resharding_finish(
+        &self,
+        operation: &PrivateOramReshardingOperation,
+    ) -> Result<bool, StorageError> {
+        let topology_state = self.toc.private_oram_resharding_state(operation)?;
+        let layout = self
+            .persistent
+            .read()
+            .validate_private_oram_resharding_operation(operation)?;
+        self.persistent
+            .write()
+            .compare_and_swap_private_oram_layout(&layout)?;
+        if topology_state == PrivateOramLayoutTransitionState::Pending {
+            let apply_result = self
+                .toc
+                .perform_collection_meta_op((*operation.collection_meta).clone());
+            if !matches!(apply_result, Ok(true))
+                && self.toc.private_oram_resharding_state(operation)?
+                    != PrivateOramLayoutTransitionState::Applied
+            {
+                return Err(StorageError::service_error(
+                    "private ORAM resharding finish was not applied",
+                ));
+            }
+        }
+        if self.toc.private_oram_resharding_state(operation)?
+            != PrivateOramLayoutTransitionState::Applied
+        {
+            return Err(StorageError::service_error(
+                "private ORAM resharding finish did not reach its committed state",
             ));
         }
         Ok(true)
@@ -1335,7 +1407,9 @@ mod tests {
     use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
     use std::sync::{Arc, mpsc};
 
+    use collection::operations::cluster_ops::ReshardingDirection;
     use collection::operations::types::PeerMetadata;
+    use collection::shards::resharding::ReshardKey;
     use collection::shards::shard::PeerId;
     use collection::shards::transfer::{
         PrivateOramTransferIndexKind, PrivateOramTransferIndexState,
@@ -1349,6 +1423,7 @@ mod tests {
     };
     use raft::storage::{MemStorage, Storage};
     use tempfile::Builder;
+    use uuid::Uuid;
 
     use super::{ConsensusManager, SnapshotData};
     use crate::content_manager::CollectionContainer;
@@ -1361,9 +1436,10 @@ mod tests {
         CompareAndSwapPrivateOramSessionLease, ConsensusOperations,
         PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
         PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramIndexKind,
-        PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding, PrivateOramLayoutTransitionState,
-        PrivateOramSessionLease, PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
-        canonical_private_oram_index_state_digest,
+        PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding,
+        PrivateOramLayoutTransitionState, PrivateOramReshardingLayoutTransition,
+        PrivateOramReshardingOperation, PrivateOramSessionLease, PrivateOramShardTransferFinish,
+        PrivateOramShardTransferStart, canonical_private_oram_index_state_digest,
     };
 
     #[test]
@@ -1517,6 +1593,18 @@ mod tests {
             ))
         }
 
+        fn private_oram_resharding_state(
+            &self,
+            _operation: &crate::content_manager::consensus_ops::PrivateOramReshardingOperation,
+        ) -> Result<
+            crate::content_manager::consensus_ops::PrivateOramLayoutTransitionState,
+            crate::content_manager::errors::StorageError,
+        > {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "private ORAM resharding requires a collection container",
+            ))
+        }
+
         fn collections_snapshot(&self) -> super::CollectionsSnapshot {
             super::CollectionsSnapshot::default()
         }
@@ -1607,6 +1695,16 @@ mod tests {
         {
             Err(crate::content_manager::errors::StorageError::service_error(
                 "unexpected private ORAM shard transfer finish",
+            ))
+        }
+
+        fn private_oram_resharding_state(
+            &self,
+            _operation: &PrivateOramReshardingOperation,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "unexpected private ORAM resharding operation",
             ))
         }
 
@@ -1714,6 +1812,147 @@ mod tests {
                 2 => Ok(PrivateOramLayoutTransitionState::Applied),
                 _ => Err(crate::content_manager::errors::StorageError::service_error(
                     "private ORAM shard transfer finish state is invalid",
+                )),
+            }
+        }
+
+        fn private_oram_resharding_state(
+            &self,
+            _operation: &PrivateOramReshardingOperation,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "unexpected private ORAM resharding operation",
+            ))
+        }
+
+        fn collections_snapshot(&self) -> super::CollectionsSnapshot {
+            super::CollectionsSnapshot::default()
+        }
+
+        fn apply_collections_snapshot(
+            &self,
+            _data: super::CollectionsSnapshot,
+        ) -> Result<(), crate::content_manager::errors::StorageError> {
+            Ok(())
+        }
+
+        fn remove_peer(
+            &self,
+            _peer_id: PeerId,
+        ) -> Result<(), crate::content_manager::errors::StorageError> {
+            Ok(())
+        }
+
+        fn sync_local_state(&self) -> Result<(), crate::content_manager::errors::StorageError> {
+            Ok(())
+        }
+    }
+
+    struct ReshardingCollections {
+        state: AtomicU8,
+        start_apply_count: AtomicUsize,
+        finish_apply_count: AtomicUsize,
+    }
+
+    impl ReshardingCollections {
+        fn new() -> Self {
+            Self {
+                state: AtomicU8::new(0),
+                start_apply_count: AtomicUsize::new(0),
+                finish_apply_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl CollectionContainer for ReshardingCollections {
+        fn perform_collection_meta_op(
+            &self,
+            operation: crate::content_manager::collection_meta_ops::CollectionMetaOperations,
+        ) -> Result<bool, crate::content_manager::errors::StorageError> {
+            use crate::content_manager::collection_meta_ops::{
+                CollectionMetaOperations, ReshardingOperation,
+            };
+
+            match operation {
+                CollectionMetaOperations::Resharding(_, ReshardingOperation::Start(_)) => {
+                    assert_eq!(self.state.load(Ordering::SeqCst), 0);
+                    self.start_apply_count.fetch_add(1, Ordering::SeqCst);
+                    self.state.store(1, Ordering::SeqCst);
+                }
+                CollectionMetaOperations::Resharding(_, ReshardingOperation::Finish(_)) => {
+                    assert_eq!(self.state.load(Ordering::SeqCst), 1);
+                    self.finish_apply_count.fetch_add(1, Ordering::SeqCst);
+                    self.state.store(2, Ordering::SeqCst);
+                }
+                _ => {
+                    return Err(crate::content_manager::errors::StorageError::service_error(
+                        "unexpected private ORAM resharding meta operation",
+                    ));
+                }
+            }
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "injected post-apply failure",
+            ))
+        }
+
+        fn private_oram_layout_transition_state(
+            &self,
+            _transition: &PrivateOramCollectionLayoutTransition,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "unexpected private ORAM collection layout transition",
+            ))
+        }
+
+        fn private_oram_shard_transfer_start_state(
+            &self,
+            _operation: &PrivateOramShardTransferStart,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "unexpected private ORAM shard transfer start",
+            ))
+        }
+
+        fn private_oram_shard_transfer_finish_state(
+            &self,
+            _operation: &PrivateOramShardTransferFinish,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "unexpected private ORAM shard transfer finish",
+            ))
+        }
+
+        fn private_oram_resharding_state(
+            &self,
+            operation: &PrivateOramReshardingOperation,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            use crate::content_manager::collection_meta_ops::{
+                CollectionMetaOperations, ReshardingOperation,
+            };
+
+            match (
+                operation.collection_meta.as_ref(),
+                self.state.load(Ordering::SeqCst),
+            ) {
+                (CollectionMetaOperations::Resharding(_, ReshardingOperation::Start(_)), 0) => {
+                    Ok(PrivateOramLayoutTransitionState::Pending)
+                }
+                (CollectionMetaOperations::Resharding(_, ReshardingOperation::Start(_)), 1) => {
+                    Ok(PrivateOramLayoutTransitionState::Applied)
+                }
+                (CollectionMetaOperations::Resharding(_, ReshardingOperation::Finish(_)), 1) => {
+                    Ok(PrivateOramLayoutTransitionState::Pending)
+                }
+                (CollectionMetaOperations::Resharding(_, ReshardingOperation::Finish(_)), 2) => {
+                    Ok(PrivateOramLayoutTransitionState::Applied)
+                }
+                _ => Err(crate::content_manager::errors::StorageError::service_error(
+                    "private ORAM resharding state is invalid",
                 )),
             }
         }
@@ -1976,6 +2215,170 @@ mod tests {
             })
             .unwrap();
         let collections = Arc::new(ShardTransferCollections::new());
+        let (sender, _) = mpsc::channel();
+        let manager = ConsensusManager::new(
+            persistent,
+            collections.clone(),
+            OperationSender::new(sender),
+            dir.path(),
+            PeerMetadata::current(),
+        )
+        .unwrap();
+
+        assert!(manager.apply_normal_entry(&start_entry).unwrap());
+        assert_eq!(manager.private_oram_layout(&layout_key), Some(current));
+        assert_eq!(collections.start_apply_count.load(Ordering::SeqCst), 1);
+        assert!(manager.apply_normal_entry(&start_entry).unwrap());
+        assert_eq!(collections.start_apply_count.load(Ordering::SeqCst), 1);
+
+        assert!(manager.apply_normal_entry(&finish_entry).unwrap());
+        assert_eq!(manager.private_oram_layout(&layout_key), Some(next.clone()));
+        assert_eq!(collections.finish_apply_count.load(Ordering::SeqCst), 1);
+        assert!(manager.apply_normal_entry(&finish_entry).unwrap());
+        assert_eq!(manager.private_oram_layout(&layout_key), Some(next));
+        assert_eq!(collections.finish_apply_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn private_oram_resharding_start_and_finish_replay_after_post_apply_failures() {
+        use crate::content_manager::collection_meta_ops::{
+            CollectionMetaOperations, ReshardingOperation,
+        };
+
+        let dir = Builder::new()
+            .prefix("private_oram_resharding_transition")
+            .tempdir()
+            .unwrap();
+        let collection_id = "qdrant-sec-resharding-collection-sentinel";
+        let index_name_sentinel = "qdrant-sec-resharding-index-sentinel";
+        let root_sentinel = BASE64URL_NOPAD.encode(&[91; 32]);
+        let lease_hash_sentinel = BASE64URL_NOPAD.encode(&[92; 32]);
+        let epoch_key = PrivateOramEpochKey {
+            collection_id: collection_id.to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: index_name_sentinel.to_string(),
+        };
+        let epoch = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: root_sentinel.clone(),
+            writeback_digest: Some(BASE64URL_NOPAD.encode(&[93; 32])),
+        };
+        let lease = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: lease_hash_sentinel.clone(),
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        };
+        let index_state_digest = canonical_private_oram_index_state_digest(
+            collection_id,
+            &[(epoch_key.clone(), epoch.clone())],
+        )
+        .unwrap();
+        let layout_key = PrivateOramLayoutKey {
+            collection_id: collection_id.to_string(),
+        };
+        let current = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7],
+            layout_digest: BASE64URL_NOPAD.encode(&[94; 32]),
+            index_state_digest: index_state_digest.clone(),
+        };
+        let next = PrivateOramConsensusLayout {
+            generation: 2,
+            owner_peer_ids: vec![7, 9],
+            layout_digest: BASE64URL_NOPAD.encode(&[95; 32]),
+            index_state_digest,
+        };
+        let resharding_key = ReshardKey {
+            uuid: Uuid::from_u128(31),
+            direction: ReshardingDirection::Up,
+            peer_id: 9,
+            shard_id: 2,
+            shard_key: None,
+        };
+        let transition = PrivateOramReshardingLayoutTransition {
+            resharding_key: resharding_key.clone(),
+            target_shard_owner_peer_ids: vec![9],
+            layout: CompareAndSwapPrivateOramLayout {
+                key: layout_key.clone(),
+                expected: Some(current.clone()),
+                new: next.clone(),
+            },
+            index_states: vec![PrivateOramLayoutIndexStateBinding {
+                key: epoch_key.clone(),
+                state: epoch.clone(),
+            }],
+        };
+        let leases = vec![PrivateOramLayoutLeaseBinding {
+            key: epoch_key.clone(),
+            lease: lease.clone(),
+        }];
+        let start = PrivateOramReshardingOperation {
+            leases: leases.clone(),
+            transition: transition.clone(),
+            collection_meta: Box::new(CollectionMetaOperations::Resharding(
+                "qdrant-sec-resharding-name-sentinel".to_string(),
+                ReshardingOperation::Start(resharding_key.clone()),
+            )),
+        };
+        let finish = PrivateOramReshardingOperation {
+            leases,
+            transition,
+            collection_meta: Box::new(CollectionMetaOperations::Resharding(
+                "qdrant-sec-resharding-name-sentinel".to_string(),
+                ReshardingOperation::Finish(resharding_key),
+            )),
+        };
+        let start_operation = ConsensusOperations::StartPrivateOramResharding(start);
+        let finish_operation = ConsensusOperations::FinishPrivateOramResharding(finish);
+        for rendered in [
+            format!("{start_operation:?}"),
+            format!("{:?}", start_operation.redacted_log()),
+            format!("{finish_operation:?}"),
+            format!("{:?}", finish_operation.redacted_log()),
+        ] {
+            for sentinel in [
+                collection_id,
+                index_name_sentinel,
+                &root_sentinel,
+                &lease_hash_sentinel,
+                "qdrant-sec-resharding-name-sentinel",
+            ] {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
+        }
+        let start_entry = Entry {
+            data: serde_cbor::to_vec(&start_operation).unwrap(),
+            ..Default::default()
+        };
+        let finish_entry = Entry {
+            data: serde_cbor::to_vec(&finish_operation).unwrap(),
+            ..Default::default()
+        };
+
+        let mut persistent = Persistent::load_or_init(dir.path(), true, false, Some(7)).unwrap();
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: epoch_key.clone(),
+                expected: None,
+                new: epoch,
+            })
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: epoch_key,
+                expected: None,
+                new: Some(lease),
+            })
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: layout_key.clone(),
+                expected: None,
+                new: current.clone(),
+            })
+            .unwrap();
+        let collections = Arc::new(ReshardingCollections::new());
         let (sender, _) = mpsc::channel();
         let manager = ConsensusManager::new(
             persistent,

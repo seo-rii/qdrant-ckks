@@ -4,9 +4,11 @@ use std::sync::Arc;
 use collection::collection::Collection;
 use collection::collection_state;
 use collection::config::CollectionParams;
+use collection::operations::cluster_ops::ReshardingDirection;
 use collection::shards::CollectionId;
 use collection::shards::collection_shard_distribution::CollectionShardDistribution;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
+use collection::shards::resharding::ReshardingStage;
 use collection::shards::shard::PeerId;
 
 use super::TableOfContent;
@@ -15,8 +17,9 @@ use crate::content_manager::collections_ops::Checker as _;
 use crate::content_manager::consensus::operation_sender::OperationSender;
 use crate::content_manager::consensus_ops::{
     ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramLayoutTransitionState,
-    PrivateOramShardLayoutEntry, PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
-    classify_private_oram_replica_removal_layout_transition,
+    PrivateOramReshardingOperation, PrivateOramShardLayoutEntry, PrivateOramShardTransferFinish,
+    PrivateOramShardTransferStart, classify_private_oram_replica_removal_layout_transition,
+    classify_private_oram_resharding_layout_transition,
     classify_private_oram_shard_transfer_layout_transition, private_oram_index_keys_for_config,
     private_oram_transfer_consensus_layouts, private_oram_transfer_consensus_states,
 };
@@ -59,6 +62,14 @@ impl CollectionContainer for TableOfContent {
                 &operation.collection_meta,
                 PrivateOramShardTransferPhase::Finish,
             ))
+    }
+
+    fn private_oram_resharding_state(
+        &self,
+        operation: &PrivateOramReshardingOperation,
+    ) -> Result<PrivateOramLayoutTransitionState, StorageError> {
+        self.general_runtime
+            .block_on(self.private_oram_resharding_state_async(operation))
     }
 
     fn collections_snapshot(&self) -> consensus_manager::CollectionsSnapshot {
@@ -147,6 +158,148 @@ impl CollectionContainer for TableOfContent {
 }
 
 impl TableOfContent {
+    async fn private_oram_resharding_state_async(
+        &self,
+        operation: &PrivateOramReshardingOperation,
+    ) -> Result<PrivateOramLayoutTransitionState, StorageError> {
+        let (collection_name, phase, resharding_key) = match operation.collection_meta.as_ref() {
+            CollectionMetaOperations::Resharding(
+                collection_name,
+                ReshardingOperation::Start(key),
+            ) => (collection_name, PrivateOramReshardingPhase::Start, key),
+            CollectionMetaOperations::Resharding(
+                collection_name,
+                ReshardingOperation::Finish(key),
+            ) => (collection_name, PrivateOramReshardingPhase::Finish, key),
+            _ => return Err(invalid_private_oram_resharding_layout_transition()),
+        };
+        if resharding_key != &operation.transition.resharding_key {
+            return Err(invalid_private_oram_resharding_layout_transition());
+        }
+
+        let collection = self.get_collection_unchecked(collection_name).await?;
+        let config = collection.config_snapshot().await;
+        let collection_id = config
+            .stable_crypto_id(collection_name)
+            .map_err(|_| invalid_private_oram_resharding_layout_transition())?;
+        let configured_keys = private_oram_index_keys_for_config(&config, collection_name)?;
+        let transition_keys = operation
+            .transition
+            .index_states
+            .iter()
+            .map(|binding| binding.key.clone())
+            .collect::<Vec<_>>();
+        if collection_id != operation.transition.layout.key.collection_id
+            || configured_keys.is_empty()
+            || configured_keys != transition_keys
+        {
+            return Err(invalid_private_oram_resharding_layout_transition());
+        }
+
+        let shard_holder = collection.shards_holder().read_owned().await;
+        if !shard_holder.get_transfers(|_| true).is_empty() {
+            return Err(invalid_private_oram_resharding_layout_transition());
+        }
+        let resharding_state = shard_holder.resharding_state();
+        let resharding_is_active = match resharding_state.as_ref() {
+            Some(state) if state.matches(resharding_key) => true,
+            Some(_) => return Err(invalid_private_oram_resharding_layout_transition()),
+            None => false,
+        };
+        if matches!(phase, PrivateOramReshardingPhase::Finish)
+            && resharding_state
+                .as_ref()
+                .is_some_and(|state| state.stage != ReshardingStage::WriteHashRingCommitted)
+        {
+            return Err(invalid_private_oram_resharding_layout_transition());
+        }
+
+        let mut entries = Vec::new();
+        for (shard_id, replica_set) in shard_holder.get_shards() {
+            let peers = replica_set.peers();
+            let is_scale_up_target = resharding_is_active
+                && matches!(phase, PrivateOramReshardingPhase::Start)
+                && resharding_key.direction == ReshardingDirection::Up
+                && shard_id == resharding_key.shard_id;
+            if is_scale_up_target {
+                let mut target_owners = peers.keys().copied().collect::<Vec<_>>();
+                target_owners.sort_unstable();
+                if replica_set.shard_key() != resharding_key.shard_key.as_ref()
+                    || target_owners != operation.transition.target_shard_owner_peer_ids
+                    || peers.values().any(|state| {
+                        !matches!(state, ReplicaState::Resharding | ReplicaState::Active)
+                    })
+                {
+                    return Err(invalid_private_oram_resharding_layout_transition());
+                }
+                continue;
+            }
+
+            let allows_scale_down_transition = resharding_is_active
+                && matches!(phase, PrivateOramReshardingPhase::Start)
+                && resharding_key.direction == ReshardingDirection::Down;
+            if peers.is_empty()
+                || peers.values().any(|state| {
+                    *state != ReplicaState::Active
+                        && !(allows_scale_down_transition
+                            && *state == ReplicaState::ReshardingScaleDown)
+                })
+            {
+                return Err(invalid_private_oram_resharding_layout_transition());
+            }
+            entries.push(PrivateOramShardLayoutEntry {
+                shard_id,
+                shard_key: replica_set.shard_key().cloned(),
+                owner_peer_ids: peers.keys().copied().collect(),
+            });
+        }
+
+        let layout_state = classify_private_oram_resharding_layout_transition(
+            &collection_id,
+            shard_holder.get_sharding_method(),
+            &entries,
+            &operation.transition,
+        )?;
+        match (
+            phase,
+            resharding_is_active,
+            resharding_key.direction,
+            layout_state,
+        ) {
+            (
+                PrivateOramReshardingPhase::Start,
+                false,
+                _,
+                PrivateOramLayoutTransitionState::Pending,
+            )
+            | (
+                PrivateOramReshardingPhase::Finish,
+                true,
+                ReshardingDirection::Up,
+                PrivateOramLayoutTransitionState::Applied,
+            )
+            | (
+                PrivateOramReshardingPhase::Finish,
+                true,
+                ReshardingDirection::Down,
+                PrivateOramLayoutTransitionState::Pending,
+            ) => Ok(PrivateOramLayoutTransitionState::Pending),
+            (
+                PrivateOramReshardingPhase::Start,
+                true,
+                _,
+                PrivateOramLayoutTransitionState::Pending,
+            )
+            | (
+                PrivateOramReshardingPhase::Finish,
+                false,
+                _,
+                PrivateOramLayoutTransitionState::Applied,
+            ) => Ok(PrivateOramLayoutTransitionState::Applied),
+            _ => Err(invalid_private_oram_resharding_layout_transition()),
+        }
+    }
+
     async fn private_oram_layout_transition_state_async(
         &self,
         transition: &PrivateOramCollectionLayoutTransition,
@@ -333,12 +486,22 @@ enum PrivateOramShardTransferPhase {
     Finish,
 }
 
+#[derive(Clone, Copy)]
+enum PrivateOramReshardingPhase {
+    Start,
+    Finish,
+}
+
 fn invalid_private_oram_layout_transition() -> StorageError {
     StorageError::bad_request("private ORAM collection layout transition is invalid")
 }
 
 fn invalid_private_oram_transfer_layout_transition() -> StorageError {
     StorageError::bad_request("private ORAM shard transfer layout transition is invalid")
+}
+
+fn invalid_private_oram_resharding_layout_transition() -> StorageError {
+    StorageError::bad_request("private ORAM resharding layout transition is invalid")
 }
 
 fn collection_params_bind_crypto_identity(params: &CollectionParams) -> bool {

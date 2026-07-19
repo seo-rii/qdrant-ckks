@@ -1040,6 +1040,8 @@ pub mod consensus_ops {
         ApplyPrivateOramCollectionLayout(PrivateOramCollectionLayoutTransition),
         StartPrivateOramShardTransfer(PrivateOramShardTransferStart),
         FinishPrivateOramShardTransfer(PrivateOramShardTransferFinish),
+        StartPrivateOramResharding(PrivateOramReshardingOperation),
+        FinishPrivateOramResharding(PrivateOramReshardingOperation),
     }
 
     impl TryFrom<&RaftEntry> for ConsensusOperations {
@@ -1240,6 +1242,14 @@ pub mod consensus_ops {
                     .debug_struct("FinishPrivateOramShardTransfer")
                     .field("collection_meta", &operation.collection_meta.redacted_log())
                     .finish(),
+                ConsensusOperations::StartPrivateOramResharding(operation) => f
+                    .debug_tuple("StartPrivateOramResharding")
+                    .field(operation)
+                    .finish(),
+                ConsensusOperations::FinishPrivateOramResharding(operation) => f
+                    .debug_tuple("FinishPrivateOramResharding")
+                    .field(operation)
+                    .finish(),
                 ConsensusOperations::RequestSnapshot => f.write_str("RequestSnapshot"),
                 ConsensusOperations::ReportSnapshot { peer_id, status } => f
                     .debug_struct("ReportSnapshot")
@@ -1313,6 +1323,11 @@ pub trait CollectionContainer {
     fn private_oram_shard_transfer_finish_state(
         &self,
         operation: &consensus_ops::PrivateOramShardTransferFinish,
+    ) -> Result<consensus_ops::PrivateOramLayoutTransitionState, StorageError>;
+
+    fn private_oram_resharding_state(
+        &self,
+        operation: &consensus_ops::PrivateOramReshardingOperation,
     ) -> Result<consensus_ops::PrivateOramLayoutTransitionState, StorageError>;
 
     fn collections_snapshot(&self) -> CollectionsSnapshot;
