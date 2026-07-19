@@ -40,7 +40,6 @@ use storage::content_manager::collection_meta_ops::{
     CollectionMetaOperations, CreateShardKey, DropShardKey, ReshardingOperation,
     SetShardReplicaState, ShardTransferOperations, UpdateCollectionOperation,
 };
-use storage::content_manager::consensus_ops::PrivateOramLayoutKey;
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
 use storage::dispatcher::Dispatcher;
@@ -53,7 +52,8 @@ use super::private_result_oram::begin_private_result_oram_collection_snapshot;
 use crate::settings::Settings;
 use crate::tonic::api::qdrant_internal_api::{
     prepare_private_oram_replica_removal, prepare_private_oram_shard_transfer,
-    private_oram_replica_removal_layout_transition, release_private_oram_transfer_reservation,
+    private_oram_replica_removal_layout_transition, private_oram_shard_transfer_start_operation,
+    release_private_oram_transfer_reservation,
 };
 pub async fn do_collection_exists(
     toc: &TableOfContent,
@@ -393,6 +393,7 @@ pub async fn do_update_collection_cluster(
                     sync: false,
                     method: move_shard.method,
                     private_oram_preinstalled: false,
+                    private_oram_layout_transition: None,
                     filter: None,
                 },
                 private_oram_transfer,
@@ -431,6 +432,7 @@ pub async fn do_update_collection_cluster(
                     sync: true,
                     method: replicate_shard.method,
                     private_oram_preinstalled: false,
+                    private_oram_layout_transition: None,
                     filter: None,
                 },
                 private_oram_transfer,
@@ -507,6 +509,7 @@ pub async fn do_update_collection_cluster(
                             sync: true,
                             method: Some(method),
                             private_oram_preinstalled: false,
+                            private_oram_layout_transition: None,
                             filter,
                         }),
                     ),
@@ -1112,8 +1115,6 @@ async fn submit_shard_transfer_with_private_oram_preinstall(
             "private ORAM shard transfer must be coordinated by its current source peer",
         ));
     }
-    reject_private_oram_transfer_after_layout_bootstrap(dispatcher, config, &collection_name)?;
-
     let reservation = prepare_private_oram_shard_transfer(
         dispatcher,
         &auth,
@@ -1123,26 +1124,31 @@ async fn submit_shard_transfer_with_private_oram_preinstall(
         transfer.to,
     )
     .await?;
-    if let Err(error) =
-        reject_private_oram_transfer_after_layout_bootstrap(dispatcher, config, &collection_name)
-    {
-        if release_private_oram_transfer_reservation(dispatcher, &reservation)
-            .await
-            .is_err()
-        {
-            log::warn!(
-                "failed to release private ORAM shard transfer reservation after layout revalidation failure"
-            );
-        }
-        return Err(error);
-    }
     transfer.private_oram_preinstalled = true;
+    let start_operation = private_oram_shard_transfer_start_operation(
+        dispatcher,
+        &collection_name,
+        config,
+        &reservation,
+        transfer,
+    )
+    .await;
+    let start_operation = match start_operation {
+        Ok(operation) => operation,
+        Err(error) => {
+            if release_private_oram_transfer_reservation(dispatcher, &reservation)
+                .await
+                .is_err()
+            {
+                log::warn!(
+                    "failed to release private ORAM shard transfer reservation after layout transition preparation failure"
+                );
+            }
+            return Err(error);
+        }
+    };
     let result = dispatcher
-        .submit_collection_meta_op(
-            CollectionMetaOperations::TransferShard(collection_name, Start(transfer)),
-            auth,
-            wait_timeout,
-        )
+        .submit_private_oram_shard_transfer_start(start_operation, auth, wait_timeout)
         .await;
     if result.is_ok() {
         if release_private_oram_transfer_reservation(dispatcher, &reservation)
@@ -1187,8 +1193,6 @@ async fn submit_restart_transfer_with_private_oram_preinstall(
             "private ORAM restart transfer must be coordinated by its current source peer",
         ));
     }
-    reject_private_oram_transfer_after_layout_bootstrap(dispatcher, config, &collection_name)?;
-
     let reservation = prepare_private_oram_shard_transfer(
         dispatcher,
         &auth,
@@ -1198,19 +1202,6 @@ async fn submit_restart_transfer_with_private_oram_preinstall(
         transfer_restart.to,
     )
     .await?;
-    if let Err(error) =
-        reject_private_oram_transfer_after_layout_bootstrap(dispatcher, config, &collection_name)
-    {
-        if release_private_oram_transfer_reservation(dispatcher, &reservation)
-            .await
-            .is_err()
-        {
-            log::warn!(
-                "failed to release private ORAM restart transfer reservation after layout revalidation failure"
-            );
-        }
-        return Err(error);
-    }
     let result = dispatcher
         .submit_collection_meta_op(
             CollectionMetaOperations::TransferShard(
@@ -1234,25 +1225,6 @@ async fn submit_restart_transfer_with_private_oram_preinstall(
         );
     }
     result
-}
-
-fn reject_private_oram_transfer_after_layout_bootstrap(
-    dispatcher: &Dispatcher,
-    config: &CollectionConfigInternal,
-    collection_name: &str,
-) -> Result<(), StorageError> {
-    let collection_id = config.stable_crypto_id(collection_name).map_err(|_| {
-        StorageError::bad_request("private ORAM shard transfer layout state is invalid")
-    })?;
-    if dispatcher
-        .private_oram_consensus_layout(&PrivateOramLayoutKey { collection_id })?
-        .is_some()
-    {
-        return Err(StorageError::bad_request(
-            "private ORAM shard transfer is unavailable after layout bootstrap until transfer completion updates the consensus layout generation",
-        ));
-    }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2298,6 +2270,7 @@ mod tests {
             sync: true,
             method: Some(ShardTransferMethod::StreamRecords),
             private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
             filter: None,
         };
         validate_private_oram_restart_transfer(&restart, &HashSet::from([transfer.clone()]), 7)

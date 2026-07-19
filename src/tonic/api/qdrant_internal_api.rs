@@ -35,7 +35,10 @@ use collection::private_result_oram_store::{
 };
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::{PeerId, ShardId};
-use collection::shards::transfer::{ShardTransfer, ShardTransferMethod};
+use collection::shards::transfer::{
+    PrivateOramTransferIndexKind, PrivateOramTransferIndexState, PrivateOramTransferLayoutState,
+    PrivateOramTransferLayoutTransition, ShardTransfer, ShardTransferMethod,
+};
 use common::types::{DetailsLevel, TelemetryDetail};
 use data_encoding::BASE64URL_NOPAD;
 use futures::{Stream, StreamExt};
@@ -54,7 +57,7 @@ use storage::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramSessionLease,
     PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
     PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramSessionLease,
-    private_oram_index_keys_for_config,
+    PrivateOramShardTransferStart, private_oram_index_keys_for_config,
 };
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
@@ -678,6 +681,7 @@ pub(crate) async fn private_oram_current_layout_candidate_for_reservation(
             &keys,
             &lease_id_hash,
             generation,
+            None,
         )
         .await?;
     if current
@@ -776,6 +780,105 @@ fn private_oram_layout_topology_matches(
     right: &PrivateOramConsensusLayout,
 ) -> bool {
     left.owner_peer_ids == right.owner_peer_ids && left.layout_digest == right.layout_digest
+}
+
+pub(crate) async fn private_oram_shard_transfer_start_operation(
+    dispatcher: &Dispatcher,
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    reservation: &PrivateOramTransferReservation,
+    mut transfer: ShardTransfer,
+) -> Result<PrivateOramShardTransferStart, StorageError> {
+    let keys = private_oram_transfer_index_keys(config, collection_name)?;
+    if keys.is_empty()
+        || keys != reservation.keys
+        || !transfer.private_oram_preinstalled
+        || transfer.private_oram_layout_transition.is_some()
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM shard transfer layout transition is invalid",
+        ));
+    }
+    let collection_id = config.stable_crypto_id(collection_name).map_err(|_| {
+        StorageError::bad_request("private ORAM shard transfer layout transition is invalid")
+    })?;
+    let layout_key = PrivateOramLayoutKey {
+        collection_id: collection_id.clone(),
+    };
+    let existing = dispatcher.private_oram_consensus_layout(&layout_key)?;
+    let generation = existing.as_ref().map_or(1, |layout| layout.generation);
+    let lease_id_hash = private_oram_session_lease_hash(&reservation.session_id)?;
+    let (captured_current, new, leases, states) = dispatcher
+        .private_oram_reserved_shard_transfer_layouts(
+            &collection_name.to_string(),
+            &collection_id,
+            &keys,
+            &lease_id_hash,
+            generation,
+            &transfer,
+        )
+        .await?;
+    let expected = match existing {
+        Some(existing) => {
+            if !private_oram_layout_topology_matches(&existing, &captured_current) {
+                return Err(StorageError::bad_request(
+                    "private ORAM consensus layout state does not match the stable collection layout",
+                ));
+            }
+            existing
+        }
+        None => {
+            dispatcher
+                .submit_private_oram_layout_cas(
+                    CompareAndSwapPrivateOramLayout {
+                        key: layout_key,
+                        expected: None,
+                        new: captured_current.clone(),
+                    },
+                    None,
+                )
+                .await?;
+            captured_current
+        }
+    };
+    transfer.private_oram_layout_transition = Some(PrivateOramTransferLayoutTransition {
+        collection_id,
+        expected: private_oram_transfer_layout_state(&expected),
+        new: private_oram_transfer_layout_state(&new),
+        index_states: states
+            .into_iter()
+            .map(|(key, state)| PrivateOramTransferIndexState {
+                index_kind: match key.index_kind {
+                    PrivateOramIndexKind::Hnsw => PrivateOramTransferIndexKind::Hnsw,
+                    PrivateOramIndexKind::ResultPayload => {
+                        PrivateOramTransferIndexKind::ResultPayload
+                    }
+                },
+                index_name: key.index_name,
+                index_epoch: state.index_epoch,
+                root_hash: state.root_hash,
+                writeback_digest: state.writeback_digest,
+            })
+            .collect(),
+    });
+    Ok(PrivateOramShardTransferStart {
+        leases,
+        collection_meta: Box::new(CollectionMetaOperations::TransferShard(
+            collection_name.to_string(),
+            storage::content_manager::collection_meta_ops::ShardTransferOperations::Start(transfer),
+        )),
+    })
+}
+
+fn private_oram_transfer_layout_state(
+    layout: &PrivateOramConsensusLayout,
+) -> PrivateOramTransferLayoutState {
+    PrivateOramTransferLayoutState {
+        generation: layout.generation,
+        owner_peer_ids: layout.owner_peer_ids.clone(),
+        layout_digest: layout.layout_digest.clone(),
+        index_state_digest: layout.index_state_digest.clone(),
+    }
 }
 
 pub(crate) async fn prepare_private_oram_shard_transfer(
@@ -2844,6 +2947,7 @@ mod tests {
             sync: true,
             method: Some(ShardTransferMethod::StreamRecords),
             private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
             filter: None,
         };
         assert!(private_oram_shard_recovery_matches_transfer(

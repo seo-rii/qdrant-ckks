@@ -657,6 +657,9 @@ impl TableOfContent {
                     sync: old_transfer.sync, // Preserve sync flag from the old transfer
                     method: Some(transfer_restart.method),
                     private_oram_preinstalled: old_transfer.private_oram_preinstalled,
+                    private_oram_layout_transition: old_transfer
+                        .private_oram_layout_transition
+                        .clone(),
                     filter: None,
                 };
 
@@ -1346,6 +1349,7 @@ mod tests {
             sync: false,
             method: Some(ShardTransferMethod::StreamRecords),
             private_oram_preinstalled: false,
+            private_oram_layout_transition: None,
             filter: None,
         });
 
@@ -1555,6 +1559,7 @@ mod tests {
             sync: true,
             method: Some(ShardTransferMethod::StreamRecords),
             private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
             filter: None,
         };
         validate_private_oram_restart_apply(
@@ -1682,6 +1687,7 @@ mod tests {
             sync: false,
             method: Some(ShardTransferMethod::StreamRecords),
             private_oram_preinstalled: false,
+            private_oram_layout_transition: None,
             filter: None,
         };
         let transfer_key = ShardTransferKey {
@@ -1757,6 +1763,7 @@ mod tests {
             sync: false,
             method: Some(ShardTransferMethod::StreamRecords),
             private_oram_preinstalled: false,
+            private_oram_layout_transition: None,
             filter: None,
         };
         let transfer_key = ShardTransferKey {

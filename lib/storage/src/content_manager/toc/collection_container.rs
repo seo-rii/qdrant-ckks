@@ -15,8 +15,10 @@ use crate::content_manager::collections_ops::Checker as _;
 use crate::content_manager::consensus::operation_sender::OperationSender;
 use crate::content_manager::consensus_ops::{
     ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramLayoutTransitionState,
-    PrivateOramShardLayoutEntry, classify_private_oram_replica_removal_layout_transition,
-    private_oram_index_keys_for_config,
+    PrivateOramShardLayoutEntry, PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
+    classify_private_oram_replica_removal_layout_transition,
+    classify_private_oram_shard_transfer_layout_transition, private_oram_index_keys_for_config,
+    private_oram_transfer_consensus_layouts, private_oram_transfer_consensus_states,
 };
 use crate::content_manager::errors::StorageError;
 use crate::content_manager::{CollectionContainer, consensus_manager};
@@ -35,6 +37,28 @@ impl CollectionContainer for TableOfContent {
     ) -> Result<PrivateOramLayoutTransitionState, StorageError> {
         self.general_runtime
             .block_on(self.private_oram_layout_transition_state_async(transition))
+    }
+
+    fn private_oram_shard_transfer_start_state(
+        &self,
+        operation: &PrivateOramShardTransferStart,
+    ) -> Result<PrivateOramLayoutTransitionState, StorageError> {
+        self.general_runtime
+            .block_on(self.private_oram_shard_transfer_state_async(
+                &operation.collection_meta,
+                PrivateOramShardTransferPhase::Start,
+            ))
+    }
+
+    fn private_oram_shard_transfer_finish_state(
+        &self,
+        operation: &PrivateOramShardTransferFinish,
+    ) -> Result<PrivateOramLayoutTransitionState, StorageError> {
+        self.general_runtime
+            .block_on(self.private_oram_shard_transfer_state_async(
+                &operation.collection_meta,
+                PrivateOramShardTransferPhase::Finish,
+            ))
     }
 
     fn collections_snapshot(&self) -> consensus_manager::CollectionsSnapshot {
@@ -187,10 +211,134 @@ impl TableOfContent {
             &transition.layout.new,
         )
     }
+
+    async fn private_oram_shard_transfer_state_async(
+        &self,
+        collection_meta: &CollectionMetaOperations,
+        phase: PrivateOramShardTransferPhase,
+    ) -> Result<PrivateOramLayoutTransitionState, StorageError> {
+        let CollectionMetaOperations::TransferShard(collection_name, operation) = collection_meta
+        else {
+            return Err(invalid_private_oram_transfer_layout_transition());
+        };
+        let transfer = match (phase, operation) {
+            (PrivateOramShardTransferPhase::Start, ShardTransferOperations::Start(transfer))
+            | (PrivateOramShardTransferPhase::Finish, ShardTransferOperations::Finish(transfer)) => {
+                transfer
+            }
+            _ => return Err(invalid_private_oram_transfer_layout_transition()),
+        };
+        let transition = transfer
+            .private_oram_layout_transition
+            .as_ref()
+            .ok_or_else(invalid_private_oram_transfer_layout_transition)?;
+        let (layout_key, expected_layout, new_layout) =
+            private_oram_transfer_consensus_layouts(transition);
+        let transition_keys = private_oram_transfer_consensus_states(transition)
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect::<Vec<_>>();
+
+        let collection = self.get_collection_unchecked(collection_name).await?;
+        let config = collection.config_snapshot().await;
+        let collection_id = config
+            .stable_crypto_id(collection_name)
+            .map_err(|_| invalid_private_oram_transfer_layout_transition())?;
+        if collection_id != layout_key.collection_id
+            || private_oram_index_keys_for_config(&config, collection_name)? != transition_keys
+        {
+            return Err(invalid_private_oram_transfer_layout_transition());
+        }
+
+        let shard_holder = collection.shards_holder().read_owned().await;
+        if shard_holder.resharding_state().is_some() {
+            return Err(invalid_private_oram_transfer_layout_transition());
+        }
+        let transfers = shard_holder.get_transfers(|_| true);
+        let transfer_is_active = match transfers.as_slice() {
+            [] => false,
+            [active] if active == transfer => true,
+            _ => return Err(invalid_private_oram_transfer_layout_transition()),
+        };
+        let mut entries = Vec::new();
+        for (shard_id, replica_set) in shard_holder.get_shards() {
+            let peers = replica_set.peers();
+            let mut owner_peer_ids = Vec::new();
+            for (peer_id, state) in peers {
+                let is_transfer_target = shard_id == transfer.shard_id && peer_id == transfer.to;
+                if transfer_is_active && is_transfer_target {
+                    if state == ReplicaState::Active {
+                        return Err(invalid_private_oram_transfer_layout_transition());
+                    }
+                    continue;
+                }
+                if !transfer_is_active
+                    && matches!(phase, PrivateOramShardTransferPhase::Start)
+                    && is_transfer_target
+                    && state == ReplicaState::Dead
+                {
+                    continue;
+                }
+                if state != ReplicaState::Active {
+                    return Err(invalid_private_oram_transfer_layout_transition());
+                }
+                owner_peer_ids.push(peer_id);
+            }
+            if owner_peer_ids.is_empty() {
+                return Err(invalid_private_oram_transfer_layout_transition());
+            }
+            entries.push(PrivateOramShardLayoutEntry {
+                shard_id,
+                shard_key: replica_set.shard_key().cloned(),
+                owner_peer_ids,
+            });
+        }
+        let layout_state = classify_private_oram_shard_transfer_layout_transition(
+            &collection_id,
+            shard_holder.get_sharding_method(),
+            &entries,
+            transfer,
+            &expected_layout,
+            &new_layout,
+        )?;
+        match (phase, transfer_is_active, layout_state) {
+            (
+                PrivateOramShardTransferPhase::Start,
+                false,
+                PrivateOramLayoutTransitionState::Pending,
+            )
+            | (
+                PrivateOramShardTransferPhase::Finish,
+                true,
+                PrivateOramLayoutTransitionState::Pending,
+            ) => Ok(PrivateOramLayoutTransitionState::Pending),
+            (
+                PrivateOramShardTransferPhase::Start,
+                true,
+                PrivateOramLayoutTransitionState::Pending,
+            )
+            | (
+                PrivateOramShardTransferPhase::Finish,
+                false,
+                PrivateOramLayoutTransitionState::Applied,
+            ) => Ok(PrivateOramLayoutTransitionState::Applied),
+            _ => Err(invalid_private_oram_transfer_layout_transition()),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PrivateOramShardTransferPhase {
+    Start,
+    Finish,
 }
 
 fn invalid_private_oram_layout_transition() -> StorageError {
     StorageError::bad_request("private ORAM collection layout transition is invalid")
+}
+
+fn invalid_private_oram_transfer_layout_transition() -> StorageError {
+    StorageError::bad_request("private ORAM shard transfer layout transition is invalid")
 }
 
 fn collection_params_bind_crypto_identity(params: &CollectionParams) -> bool {

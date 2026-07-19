@@ -4799,6 +4799,7 @@ mod tests {
             sync: true,
             method: Some(ShardTransferMethod::StreamRecords),
             private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
             filter: None,
         };
 

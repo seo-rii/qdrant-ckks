@@ -32,7 +32,8 @@ use super::alias_mapping::AliasMapping;
 use super::consensus_ops::{
     ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
     PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramLayoutKey,
-    PrivateOramLayoutTransitionState, PrivateOramSessionLease, SnapshotStatus,
+    PrivateOramLayoutTransitionState, PrivateOramSessionLease, PrivateOramShardTransferFinish,
+    PrivateOramShardTransferStart, SnapshotStatus,
 };
 use super::errors::StorageError;
 use crate::content_manager::consensus::consensus_wal::ConsensusOpWal;
@@ -576,6 +577,12 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             ConsensusOperations::ApplyPrivateOramCollectionLayout(operation) => {
                 self.apply_private_oram_collection_layout_transition(&operation)
             }
+            ConsensusOperations::StartPrivateOramShardTransfer(operation) => {
+                self.apply_private_oram_shard_transfer_start(&operation)
+            }
+            ConsensusOperations::FinishPrivateOramShardTransfer(operation) => {
+                self.apply_private_oram_shard_transfer_finish(&operation)
+            }
 
             ConsensusOperations::RequestSnapshot | ConsensusOperations::ReportSnapshot { .. } => {
                 Err(StorageError::service_error(
@@ -624,6 +631,84 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         {
             return Err(StorageError::service_error(
                 "private ORAM collection layout transition did not reach its committed state",
+            ));
+        }
+        Ok(true)
+    }
+
+    fn apply_private_oram_shard_transfer_start(
+        &self,
+        operation: &PrivateOramShardTransferStart,
+    ) -> Result<bool, StorageError> {
+        let topology_state = self
+            .toc
+            .private_oram_shard_transfer_start_state(operation)?;
+        self.persistent
+            .read()
+            .validate_private_oram_shard_transfer_start(operation)?;
+        if topology_state == PrivateOramLayoutTransitionState::Pending {
+            let apply_result = self
+                .toc
+                .perform_collection_meta_op((*operation.collection_meta).clone());
+            if !matches!(apply_result, Ok(true))
+                && self
+                    .toc
+                    .private_oram_shard_transfer_start_state(operation)?
+                    != PrivateOramLayoutTransitionState::Applied
+            {
+                return Err(StorageError::service_error(
+                    "private ORAM shard transfer start was not applied",
+                ));
+            }
+        }
+        if self
+            .toc
+            .private_oram_shard_transfer_start_state(operation)?
+            != PrivateOramLayoutTransitionState::Applied
+        {
+            return Err(StorageError::service_error(
+                "private ORAM shard transfer start did not reach its committed state",
+            ));
+        }
+        Ok(true)
+    }
+
+    fn apply_private_oram_shard_transfer_finish(
+        &self,
+        operation: &PrivateOramShardTransferFinish,
+    ) -> Result<bool, StorageError> {
+        let topology_state = self
+            .toc
+            .private_oram_shard_transfer_finish_state(operation)?;
+        let layout = self
+            .persistent
+            .read()
+            .validate_private_oram_shard_transfer_finish(operation)?;
+        self.persistent
+            .write()
+            .compare_and_swap_private_oram_layout(&layout)?;
+        if topology_state == PrivateOramLayoutTransitionState::Pending {
+            let apply_result = self
+                .toc
+                .perform_collection_meta_op((*operation.collection_meta).clone());
+            if !matches!(apply_result, Ok(true))
+                && self
+                    .toc
+                    .private_oram_shard_transfer_finish_state(operation)?
+                    != PrivateOramLayoutTransitionState::Applied
+            {
+                return Err(StorageError::service_error(
+                    "private ORAM shard transfer finish was not applied",
+                ));
+            }
+        }
+        if self
+            .toc
+            .private_oram_shard_transfer_finish_state(operation)?
+            != PrivateOramLayoutTransitionState::Applied
+        {
+            return Err(StorageError::service_error(
+                "private ORAM shard transfer finish did not reach its committed state",
             ));
         }
         Ok(true)
@@ -1252,6 +1337,11 @@ mod tests {
 
     use collection::operations::types::PeerMetadata;
     use collection::shards::shard::PeerId;
+    use collection::shards::transfer::{
+        PrivateOramTransferIndexKind, PrivateOramTransferIndexState,
+        PrivateOramTransferLayoutState, PrivateOramTransferLayoutTransition, ShardTransfer,
+        ShardTransferMethod,
+    };
     use data_encoding::BASE64URL_NOPAD;
     use proptest::prelude::*;
     use raft::eraftpb::{
@@ -1272,7 +1362,8 @@ mod tests {
         PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
         PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramIndexKind,
         PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding, PrivateOramLayoutTransitionState,
-        PrivateOramSessionLease, canonical_private_oram_index_state_digest,
+        PrivateOramSessionLease, PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
+        canonical_private_oram_index_state_digest,
     };
 
     #[test]
@@ -1402,6 +1493,30 @@ mod tests {
             ))
         }
 
+        fn private_oram_shard_transfer_start_state(
+            &self,
+            _operation: &crate::content_manager::consensus_ops::PrivateOramShardTransferStart,
+        ) -> Result<
+            crate::content_manager::consensus_ops::PrivateOramLayoutTransitionState,
+            crate::content_manager::errors::StorageError,
+        > {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "private ORAM shard transfers require a collection container",
+            ))
+        }
+
+        fn private_oram_shard_transfer_finish_state(
+            &self,
+            _operation: &crate::content_manager::consensus_ops::PrivateOramShardTransferFinish,
+        ) -> Result<
+            crate::content_manager::consensus_ops::PrivateOramLayoutTransitionState,
+            crate::content_manager::errors::StorageError,
+        > {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "private ORAM shard transfers require a collection container",
+            ))
+        }
+
         fn collections_snapshot(&self) -> super::CollectionsSnapshot {
             super::CollectionsSnapshot::default()
         }
@@ -1473,6 +1588,134 @@ mod tests {
             } else {
                 PrivateOramLayoutTransitionState::Applied
             })
+        }
+
+        fn private_oram_shard_transfer_start_state(
+            &self,
+            _operation: &PrivateOramShardTransferStart,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "unexpected private ORAM shard transfer start",
+            ))
+        }
+
+        fn private_oram_shard_transfer_finish_state(
+            &self,
+            _operation: &PrivateOramShardTransferFinish,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "unexpected private ORAM shard transfer finish",
+            ))
+        }
+
+        fn collections_snapshot(&self) -> super::CollectionsSnapshot {
+            super::CollectionsSnapshot::default()
+        }
+
+        fn apply_collections_snapshot(
+            &self,
+            _data: super::CollectionsSnapshot,
+        ) -> Result<(), crate::content_manager::errors::StorageError> {
+            Ok(())
+        }
+
+        fn remove_peer(
+            &self,
+            _peer_id: PeerId,
+        ) -> Result<(), crate::content_manager::errors::StorageError> {
+            Ok(())
+        }
+
+        fn sync_local_state(&self) -> Result<(), crate::content_manager::errors::StorageError> {
+            Ok(())
+        }
+    }
+
+    struct ShardTransferCollections {
+        state: AtomicU8,
+        start_apply_count: AtomicUsize,
+        finish_apply_count: AtomicUsize,
+    }
+
+    impl ShardTransferCollections {
+        fn new() -> Self {
+            Self {
+                state: AtomicU8::new(0),
+                start_apply_count: AtomicUsize::new(0),
+                finish_apply_count: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl CollectionContainer for ShardTransferCollections {
+        fn perform_collection_meta_op(
+            &self,
+            operation: crate::content_manager::collection_meta_ops::CollectionMetaOperations,
+        ) -> Result<bool, crate::content_manager::errors::StorageError> {
+            use crate::content_manager::collection_meta_ops::{
+                CollectionMetaOperations, ShardTransferOperations,
+            };
+
+            match operation {
+                CollectionMetaOperations::TransferShard(_, ShardTransferOperations::Start(_)) => {
+                    assert_eq!(self.state.load(Ordering::SeqCst), 0);
+                    self.start_apply_count.fetch_add(1, Ordering::SeqCst);
+                    self.state.store(1, Ordering::SeqCst);
+                }
+                CollectionMetaOperations::TransferShard(_, ShardTransferOperations::Finish(_)) => {
+                    assert_eq!(self.state.load(Ordering::SeqCst), 1);
+                    self.finish_apply_count.fetch_add(1, Ordering::SeqCst);
+                    self.state.store(2, Ordering::SeqCst);
+                }
+                _ => {
+                    return Err(crate::content_manager::errors::StorageError::service_error(
+                        "unexpected private ORAM shard transfer operation",
+                    ));
+                }
+            }
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "injected post-apply failure",
+            ))
+        }
+
+        fn private_oram_layout_transition_state(
+            &self,
+            _transition: &PrivateOramCollectionLayoutTransition,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            Err(crate::content_manager::errors::StorageError::service_error(
+                "unexpected private ORAM collection layout transition",
+            ))
+        }
+
+        fn private_oram_shard_transfer_start_state(
+            &self,
+            _operation: &PrivateOramShardTransferStart,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            match self.state.load(Ordering::SeqCst) {
+                0 => Ok(PrivateOramLayoutTransitionState::Pending),
+                1 => Ok(PrivateOramLayoutTransitionState::Applied),
+                _ => Err(crate::content_manager::errors::StorageError::service_error(
+                    "private ORAM shard transfer start state is invalid",
+                )),
+            }
+        }
+
+        fn private_oram_shard_transfer_finish_state(
+            &self,
+            _operation: &PrivateOramShardTransferFinish,
+        ) -> Result<PrivateOramLayoutTransitionState, crate::content_manager::errors::StorageError>
+        {
+            match self.state.load(Ordering::SeqCst) {
+                1 => Ok(PrivateOramLayoutTransitionState::Pending),
+                2 => Ok(PrivateOramLayoutTransitionState::Applied),
+                _ => Err(crate::content_manager::errors::StorageError::service_error(
+                    "private ORAM shard transfer finish state is invalid",
+                )),
+            }
         }
 
         fn collections_snapshot(&self) -> super::CollectionsSnapshot {
@@ -1603,6 +1846,158 @@ mod tests {
         assert!(manager.apply_normal_entry(&entry).unwrap());
         assert_eq!(manager.private_oram_layout(&layout_key), Some(next));
         assert_eq!(collections.apply_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn private_oram_shard_transfer_start_and_finish_replay_after_post_apply_failures() {
+        use crate::content_manager::collection_meta_ops::{
+            CollectionMetaOperations, ShardTransferOperations,
+        };
+
+        let dir = Builder::new()
+            .prefix("private_oram_shard_transfer_transition")
+            .tempdir()
+            .unwrap();
+        let collection_id = "collection-uuid-1";
+        let epoch_key = PrivateOramEpochKey {
+            collection_id: collection_id.to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let epoch = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[41; 32]),
+            writeback_digest: Some(BASE64URL_NOPAD.encode(&[42; 32])),
+        };
+        let lease = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        };
+        let layout_key = PrivateOramLayoutKey {
+            collection_id: collection_id.to_string(),
+        };
+        let current = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7],
+            layout_digest: BASE64URL_NOPAD.encode(&[44; 32]),
+            index_state_digest: BASE64URL_NOPAD.encode(&[45; 32]),
+        };
+        let next = PrivateOramConsensusLayout {
+            generation: 2,
+            owner_peer_ids: vec![7, 9],
+            layout_digest: BASE64URL_NOPAD.encode(&[46; 32]),
+            index_state_digest: canonical_private_oram_index_state_digest(
+                collection_id,
+                &[(epoch_key.clone(), epoch.clone())],
+            )
+            .unwrap(),
+        };
+        let transfer = ShardTransfer {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 7,
+            to: 9,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: Some(PrivateOramTransferLayoutTransition {
+                collection_id: collection_id.to_string(),
+                expected: PrivateOramTransferLayoutState {
+                    generation: current.generation,
+                    owner_peer_ids: current.owner_peer_ids.clone(),
+                    layout_digest: current.layout_digest.clone(),
+                    index_state_digest: current.index_state_digest.clone(),
+                },
+                new: PrivateOramTransferLayoutState {
+                    generation: next.generation,
+                    owner_peer_ids: next.owner_peer_ids.clone(),
+                    layout_digest: next.layout_digest.clone(),
+                    index_state_digest: next.index_state_digest.clone(),
+                },
+                index_states: vec![PrivateOramTransferIndexState {
+                    index_kind: PrivateOramTransferIndexKind::Hnsw,
+                    index_name: epoch_key.index_name.clone(),
+                    index_epoch: epoch.index_epoch,
+                    root_hash: epoch.root_hash.clone(),
+                    writeback_digest: epoch.writeback_digest.clone(),
+                }],
+            }),
+            filter: None,
+        };
+        let start = PrivateOramShardTransferStart {
+            leases: vec![PrivateOramLayoutLeaseBinding {
+                key: epoch_key.clone(),
+                lease: lease.clone(),
+            }],
+            collection_meta: Box::new(CollectionMetaOperations::TransferShard(
+                "docs".to_string(),
+                ShardTransferOperations::Start(transfer.clone()),
+            )),
+        };
+        let finish = PrivateOramShardTransferFinish {
+            collection_meta: Box::new(CollectionMetaOperations::TransferShard(
+                "docs".to_string(),
+                ShardTransferOperations::Finish(transfer),
+            )),
+        };
+        let start_entry = Entry {
+            data: serde_cbor::to_vec(&ConsensusOperations::StartPrivateOramShardTransfer(start))
+                .unwrap(),
+            ..Default::default()
+        };
+        let finish_entry = Entry {
+            data: serde_cbor::to_vec(&ConsensusOperations::FinishPrivateOramShardTransfer(finish))
+                .unwrap(),
+            ..Default::default()
+        };
+
+        let mut persistent = Persistent::load_or_init(dir.path(), true, false, Some(7)).unwrap();
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: epoch_key.clone(),
+                expected: None,
+                new: epoch,
+            })
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: epoch_key,
+                expected: None,
+                new: Some(lease),
+            })
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: layout_key.clone(),
+                expected: None,
+                new: current.clone(),
+            })
+            .unwrap();
+        let collections = Arc::new(ShardTransferCollections::new());
+        let (sender, _) = mpsc::channel();
+        let manager = ConsensusManager::new(
+            persistent,
+            collections.clone(),
+            OperationSender::new(sender),
+            dir.path(),
+            PeerMetadata::current(),
+        )
+        .unwrap();
+
+        assert!(manager.apply_normal_entry(&start_entry).unwrap());
+        assert_eq!(manager.private_oram_layout(&layout_key), Some(current));
+        assert_eq!(collections.start_apply_count.load(Ordering::SeqCst), 1);
+        assert!(manager.apply_normal_entry(&start_entry).unwrap());
+        assert_eq!(collections.start_apply_count.load(Ordering::SeqCst), 1);
+
+        assert!(manager.apply_normal_entry(&finish_entry).unwrap());
+        assert_eq!(manager.private_oram_layout(&layout_key), Some(next.clone()));
+        assert_eq!(collections.finish_apply_count.load(Ordering::SeqCst), 1);
+        assert!(manager.apply_normal_entry(&finish_entry).unwrap());
+        assert_eq!(manager.private_oram_layout(&layout_key), Some(next));
+        assert_eq!(collections.finish_apply_count.load(Ordering::SeqCst), 1);
     }
 
     fn setup_storages(

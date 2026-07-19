@@ -552,6 +552,57 @@ def test_private_oram_replica_removal_requires_idle_index_and_retains_owner(
             assert secret not in response.text
 
 
+def test_private_oram_existing_layout_advances_after_replica_removal_and_transfer(
+    tmp_path: pathlib.Path,
+):
+    peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(
+        tmp_path, 3, 3
+    )
+    coordinator_url = peer_urls[0]
+    removed_index = 1
+    removed_url = peer_urls[removed_index]
+    peer_ids = [get_cluster_info(peer_url)["peer_id"] for peer_url in peer_urls]
+    coordinator_info = get_collection_cluster_info(coordinator_url, COLLECTION)
+    shard_id = coordinator_info["local_shards"][0]["shard_id"]
+
+    _upload_hnsw(coordinator_url, fixture)
+    _exercise_hnsw_owner_session(coordinator_url, fixture)
+    _upload_result_oram(coordinator_url, fixture)
+    _exercise_result_owner_session(coordinator_url, fixture)
+
+    removed = requests.post(
+        f"{coordinator_url}/collections/{COLLECTION}/cluster",
+        json={
+            "drop_replica": {
+                "shard_id": shard_id,
+                "peer_id": peer_ids[removed_index],
+            }
+        },
+        timeout=60,
+    )
+    assert_http_ok(removed)
+    wait_for_collection_local_shards_count(removed_url, COLLECTION, 0)
+    wait_for_collection_shard_transfers_count(coordinator_url, COLLECTION, 0)
+    remaining_peer_ids = [
+        peer_id for index, peer_id in enumerate(peer_ids) if index != removed_index
+    ]
+    _wait_for_private_oram_layout(peer_dirs, 2, remaining_peer_ids)
+
+    replicated = _request_private_oram_shard_transfer(
+        coordinator_url,
+        "replicate_shard",
+        shard_id,
+        peer_ids[0],
+        peer_ids[removed_index],
+    )
+    assert_http_ok(replicated)
+    wait_for_collection_local_shards_count(removed_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(coordinator_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _assert_replica_can_open_current_sessions(removed_url)
+    _wait_for_private_oram_layout(peer_dirs, 3, peer_ids)
+
+
 def test_private_oram_dead_replica_automatically_recovers_from_source(
     tmp_path: pathlib.Path,
 ):
@@ -714,11 +765,37 @@ def _request_private_oram_shard_transfer(
     )
 
 
+def _private_oram_layout_state(peer_dir: pathlib.Path) -> dict | None:
+    try:
+        with open(peer_dir / "storage" / "raft_state.json") as state_file:
+            layouts = json.load(state_file).get("private_oram_layouts", {})
+    except (OSError, json.JSONDecodeError):
+        return None
+    if len(layouts) != 1:
+        return None
+    return next(iter(layouts.values()))
+
+
+def _wait_for_private_oram_layout(
+    peer_dirs: list[pathlib.Path], generation: int, owner_peer_ids: list[int]
+) -> None:
+    expected_owners = sorted(owner_peer_ids)
+    wait_for(
+        lambda: all(
+            (state := _private_oram_layout_state(peer_dir)) is not None
+            and state["generation"] == generation
+            and state["owner_peer_ids"] == expected_owners
+            for peer_dir in peer_dirs
+        ),
+        wait_for_timeout=30,
+    )
+
+
 @pytest.mark.parametrize("transfer_operation", ["replicate_shard", "move_shard"])
 def test_private_oram_shard_transfer_preinstalls_live_store(
     tmp_path: pathlib.Path, transfer_operation: str
 ):
-    peer_urls, _, fixture, _, _ = _start_private_oram_cluster(tmp_path, 2, 1)
+    peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(tmp_path, 2, 1)
     _, _, source_url, target_url, source_info, target_info = (
         _private_oram_transfer_peers(peer_urls)
     )
@@ -749,6 +826,16 @@ def test_private_oram_shard_transfer_preinstalls_live_store(
     wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
     _assert_replica_can_open_current_sessions(target_url)
+
+    expected_owners = (
+        [target_info["peer_id"]]
+        + (
+            [source_info["peer_id"]]
+            if transfer_operation == "replicate_shard"
+            else []
+        )
+    )
+    _wait_for_private_oram_layout(peer_dirs, 2, expected_owners)
 
 
 def test_private_oram_multi_shard_union_replication_and_transfer(
@@ -1022,6 +1109,7 @@ def test_private_oram_post_submit_abort_releases_sessions_and_retries(
     assert_http_ok(aborted)
     wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
     wait_for_collection_shard_transfers_count(target_url, COLLECTION, 0)
+    _wait_for_private_oram_layout(peer_dirs, 1, [source_info["peer_id"]])
 
     aborted_target = get_collection_cluster_info(target_url, COLLECTION)
     assert len(aborted_target["local_shards"]) == 1
@@ -1042,6 +1130,9 @@ def test_private_oram_post_submit_abort_releases_sessions_and_retries(
     wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
     _assert_replica_can_open_current_sessions(target_url)
+    _wait_for_private_oram_layout(
+        peer_dirs, 2, [source_info["peer_id"], target_info["peer_id"]]
+    )
 
 
 def test_private_oram_restart_repreinstalls_and_completes(
@@ -1074,6 +1165,7 @@ def test_private_oram_restart_repreinstalls_and_completes(
     assert_http_ok(started)
     wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
     wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
+    _wait_for_private_oram_layout(peer_dirs, 1, [source_info["peer_id"]])
 
     collection_path = (
         peer_dirs[target_index] / "storage" / "collections" / COLLECTION
@@ -1097,6 +1189,7 @@ def test_private_oram_restart_repreinstalls_and_completes(
     wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
     assert (hnsw_store / VECTOR / "buckets").is_dir()
     assert (result_store / "buckets").is_dir()
+    _wait_for_private_oram_layout(peer_dirs, 1, [source_info["peer_id"]])
 
     blocked_session = requests.post(
         f"{source_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session",
@@ -1120,6 +1213,9 @@ def test_private_oram_restart_repreinstalls_and_completes(
     wait_for_collection_local_shards_count(target_url, COLLECTION, 1)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
     _assert_replica_can_open_current_sessions(target_url)
+    _wait_for_private_oram_layout(
+        peer_dirs, 2, [source_info["peer_id"], target_info["peer_id"]]
+    )
 
 
 @pytest.mark.parametrize("index_kind", ["hnsw", "result"])

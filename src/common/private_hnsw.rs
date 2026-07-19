@@ -3753,6 +3753,7 @@ mod private_hnsw_tests {
             sync: true,
             method: Some(collection::shards::transfer::ShardTransferMethod::StreamRecords),
             private_oram_preinstalled: false,
+            private_oram_layout_transition: None,
             filter: None,
         };
         assert!(!private_oram_shard_transfer_active(&HashSet::from([

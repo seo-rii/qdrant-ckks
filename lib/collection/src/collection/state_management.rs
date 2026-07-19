@@ -763,6 +763,7 @@ mod tests {
             sync: true,
             method: Some(ShardTransferMethod::StreamRecords),
             private_oram_preinstalled: false,
+            private_oram_layout_transition: None,
             filter: None,
         }]);
 
@@ -795,6 +796,7 @@ mod tests {
             sync: true,
             method: Some(ShardTransferMethod::StreamRecords),
             private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
             filter: None,
         }]);
         validate_private_oram_apply_shard_transfers_until_supported(&authorized, true)

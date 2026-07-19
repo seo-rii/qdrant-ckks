@@ -1130,6 +1130,7 @@ impl Collection {
                     // For automatic shard transfers, always select some default method from this point on
                     method: Some(shard_transfer_method),
                     private_oram_preinstalled: false,
+                    private_oram_layout_transition: None,
                     filter: None,
                 };
 

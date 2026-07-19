@@ -137,6 +137,7 @@ impl TableOfContent {
                 sync,
                 method,
                 private_oram_preinstalled: false,
+                private_oram_layout_transition: None,
                 filter: None,
             };
             let operation = ConsensusOperations::start_transfer(collection_name, transfer_request);

@@ -120,10 +120,28 @@ advances the layout generation, applies the reserved exact single-replica
 removal, and verifies the post-removal topology. Pre-state and already-applied
 post-state classification makes exact replay idempotent; mismatched shard,
 owner, digest, lease, or index state fails closed without reflecting bound
-values. Transfer-finish generation transitions are not connected yet, so a new
-private ORAM shard transfer is rejected after a layout record has been
-bootstrapped. Existing transfer support remains available for collections that
-do not yet have a layout record. Resharding and dynamic shard-layout guards
+values.
+
+Fixed-layout `stream_records` shard transfer now consumes the same layout
+record. While all configured indexes share one live reservation, the source
+captures their exact epoch/root/writeback state and the stable pre/post owner
+layouts. A missing record is first bootstrapped at generation 1. The transfer
+start Raft operation validates the exact leases and current index states and
+persists the expected layout, generation-`+1` layout, and captured index states
+inside the marked transfer record. It does not advance membership yet. After
+start apply, the reservation is released and the active transfer marker keeps
+new sessions and writebacks frozen. Transfer completion uses a dedicated Raft
+operation that revalidates the captured index states, advances the layout CAS,
+applies target activation and optional source removal, and verifies the exact
+post-layout. Pre-state and post-state classification makes start/finish replay
+safe across crashes. Exact restart preserves the transition metadata; abort
+removes the transfer without advancing the expected layout. Existing layout
+records may carry an older index-state checkpoint after ordinary writebacks,
+but their topology must match and the new generation always binds the current
+index states. An abort may leave the exact transfer target replica `Dead`; an
+exact retry excludes only that `(shard, target)` replica from the pre-layout and
+must restore it through the same marked transfer. Any other dead or transitional
+replica still fails closed. Resharding and broader dynamic shard-layout guards
 remain active.
 
 Private ORAM search and result-fetch providers have their own client-led
@@ -270,9 +288,11 @@ it never accepts a missing or different reservation. For supported manual and
 automatic fixed-layout shard transfers, the source coordinator acquires the
 same hashed consensus reservation for every configured private HNSW/result
 index, installs all live bundles on the target, requires exact acknowledgements,
-and only then submits a transfer marked `private_oram_preinstalled`. New private
-sessions and writebacks remain frozen from reservation acquisition through the
-active transfer marker.
+and only then derives a consensus-bound pre/post layout transition and submits a
+transfer marked `private_oram_preinstalled`. The marked record carries the exact
+captured index states and next layout generation. New private sessions and
+writebacks remain frozen from reservation acquisition through the active
+transfer marker.
 
 Automatic recovery uses the typed internal
 `RequestPrivateOramShardRecovery` RPC. The target schedules that request outside
@@ -1630,9 +1650,15 @@ collection-global private ORAM store is replicated to the union of all
 fully-active shard replica owners. The coordinator acquires a bounded consensus
 lease reservation for every configured private HNSW/result index, installs the
 exact current encrypted bucket stores on the target, validates
-epoch/root/writeback-digest acknowledgements, and only then submits the marked
-shard transfer. Partial preinstalls are idempotent exact-state copies and do not
-change membership. The marked target accepts only the transfer's peer
+epoch/root/writeback-digest acknowledgements, captures the exact current index
+states and pre/post topology, bootstraps generation 1 when needed, and only then
+submits the marked shard transfer. Completion advances the collection layout by
+one generation before activating the target and optionally removing the source.
+An exact retry after abort may start with its target replica `Dead`; only that
+target is excluded from the captured pre-layout, while every other replica must
+remain fully active.
+Partial preinstalls are idempotent exact-state copies and do not change
+membership. The marked target accepts only the transfer's peer
 `SyncPoints` operation needed to initialize ordinary shard records, and normal
 peer crypto checks still reject protected vector or private result payload
 content. Before any initial or live peer install, the source bounds the complete
@@ -1731,6 +1757,9 @@ Automatic dead-replica recovery is supported only for the same exact
 source-preinstalled per-shard `ReplicateShard` shape on a stable configured
 layout. As a final guard, only consensus transfer records carrying the verified
 `private_oram_preinstalled` marker may start and finish the stream-records path.
+Newly coordinated transfers also carry the exact consensus-bound expected/new
+layout and index-state checkpoint used by the dedicated start/finish Raft
+operations. Legacy marked records remain readable for snapshot/WAL compatibility.
 Restart apply is limited to the exact sole active marked transfer with the same
 key, no temporary shard, no filter, and `stream_records` on both the old and new
 configuration. Unmarked, mismatched, filtered, temporary-shard, and other

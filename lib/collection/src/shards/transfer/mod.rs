@@ -66,6 +66,7 @@ mod tests {
             sync: true,
             method: Some(ShardTransferMethod::StreamRecords),
             private_oram_preinstalled: false,
+            private_oram_layout_transition: None,
             filter: Some(Filter::new_must(Condition::Field(
                 FieldCondition::new_match(
                     "document.body".parse().unwrap(),
@@ -95,6 +96,7 @@ mod tests {
         });
         let decoded: ShardTransfer = serde_json::from_value(legacy).unwrap();
         assert!(!decoded.private_oram_preinstalled);
+        assert!(decoded.private_oram_layout_transition.is_none());
 
         let marked = ShardTransfer {
             private_oram_preinstalled: true,
@@ -107,6 +109,62 @@ mod tests {
                 .unwrap()
                 .private_oram_preinstalled
         );
+    }
+
+    #[test]
+    fn private_oram_layout_transition_round_trips_without_debug_disclosure() {
+        let collection_sentinel = "qdrant-sec-transfer-collection-sentinel";
+        let index_sentinel = "qdrant-sec-transfer-index-sentinel";
+        let root_sentinel = "qdrant-sec-transfer-root-sentinel";
+        let layout_sentinel = "qdrant-sec-transfer-layout-sentinel";
+        let transition = PrivateOramTransferLayoutTransition {
+            collection_id: collection_sentinel.to_string(),
+            expected: PrivateOramTransferLayoutState {
+                generation: 4,
+                owner_peer_ids: vec![1],
+                layout_digest: layout_sentinel.to_string(),
+                index_state_digest: "qdrant-sec-transfer-old-index-digest-sentinel".to_string(),
+            },
+            new: PrivateOramTransferLayoutState {
+                generation: 5,
+                owner_peer_ids: vec![1, 2],
+                layout_digest: "qdrant-sec-transfer-new-layout-sentinel".to_string(),
+                index_state_digest: "qdrant-sec-transfer-new-index-digest-sentinel".to_string(),
+            },
+            index_states: vec![PrivateOramTransferIndexState {
+                index_kind: PrivateOramTransferIndexKind::Hnsw,
+                index_name: index_sentinel.to_string(),
+                index_epoch: 42,
+                root_hash: root_sentinel.to_string(),
+                writeback_digest: Some("qdrant-sec-transfer-writeback-digest-sentinel".to_string()),
+            }],
+        };
+        let transfer = ShardTransfer {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 1,
+            to: 2,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: Some(transition),
+            filter: None,
+        };
+
+        let encoded = serde_json::to_value(&transfer).unwrap();
+        let decoded: ShardTransfer = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, transfer);
+
+        let rendered = format!("{transfer:?}");
+        assert!(rendered.contains("private_oram_layout_transition_present: true"));
+        for sentinel in [
+            collection_sentinel,
+            index_sentinel,
+            root_sentinel,
+            layout_sentinel,
+        ] {
+            assert!(!rendered.contains(sentinel), "{rendered}");
+        }
     }
 }
 
@@ -161,6 +219,73 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivateOramTransferIndexKind {
+    Hnsw,
+    ResultPayload,
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivateOramTransferIndexState {
+    pub index_kind: PrivateOramTransferIndexKind,
+    pub index_name: String,
+    pub index_epoch: u64,
+    pub root_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writeback_digest: Option<String>,
+}
+
+impl fmt::Debug for PrivateOramTransferIndexState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramTransferIndexState")
+            .field("index_kind", &self.index_kind)
+            .field("index_name", &"[redacted]")
+            .field("index_epoch", &self.index_epoch)
+            .field("root_hash", &"[redacted]")
+            .field("has_writeback_digest", &self.writeback_digest.is_some())
+            .finish()
+    }
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivateOramTransferLayoutState {
+    pub generation: u64,
+    pub owner_peer_ids: Vec<PeerId>,
+    pub layout_digest: String,
+    pub index_state_digest: String,
+}
+
+impl fmt::Debug for PrivateOramTransferLayoutState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramTransferLayoutState")
+            .field("generation", &self.generation)
+            .field("owner_peer_count", &self.owner_peer_ids.len())
+            .field("layout_digest", &"[redacted]")
+            .field("index_state_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrivateOramTransferLayoutTransition {
+    pub collection_id: CollectionId,
+    pub expected: PrivateOramTransferLayoutState,
+    pub new: PrivateOramTransferLayoutState,
+    pub index_states: Vec<PrivateOramTransferIndexState>,
+}
+
+impl fmt::Debug for PrivateOramTransferLayoutTransition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramTransferLayoutTransition")
+            .field("collection_id", &"[redacted]")
+            .field("expected", &self.expected)
+            .field("new", &self.new)
+            .field("index_state_count", &self.index_states.len())
+            .finish()
+    }
+}
+
 #[derive(Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShardTransfer {
     pub shard_id: ShardId,
@@ -183,6 +308,10 @@ pub struct ShardTransfer {
     #[serde(default, skip_serializing_if = "is_false")]
     pub private_oram_preinstalled: bool,
 
+    /// Consensus-bound layout transition captured while every private ORAM index is reserved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_oram_layout_transition: Option<PrivateOramTransferLayoutTransition>,
+
     // Optional filter to apply when transferring points
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<Filter>,
@@ -198,6 +327,10 @@ impl fmt::Debug for ShardTransfer {
             .field("sync", &self.sync)
             .field("method", &self.method)
             .field("private_oram_preinstalled", &self.private_oram_preinstalled)
+            .field(
+                "private_oram_layout_transition_present",
+                &self.private_oram_layout_transition.is_some(),
+            )
             .field("filter_present", &self.filter.is_some())
             .finish()
     }
@@ -213,6 +346,7 @@ impl ShardTransfer {
             sync: _,
             method: _,
             private_oram_preinstalled: _,
+            private_oram_layout_transition: _,
             filter: _,
         } = self;
 
@@ -299,6 +433,7 @@ impl From<&ShardTransferRestart> for ShardTransfer {
             sync: false,
             method: Some(method),
             private_oram_preinstalled: false,
+            private_oram_layout_transition: None,
             filter: None,
         }
     }
@@ -331,6 +466,7 @@ impl ShardTransferRestart {
             sync: _,
             method,
             private_oram_preinstalled: _,
+            private_oram_layout_transition: _,
             filter: _,
         } = transfer;
 
