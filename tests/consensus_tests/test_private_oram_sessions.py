@@ -720,6 +720,12 @@ def test_private_oram_dead_replica_automatically_recovers_from_source(
         )
         is True
     )
+    active_owner_peer_ids = [
+        peer_ids[index]
+        for index, peer_url in enumerate(peer_urls)
+        if get_collection_cluster_info(peer_url, COLLECTION)["local_shards"]
+    ]
+    _wait_for_private_oram_layout(peer_dirs, 2, active_owner_peer_ids)
 
 
 def _private_oram_transfer_peers(
