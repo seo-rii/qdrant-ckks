@@ -56,7 +56,7 @@ use crate::operations::{CollectionUpdateOperations, OperationWithClockTag};
 use crate::shards::resharding::ReshardState;
 use crate::shards::shard::{PeerId, ShardId};
 use crate::shards::shard_trait::WaitUntil;
-use crate::shards::transfer::ShardTransfer;
+use crate::shards::transfer::{ShardTransfer, ShardTransferMethod};
 
 const METADATA_BLIND_INDEX_MATCH_ANY_MAX_TOKENS: usize = 64;
 const METADATA_BLIND_INDEX_FILTER_MAX_TOKENS: usize = 256;
@@ -172,17 +172,27 @@ fn reject_private_hnsw_oram_read_only_point_operation(
     )))
 }
 
-fn private_oram_preinstalled_transfer_authorizes_peer_sync(
+fn private_oram_preinstalled_transfer_authorizes_peer_update(
     operation: &CollectionUpdateOperations,
     transfer: &ShardTransfer,
     resharding: Option<&ReshardState>,
     this_peer_id: PeerId,
     shard_id: ShardId,
 ) -> bool {
-    matches!(
-        operation,
-        CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(_))
-    ) && transfer.is_private_oram_preinstalled_transfer_for(resharding)
+    let operation_matches_transfer = match transfer.method {
+        Some(ShardTransferMethod::StreamRecords) => matches!(
+            operation,
+            CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(_))
+        ),
+        Some(ShardTransferMethod::ReshardingStreamRecords) => matches!(
+            operation,
+            CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(_))
+        ),
+        Some(ShardTransferMethod::Snapshot | ShardTransferMethod::WalDelta) | None => false,
+    };
+
+    operation_matches_transfer
+        && transfer.is_private_oram_preinstalled_transfer_for(resharding)
         && transfer.is_target(this_peer_id, shard_id)
 }
 
@@ -1028,9 +1038,9 @@ impl Collection {
 
         let shards_holder = self.shards_holder.read().await;
         let resharding = shards_holder.resharding_state();
-        let private_oram_transfer_sync = !shards_holder
+        let private_oram_transfer_update = !shards_holder
             .get_transfers(|transfer| {
-                private_oram_preinstalled_transfer_authorizes_peer_sync(
+                private_oram_preinstalled_transfer_authorizes_peer_update(
                     operation,
                     transfer,
                     resharding.as_ref(),
@@ -1040,10 +1050,11 @@ impl Collection {
             })
             .is_empty();
         drop(shards_holder);
-        if !private_oram_transfer_sync {
+        if !private_oram_transfer_update {
             reject_private_hnsw_oram_read_only_point_operation(operation, &encryption, true)?;
             reject_private_result_oram_payload_point_operation(operation, &encryption, true)?;
         }
+        // Preinstalled transfer batches still pass the per-field vector and payload checks below.
 
         match operation {
             CollectionUpdateOperations::PointOperation(
@@ -4264,7 +4275,6 @@ mod tests {
     use super::*;
     use crate::config::{CollectionEncryptionConfig, EncryptionRuleRef};
     use crate::operations::point_ops::PointStructPersisted;
-    use crate::shards::transfer::ShardTransferMethod;
 
     fn blind_index_token(byte: u8) -> String {
         BASE64URL_NOPAD.encode(&[byte; 32])
@@ -4782,7 +4792,7 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_peer_sync_requires_exact_preinstalled_transfer_target() {
+    fn private_oram_peer_transfer_update_requires_exact_preinstalled_target() {
         let this_peer_id = 22;
         let shard_id = 7;
         let sync = CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(
@@ -4804,7 +4814,7 @@ mod tests {
             filter: None,
         };
 
-        assert!(private_oram_preinstalled_transfer_authorizes_peer_sync(
+        assert!(private_oram_preinstalled_transfer_authorizes_peer_update(
             &sync,
             &transfer,
             None,
@@ -4835,7 +4845,7 @@ mod tests {
             },
         ];
         for unauthorized in unauthorized_transfers {
-            assert!(!private_oram_preinstalled_transfer_authorizes_peer_sync(
+            assert!(!private_oram_preinstalled_transfer_authorizes_peer_update(
                 &sync,
                 &unauthorized,
                 None,
@@ -4847,7 +4857,7 @@ mod tests {
         let delete = CollectionUpdateOperations::PointOperation(PointOperations::DeletePoints {
             ids: vec![1.into()],
         });
-        assert!(!private_oram_preinstalled_transfer_authorizes_peer_sync(
+        assert!(!private_oram_preinstalled_transfer_authorizes_peer_update(
             &delete,
             &transfer,
             None,
@@ -4873,15 +4883,25 @@ mod tests {
             private_oram_layout_transition: None,
             filter: None,
         };
-        assert!(private_oram_preinstalled_transfer_authorizes_peer_sync(
+        let upsert = CollectionUpdateOperations::PointOperation(PointOperations::UpsertPoints(
+            PointInsertOperationsInternal::PointsList(vec![]),
+        ));
+        assert!(private_oram_preinstalled_transfer_authorizes_peer_update(
+            &upsert,
+            &resharding_transfer,
+            Some(&resharding),
+            this_peer_id,
+            9,
+        ));
+        assert!(!private_oram_preinstalled_transfer_authorizes_peer_update(
             &sync,
             &resharding_transfer,
             Some(&resharding),
             this_peer_id,
             9,
         ));
-        assert!(!private_oram_preinstalled_transfer_authorizes_peer_sync(
-            &sync,
+        assert!(!private_oram_preinstalled_transfer_authorizes_peer_update(
+            &upsert,
             &resharding_transfer,
             None,
             this_peer_id,

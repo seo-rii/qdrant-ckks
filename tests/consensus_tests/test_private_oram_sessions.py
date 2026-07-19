@@ -806,14 +806,81 @@ def _wait_for_private_oram_layout(
     )
 
 
+def _assert_private_oram_sessions_blocked_during_resharding(
+    peer_url: str, fixture: dict, include_result_oram: bool
+) -> None:
+    hnsw = requests.post(
+        f"{peer_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session",
+        json={
+            "client_id": "tenant-a/resharding-blocked-hnsw-sdk",
+            "desired_epoch": NEXT_EPOCH,
+            "fixed_budget": True,
+            "result_privacy": fixture["hnsw"]["manifest"]["result_privacy"],
+        },
+        timeout=30,
+    )
+    assert 400 <= hnsw.status_code < 600
+    assert "stable shard topology" in hnsw.text
+    assert fixture["hnsw"]["commit"]["new_root_hash"] not in hnsw.text
+
+    if include_result_oram:
+        result = requests.post(
+            f"{peer_url}/collections/{COLLECTION}/private-result-oram/session",
+            json={
+                "client_id": "tenant-a/resharding-blocked-result-sdk",
+                "desired_epoch": NEXT_EPOCH,
+                "fixed_budget": True,
+            },
+            timeout=30,
+        )
+        assert 400 <= result.status_code < 600
+        assert "stable shard topology" in result.text
+        assert fixture["result"]["commit"]["new_root_hash"] not in result.text
+
+
+def _assert_private_oram_owner_sessions(
+    peer_url: str, fixture: dict, include_result_oram: bool
+) -> None:
+    hnsw = _open_hnsw_owner_session(
+        peer_url,
+        NEXT_EPOCH,
+        fixture["hnsw"]["manifest"]["result_privacy"],
+    )
+    assert hnsw["root_hash"] == fixture["hnsw"]["commit"]["new_root_hash"]
+    assert (
+        _post_result(
+            f"{peer_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session/{hnsw['session_id']}/close",
+            {},
+        )
+        is True
+    )
+
+    if include_result_oram:
+        result = _open_result_owner_session(peer_url, NEXT_EPOCH)
+        assert result["root_hash"] == fixture["result"]["commit"]["new_root_hash"]
+        assert (
+            _post_result(
+                f"{peer_url}/collections/{COLLECTION}/private-result-oram/session/{result['session_id']}/close",
+                {},
+            )
+            is True
+        )
+
+
+@pytest.mark.parametrize(
+    "include_result_oram",
+    [False, True],
+    ids=["hnsw-only", "hnsw-result"],
+)
 def test_private_oram_scale_up_resharding_preserves_encrypted_store_and_sessions(
     tmp_path: pathlib.Path,
+    include_result_oram: bool,
 ):
     peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(
         tmp_path,
         2,
         1,
-        include_result_oram=False,
+        include_result_oram=include_result_oram,
         include_public_vector=True,
         extra_env={"QDRANT__CLUSTER__RESHARDING_ENABLED": "true"},
     )
@@ -825,20 +892,24 @@ def test_private_oram_scale_up_resharding_preserves_encrypted_store_and_sessions
     source_shard_id = source_info["local_shards"][0]["shard_id"]
     target_shard_id = source_shard_id + 1
 
-    points = requests.put(
-        f"{source_url}/collections/{COLLECTION}/points?wait=true",
-        json={
-            "points": [
-                {"id": point_id, "vector": {"public": [float(point_id), 1.0]}}
-                for point_id in range(16)
-            ]
-        },
-        timeout=30,
-    )
-    assert_http_ok(points)
+    if not include_result_oram:
+        points = requests.put(
+            f"{source_url}/collections/{COLLECTION}/points?wait=true",
+            json={
+                "points": [
+                    {"id": point_id, "vector": {"public": [float(point_id), 1.0]}}
+                    for point_id in range(16)
+                ]
+            },
+            timeout=30,
+        )
+        assert_http_ok(points)
 
     _upload_hnsw(source_url, fixture)
     _exercise_hnsw_owner_session(source_url, fixture)
+    if include_result_oram:
+        _upload_result_oram(source_url, fixture)
+        _exercise_result_owner_session(source_url, fixture)
 
     started = start_resharding(
         source_url,
@@ -849,19 +920,9 @@ def test_private_oram_scale_up_resharding_preserves_encrypted_store_and_sessions
     assert_http_ok(started)
     wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
 
-    blocked_session = requests.post(
-        f"{source_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session",
-        json={
-            "client_id": "tenant-a/resharding-blocked-sdk",
-            "desired_epoch": NEXT_EPOCH,
-            "fixed_budget": True,
-            "result_privacy": IDS_VISIBLE_RESULT_PRIVACY,
-        },
-        timeout=30,
+    _assert_private_oram_sessions_blocked_during_resharding(
+        source_url, fixture, include_result_oram
     )
-    assert 400 <= blocked_session.status_code < 600
-    assert "stable shard topology" in blocked_session.text
-    assert fixture["hnsw"]["commit"]["new_root_hash"] not in blocked_session.text
 
     migrate_points(
         source_url,
@@ -893,43 +954,43 @@ def test_private_oram_scale_up_resharding_preserves_encrypted_store_and_sessions
 
     assert _private_oram_buckets_dir(peer_dirs[0], "hnsw").is_dir()
     assert _private_oram_buckets_dir(peer_dirs[1], "hnsw").is_dir()
+    if include_result_oram:
+        assert _private_oram_buckets_dir(peer_dirs[0], "result").is_dir()
+        assert _private_oram_buckets_dir(peer_dirs[1], "result").is_dir()
     for owner_url in [source_url, target_url]:
-        session = _open_hnsw_owner_session(
-            owner_url,
-            NEXT_EPOCH,
-            IDS_VISIBLE_RESULT_PRIVACY,
+        _assert_private_oram_owner_sessions(owner_url, fixture, include_result_oram)
+
+    if not include_result_oram:
+        retrieved = requests.post(
+            f"{source_url}/collections/{COLLECTION}/points",
+            json={
+                "ids": list(range(16)),
+                "with_payload": False,
+                "with_vector": False,
+            },
+            timeout=30,
         )
-        assert session["root_hash"] == fixture["hnsw"]["commit"]["new_root_hash"]
-        assert (
-            _post_result(
-                f"{owner_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session/{session['session_id']}/close",
-                {},
-            )
-            is True
+        assert_http_ok(retrieved)
+        assert sorted(point["id"] for point in retrieved.json()["result"]) == list(
+            range(16)
         )
 
-    retrieved = requests.post(
-        f"{source_url}/collections/{COLLECTION}/points",
-        json={
-            "ids": list(range(16)),
-            "with_payload": False,
-            "with_vector": False,
-        },
-        timeout=30,
-    )
-    assert_http_ok(retrieved)
-    assert sorted(point["id"] for point in retrieved.json()["result"]) == list(range(16))
 
-
+@pytest.mark.parametrize(
+    "include_result_oram",
+    [False, True],
+    ids=["hnsw-only", "hnsw-result"],
+)
 def test_private_oram_scale_down_resharding_preserves_encrypted_store_and_sessions(
     tmp_path: pathlib.Path,
+    include_result_oram: bool,
 ):
     peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(
         tmp_path,
         2,
         2,
         shard_number=2,
-        include_result_oram=False,
+        include_result_oram=include_result_oram,
         include_public_vector=True,
         extra_env={"QDRANT__CLUSTER__RESHARDING_ENABLED": "true"},
     )
@@ -940,20 +1001,24 @@ def test_private_oram_scale_down_resharding_preserves_encrypted_store_and_sessio
     target_shard_id = max(shard["shard_id"] for shard in source_info["local_shards"])
     receiver_shard_id = min(shard["shard_id"] for shard in source_info["local_shards"])
 
-    points = requests.put(
-        f"{source_url}/collections/{COLLECTION}/points?wait=true",
-        json={
-            "points": [
-                {"id": point_id, "vector": {"public": [float(point_id), 1.0]}}
-                for point_id in range(16)
-            ]
-        },
-        timeout=30,
-    )
-    assert_http_ok(points)
+    if not include_result_oram:
+        points = requests.put(
+            f"{source_url}/collections/{COLLECTION}/points?wait=true",
+            json={
+                "points": [
+                    {"id": point_id, "vector": {"public": [float(point_id), 1.0]}}
+                    for point_id in range(16)
+                ]
+            },
+            timeout=30,
+        )
+        assert_http_ok(points)
 
     _upload_hnsw(source_url, fixture)
     _exercise_hnsw_owner_session(source_url, fixture)
+    if include_result_oram:
+        _upload_result_oram(source_url, fixture)
+        _exercise_result_owner_session(source_url, fixture)
 
     started = start_resharding(
         source_url,
@@ -964,19 +1029,9 @@ def test_private_oram_scale_down_resharding_preserves_encrypted_store_and_sessio
     assert_http_ok(started)
     wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
 
-    blocked_session = requests.post(
-        f"{source_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session",
-        json={
-            "client_id": "tenant-a/scale-down-blocked-sdk",
-            "desired_epoch": NEXT_EPOCH,
-            "fixed_budget": True,
-            "result_privacy": IDS_VISIBLE_RESULT_PRIVACY,
-        },
-        timeout=30,
+    _assert_private_oram_sessions_blocked_during_resharding(
+        source_url, fixture, include_result_oram
     )
-    assert 400 <= blocked_session.status_code < 600
-    assert "stable shard topology" in blocked_session.text
-    assert fixture["hnsw"]["commit"]["new_root_hash"] not in blocked_session.text
 
     for destination_peer_id in [source_peer_id, receiver_peer_id]:
         migrate_points(
@@ -1006,37 +1061,33 @@ def test_private_oram_scale_down_resharding_preserves_encrypted_store_and_sessio
         2,
         [source_peer_id, receiver_peer_id],
     )
+    assert _private_oram_buckets_dir(peer_dirs[0], "hnsw").is_dir()
+    assert _private_oram_buckets_dir(peer_dirs[1], "hnsw").is_dir()
+    if include_result_oram:
+        assert _private_oram_buckets_dir(peer_dirs[0], "result").is_dir()
+        assert _private_oram_buckets_dir(peer_dirs[1], "result").is_dir()
 
     for owner_url in [source_url, receiver_url]:
         info = get_collection_cluster_info(owner_url, COLLECTION)
         assert {shard["shard_id"] for shard in info["local_shards"]} == {
             receiver_shard_id
         }
-        session = _open_hnsw_owner_session(
-            owner_url,
-            NEXT_EPOCH,
-            IDS_VISIBLE_RESULT_PRIVACY,
-        )
-        assert session["root_hash"] == fixture["hnsw"]["commit"]["new_root_hash"]
-        assert (
-            _post_result(
-                f"{owner_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session/{session['session_id']}/close",
-                {},
-            )
-            is True
-        )
+        _assert_private_oram_owner_sessions(owner_url, fixture, include_result_oram)
 
-    retrieved = requests.post(
-        f"{source_url}/collections/{COLLECTION}/points",
-        json={
-            "ids": list(range(16)),
-            "with_payload": False,
-            "with_vector": False,
-        },
-        timeout=30,
-    )
-    assert_http_ok(retrieved)
-    assert sorted(point["id"] for point in retrieved.json()["result"]) == list(range(16))
+    if not include_result_oram:
+        retrieved = requests.post(
+            f"{source_url}/collections/{COLLECTION}/points",
+            json={
+                "ids": list(range(16)),
+                "with_payload": False,
+                "with_vector": False,
+            },
+            timeout=30,
+        )
+        assert_http_ok(retrieved)
+        assert sorted(point["id"] for point in retrieved.json()["result"]) == list(
+            range(16)
+        )
 
 
 @pytest.mark.parametrize("transfer_operation", ["replicate_shard", "move_shard"])
