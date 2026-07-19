@@ -34,6 +34,14 @@ impl CollectionContainer for TableOfContent {
         self.perform_collection_meta_op_sync(operation)
     }
 
+    fn perform_private_oram_resharding_meta_op(
+        &self,
+        operation: &PrivateOramReshardingOperation,
+    ) -> Result<bool, StorageError> {
+        self.general_runtime
+            .block_on(self.perform_private_oram_resharding_meta_op(operation))
+    }
+
     fn private_oram_layout_transition_state(
         &self,
         transition: &PrivateOramCollectionLayoutTransition,

@@ -1310,6 +1310,13 @@ pub trait CollectionContainer {
         operation: CollectionMetaOperations,
     ) -> Result<bool, StorageError>;
 
+    fn perform_private_oram_resharding_meta_op(
+        &self,
+        operation: &consensus_ops::PrivateOramReshardingOperation,
+    ) -> Result<bool, StorageError> {
+        self.perform_collection_meta_op((*operation.collection_meta).clone())
+    }
+
     fn private_oram_layout_transition_state(
         &self,
         transition: &consensus_ops::PrivateOramCollectionLayoutTransition,

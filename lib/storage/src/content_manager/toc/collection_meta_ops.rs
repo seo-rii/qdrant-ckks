@@ -19,12 +19,18 @@ use super::{COLLECTION_DELETE_SPIN_INTERVAL, COLLECTION_DELETE_WAIT_TIMEOUT, Tab
 use crate::common::utils::try_unwrap_with_timeout_async;
 use crate::content_manager::collection_meta_ops::*;
 use crate::content_manager::collections_ops::Checker as _;
-use crate::content_manager::consensus_ops::ConsensusOperations;
+use crate::content_manager::consensus_ops::{ConsensusOperations, PrivateOramReshardingOperation};
 use crate::content_manager::errors::StorageError;
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
 
 static CREATE_CUSTOM_SHARDS_IN_INITIALIZING_STATE: LazyLock<semver::Version> =
     LazyLock::new(|| semver::Version::parse("1.14.2-dev").unwrap());
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum ReshardingApplyAuthority {
+    Ordinary,
+    PrivateOramConsensus,
+}
 
 impl TableOfContent {
     pub(super) fn perform_collection_meta_op_sync(
@@ -104,7 +110,7 @@ impl TableOfContent {
                 };
                 log::debug!("Resharding {operation_kind} of {collection}");
 
-                self.handle_resharding(collection, operation)
+                self.handle_resharding(collection, operation, ReshardingApplyAuthority::Ordinary)
                     .await
                     .map(|_| true)
             }
@@ -397,10 +403,36 @@ impl TableOfContent {
     /// # Cancel safety
     ///
     /// This method is *not* cancel safe.
+    pub(super) async fn perform_private_oram_resharding_meta_op(
+        &self,
+        operation: &PrivateOramReshardingOperation,
+    ) -> Result<bool, StorageError> {
+        let CollectionMetaOperations::Resharding(collection_id, resharding_operation) =
+            operation.collection_meta.as_ref()
+        else {
+            return Err(invalid_private_oram_resharding_consensus_operation());
+        };
+        let resharding_key = match resharding_operation {
+            ReshardingOperation::Start(key) | ReshardingOperation::Finish(key) => key,
+            _ => return Err(invalid_private_oram_resharding_consensus_operation()),
+        };
+        if resharding_key != &operation.transition.resharding_key {
+            return Err(invalid_private_oram_resharding_consensus_operation());
+        }
+        self.handle_resharding(
+            collection_id.clone(),
+            resharding_operation.clone(),
+            ReshardingApplyAuthority::PrivateOramConsensus,
+        )
+        .await?;
+        Ok(true)
+    }
+
     async fn handle_resharding(
         &self,
         collection_id: CollectionId,
         operation: ReshardingOperation,
+        authority: ReshardingApplyAuthority,
     ) -> Result<(), StorageError> {
         let collection = self.get_collection_unchecked(&collection_id).await?;
         let Some(proposal_sender) = self.consensus_proposal_sender.clone() else {
@@ -409,10 +441,11 @@ impl TableOfContent {
             ));
         };
         let collection_config = collection.config_snapshot().await;
-        reject_private_oram_resharding_until_supported(
+        validate_private_oram_resharding_apply_authority(
             &collection_id,
             &collection_config.params,
             &operation,
+            authority,
         )?;
 
         match operation {
@@ -448,33 +481,44 @@ impl TableOfContent {
                     }
                 };
 
-                let on_finish = {
-                    let collection_id = collection_id.clone();
-                    let key = key.clone();
-                    let proposal_sender = proposal_sender.clone();
-                    async move {
-                        let operation = ConsensusOperations::finish_resharding(collection_id, key);
-                        if let Err(error) = proposal_sender.send(operation) {
-                            log::error!("Can't report resharding progress to consensus: {error}");
-                        };
-                    }
-                };
+                if authority == ReshardingApplyAuthority::PrivateOramConsensus {
+                    collection
+                        .start_private_oram_resharding(key, consensus)
+                        .await?;
+                } else {
+                    let on_finish = {
+                        let collection_id = collection_id.clone();
+                        let key = key.clone();
+                        let proposal_sender = proposal_sender.clone();
+                        async move {
+                            let operation =
+                                ConsensusOperations::finish_resharding(collection_id, key);
+                            if let Err(error) = proposal_sender.send(operation) {
+                                log::error!(
+                                    "Can't report resharding progress to consensus: {error}"
+                                );
+                            };
+                        }
+                    };
 
-                let on_failure = {
-                    let collection_id = collection_id.clone();
-                    let key = key.clone();
-                    async move {
-                        if let Err(error) = proposal_sender
-                            .send(ConsensusOperations::abort_resharding(collection_id, key))
-                        {
-                            log::error!("Can't report resharding progress to consensus: {error}");
-                        };
-                    }
-                };
+                    let on_failure = {
+                        let collection_id = collection_id.clone();
+                        let key = key.clone();
+                        async move {
+                            if let Err(error) = proposal_sender
+                                .send(ConsensusOperations::abort_resharding(collection_id, key))
+                            {
+                                log::error!(
+                                    "Can't report resharding progress to consensus: {error}"
+                                );
+                            };
+                        }
+                    };
 
-                collection
-                    .start_resharding(key, consensus, on_finish, on_failure)
-                    .await?;
+                    collection
+                        .start_resharding(key, consensus, on_finish, on_failure)
+                        .await?;
+                }
             }
 
             ReshardingOperation::CommitRead(key) => {
@@ -486,7 +530,11 @@ impl TableOfContent {
             }
 
             ReshardingOperation::Finish(key) => {
-                collection.finish_resharding(key).await?;
+                if authority == ReshardingApplyAuthority::PrivateOramConsensus {
+                    collection.finish_private_oram_resharding(key).await?;
+                } else {
+                    collection.finish_resharding(key).await?;
+                }
             }
 
             ReshardingOperation::Abort(key) => {
@@ -959,6 +1007,35 @@ fn reject_private_oram_resharding_until_supported(
     )))
 }
 
+fn validate_private_oram_resharding_apply_authority(
+    collection_id: &str,
+    params: &CollectionParams,
+    operation: &ReshardingOperation,
+    authority: ReshardingApplyAuthority,
+) -> Result<(), StorageError> {
+    match authority {
+        ReshardingApplyAuthority::Ordinary => {
+            reject_private_oram_resharding_until_supported(collection_id, params, operation)
+        }
+        ReshardingApplyAuthority::PrivateOramConsensus
+            if collection_params_use_private_oram_bucket_store(params)
+                && matches!(
+                    operation,
+                    ReshardingOperation::Start(_) | ReshardingOperation::Finish(_)
+                ) =>
+        {
+            Ok(())
+        }
+        ReshardingApplyAuthority::PrivateOramConsensus => {
+            Err(invalid_private_oram_resharding_consensus_operation())
+        }
+    }
+}
+
+fn invalid_private_oram_resharding_consensus_operation() -> StorageError {
+    StorageError::bad_request("private ORAM resharding consensus operation is invalid")
+}
+
 fn reject_private_oram_resharding_replica_state_until_supported(
     _collection_id: &str,
     params: &CollectionParams,
@@ -1160,7 +1237,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING,
+        PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, ReshardingApplyAuthority,
         collection_params_require_crypto_runtime_transfer_parity,
         reject_private_oram_resharding_replica_state_until_supported,
         reject_private_oram_resharding_until_supported,
@@ -1169,7 +1246,8 @@ mod tests {
         validate_encrypted_create_shard_key_crypto_runtime_parity,
         validate_encrypted_resharding_crypto_runtime_parity,
         validate_encrypted_transfer_crypto_runtime_parity,
-        validate_private_oram_replica_removal_authorization, validate_private_oram_restart_apply,
+        validate_private_oram_replica_removal_authorization,
+        validate_private_oram_resharding_apply_authority, validate_private_oram_restart_apply,
     };
     use crate::content_manager::collection_meta_ops::{
         ReshardingOperation, SetShardReplicaState, ShardTransferOperations,
@@ -1886,6 +1964,36 @@ mod tests {
             )
             .expect("abort must remain available to clean up unsupported private ORAM resharding");
 
+            for operation in [
+                ReshardingOperation::Start(key.clone()),
+                ReshardingOperation::Finish(key.clone()),
+            ] {
+                validate_private_oram_resharding_apply_authority(
+                    "docs",
+                    &params,
+                    &operation,
+                    ReshardingApplyAuthority::PrivateOramConsensus,
+                )
+                .expect("typed private ORAM start and finish must be authorized");
+            }
+            for operation in [
+                ReshardingOperation::CommitRead(key.clone()),
+                ReshardingOperation::CommitWrite(key.clone()),
+                ReshardingOperation::Abort(key.clone()),
+            ] {
+                let err = validate_private_oram_resharding_apply_authority(
+                    "docs",
+                    &params,
+                    &operation,
+                    ReshardingApplyAuthority::PrivateOramConsensus,
+                )
+                .expect_err("typed private ORAM authority must be scoped to start and finish");
+                assert_eq!(
+                    err.to_string(),
+                    "Bad request: private ORAM resharding consensus operation is invalid"
+                );
+            }
+
             let replica_progress = SetShardReplicaState {
                 collection_name: "docs".to_string(),
                 shard_id: 1,
@@ -1914,6 +2022,13 @@ mod tests {
             &ReshardingOperation::Start(key.clone()),
         )
         .expect("ordinary collection resharding guard must stay open");
+        validate_private_oram_resharding_apply_authority(
+            "docs",
+            &CollectionParams::empty(),
+            &ReshardingOperation::Start(key.clone()),
+            ReshardingApplyAuthority::PrivateOramConsensus,
+        )
+        .expect_err("private ORAM consensus authority must reject ordinary collections");
         reject_private_oram_resharding_replica_state_until_supported(
             "docs",
             &CollectionParams::empty(),

@@ -40,6 +40,23 @@ impl Collection {
         self.validate_private_oram_resharding_operation_until_supported("start resharding")
             .await?;
 
+        self.start_resharding_authorized(resharding_key).await
+    }
+
+    pub async fn start_private_oram_resharding(
+        &self,
+        resharding_key: ReshardKey,
+        _consensus: Box<dyn ShardTransferConsensus>,
+    ) -> CollectionResult<()> {
+        self.validate_private_oram_resharding_consensus_collection()
+            .await?;
+        self.start_resharding_authorized(resharding_key).await
+    }
+
+    async fn start_resharding_authorized(
+        &self,
+        resharding_key: ReshardKey,
+    ) -> CollectionResult<()> {
         {
             let mut shard_holder = self.shards_holder.write().await;
 
@@ -147,6 +164,22 @@ impl Collection {
         self.validate_private_oram_resharding_operation_until_supported("finish resharding")
             .await?;
 
+        self.finish_resharding_authorized(resharding_key).await
+    }
+
+    pub async fn finish_private_oram_resharding(
+        &self,
+        resharding_key: ReshardKey,
+    ) -> CollectionResult<()> {
+        self.validate_private_oram_resharding_consensus_collection()
+            .await?;
+        self.finish_resharding_authorized(resharding_key).await
+    }
+
+    async fn finish_resharding_authorized(
+        &self,
+        resharding_key: ReshardKey,
+    ) -> CollectionResult<()> {
         let mut shard_holder = self.shards_holder.write().await;
 
         shard_holder.check_finish_resharding(&resharding_key)?;
@@ -308,6 +341,24 @@ impl Collection {
             operation_name,
             private_oram_bucket_store_collection,
         )
+    }
+
+    async fn validate_private_oram_resharding_consensus_collection(&self) -> CollectionResult<()> {
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
+        if private_oram_bucket_store_collection {
+            Ok(())
+        } else {
+            Err(CollectionError::bad_input(
+                "private ORAM resharding consensus authorization requires a private ORAM collection",
+            ))
+        }
     }
 }
 

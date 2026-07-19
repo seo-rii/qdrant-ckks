@@ -729,9 +729,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             .read()
             .validate_private_oram_resharding_operation(operation)?;
         if topology_state == PrivateOramLayoutTransitionState::Pending {
-            let apply_result = self
-                .toc
-                .perform_collection_meta_op((*operation.collection_meta).clone());
+            let apply_result = self.toc.perform_private_oram_resharding_meta_op(operation);
             if !matches!(apply_result, Ok(true))
                 && self.toc.private_oram_resharding_state(operation)?
                     != PrivateOramLayoutTransitionState::Applied
@@ -764,9 +762,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             .write()
             .compare_and_swap_private_oram_layout(&layout)?;
         if topology_state == PrivateOramLayoutTransitionState::Pending {
-            let apply_result = self
-                .toc
-                .perform_collection_meta_op((*operation.collection_meta).clone());
+            let apply_result = self.toc.perform_private_oram_resharding_meta_op(operation);
             if !matches!(apply_result, Ok(true))
                 && self.toc.private_oram_resharding_state(operation)?
                     != PrivateOramLayoutTransitionState::Applied
