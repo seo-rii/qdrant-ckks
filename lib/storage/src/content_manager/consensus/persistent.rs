@@ -20,15 +20,15 @@ use sha2::{Digest, Sha256};
 
 use crate::StorageError;
 use crate::content_manager::collection_meta_ops::{
-    CollectionMetaOperations, ShardTransferOperations,
+    CollectionMetaOperations, ReshardingOperation, ShardTransferOperations,
 };
 use crate::content_manager::consensus::entry_queue::{EntryApplyProgressQueue, EntryId};
 use crate::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
     CompareAndSwapPrivateOramSessionLease, PrivateOramCollectionLayoutTransition,
     PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramEpochKey,
-    PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramSessionLease,
-    PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
+    PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramReshardingOperation,
+    PrivateOramSessionLease, PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
     canonical_private_oram_index_state_digest, private_oram_transfer_consensus_layouts,
     private_oram_transfer_consensus_states,
 };
@@ -525,6 +525,90 @@ impl Persistent {
         Ok(())
     }
 
+    pub fn validate_private_oram_resharding_operation(
+        &self,
+        operation: &PrivateOramReshardingOperation,
+    ) -> Result<CompareAndSwapPrivateOramLayout, StorageError> {
+        let (phase, resharding_key) = match operation.collection_meta.as_ref() {
+            CollectionMetaOperations::Resharding(_, ReshardingOperation::Start(key)) => {
+                (PrivateOramReshardingPhase::Start, key)
+            }
+            CollectionMetaOperations::Resharding(_, ReshardingOperation::Finish(key)) => {
+                (PrivateOramReshardingPhase::Finish, key)
+            }
+            _ => return Err(invalid_private_oram_resharding_transition()),
+        };
+        if resharding_key != &operation.transition.resharding_key {
+            return Err(invalid_private_oram_resharding_transition());
+        }
+
+        validate_private_oram_layout_cas(&operation.transition.layout)
+            .map_err(|_| invalid_private_oram_resharding_transition())?;
+        let expected_layout = operation
+            .transition
+            .layout
+            .expected
+            .as_ref()
+            .ok_or_else(invalid_private_oram_resharding_transition)?;
+        if operation.leases.is_empty()
+            || operation.leases.len() > PRIVATE_ORAM_EPOCH_MAX_RECORDS
+            || operation.leases.len() != operation.transition.index_states.len()
+            || expected_layout.layout_digest == operation.transition.layout.new.layout_digest
+            || expected_layout.index_state_digest
+                != operation.transition.layout.new.index_state_digest
+        {
+            return Err(invalid_private_oram_resharding_transition());
+        }
+
+        let expected_lease = &operation.leases[0].lease;
+        let mut states = Vec::with_capacity(operation.transition.index_states.len());
+        let mut previous_key = None;
+        for (lease_binding, state_binding) in operation
+            .leases
+            .iter()
+            .zip(&operation.transition.index_states)
+        {
+            let key_order = private_oram_epoch_key_order(&state_binding.key);
+            if lease_binding.key != state_binding.key
+                || state_binding.key.collection_id != operation.transition.layout.key.collection_id
+                || &lease_binding.lease != expected_lease
+                || self.private_oram_session_lease(&state_binding.key).as_ref()
+                    != Some(&lease_binding.lease)
+                || self.private_oram_epoch(&state_binding.key).as_ref()
+                    != Some(&state_binding.state)
+                || previous_key
+                    .as_ref()
+                    .is_some_and(|previous| previous >= &key_order)
+            {
+                return Err(invalid_private_oram_resharding_transition());
+            }
+            previous_key = Some(key_order);
+            states.push((state_binding.key.clone(), state_binding.state.clone()));
+        }
+
+        let index_state_digest = canonical_private_oram_index_state_digest(
+            &operation.transition.layout.key.collection_id,
+            &states,
+        )
+        .map_err(|_| invalid_private_oram_resharding_transition())?;
+        if expected_layout.index_state_digest != index_state_digest {
+            return Err(invalid_private_oram_resharding_transition());
+        }
+
+        let current = self.private_oram_layout(&operation.transition.layout.key);
+        let valid_current = match phase {
+            PrivateOramReshardingPhase::Start => current.as_ref() == Some(expected_layout),
+            PrivateOramReshardingPhase::Finish => {
+                current.as_ref() == Some(expected_layout)
+                    || current.as_ref() == Some(&operation.transition.layout.new)
+            }
+        };
+        if !valid_current {
+            return Err(invalid_private_oram_resharding_transition());
+        }
+        Ok(operation.transition.layout.clone())
+    }
+
     pub fn validate_private_oram_shard_transfer_start(
         &self,
         operation: &PrivateOramShardTransferStart,
@@ -891,6 +975,12 @@ enum PrivateOramTransferOperationKind {
     Finish,
 }
 
+#[derive(Clone, Copy)]
+enum PrivateOramReshardingPhase {
+    Start,
+    Finish,
+}
+
 fn private_oram_transfer_transition(
     collection_meta: &CollectionMetaOperations,
     kind: PrivateOramTransferOperationKind,
@@ -917,6 +1007,10 @@ fn invalid_private_oram_collection_layout_transition() -> StorageError {
 
 fn invalid_private_oram_transfer_transition() -> StorageError {
     StorageError::bad_request("private ORAM shard transfer layout transition is invalid")
+}
+
+fn invalid_private_oram_resharding_transition() -> StorageError {
+    StorageError::bad_request("private ORAM resharding layout transition is invalid")
 }
 
 fn validate_private_oram_layout_key(key: &PrivateOramLayoutKey) -> Result<(), StorageError> {
@@ -1108,14 +1202,21 @@ fn validate_private_oram_consensus_digest(digest: &str) -> Result<(), StorageErr
 
 #[cfg(test)]
 mod tests {
+    use collection::operations::cluster_ops::ReshardingDirection;
+    use collection::shards::resharding::ReshardKey;
     use collection::shards::transfer::{
         PrivateOramTransferIndexKind, PrivateOramTransferIndexState,
         PrivateOramTransferLayoutState, PrivateOramTransferLayoutTransition, ShardTransfer,
         ShardTransferMethod,
     };
+    use segment::types::ShardKey;
+    use uuid::Uuid;
 
     use super::*;
-    use crate::content_manager::consensus_ops::PrivateOramLayoutLeaseBinding;
+    use crate::content_manager::consensus_ops::{
+        PrivateOramLayoutIndexStateBinding, PrivateOramLayoutLeaseBinding,
+        PrivateOramReshardingLayoutTransition,
+    };
 
     #[test]
     fn persistent_debug_redacts_peer_and_cluster_metadata_values() {
@@ -1616,6 +1717,218 @@ mod tests {
             .to_string();
         assert!(error.contains("layout transition is invalid"), "{error}");
         assert!(!error.contains(&wrong_lease.leases[0].lease.lease_id_hash));
+    }
+
+    #[test]
+    fn private_oram_resharding_validator_binds_leases_layout_and_index_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let collection_id = "qdrant-sec-resharding-collection-sentinel";
+        let index_name_sentinel = "qdrant-sec-resharding-index-sentinel";
+        let shard_key_sentinel = "qdrant-sec-resharding-shard-key-sentinel";
+        let lease_hash_sentinel = BASE64URL_NOPAD.encode(&[81; 32]);
+        let root_sentinel = BASE64URL_NOPAD.encode(&[82; 32]);
+        let hnsw_key = PrivateOramEpochKey {
+            collection_id: collection_id.to_string(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: index_name_sentinel.to_string(),
+        };
+        let result_key = PrivateOramEpochKey {
+            collection_id: collection_id.to_string(),
+            index_kind: PrivateOramIndexKind::ResultPayload,
+            index_name: String::new(),
+        };
+        let hnsw_epoch = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: root_sentinel.clone(),
+            writeback_digest: Some(BASE64URL_NOPAD.encode(&[83; 32])),
+        };
+        let result_epoch = PrivateOramConsensusEpoch {
+            index_epoch: 43,
+            root_hash: BASE64URL_NOPAD.encode(&[84; 32]),
+            writeback_digest: None,
+        };
+        let state_bindings = vec![
+            PrivateOramLayoutIndexStateBinding {
+                key: hnsw_key.clone(),
+                state: hnsw_epoch.clone(),
+            },
+            PrivateOramLayoutIndexStateBinding {
+                key: result_key.clone(),
+                state: result_epoch.clone(),
+            },
+        ];
+        let states = state_bindings
+            .iter()
+            .map(|binding| (binding.key.clone(), binding.state.clone()))
+            .collect::<Vec<_>>();
+        let index_state_digest =
+            canonical_private_oram_index_state_digest(collection_id, &states).unwrap();
+        let layout_key = PrivateOramLayoutKey {
+            collection_id: collection_id.to_string(),
+        };
+        let expected = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7],
+            layout_digest: BASE64URL_NOPAD.encode(&[85; 32]),
+            index_state_digest: index_state_digest.clone(),
+        };
+        let new = PrivateOramConsensusLayout {
+            generation: 2,
+            owner_peer_ids: vec![7, 9],
+            layout_digest: BASE64URL_NOPAD.encode(&[86; 32]),
+            index_state_digest,
+        };
+        let lease = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: lease_hash_sentinel.clone(),
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        };
+        let lease_bindings = states
+            .iter()
+            .map(|(key, _)| PrivateOramLayoutLeaseBinding {
+                key: key.clone(),
+                lease: lease.clone(),
+            })
+            .collect::<Vec<_>>();
+        let resharding_key = ReshardKey {
+            uuid: Uuid::from_u128(21),
+            direction: ReshardingDirection::Up,
+            peer_id: 9,
+            shard_id: 2,
+            shard_key: Some(ShardKey::from(shard_key_sentinel)),
+        };
+        let transition = PrivateOramReshardingLayoutTransition {
+            resharding_key: resharding_key.clone(),
+            target_shard_owner_peer_ids: vec![9],
+            layout: CompareAndSwapPrivateOramLayout {
+                key: layout_key.clone(),
+                expected: Some(expected.clone()),
+                new: new.clone(),
+            },
+            index_states: state_bindings,
+        };
+        let start = PrivateOramReshardingOperation {
+            leases: lease_bindings.clone(),
+            transition: transition.clone(),
+            collection_meta: Box::new(CollectionMetaOperations::Resharding(
+                "qdrant-sec-resharding-name-sentinel".to_string(),
+                ReshardingOperation::Start(resharding_key.clone()),
+            )),
+        };
+        let finish = PrivateOramReshardingOperation {
+            leases: lease_bindings,
+            transition,
+            collection_meta: Box::new(CollectionMetaOperations::Resharding(
+                "qdrant-sec-resharding-name-sentinel".to_string(),
+                ReshardingOperation::Finish(resharding_key.clone()),
+            )),
+        };
+
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        for (key, epoch) in &states {
+            persistent
+                .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                    key: key.clone(),
+                    expected: None,
+                    new: epoch.clone(),
+                })
+                .unwrap();
+            persistent
+                .compare_and_swap_private_oram_session_lease(
+                    &CompareAndSwapPrivateOramSessionLease {
+                        key: key.clone(),
+                        expected: None,
+                        new: Some(lease.clone()),
+                    },
+                )
+                .unwrap();
+        }
+        persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: layout_key.clone(),
+                expected: None,
+                new: expected.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            persistent
+                .validate_private_oram_resharding_operation(&start)
+                .unwrap(),
+            start.transition.layout,
+        );
+        assert_eq!(
+            persistent
+                .validate_private_oram_resharding_operation(&finish)
+                .unwrap(),
+            finish.transition.layout,
+        );
+
+        for rendered in [format!("{start:?}"), format!("{finish:?}")] {
+            for sentinel in [
+                collection_id,
+                index_name_sentinel,
+                shard_key_sentinel,
+                &lease_hash_sentinel,
+                &root_sentinel,
+                "qdrant-sec-resharding-name-sentinel",
+            ] {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
+        }
+
+        let mut wrong_lease = start.clone();
+        wrong_lease.leases[0].lease.lease_id_hash = BASE64URL_NOPAD.encode(&[87; 32]);
+        let wrong_lease_hash = wrong_lease.leases[0].lease.lease_id_hash.clone();
+        let error = persistent
+            .validate_private_oram_resharding_operation(&wrong_lease)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("resharding layout transition is invalid"));
+        assert!(!error.contains(&wrong_lease_hash));
+
+        let mut noncanonical = finish.clone();
+        noncanonical.transition.index_states.reverse();
+        assert!(
+            persistent
+                .validate_private_oram_resharding_operation(&noncanonical)
+                .unwrap_err()
+                .to_string()
+                .contains("resharding layout transition is invalid")
+        );
+
+        let mut wrong_key = start.clone();
+        let CollectionMetaOperations::Resharding(_, ReshardingOperation::Start(key)) =
+            wrong_key.collection_meta.as_mut()
+        else {
+            unreachable!();
+        };
+        key.uuid = Uuid::from_u128(22);
+        assert!(
+            persistent
+                .validate_private_oram_resharding_operation(&wrong_key)
+                .unwrap_err()
+                .to_string()
+                .contains("resharding layout transition is invalid")
+        );
+
+        persistent
+            .compare_and_swap_private_oram_layout(&finish.transition.layout)
+            .unwrap();
+        assert_eq!(
+            persistent
+                .validate_private_oram_resharding_operation(&finish)
+                .unwrap(),
+            finish.transition.layout,
+        );
+        assert!(
+            persistent
+                .validate_private_oram_resharding_operation(&start)
+                .unwrap_err()
+                .to_string()
+                .contains("resharding layout transition is invalid")
+        );
     }
 
     #[test]

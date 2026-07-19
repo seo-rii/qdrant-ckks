@@ -232,6 +232,28 @@ pub mod consensus_ops {
     }
 
     #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramReshardingOperation {
+        pub leases: Vec<PrivateOramLayoutLeaseBinding>,
+        pub transition: PrivateOramReshardingLayoutTransition,
+        pub collection_meta: Box<CollectionMetaOperations>,
+    }
+
+    impl fmt::Debug for PrivateOramReshardingOperation {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            let phase = match self.collection_meta.as_ref() {
+                CollectionMetaOperations::Resharding(_, ReshardingOperation::Start(_)) => "start",
+                CollectionMetaOperations::Resharding(_, ReshardingOperation::Finish(_)) => "finish",
+                _ => "invalid",
+            };
+            f.debug_struct("PrivateOramReshardingOperation")
+                .field("phase", &phase)
+                .field("lease_count", &self.leases.len())
+                .field("transition", &self.transition)
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
     pub struct PrivateOramLayoutLeaseBinding {
         pub key: PrivateOramEpochKey,
         pub lease: PrivateOramSessionLease,
