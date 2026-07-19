@@ -45,6 +45,7 @@ use crate::config::{
     CollectionConfigInternal, CollectionEncryptionConfig, EncryptionSelector, ShardingMethod,
 };
 use crate::operations::OperationWithClockTag;
+use crate::operations::cluster_ops::ReshardingDirection;
 use crate::operations::config_diff::{DiffConfig, OptimizersConfigDiff};
 use crate::operations::shared_storage_config::SharedStorageConfig;
 use crate::operations::types::{
@@ -59,6 +60,7 @@ use crate::shards::replica_set::replica_set_state::ReplicaState::{
     Active, Dead, Initializing, Listener,
 };
 use crate::shards::replica_set::{ChangePeerFromState, ChangePeerState, ShardReplicaSet};
+use crate::shards::resharding::{ReshardState, ReshardingStage};
 use crate::shards::shard::{PeerId, ShardId};
 use crate::shards::shard_holder::shard_mapping::ShardKeyMapping;
 use crate::shards::shard_holder::{ShardHolder, SharedShardHolder, shard_not_found_error};
@@ -697,11 +699,16 @@ impl Collection {
         );
 
         let current_state = replica_set.peer_state(peer_id);
+        let resharding_state = shard_holder.resharding_state();
 
         validate_private_oram_resharding_replica_state_until_supported(
+            shard_id,
+            peer_id,
+            replica_set.shard_key(),
             new_state,
             from_state,
             current_state,
+            resharding_state.as_ref(),
             private_oram_bucket_store_collection,
         )?;
 
@@ -1564,9 +1571,13 @@ fn validate_private_oram_automatic_transfer_recovery_layout(
 }
 
 fn validate_private_oram_resharding_replica_state_until_supported(
+    shard_id: ShardId,
+    peer_id: PeerId,
+    shard_key: Option<&ShardKey>,
     new_state: ReplicaState,
     from_state: Option<ReplicaState>,
     current_state: Option<ReplicaState>,
+    resharding_state: Option<&ReshardState>,
     private_oram_bucket_store_collection: bool,
 ) -> CollectionResult<()> {
     if !private_oram_bucket_store_collection
@@ -1575,10 +1586,30 @@ fn validate_private_oram_resharding_replica_state_until_supported(
         return Ok(());
     }
 
+    let exact_promotion = new_state == ReplicaState::Active
+        && current_state == from_state
+        && resharding_state.is_some_and(|state| {
+            state.stage == ReshardingStage::MigratingPoints
+                && state.shard_key.as_ref() == shard_key
+                && match state.direction {
+                    ReshardingDirection::Up => {
+                        from_state == Some(ReplicaState::Resharding)
+                            && shard_id == state.shard_id
+                            && peer_id == state.peer_id
+                    }
+                    ReshardingDirection::Down => {
+                        from_state == Some(ReplicaState::ReshardingScaleDown)
+                            && shard_id != state.shard_id
+                    }
+                }
+        });
+    if exact_promotion {
+        return Ok(());
+    }
+
     Err(CollectionError::bad_input(
-        "cannot change resharding replica state for private ORAM collections: collection-local \
-         encrypted ORAM buckets cannot be moved or promoted by resharding until ORAM bucket \
-         migration and consensus-backed epoch/root ownership are implemented",
+        "cannot change resharding replica state for private ORAM collections: only the exact \
+         active resharding promotion from its transitional state is allowed",
     ))
 }
 
@@ -2057,20 +2088,64 @@ mod tests {
 
     #[test]
     fn private_oram_resharding_replica_state_guard_redacts_collection_details() {
+        let up = ReshardState::new(
+            uuid::Uuid::from_u128(42),
+            ReshardingDirection::Up,
+            7,
+            3,
+            None,
+        );
+        let down = ReshardState::new(
+            uuid::Uuid::from_u128(43),
+            ReshardingDirection::Down,
+            7,
+            3,
+            None,
+        );
         validate_private_oram_resharding_replica_state_until_supported(
+            3,
+            7,
+            None,
             ReplicaState::Active,
             Some(ReplicaState::Partial),
             Some(ReplicaState::Partial),
+            None,
             true,
         )
         .unwrap();
         validate_private_oram_resharding_replica_state_until_supported(
+            3,
+            7,
+            None,
             ReplicaState::Active,
             Some(ReplicaState::Resharding),
             Some(ReplicaState::Resharding),
+            None,
             false,
         )
         .unwrap();
+        validate_private_oram_resharding_replica_state_until_supported(
+            3,
+            7,
+            None,
+            ReplicaState::Active,
+            Some(ReplicaState::Resharding),
+            Some(ReplicaState::Resharding),
+            Some(&up),
+            true,
+        )
+        .expect("exact scale-up target promotion must be allowed");
+        validate_private_oram_resharding_replica_state_until_supported(
+            2,
+            9,
+            None,
+            ReplicaState::Active,
+            Some(ReplicaState::ReshardingScaleDown),
+            Some(ReplicaState::ReshardingScaleDown),
+            Some(&down),
+            true,
+        )
+        .expect("exact scale-down receiver promotion must be allowed");
 
         for state in [
             ReplicaState::Active,
@@ -2084,9 +2159,13 @@ mod tests {
             ReplicaState::ManualRecovery,
         ] {
             validate_private_oram_resharding_replica_state_until_supported(
+                3,
+                7,
+                None,
                 state,
                 Some(state),
                 Some(state),
+                None,
                 true,
             )
             .unwrap_or_else(|err| {
@@ -2096,27 +2175,58 @@ mod tests {
             });
         }
 
-        for (new_state, from_state, current_state) in [
-            (ReplicaState::Resharding, None, None),
-            (ReplicaState::Active, Some(ReplicaState::Resharding), None),
+        let mut committed_up = up.clone();
+        committed_up.stage = ReshardingStage::ReadHashRingCommitted;
+        for (shard_id, peer_id, new_state, from_state, current_state, state) in [
+            (3, 7, ReplicaState::Resharding, None, None, Some(&up)),
             (
+                3,
+                7,
+                ReplicaState::Active,
+                Some(ReplicaState::Resharding),
+                None,
+                Some(&up),
+            ),
+            (
+                3,
+                9,
+                ReplicaState::Active,
+                Some(ReplicaState::Resharding),
+                Some(ReplicaState::Resharding),
+                Some(&up),
+            ),
+            (
+                3,
+                7,
+                ReplicaState::Active,
+                Some(ReplicaState::Resharding),
+                Some(ReplicaState::Resharding),
+                Some(&committed_up),
+            ),
+            (
+                2,
+                9,
                 ReplicaState::Dead,
                 None,
                 Some(ReplicaState::ReshardingScaleDown),
+                Some(&down),
             ),
         ] {
             let err = validate_private_oram_resharding_replica_state_until_supported(
+                shard_id,
+                peer_id,
+                None,
                 new_state,
                 from_state,
                 current_state,
+                state,
                 true,
             )
             .unwrap_err();
             let rendered = format!("{err:?}");
 
             assert!(rendered.contains("cannot change resharding replica state"));
-            assert!(rendered.contains("collection-local encrypted ORAM buckets"));
-            assert!(rendered.contains("consensus-backed epoch/root"));
+            assert!(rendered.contains("exact active resharding promotion"));
             assert!(!rendered.contains("private_hnsw_oram"));
             assert!(!rendered.contains("private_result_oram"));
             for &leaked_alias in PRIVATE_ORAM_CLIENT_STATE_REDACTION_STEMS {

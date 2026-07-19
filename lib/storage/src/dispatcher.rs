@@ -1468,15 +1468,16 @@ impl Dispatcher {
             .get_collection(&CollectionMultipass.issue_pass(collection_name))
             .await?;
         let shard_holder = collection.shards_holder().read_owned().await;
-        let owns_active_shard = shard_holder.all_shards().any(|replica_set| {
-            replica_set.peers().get(&self.toc.this_peer_id) == Some(&ReplicaState::Active)
-        });
-        if !owns_active_shard {
-            return Err(StorageError::service_error(
-                "private ORAM session coordinator must own an active shard replica",
-            ));
-        }
-        Ok(())
+        let shard_peer_states = shard_holder
+            .all_shards()
+            .map(|replica_set| replica_set.peers())
+            .collect::<Vec<_>>();
+        validate_private_oram_session_coordinator_topology(
+            &shard_peer_states,
+            self.toc.this_peer_id,
+            shard_holder.resharding_state().is_some(),
+            !shard_holder.get_transfers(|_| true).is_empty(),
+        )
     }
 
     pub async fn prepare_private_hnsw_oram_replicas(
@@ -2213,6 +2214,28 @@ fn derive_private_oram_replication_peers(
     Ok(replica_peers)
 }
 
+fn validate_private_oram_session_coordinator_topology(
+    shard_peer_states: &[HashMap<PeerId, ReplicaState>],
+    this_peer_id: PeerId,
+    resharding_active: bool,
+    shard_transfer_active: bool,
+) -> Result<(), StorageError> {
+    if resharding_active || shard_transfer_active {
+        return Err(StorageError::service_error(
+            "private ORAM sessions require a stable shard topology",
+        ));
+    }
+    if shard_peer_states
+        .iter()
+        .any(|peers| peers.get(&this_peer_id) == Some(&ReplicaState::Active))
+    {
+        return Ok(());
+    }
+    Err(StorageError::service_error(
+        "private ORAM session coordinator must own an active shard replica",
+    ))
+}
+
 fn current_private_oram_unix_secs() -> Result<u64, StorageError> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -2528,6 +2551,34 @@ mod tests {
             .to_string();
         assert!(local_missing.contains("coordinator must own an active shard replica"));
         assert!(!local_missing.contains("11"));
+    }
+
+    #[test]
+    fn private_oram_session_coordinator_requires_stable_topology() {
+        let states = [HashMap::from([
+            (7, ReplicaState::Active),
+            (9, ReplicaState::Resharding),
+        ])];
+        validate_private_oram_session_coordinator_topology(&states, 7, false, false).unwrap();
+
+        for (resharding_active, shard_transfer_active) in [(true, false), (false, true)] {
+            let error = validate_private_oram_session_coordinator_topology(
+                &states,
+                7,
+                resharding_active,
+                shard_transfer_active,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("stable shard topology"));
+            assert!(!error.contains('7'));
+        }
+
+        let error = validate_private_oram_session_coordinator_topology(&states, 11, false, false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("coordinator must own an active shard replica"));
+        assert!(!error.contains("11"));
     }
 
     #[test]

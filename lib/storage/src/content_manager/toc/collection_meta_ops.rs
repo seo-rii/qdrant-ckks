@@ -995,15 +995,19 @@ fn reject_private_oram_resharding_until_supported(
     operation: &ReshardingOperation,
 ) -> Result<(), StorageError> {
     if !collection_params_use_private_oram_bucket_store(params)
-        || matches!(operation, ReshardingOperation::Abort(_))
+        || matches!(
+            operation,
+            ReshardingOperation::CommitRead(_)
+                | ReshardingOperation::CommitWrite(_)
+                | ReshardingOperation::Abort(_)
+        )
     {
         return Ok(());
     }
 
     Err(StorageError::bad_input(format!(
-        "private ORAM resharding is not supported for private ORAM collections: \
-         encrypted ORAM bucket migration and consensus-backed epoch/root ownership are not \
-         implemented; keep the private ORAM collection on the current shard layout",
+        "private ORAM resharding start and finish require the typed private ORAM coordinator \
+         with encrypted bucket installation and consensus-backed layout ownership",
     )))
 }
 
@@ -1047,11 +1051,18 @@ fn reject_private_oram_resharding_replica_state_until_supported(
         return Ok(());
     }
 
+    if operation.state == ReplicaState::Active
+        && matches!(
+            operation.from_state,
+            Some(ReplicaState::Resharding | ReplicaState::ReshardingScaleDown)
+        )
+    {
+        return Ok(());
+    }
+
     Err(StorageError::bad_input(format!(
-        "private ORAM resharding replica state progress is not supported for private ORAM \
-         collections: encrypted ORAM bucket migration and consensus-backed epoch/root ownership \
-         are not implemented; abort resharding or keep the private ORAM collection on the \
-         current shard layout",
+        "private ORAM resharding replica state progress permits only an exact transitional-to-active \
+         promotion that is validated against the active resharding state",
     )))
 }
 
@@ -1890,7 +1901,7 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_consensus_resharding_progress_fails_closed_until_bucket_migration_exists() {
+    fn private_oram_consensus_resharding_apply_authority_is_phase_scoped() {
         let private_hnsw_params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
@@ -1934,35 +1945,34 @@ mod tests {
             shard_id: 1,
             shard_key: None,
         };
-        let progressing_operations = [
-            ReshardingOperation::Start(key.clone()),
-            ReshardingOperation::CommitRead(key.clone()),
-            ReshardingOperation::CommitWrite(key.clone()),
-            ReshardingOperation::Finish(key.clone()),
-        ];
-
         for (label, params) in [
             ("private HNSW ORAM", private_hnsw_params),
             ("private result ORAM", private_result_params),
         ] {
-            for operation in &progressing_operations {
+            for operation in [
+                ReshardingOperation::Start(key.clone()),
+                ReshardingOperation::Finish(key.clone()),
+            ] {
                 let err =
-                    reject_private_oram_resharding_until_supported("docs", &params, operation)
-                        .expect_err("private ORAM resharding progress must fail closed");
+                    reject_private_oram_resharding_until_supported("docs", &params, &operation)
+                        .expect_err("ordinary private ORAM start and finish must fail closed");
                 assert!(
-                    err.to_string().contains("private ORAM resharding")
-                        && err.to_string().contains("encrypted ORAM bucket migration"),
+                    err.to_string()
+                        .contains("private ORAM resharding start and finish")
+                        && err.to_string().contains("typed private ORAM coordinator"),
                     "unexpected {label} resharding error for {operation:?}: {err}",
                 );
                 assert_private_oram_consensus_guard_redacts_config(&err.to_string());
             }
 
-            reject_private_oram_resharding_until_supported(
-                "docs",
-                &params,
-                &ReshardingOperation::Abort(key.clone()),
-            )
-            .expect("abort must remain available to clean up unsupported private ORAM resharding");
+            for operation in [
+                ReshardingOperation::CommitRead(key.clone()),
+                ReshardingOperation::CommitWrite(key.clone()),
+                ReshardingOperation::Abort(key.clone()),
+            ] {
+                reject_private_oram_resharding_until_supported("docs", &params, &operation)
+                    .expect("bounded private ORAM resharding progress must remain available");
+            }
 
             for operation in [
                 ReshardingOperation::Start(key.clone()),
@@ -2001,16 +2011,26 @@ mod tests {
                 state: ReplicaState::Active,
                 from_state: Some(ReplicaState::Resharding),
             };
-            let err = reject_private_oram_resharding_replica_state_until_supported(
+            reject_private_oram_resharding_replica_state_until_supported(
                 "docs",
                 &params,
                 &replica_progress,
             )
-            .expect_err("private ORAM resharding replica-state progress must fail closed");
+            .expect("transitional-to-active promotion shape must pass the TOC guard");
+            let invalid_replica_progress = SetShardReplicaState {
+                state: ReplicaState::Dead,
+                ..replica_progress
+            };
+            let err = reject_private_oram_resharding_replica_state_until_supported(
+                "docs",
+                &params,
+                &invalid_replica_progress,
+            )
+            .expect_err("other private ORAM resharding replica-state changes must fail closed");
             assert!(
                 err.to_string()
                     .contains("private ORAM resharding replica state progress")
-                    && err.to_string().contains("encrypted ORAM bucket migration"),
+                    && err.to_string().contains("transitional-to-active"),
                 "unexpected {label} replica-state error: {err}",
             );
             assert_private_oram_consensus_guard_redacts_config(&err.to_string());

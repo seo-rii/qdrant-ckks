@@ -115,9 +115,6 @@ impl Collection {
     }
 
     pub async fn commit_read_hashring(&self, resharding_key: &ReshardKey) -> CollectionResult<()> {
-        self.validate_private_oram_resharding_operation_until_supported("commit read hash ring")
-            .await?;
-
         let mut shards_holder = self.shards_holder.write().await;
 
         shards_holder.commit_read_hashring(resharding_key)?;
@@ -151,9 +148,6 @@ impl Collection {
     }
 
     pub async fn commit_write_hashring(&self, resharding_key: &ReshardKey) -> CollectionResult<()> {
-        self.validate_private_oram_resharding_operation_until_supported("commit write hash ring")
-            .await?;
-
         self.shards_holder
             .write()
             .await
@@ -371,8 +365,8 @@ fn validate_private_oram_resharding_until_supported(
     }
 
     Err(CollectionError::bad_input(
-        "cannot proceed with resharding for private ORAM collections: encrypted ORAM bucket migration \
-         and consensus-backed epoch/root ownership are not implemented for resharding",
+        "ordinary private ORAM resharding start and finish are not authorized; use the typed \
+         private ORAM consensus coordinator",
     ))
 }
 
@@ -382,7 +376,6 @@ mod tests {
 
     const PRIVATE_ORAM_RESHARDING_OPERATION_NAMES: &[&str] = &[
         "start resharding",
-        "commit read hash ring",
         "private-resharding-operation-sentinel",
         "stashBackup.json",
         "stashBackups.json",
@@ -576,11 +569,8 @@ mod tests {
                 validate_private_oram_resharding_until_supported(operation_name, true).unwrap_err();
             let rendered = format!("{err:?}");
 
-            assert!(
-                rendered.contains("cannot proceed with resharding for private ORAM collections")
-            );
-            assert!(rendered.contains("encrypted ORAM bucket migration"));
-            assert!(rendered.contains("consensus-backed epoch/root"));
+            assert!(rendered.contains("ordinary private ORAM resharding start and finish"));
+            assert!(rendered.contains("typed private ORAM consensus coordinator"));
             assert!(!rendered.contains(operation_name));
             assert!(!rendered.contains("private_hnsw_oram"));
             assert!(!rendered.contains("private_result_oram"));
