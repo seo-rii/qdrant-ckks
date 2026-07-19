@@ -977,6 +977,7 @@ impl Collection {
 
         // Check for un-reported finished transfers
         let outgoing_transfers = shard_holder.get_outgoing_transfers(self.this_peer_id);
+        let resharding_state = shard_holder.resharding_state();
         let tasks_lock = self.transfer_tasks.lock().await;
         for transfer in outgoing_transfers {
             match tasks_lock
@@ -984,6 +985,17 @@ impl Collection {
                 .map(|s| s.result)
             {
                 None => {
+                    if private_oram_resharding_transfer_requires_exact_restart(
+                        private_oram_bucket_store_collection,
+                        &transfer,
+                        resharding_state.as_ref(),
+                        self.this_peer_id,
+                    ) {
+                        log::warn!(
+                            "Private ORAM resharding transfer task is missing; preserving the active transfer until an exact restart request re-preinstalls its encrypted stores",
+                        );
+                        continue;
+                    }
                     log::debug!(
                         "Transfer {:?} does not exist, but not reported as cancelled. Reporting now.",
                         transfer.key(),
@@ -1220,6 +1232,30 @@ impl Collection {
         }
 
         Ok(())
+    }
+
+    /// Whether a source peer restart must preserve an active private ORAM reshard transfer until
+    /// the source submits the exact restart request that re-preinstalls the encrypted stores.
+    pub async fn should_preserve_private_oram_transfer_on_peer_restart(
+        &self,
+        transfer: &ShardTransfer,
+        restarted_peer_id: PeerId,
+    ) -> bool {
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
+        let resharding_state = self.resharding_state().await;
+        private_oram_resharding_transfer_requires_exact_restart(
+            private_oram_bucket_store_collection,
+            transfer,
+            resharding_state.as_ref(),
+            restarted_peer_id,
+        )
     }
 
     pub async fn get_aggregated_telemetry_data(
@@ -1568,6 +1604,18 @@ fn validate_private_oram_automatic_transfer_recovery_layout(
         "automatic shard transfer recovery for private ORAM collections requires the configured \
          stable shard layout",
     ))
+}
+
+fn private_oram_resharding_transfer_requires_exact_restart(
+    private_oram_bucket_store_collection: bool,
+    transfer: &ShardTransfer,
+    resharding_state: Option<&ReshardState>,
+    restarted_peer_id: PeerId,
+) -> bool {
+    private_oram_bucket_store_collection
+        && transfer.from == restarted_peer_id
+        && transfer.is_resharding()
+        && transfer.is_private_oram_preinstalled_transfer_for(resharding_state)
 }
 
 fn validate_private_oram_resharding_replica_state_until_supported(
@@ -2084,6 +2132,59 @@ mod tests {
             )
             .unwrap_err();
         }
+    }
+
+    #[test]
+    fn private_oram_resharding_transfer_restart_preservation_is_source_and_marker_bounded() {
+        let state = ReshardState::new(uuid::Uuid::nil(), ReshardingDirection::Up, 22, 9, None);
+        let transfer = ShardTransfer {
+            shard_id: 7,
+            to_shard_id: Some(9),
+            from: 11,
+            to: 22,
+            sync: true,
+            method: Some(ShardTransferMethod::ReshardingStreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
+            filter: None,
+        };
+
+        assert!(private_oram_resharding_transfer_requires_exact_restart(
+            true,
+            &transfer,
+            Some(&state),
+            transfer.from,
+        ));
+        assert!(!private_oram_resharding_transfer_requires_exact_restart(
+            false,
+            &transfer,
+            Some(&state),
+            transfer.from,
+        ));
+        assert!(!private_oram_resharding_transfer_requires_exact_restart(
+            true,
+            &transfer,
+            Some(&state),
+            transfer.to,
+        ));
+        assert!(!private_oram_resharding_transfer_requires_exact_restart(
+            true,
+            &ShardTransfer {
+                private_oram_preinstalled: false,
+                ..transfer.clone()
+            },
+            Some(&state),
+            transfer.from,
+        ));
+
+        let mut advanced_state = state;
+        advanced_state.stage = ReshardingStage::ReadHashRingCommitted;
+        assert!(!private_oram_resharding_transfer_requires_exact_restart(
+            true,
+            &transfer,
+            Some(&advanced_state),
+            transfer.from,
+        ));
     }
 
     #[test]

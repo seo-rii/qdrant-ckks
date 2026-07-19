@@ -677,6 +677,18 @@ impl TableOfContent {
         if let Some(proposal_sender) = &self.consensus_proposal_sender {
             for collection in collections.values() {
                 for transfer in collection.get_related_transfers(self.this_peer_id).await {
+                    if collection
+                        .should_preserve_private_oram_transfer_on_peer_restart(
+                            &transfer,
+                            self.this_peer_id,
+                        )
+                        .await
+                    {
+                        log::warn!(
+                            "Preserving an active private ORAM resharding transfer after its source peer restarted; an exact restart request is required",
+                        );
+                        continue;
+                    }
                     let cancel_transfer = ConsensusOperations::abort_transfer(
                         collection.name().to_string(),
                         transfer,

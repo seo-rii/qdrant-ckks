@@ -1635,6 +1635,117 @@ def test_private_oram_resharding_restart_repreinstalls_and_completes(
         _assert_private_oram_owner_sessions(owner_url, fixture, True)
 
 
+def test_private_oram_resharding_source_crash_preserves_exact_restart(
+    tmp_path: pathlib.Path,
+):
+    extra_env = {
+        "QDRANT__CLUSTER__RESHARDING_ENABLED": "true",
+        "QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "5",
+    }
+    peer_urls, peer_dirs, fixture, leader, _ = _start_private_oram_cluster(
+        tmp_path,
+        2,
+        1,
+        include_public_vector=True,
+        extra_env=extra_env,
+    )
+    skip_if_no_feature(peer_urls[0], "staging")
+    source_index, target_index, source_url, target_url, source_info, target_info = (
+        _private_oram_transfer_peers(peer_urls)
+    )
+    source_peer_id = source_info["peer_id"]
+    target_peer_id = target_info["peer_id"]
+    source_shard_id = source_info["local_shards"][0]["shard_id"]
+    target_shard_id = source_shard_id + 1
+
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    _upload_result_oram(source_url, fixture)
+    _exercise_result_owner_session(source_url, fixture)
+
+    assert_http_ok(
+        start_resharding(
+            source_url,
+            collection=COLLECTION,
+            direction="up",
+            peer_id=target_peer_id,
+        )
+    )
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
+    assert_http_ok(
+        _request_private_oram_resharding_transfer(
+            source_url,
+            "replicate_shard",
+            source_shard_id,
+            target_shard_id,
+            source_peer_id,
+            target_peer_id,
+        )
+    )
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
+
+    source_port = processes[source_index].p2p_port
+    restart_bootstrap_uri = get_uri(processes[target_index].p2p_port)
+    processes.pop(source_index).kill()
+    restarted_url = start_peer(
+        peer_dirs[source_index],
+        "private_oram_resharding_source_restarted.log",
+        restart_bootstrap_uri,
+        port=source_port,
+        extra_env=extra_env,
+    )
+    source_url = restarted_url
+    peer_urls[source_index] = restarted_url
+    wait_for_peer_online(restarted_url, path="/cluster")
+    wait_for_uniform_cluster_status(peer_urls, leader)
+
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
+    _wait_for_private_oram_layout(peer_dirs, 1, [source_peer_id])
+    _assert_private_oram_sessions_blocked_during_resharding(source_url, fixture, True)
+
+    collection_path = (
+        peer_dirs[target_index] / "storage" / "collections" / COLLECTION
+    )
+    hnsw_store = collection_path / "private_hnsw_oram"
+    result_store = collection_path / "private_result_oram"
+    shutil.rmtree(hnsw_store)
+    shutil.rmtree(result_store)
+
+    assert_http_ok(
+        _request_private_oram_resharding_transfer(
+            source_url,
+            "restart_transfer",
+            source_shard_id,
+            target_shard_id,
+            source_peer_id,
+            target_peer_id,
+        )
+    )
+    assert (hnsw_store / VECTOR / "buckets").is_dir()
+    assert (result_store / "buckets").is_dir()
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 0)
+
+    activate_replica(
+        source_url,
+        target_peer_id,
+        target_shard_id,
+        collection=COLLECTION,
+    )
+    assert_http_ok(commit_read_hashring(source_url, collection=COLLECTION))
+    assert_http_ok(commit_write_hashring(source_url, collection=COLLECTION))
+    assert_http_ok(finish_resharding(source_url, collection=COLLECTION))
+
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _wait_for_private_oram_layout(peer_dirs, 2, [source_peer_id, target_peer_id])
+    for owner_url in [source_url, target_url]:
+        _assert_private_oram_owner_sessions(owner_url, fixture, True)
+
+
 @pytest.mark.parametrize("index_kind", ["hnsw", "result"])
 def test_private_oram_replica_prepare_failure_preserves_epoch(
     tmp_path: pathlib.Path, index_kind: str
