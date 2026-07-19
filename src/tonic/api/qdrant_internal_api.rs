@@ -34,6 +34,7 @@ use collection::private_result_oram_store::{
     PrivateResultOramLiveReplicationBundle, PrivateResultOramWritebackBatch,
 };
 use collection::shards::replica_set::replica_set_state::ReplicaState;
+use collection::shards::resharding::ReshardKey;
 use collection::shards::shard::{PeerId, ShardId};
 use collection::shards::transfer::{
     PrivateOramTransferIndexKind, PrivateOramTransferIndexState, PrivateOramTransferLayoutState,
@@ -51,13 +52,16 @@ use qdrant_sec::{
 use sha2::{Digest, Sha256};
 use storage::audit::AuditConfig;
 use storage::audit_reader::{AuditLogQuery, read_local_audit_logs};
-use storage::content_manager::collection_meta_ops::CollectionMetaOperations;
+use storage::content_manager::collection_meta_ops::{
+    CollectionMetaOperations, ReshardingOperation,
+};
 use storage::content_manager::consensus_manager::ConsensusStateRef;
 use storage::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramSessionLease,
     PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
-    PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramSessionLease,
-    PrivateOramShardTransferStart, private_oram_index_keys_for_config,
+    PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramLayoutKey,
+    PrivateOramReshardingOperation, PrivateOramSessionLease, PrivateOramShardTransferStart,
+    private_oram_index_keys_for_config,
 };
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
@@ -866,6 +870,72 @@ pub(crate) async fn private_oram_shard_transfer_start_operation(
         collection_meta: Box::new(CollectionMetaOperations::TransferShard(
             collection_name.to_string(),
             storage::content_manager::collection_meta_ops::ShardTransferOperations::Start(transfer),
+        )),
+    })
+}
+
+pub(crate) async fn private_oram_resharding_start_operation(
+    dispatcher: &Dispatcher,
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    reservation: &PrivateOramTransferReservation,
+    resharding_key: ReshardKey,
+) -> Result<PrivateOramReshardingOperation, StorageError> {
+    let keys = private_oram_transfer_index_keys(config, collection_name)?;
+    if keys.is_empty() || keys != reservation.keys {
+        return Err(StorageError::bad_request(
+            "private ORAM resharding layout transition is invalid",
+        ));
+    }
+    let collection_id = config.stable_crypto_id(collection_name).map_err(|_| {
+        StorageError::bad_request("private ORAM resharding layout transition is invalid")
+    })?;
+    let layout_key = PrivateOramLayoutKey {
+        collection_id: collection_id.clone(),
+    };
+    let existing = dispatcher.private_oram_consensus_layout(&layout_key)?;
+    let generation = existing.as_ref().map_or(1, |layout| layout.generation);
+    let lease_id_hash = private_oram_session_lease_hash(&reservation.session_id)?;
+    let (transition, leases) = dispatcher
+        .private_oram_reserved_resharding_start_transition(
+            &collection_name.to_string(),
+            &collection_id,
+            &keys,
+            &lease_id_hash,
+            generation,
+            &resharding_key,
+        )
+        .await?;
+    let captured_current = transition.layout.expected.as_ref().ok_or_else(|| {
+        StorageError::bad_request("private ORAM resharding layout transition is invalid")
+    })?;
+    match existing {
+        Some(existing) if &existing == captured_current => {}
+        Some(_) => {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus layout state does not match the stable collection layout",
+            ));
+        }
+        None => {
+            dispatcher
+                .submit_private_oram_layout_cas(
+                    CompareAndSwapPrivateOramLayout {
+                        key: layout_key,
+                        expected: None,
+                        new: captured_current.clone(),
+                    },
+                    None,
+                )
+                .await?;
+        }
+    }
+
+    Ok(PrivateOramReshardingOperation {
+        leases,
+        transition,
+        collection_meta: Box::new(CollectionMetaOperations::Resharding(
+            collection_name.to_string(),
+            ReshardingOperation::Start(resharding_key),
         )),
     })
 }

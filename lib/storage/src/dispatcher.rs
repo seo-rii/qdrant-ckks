@@ -21,6 +21,7 @@ use collection::private_result_oram_store::{
     PrivateResultOramConsensusWriteback, PrivateResultOramWritebackBatch,
 };
 use collection::shards::replica_set::replica_set_state::ReplicaState;
+use collection::shards::resharding::ReshardKey;
 use collection::shards::shard::{PeerId, ShardId};
 use collection::shards::transfer::ShardTransfer;
 use common::counter::hardware_accumulator::HwSharedDrain;
@@ -35,9 +36,12 @@ use crate::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
     CompareAndSwapPrivateOramSessionLease, PrivateOramCollectionLayoutTransition,
     PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramEpochKey,
-    PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding,
-    PrivateOramSessionLease, PrivateOramShardLayoutEntry, PrivateOramShardTransferStart,
-    canonical_private_oram_index_state_digest, canonical_private_oram_shard_layout_digest,
+    PrivateOramIndexKind, PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey,
+    PrivateOramLayoutLeaseBinding, PrivateOramReshardingLayoutTransition,
+    PrivateOramReshardingOperation, PrivateOramSessionLease, PrivateOramShardLayoutEntry,
+    PrivateOramShardTransferStart, canonical_private_oram_index_state_digest,
+    canonical_private_oram_resharding_post_layout_digest,
+    canonical_private_oram_shard_layout_digest,
     canonical_private_oram_shard_transfer_post_layout_digest,
 };
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
@@ -443,6 +447,46 @@ impl Dispatcher {
         consensus_state
             .propose_consensus_op_with_await(
                 ConsensusOperations::StartPrivateOramShardTransfer(operation),
+                wait_timeout,
+            )
+            .await
+    }
+
+    pub async fn submit_private_oram_resharding_start(
+        &self,
+        operation: PrivateOramReshardingOperation,
+        auth: Auth,
+        wait_timeout: Option<Duration>,
+    ) -> Result<bool, StorageError> {
+        auth.check_collection_meta_operation(&operation.collection_meta)?;
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM resharding layout transition requires distributed mode",
+            )
+        })?;
+        consensus_state
+            .propose_consensus_op_with_await(
+                ConsensusOperations::StartPrivateOramResharding(operation),
+                wait_timeout,
+            )
+            .await
+    }
+
+    pub async fn submit_private_oram_resharding_finish(
+        &self,
+        operation: PrivateOramReshardingOperation,
+        auth: Auth,
+        wait_timeout: Option<Duration>,
+    ) -> Result<bool, StorageError> {
+        auth.check_collection_meta_operation(&operation.collection_meta)?;
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM resharding layout transition requires distributed mode",
+            )
+        })?;
+        consensus_state
+            .propose_consensus_op_with_await(
+                ConsensusOperations::FinishPrivateOramResharding(operation),
                 wait_timeout,
             )
             .await
@@ -1092,6 +1136,161 @@ impl Dispatcher {
             index_state_digest,
         };
         Ok((current, new, leases, states))
+    }
+
+    pub async fn private_oram_reserved_resharding_start_transition(
+        &self,
+        collection_name: &CollectionName,
+        collection_id: &str,
+        keys: &[PrivateOramEpochKey],
+        reservation_lease_id_hash: &str,
+        generation: u64,
+        resharding_key: &ReshardKey,
+    ) -> Result<
+        (
+            PrivateOramReshardingLayoutTransition,
+            Vec<PrivateOramLayoutLeaseBinding>,
+        ),
+        StorageError,
+    > {
+        let current = self
+            .private_oram_reserved_layout_candidate(
+                collection_name,
+                collection_id,
+                keys,
+                reservation_lease_id_hash,
+                generation,
+                None,
+            )
+            .await?;
+        let collection = self
+            .toc
+            .get_collection(&CollectionMultipass.issue_pass(collection_name))
+            .await?;
+        let config = collection.config_snapshot().await;
+        if config
+            .stable_crypto_id(collection_name)
+            .map_err(|_| invalid_private_oram_resharding_layout_transition())?
+            != collection_id
+        {
+            return Err(invalid_private_oram_resharding_layout_transition());
+        }
+
+        let shard_holder = collection.shards_holder().read_owned().await;
+        if shard_holder.resharding_state().is_some()
+            || !shard_holder.get_transfers(|_| true).is_empty()
+        {
+            return Err(invalid_private_oram_resharding_layout_transition());
+        }
+        let mut entries = Vec::new();
+        for (shard_id, replica_set) in shard_holder.get_shards() {
+            let peers = replica_set.peers();
+            if peers.is_empty() || peers.values().any(|state| *state != ReplicaState::Active) {
+                return Err(invalid_private_oram_resharding_layout_transition());
+            }
+            entries.push(PrivateOramShardLayoutEntry {
+                shard_id,
+                shard_key: replica_set.shard_key().cloned(),
+                owner_peer_ids: peers.keys().copied().collect(),
+            });
+        }
+        let sharding_method = shard_holder.get_sharding_method();
+        let (current_owners, current_layout_digest) =
+            canonical_private_oram_shard_layout_digest(collection_id, sharding_method, &entries)
+                .map_err(|_| invalid_private_oram_resharding_layout_transition())?;
+        if current.owner_peer_ids != current_owners
+            || current.layout_digest != current_layout_digest
+            || !current_owners.contains(&self.toc.this_peer_id)
+        {
+            return Err(invalid_private_oram_resharding_layout_transition());
+        }
+        let target_shard_owner_peer_ids = match resharding_key.direction {
+            collection::operations::cluster_ops::ReshardingDirection::Up => {
+                vec![resharding_key.peer_id]
+            }
+            collection::operations::cluster_ops::ReshardingDirection::Down => {
+                let mut owners = entries
+                    .iter()
+                    .find(|entry| entry.shard_id == resharding_key.shard_id)
+                    .filter(|entry| entry.shard_key == resharding_key.shard_key)
+                    .map(|entry| entry.owner_peer_ids.clone())
+                    .ok_or_else(invalid_private_oram_resharding_layout_transition)?;
+                owners.sort_unstable();
+                if !owners.contains(&resharding_key.peer_id) {
+                    return Err(invalid_private_oram_resharding_layout_transition());
+                }
+                owners
+            }
+        };
+        let (new_owner_peer_ids, new_layout_digest) =
+            canonical_private_oram_resharding_post_layout_digest(
+                collection_id,
+                sharding_method,
+                &entries,
+                resharding_key,
+            )
+            .map_err(|_| invalid_private_oram_resharding_layout_transition())?;
+        drop(shard_holder);
+        if !new_owner_peer_ids.contains(&self.toc.this_peer_id) {
+            return Err(invalid_private_oram_resharding_layout_transition());
+        }
+
+        let now_unix = current_private_oram_unix_secs()?;
+        let mut states = Vec::with_capacity(keys.len());
+        let mut leases = Vec::with_capacity(keys.len());
+        for key in keys {
+            let lease = self
+                .private_oram_consensus_session_lease(key)?
+                .ok_or_else(invalid_private_oram_layout_reservation)?;
+            if !private_oram_layout_reservation_matches(
+                &lease,
+                self.toc.this_peer_id,
+                reservation_lease_id_hash,
+                now_unix,
+            ) {
+                return Err(invalid_private_oram_layout_reservation());
+            }
+            let state = self.private_oram_consensus_epoch(key)?.ok_or_else(|| {
+                StorageError::bad_request("private ORAM consensus layout index state is incomplete")
+            })?;
+            states.push((key.clone(), state.clone()));
+            leases.push(PrivateOramLayoutLeaseBinding {
+                key: key.clone(),
+                lease,
+            });
+        }
+        let index_state_digest = canonical_private_oram_index_state_digest(collection_id, &states)
+            .map_err(|_| invalid_private_oram_resharding_layout_transition())?;
+        if current.index_state_digest != index_state_digest {
+            return Err(invalid_private_oram_layout_reservation());
+        }
+        let new = PrivateOramConsensusLayout {
+            generation: generation
+                .checked_add(1)
+                .ok_or_else(invalid_private_oram_resharding_layout_transition)?,
+            owner_peer_ids: new_owner_peer_ids,
+            layout_digest: new_layout_digest,
+            index_state_digest,
+        };
+
+        Ok((
+            PrivateOramReshardingLayoutTransition {
+                resharding_key: resharding_key.clone(),
+                target_shard_owner_peer_ids,
+                layout: CompareAndSwapPrivateOramLayout {
+                    key: PrivateOramLayoutKey {
+                        collection_id: collection_id.to_string(),
+                    },
+                    expected: Some(current),
+                    new,
+                },
+                index_states: states
+                    .into_iter()
+                    .map(|(key, state)| PrivateOramLayoutIndexStateBinding { key, state })
+                    .collect(),
+            },
+            leases,
+        ))
     }
 
     /// Require this peer to own at least one active shard replica before it coordinates a
@@ -1883,6 +2082,10 @@ fn invalid_private_oram_layout_reservation() -> StorageError {
 
 fn invalid_private_oram_layout_transition() -> StorageError {
     StorageError::bad_request("private ORAM collection layout transition is invalid")
+}
+
+fn invalid_private_oram_resharding_layout_transition() -> StorageError {
+    StorageError::bad_request("private ORAM resharding layout transition is invalid")
 }
 
 fn validate_private_oram_writeback_digest(digest: &str) -> Result<(), StorageError> {

@@ -52,8 +52,8 @@ use super::private_result_oram::begin_private_result_oram_collection_snapshot;
 use crate::settings::Settings;
 use crate::tonic::api::qdrant_internal_api::{
     prepare_private_oram_replica_removal, prepare_private_oram_shard_transfer,
-    private_oram_replica_removal_layout_transition, private_oram_shard_transfer_start_operation,
-    release_private_oram_transfer_reservation,
+    private_oram_replica_removal_layout_transition, private_oram_resharding_start_operation,
+    private_oram_shard_transfer_start_operation, release_private_oram_transfer_reservation,
 };
 pub async fn do_collection_exists(
     toc: &TableOfContent,
@@ -894,22 +894,36 @@ pub async fn do_update_collection_cluster(
                 )));
             }
 
-            dispatcher
-                .submit_collection_meta_op(
-                    CollectionMetaOperations::Resharding(
-                        collection_name.clone(),
-                        ReshardingOperation::Start(ReshardKey {
-                            uuid,
-                            direction,
-                            peer_id,
-                            shard_id,
-                            shard_key,
-                        }),
-                    ),
+            let resharding_key = ReshardKey {
+                uuid,
+                direction,
+                peer_id,
+                shard_id,
+                shard_key,
+            };
+            if collection_uses_private_oram_bucket_store(&collection_state.config) {
+                submit_private_oram_resharding_start_with_preinstall(
+                    dispatcher,
+                    settings,
+                    &collection_state.config,
+                    collection_name,
+                    resharding_key,
                     auth,
                     wait_timeout,
                 )
                 .await
+            } else {
+                dispatcher
+                    .submit_collection_meta_op(
+                        CollectionMetaOperations::Resharding(
+                            collection_name,
+                            ReshardingOperation::Start(resharding_key),
+                        ),
+                        auth,
+                        wait_timeout,
+                    )
+                    .await
+            }
         }
         ClusterOperations::AbortResharding(_) => {
             // TODO(reshading): Deduplicate resharding operations handling?
@@ -1160,6 +1174,79 @@ async fn submit_shard_transfer_with_private_oram_preinstall(
     } else {
         log::warn!(
             "retaining private ORAM shard transfer reservation after uncertain consensus submission"
+        );
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn submit_private_oram_resharding_start_with_preinstall(
+    dispatcher: &Dispatcher,
+    settings: &Settings,
+    config: &CollectionConfigInternal,
+    collection_name: String,
+    resharding_key: ReshardKey,
+    auth: Auth,
+    wait_timeout: Option<Duration>,
+) -> Result<bool, StorageError> {
+    let reservation = match resharding_key.direction {
+        ReshardingDirection::Up => {
+            prepare_private_oram_shard_transfer(
+                dispatcher,
+                &auth,
+                settings,
+                &collection_name,
+                config,
+                resharding_key.peer_id,
+            )
+            .await?
+        }
+        ReshardingDirection::Down => {
+            prepare_private_oram_replica_removal(
+                dispatcher,
+                &auth,
+                settings,
+                &collection_name,
+                config,
+            )
+            .await?
+        }
+    };
+    let operation = private_oram_resharding_start_operation(
+        dispatcher,
+        &collection_name,
+        config,
+        &reservation,
+        resharding_key,
+    )
+    .await;
+    let operation = match operation {
+        Ok(operation) => operation,
+        Err(error) => {
+            if release_private_oram_transfer_reservation(dispatcher, &reservation)
+                .await
+                .is_err()
+            {
+                log::warn!(
+                    "failed to release private ORAM resharding reservation after layout transition preparation failure"
+                );
+            }
+            return Err(error);
+        }
+    };
+    let result = dispatcher
+        .submit_private_oram_resharding_start(operation, auth, wait_timeout)
+        .await;
+    if result.is_ok() {
+        if release_private_oram_transfer_reservation(dispatcher, &reservation)
+            .await
+            .is_err()
+        {
+            log::warn!("failed to release private ORAM resharding start reservation");
+        }
+    } else {
+        log::warn!(
+            "retaining private ORAM resharding start reservation after uncertain consensus submission"
         );
     }
     result
