@@ -123,6 +123,16 @@ impl fmt::Debug for Persistent {
 }
 
 impl Persistent {
+    pub fn validate_private_oram_snapshot_state(
+        private_oram_epochs: &HashMap<String, PrivateOramConsensusEpoch>,
+        private_oram_session_leases: &HashMap<String, PrivateOramSessionLease>,
+        private_oram_layouts: &HashMap<String, PrivateOramConsensusLayout>,
+    ) -> Result<(), StorageError> {
+        validate_private_oram_epoch_snapshot(private_oram_epochs)?;
+        validate_private_oram_session_lease_snapshot(private_oram_session_leases)?;
+        validate_private_oram_layout_snapshot(private_oram_layouts)
+    }
+
     pub fn state(&self) -> &RaftState {
         &self.state
     }
@@ -874,7 +884,7 @@ impl Persistent {
     }
 }
 
-fn private_oram_epoch_key_digest(key: &PrivateOramEpochKey) -> String {
+pub(crate) fn private_oram_epoch_key_digest(key: &PrivateOramEpochKey) -> String {
     let mut hasher = Sha256::new();
     hasher.update(PRIVATE_ORAM_EPOCH_KEY_DOMAIN);
     update_length_prefixed(&mut hasher, key.collection_id.as_bytes());
@@ -886,11 +896,25 @@ fn private_oram_epoch_key_digest(key: &PrivateOramEpochKey) -> String {
     BASE64URL_NOPAD.encode(&hasher.finalize())
 }
 
-fn private_oram_layout_key_digest(key: &PrivateOramLayoutKey) -> String {
+pub(crate) fn private_oram_epoch_snapshot_value<'a>(
+    epochs: &'a HashMap<String, PrivateOramConsensusEpoch>,
+    key: &PrivateOramEpochKey,
+) -> Option<&'a PrivateOramConsensusEpoch> {
+    epochs.get(&private_oram_epoch_key_digest(key))
+}
+
+pub(crate) fn private_oram_layout_key_digest(key: &PrivateOramLayoutKey) -> String {
     let mut hasher = Sha256::new();
     hasher.update(PRIVATE_ORAM_LAYOUT_KEY_DOMAIN);
     update_length_prefixed(&mut hasher, key.collection_id.as_bytes());
     BASE64URL_NOPAD.encode(&hasher.finalize())
+}
+
+pub(crate) fn private_oram_layout_snapshot_value<'a>(
+    layouts: &'a HashMap<String, PrivateOramConsensusLayout>,
+    key: &PrivateOramLayoutKey,
+) -> Option<&'a PrivateOramConsensusLayout> {
+    layouts.get(&private_oram_layout_key_digest(key))
 }
 
 fn update_length_prefixed(hasher: &mut Sha256, value: &[u8]) {

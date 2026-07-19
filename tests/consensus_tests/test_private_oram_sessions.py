@@ -829,6 +829,45 @@ def _wait_for_private_oram_layout(
     )
 
 
+def _wait_for_private_oram_epochs(
+    peer_dirs: list[pathlib.Path], index_epoch: int, expected_count: int
+) -> None:
+    def epochs_match(peer_dir: pathlib.Path) -> bool:
+        try:
+            with open(peer_dir / "storage" / "raft_state.json") as state_file:
+                epochs = json.load(state_file).get("private_oram_epochs", {})
+        except (OSError, json.JSONDecodeError):
+            return False
+        return len(epochs) == expected_count and all(
+            epoch["index_epoch"] == index_epoch for epoch in epochs.values()
+        )
+
+    wait_for(
+        lambda: all(epochs_match(peer_dir) for peer_dir in peer_dirs),
+        wait_for_timeout=30,
+    )
+
+
+def _wait_for_crypto_runtime_capability_metadata(
+    peer_dirs: list[pathlib.Path], expected_count: int
+) -> None:
+    def metadata_match(peer_dir: pathlib.Path) -> bool:
+        try:
+            with open(peer_dir / "storage" / "raft_state.json") as state_file:
+                metadata = json.load(state_file).get("peer_metadata_by_id", {})
+        except (OSError, json.JSONDecodeError):
+            return False
+        return len(metadata) == expected_count and all(
+            peer_metadata.get("crypto_runtime_capability_fingerprint")
+            for peer_metadata in metadata.values()
+        )
+
+    wait_for(
+        lambda: all(metadata_match(peer_dir) for peer_dir in peer_dirs),
+        wait_for_timeout=30,
+    )
+
+
 def _assert_private_oram_sessions_blocked_during_resharding(
     peer_url: str, fixture: dict, include_result_oram: bool
 ) -> None:
@@ -1744,6 +1783,291 @@ def test_private_oram_resharding_source_crash_preserves_exact_restart(
     _wait_for_private_oram_layout(peer_dirs, 2, [source_peer_id, target_peer_id])
     for owner_url in [source_url, target_url]:
         _assert_private_oram_owner_sessions(owner_url, fixture, True)
+
+
+def test_private_oram_active_reshard_recovers_from_raft_snapshot(
+    tmp_path: pathlib.Path,
+):
+    extra_env = {
+        "QDRANT__CLUSTER__RESHARDING_ENABLED": "true",
+        "QDRANT__CLUSTER__CONSENSUS__COMPACT_WAL_ENTRIES": "1",
+        "QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "5",
+    }
+    peer_urls, peer_dirs, fixture, leader, _ = _start_private_oram_cluster(
+        tmp_path,
+        3,
+        1,
+        include_public_vector=True,
+        extra_env=extra_env,
+    )
+    skip_if_no_feature(peer_urls[0], "staging")
+    peer_ids = [get_cluster_info(peer_url)["peer_id"] for peer_url in peer_urls]
+    cluster_infos = [
+        get_collection_cluster_info(peer_url, COLLECTION) for peer_url in peer_urls
+    ]
+    source_index = next(
+        index for index, info in enumerate(cluster_infos) if info["local_shards"]
+    )
+    non_source_indices = [
+        index for index in range(len(peer_urls)) if index != source_index
+    ]
+    lagging_index = next(
+        index for index in non_source_indices if peer_ids[index] != leader
+    )
+    target_index = next(
+        index for index in non_source_indices if index != lagging_index
+    )
+    source_url = peer_urls[source_index]
+    target_url = peer_urls[target_index]
+    source_peer_id = peer_ids[source_index]
+    target_peer_id = peer_ids[target_index]
+    source_shard_id = cluster_infos[source_index]["local_shards"][0]["shard_id"]
+    target_shard_id = source_shard_id + 1
+
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    _upload_result_oram(source_url, fixture)
+    _exercise_result_owner_session(source_url, fixture)
+    _wait_for_private_oram_epochs(peer_dirs, NEXT_EPOCH, 2)
+    _wait_for_crypto_runtime_capability_metadata(peer_dirs, len(peer_urls))
+
+    lagging_port = processes[lagging_index].p2p_port
+    restart_bootstrap_uri = get_uri(processes[source_index].p2p_port)
+    processes.pop(lagging_index).kill()
+
+    assert_http_ok(
+        start_resharding(
+            source_url,
+            collection=COLLECTION,
+            direction="up",
+            peer_id=target_peer_id,
+        )
+    )
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
+    assert_http_ok(
+        _request_private_oram_resharding_transfer(
+            source_url,
+            "replicate_shard",
+            source_shard_id,
+            target_shard_id,
+            source_peer_id,
+            target_peer_id,
+        )
+    )
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
+    _wait_for_private_oram_layout(
+        [peer_dir for index, peer_dir in enumerate(peer_dirs) if index != lagging_index],
+        1,
+        [source_peer_id],
+    )
+
+    for index in range(8):
+        response = requests.put(
+            f"{source_url}/cluster/metadata/keys/private-oram-snapshot-{index}?wait=true",
+            json=index,
+            timeout=30,
+        )
+        assert_http_ok(response)
+
+    restarted_log = "private_oram_active_reshard_snapshot_restarted.log"
+    restarted_url = start_peer(
+        peer_dirs[lagging_index],
+        restarted_log,
+        restart_bootstrap_uri,
+        port=lagging_port,
+        extra_env=extra_env,
+    )
+    peer_urls[lagging_index] = restarted_url
+    wait_for_peer_online(restarted_url, path="/cluster")
+    wait_for_uniform_cluster_status(peer_urls, leader)
+    wait_for_collection_resharding_operations_count(restarted_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(restarted_url, COLLECTION, 0)
+    _assert_private_oram_sessions_blocked_during_resharding(
+        restarted_url, fixture, True
+    )
+    restarted_log_path = pathlib.Path(init_pytest_log_folder()) / restarted_log
+    wait_for(
+        lambda: restarted_log_path.exists()
+        and "Applying snapshot" in restarted_log_path.read_text(),
+        wait_for_timeout=30,
+    )
+
+    restarted_info = get_collection_cluster_info(restarted_url, COLLECTION)
+    target_replicas = [
+        shard
+        for shard in restarted_info["remote_shards"]
+        if shard["shard_id"] == target_shard_id
+        and shard.get("peer_id") == target_peer_id
+    ]
+    assert len(target_replicas) == 1
+    assert target_replicas[0]["state"] == "Resharding"
+
+    activate_replica(
+        source_url,
+        target_peer_id,
+        target_shard_id,
+        collection=COLLECTION,
+    )
+    assert_http_ok(commit_read_hashring(source_url, collection=COLLECTION))
+    assert_http_ok(commit_write_hashring(source_url, collection=COLLECTION))
+    assert_http_ok(finish_resharding(source_url, collection=COLLECTION))
+
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _wait_for_private_oram_layout(peer_dirs, 2, [source_peer_id, target_peer_id])
+    for owner_url in [source_url, target_url]:
+        _assert_private_oram_owner_sessions(owner_url, fixture, True)
+
+
+def test_private_oram_active_scale_down_recovers_from_raft_snapshot(
+    tmp_path: pathlib.Path,
+):
+    extra_env = {
+        "QDRANT__CLUSTER__RESHARDING_ENABLED": "true",
+        "QDRANT__CLUSTER__CONSENSUS__COMPACT_WAL_ENTRIES": "1",
+    }
+    peer_urls, peer_dirs, fixture, leader, _ = _start_private_oram_cluster(
+        tmp_path,
+        4,
+        3,
+        shard_number=2,
+        include_public_vector=True,
+        extra_env=extra_env,
+    )
+    peer_ids = [get_cluster_info(peer_url)["peer_id"] for peer_url in peer_urls]
+    cluster_infos = [
+        get_collection_cluster_info(peer_url, COLLECTION) for peer_url in peer_urls
+    ]
+    owner_indices_by_shard: dict[int, list[int]] = {}
+    for peer_index, info in enumerate(cluster_infos):
+        for shard in info["local_shards"]:
+            if shard["state"] == "Active":
+                owner_indices_by_shard.setdefault(shard["shard_id"], []).append(
+                    peer_index
+                )
+    assert len(owner_indices_by_shard) == 2
+    receiver_shard_id = min(owner_indices_by_shard)
+    target_shard_id = max(owner_indices_by_shard)
+    receiver_indices = owner_indices_by_shard[receiver_shard_id]
+    target_indices = owner_indices_by_shard[target_shard_id]
+    assert len(receiver_indices) == 3
+    assert len(target_indices) == 3
+
+    source_index = next(
+        index for index in target_indices if index in receiver_indices
+    )
+    source_url = peer_urls[source_index]
+    source_peer_id = peer_ids[source_index]
+    receiver_peer_ids = [peer_ids[index] for index in receiver_indices]
+    initial_owner_peer_ids = sorted(
+        {
+            peer_ids[index]
+            for owner_indices in owner_indices_by_shard.values()
+            for index in owner_indices
+        }
+    )
+
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    _upload_result_oram(source_url, fixture)
+    _exercise_result_owner_session(source_url, fixture)
+    _wait_for_private_oram_epochs(peer_dirs, NEXT_EPOCH, 2)
+    _wait_for_crypto_runtime_capability_metadata(peer_dirs, len(peer_urls))
+
+    assert_http_ok(
+        start_resharding(
+            source_url,
+            collection=COLLECTION,
+            direction="down",
+            peer_id=source_peer_id,
+        )
+    )
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
+    for receiver_peer_id in receiver_peer_ids:
+        migrate_points(
+            source_url,
+            receiver_peer_id,
+            receiver_shard_id,
+            source_peer_id,
+            target_shard_id,
+            "down",
+            collection=COLLECTION,
+        )
+        activate_replica(
+            source_url,
+            receiver_peer_id,
+            receiver_shard_id,
+            collection=COLLECTION,
+        )
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
+    _wait_for_private_oram_layout(
+        peer_dirs,
+        1,
+        initial_owner_peer_ids,
+    )
+
+    lagging_index = next(
+        index
+        for index, peer_id in enumerate(peer_ids)
+        if index != source_index and peer_id != leader
+    )
+    lagging_port = processes[lagging_index].p2p_port
+    restart_bootstrap_uri = get_uri(processes[source_index].p2p_port)
+    processes.pop(lagging_index).kill()
+
+    for index in range(8):
+        assert_http_ok(
+            requests.put(
+                f"{source_url}/cluster/metadata/keys/private-oram-scale-down-snapshot-{index}?wait=true",
+                json=index,
+                timeout=30,
+            )
+        )
+
+    restarted_log = "private_oram_active_scale_down_snapshot_restarted.log"
+    restarted_url = start_peer(
+        peer_dirs[lagging_index],
+        restarted_log,
+        restart_bootstrap_uri,
+        port=lagging_port,
+        extra_env=extra_env,
+    )
+    peer_urls[lagging_index] = restarted_url
+    wait_for_peer_online(restarted_url, path="/cluster")
+    wait_for_uniform_cluster_status(peer_urls, leader)
+    wait_for_collection_resharding_operations_count(restarted_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(restarted_url, COLLECTION, 0)
+    _assert_private_oram_sessions_blocked_during_resharding(
+        restarted_url, fixture, True
+    )
+    restarted_log_path = pathlib.Path(init_pytest_log_folder()) / restarted_log
+    wait_for(
+        lambda: restarted_log_path.exists()
+        and "Applying snapshot" in restarted_log_path.read_text(),
+        wait_for_timeout=30,
+    )
+
+    restarted_info = get_collection_cluster_info(restarted_url, COLLECTION)
+    target_states = [
+        shard["state"]
+        for shard in restarted_info["local_shards"] + restarted_info["remote_shards"]
+        if shard["shard_id"] == target_shard_id
+    ]
+    assert len(target_states) == len(target_indices)
+    assert set(target_states) == {"Active"}
+
+    assert_http_ok(commit_read_hashring(source_url, collection=COLLECTION))
+    assert_http_ok(commit_write_hashring(source_url, collection=COLLECTION))
+    assert_http_ok(finish_resharding(source_url, collection=COLLECTION))
+
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _wait_for_private_oram_layout(peer_dirs, 2, receiver_peer_ids)
+    for receiver_index in receiver_indices:
+        _assert_private_oram_owner_sessions(peer_urls[receiver_index], fixture, True)
 
 
 @pytest.mark.parametrize("index_kind", ["hnsw", "result"])

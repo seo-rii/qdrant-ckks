@@ -77,6 +77,14 @@ pub struct CollectionsSnapshot {
     pub aliases: AliasMapping,
 }
 
+#[derive(Clone, Copy)]
+pub struct PrivateOramSnapshotState<'a> {
+    pub incoming_epochs: &'a HashMap<String, PrivateOramConsensusEpoch>,
+    pub current_epochs: &'a HashMap<String, PrivateOramConsensusEpoch>,
+    pub incoming_layouts: &'a HashMap<String, PrivateOramConsensusLayout>,
+    pub current_layouts: &'a HashMap<String, PrivateOramConsensusLayout>,
+}
+
 impl TryFrom<&[u8]> for SnapshotData {
     type Error = serde_cbor::Error;
 
@@ -799,7 +807,28 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             private_oram_layouts,
         } = snapshot.get_data().try_into()?;
 
-        self.toc.apply_collections_snapshot(collections_data)?;
+        Persistent::validate_private_oram_snapshot_state(
+            &private_oram_epochs,
+            &private_oram_session_leases,
+            &private_oram_layouts,
+        )?;
+        let (current_private_oram_epochs, current_private_oram_layouts) = {
+            let persistent = self.persistent.read();
+            (
+                persistent.private_oram_epochs.clone(),
+                persistent.private_oram_layouts.clone(),
+            )
+        };
+        self.toc
+            .apply_collections_snapshot_with_private_oram_state(
+                collections_data,
+                PrivateOramSnapshotState {
+                    incoming_epochs: &private_oram_epochs,
+                    current_epochs: &current_private_oram_epochs,
+                    incoming_layouts: &private_oram_layouts,
+                    current_layouts: &current_private_oram_layouts,
+                },
+            )?;
         self.persistent.write().update_from_snapshot(
             meta,
             address_by_id,
@@ -1543,7 +1572,10 @@ mod tests {
         assert_eq!(wal.entries(4, 5, Some(0)).unwrap().len(), 1)
     }
 
-    struct NoCollections;
+    #[derive(Default)]
+    struct NoCollections {
+        snapshot_apply_count: AtomicUsize,
+    }
 
     impl CollectionContainer for NoCollections {
         fn perform_collection_meta_op(
@@ -1609,6 +1641,7 @@ mod tests {
             &self,
             _data: super::CollectionsSnapshot,
         ) -> Result<(), crate::content_manager::errors::StorageError> {
+            self.snapshot_apply_count.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
 
@@ -2407,7 +2440,7 @@ mod tests {
         let (sender, _) = mpsc::channel();
         let consensus_state = ConsensusManager::new(
             persistent,
-            Arc::new(NoCollections),
+            Arc::new(NoCollections::default()),
             OperationSender::new(sender),
             path,
             PeerMetadata::current(),
@@ -2607,6 +2640,86 @@ mod tests {
         let (target, _) = setup_storages(Vec::new(), target_dir.path());
         target.apply_snapshot(&snapshot).unwrap().unwrap();
         assert_eq!(target.private_oram_layout(&key), Some(next));
+    }
+
+    #[test]
+    fn malformed_private_oram_snapshot_maps_fail_before_collection_apply() {
+        let valid_digest = BASE64URL_NOPAD.encode(&[61; 32]);
+        let epoch = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: valid_digest.clone(),
+            writeback_digest: Some(valid_digest.clone()),
+        };
+        let lease = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: valid_digest.clone(),
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        };
+        let layout = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7],
+            layout_digest: valid_digest.clone(),
+            index_state_digest: valid_digest,
+        };
+        let malformed_snapshots = [
+            SnapshotData {
+                collections_data: Default::default(),
+                address_by_id: Default::default(),
+                metadata_by_id: Default::default(),
+                cluster_metadata: Default::default(),
+                private_oram_epochs: std::collections::HashMap::from([(
+                    "invalid-epoch-key".to_string(),
+                    epoch,
+                )]),
+                private_oram_session_leases: Default::default(),
+                private_oram_layouts: Default::default(),
+            },
+            SnapshotData {
+                collections_data: Default::default(),
+                address_by_id: Default::default(),
+                metadata_by_id: Default::default(),
+                cluster_metadata: Default::default(),
+                private_oram_epochs: Default::default(),
+                private_oram_session_leases: std::collections::HashMap::from([(
+                    "invalid-lease-key".to_string(),
+                    lease,
+                )]),
+                private_oram_layouts: Default::default(),
+            },
+            SnapshotData {
+                collections_data: Default::default(),
+                address_by_id: Default::default(),
+                metadata_by_id: Default::default(),
+                cluster_metadata: Default::default(),
+                private_oram_epochs: Default::default(),
+                private_oram_session_leases: Default::default(),
+                private_oram_layouts: std::collections::HashMap::from([(
+                    "invalid-layout-key".to_string(),
+                    layout,
+                )]),
+            },
+        ];
+
+        for (index, snapshot_data) in malformed_snapshots.into_iter().enumerate() {
+            let dir = Builder::new()
+                .prefix(&format!("malformed_private_oram_snapshot_{index}"))
+                .tempdir()
+                .unwrap();
+            let (target, _) = setup_storages(Vec::new(), dir.path());
+            let snapshot = raft::eraftpb::Snapshot {
+                data: serde_cbor::to_vec(&snapshot_data).unwrap(),
+                metadata: Some(Default::default()),
+            };
+
+            let err = target.apply_snapshot(&snapshot).unwrap_err();
+            assert!(err.to_string().contains("snapshot is invalid"));
+            assert_eq!(target.toc.snapshot_apply_count.load(Ordering::SeqCst), 0);
+            let persistent = target.persistent.read();
+            assert!(persistent.private_oram_epochs.is_empty());
+            assert!(persistent.private_oram_session_leases.is_empty());
+            assert!(persistent.private_oram_layouts.is_empty());
+        }
     }
 
     #[test]

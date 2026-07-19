@@ -35,6 +35,32 @@ impl Collection {
         this_peer_id: PeerId,
         abort_transfer: impl FnMut(ShardTransfer),
     ) -> CollectionResult<()> {
+        self.apply_state_internal(state, this_peer_id, abort_transfer, false)
+            .await
+    }
+
+    pub async fn apply_validated_private_oram_resharding_snapshot_state(
+        &self,
+        state: State,
+        this_peer_id: PeerId,
+        abort_transfer: impl FnMut(ShardTransfer),
+    ) -> CollectionResult<()> {
+        if state.resharding.is_none() {
+            return Err(CollectionError::bad_input(
+                "validated private ORAM resharding snapshot state must contain an active reshard",
+            ));
+        }
+        self.apply_state_internal(state, this_peer_id, abort_transfer, true)
+            .await
+    }
+
+    async fn apply_state_internal(
+        &self,
+        state: State,
+        this_peer_id: PeerId,
+        abort_transfer: impl FnMut(ShardTransfer),
+        validated_private_oram_resharding_snapshot: bool,
+    ) -> CollectionResult<()> {
         let State {
             config,
             shards,
@@ -44,11 +70,32 @@ impl Collection {
             payload_index_schema,
         } = state;
 
-        self.apply_config(config).await?;
-        self.apply_shard_transfers(transfers, resharding.as_ref(), this_peer_id, abort_transfer)
-            .await?;
-        self.apply_reshard_state(resharding).await?;
-        self.apply_shard_info(shards, shards_key_mapping).await?;
+        self.apply_config(
+            config,
+            resharding.as_ref(),
+            validated_private_oram_resharding_snapshot,
+        )
+        .await?;
+        self.apply_shard_transfers(
+            transfers,
+            resharding.as_ref(),
+            this_peer_id,
+            abort_transfer,
+            validated_private_oram_resharding_snapshot,
+        )
+        .await?;
+        self.apply_reshard_state(
+            resharding.clone(),
+            validated_private_oram_resharding_snapshot,
+        )
+        .await?;
+        self.apply_shard_info(
+            shards,
+            shards_key_mapping,
+            resharding.as_ref(),
+            validated_private_oram_resharding_snapshot,
+        )
+        .await?;
         self.apply_payload_index_schema(payload_index_schema)
             .await?;
         Ok(())
@@ -60,6 +107,7 @@ impl Collection {
         resharding: Option<&ReshardState>,
         this_peer_id: PeerId,
         mut abort_transfer: impl FnMut(ShardTransfer),
+        validated_private_oram_resharding_snapshot: bool,
     ) -> CollectionResult<()> {
         let private_oram_bucket_store_collection = {
             let config = self.collection_config.read().await;
@@ -90,6 +138,12 @@ impl Collection {
         }
         for transfer in shard_transfers.difference(&old_transfers) {
             if transfer.from == this_peer_id {
+                if validated_private_oram_resharding_snapshot
+                    && private_oram_bucket_store_collection
+                    && transfer.is_private_oram_preinstalled_transfer_for(resharding)
+                {
+                    continue;
+                }
                 // Abort transfer as sender should not learn about the transfer from snapshot
                 // If this happens it mean the sender is probably outdated and it is safer to abort
                 abort_transfer(transfer.clone());
@@ -111,7 +165,11 @@ impl Collection {
         Ok(())
     }
 
-    async fn apply_reshard_state(&self, resharding: Option<ReshardState>) -> CollectionResult<()> {
+    async fn apply_reshard_state(
+        &self,
+        resharding: Option<ReshardState>,
+        validated_private_oram_resharding_snapshot: bool,
+    ) -> CollectionResult<()> {
         let private_oram_bucket_store_collection = {
             let config = self.collection_config.read().await;
             config
@@ -123,6 +181,7 @@ impl Collection {
         validate_private_oram_apply_reshard_state_until_supported(
             resharding.as_ref(),
             private_oram_bucket_store_collection,
+            validated_private_oram_resharding_snapshot,
         )?;
 
         // We don't have to explicitly abort resharding or bump shard replica states, because:
@@ -137,7 +196,12 @@ impl Collection {
         Ok(())
     }
 
-    async fn apply_config(&self, new_config: CollectionConfigInternal) -> CollectionResult<()> {
+    async fn apply_config(
+        &self,
+        new_config: CollectionConfigInternal,
+        resharding: Option<&ReshardState>,
+        validated_private_oram_resharding_snapshot: bool,
+    ) -> CollectionResult<()> {
         let recreate_optimizers;
 
         {
@@ -162,6 +226,8 @@ impl Collection {
             validate_private_oram_apply_config_layout_until_supported(
                 &config.params,
                 &new_config.params,
+                resharding,
+                validated_private_oram_resharding_snapshot,
             )?;
 
             // Destructure `new_config`, to ensure we compare all config fields. Compiler would
@@ -227,6 +293,8 @@ impl Collection {
         &self,
         shards: AHashMap<ShardId, ShardInfo>,
         shards_key_mapping: ShardKeyMapping,
+        resharding: Option<&ReshardState>,
+        validated_private_oram_resharding_snapshot: bool,
     ) -> CollectionResult<()> {
         let mut extra_shards: AHashMap<ShardId, ShardReplicaSet> = AHashMap::new();
 
@@ -270,6 +338,7 @@ impl Collection {
             &current_shards_key_mapping,
             &current_replica_peers,
             private_oram_bucket_store_collection,
+            validated_private_oram_resharding_snapshot,
         )?;
 
         for (shard_id, shard_info) in shards {
@@ -282,9 +351,26 @@ impl Collection {
                 }
                 None => {
                     let shard_replicas: Vec<_> = shard_info.replicas.keys().copied().collect();
-                    let mut replica_set = self
-                        .create_replica_set(shard_id, shard_key.clone(), &shard_replicas, None)
-                        .await?;
+                    let is_validated_private_oram_scale_up_target =
+                        validated_private_oram_scale_up_target(
+                            shard_id,
+                            &shard_replicas,
+                            resharding,
+                            private_oram_bucket_store_collection,
+                            validated_private_oram_resharding_snapshot,
+                        );
+                    let mut replica_set = if is_validated_private_oram_scale_up_target {
+                        self.create_private_oram_resharding_replica_set(
+                            shard_id,
+                            shard_key.clone(),
+                            &shard_replicas,
+                            crate::shards::replica_set::replica_set_state::ReplicaState::Resharding,
+                        )
+                        .await?
+                    } else {
+                        self.create_replica_set(shard_id, shard_key.clone(), &shard_replicas, None)
+                            .await?
+                    };
                     replica_set
                         .apply_state(shard_info.replicas, shard_key)
                         .await?;
@@ -345,8 +431,12 @@ impl Collection {
 fn validate_private_oram_apply_reshard_state_until_supported(
     resharding: Option<&ReshardState>,
     private_oram_bucket_store_collection: bool,
+    validated_private_oram_resharding_snapshot: bool,
 ) -> CollectionResult<()> {
-    if !private_oram_bucket_store_collection || resharding.is_none() {
+    if !private_oram_bucket_store_collection
+        || resharding.is_none()
+        || validated_private_oram_resharding_snapshot
+    {
         return Ok(());
     }
 
@@ -360,6 +450,8 @@ fn validate_private_oram_apply_reshard_state_until_supported(
 fn validate_private_oram_apply_config_layout_until_supported(
     current: &CollectionParams,
     next: &CollectionParams,
+    resharding: Option<&ReshardState>,
+    validated_private_oram_resharding_snapshot: bool,
 ) -> CollectionResult<()> {
     let private_oram_bucket_store_collection = current
         .effective_encryption()
@@ -373,6 +465,22 @@ fn validate_private_oram_apply_config_layout_until_supported(
         && current.sharding_method == next.sharding_method
         && current.replication_factor == next.replication_factor
     {
+        return Ok(());
+    }
+
+    let exact_active_reshard_config = validated_private_oram_resharding_snapshot
+        && current.sharding_method == next.sharding_method
+        && current.replication_factor == next.replication_factor
+        && resharding.is_some_and(|state| match state.direction {
+            crate::operations::cluster_ops::ReshardingDirection::Up => current
+                .shard_number
+                .checked_add(1)
+                .is_some_and(|shard_number| shard_number == next.shard_number),
+            crate::operations::cluster_ops::ReshardingDirection::Down => {
+                current.shard_number == next.shard_number
+            }
+        });
+    if exact_active_reshard_config {
         return Ok(());
     }
 
@@ -412,8 +520,9 @@ fn validate_private_oram_apply_shard_info_until_supported(
     current_shards_key_mapping: &ShardKeyMapping,
     current_replica_peers: &HashMap<ShardId, HashSet<PeerId>>,
     private_oram_bucket_store_collection: bool,
+    validated_private_oram_resharding_snapshot: bool,
 ) -> CollectionResult<()> {
-    if !private_oram_bucket_store_collection {
+    if !private_oram_bucket_store_collection || validated_private_oram_resharding_snapshot {
         return Ok(());
     }
 
@@ -445,6 +554,22 @@ fn validate_private_oram_apply_shard_info_until_supported(
     ))
 }
 
+fn validated_private_oram_scale_up_target(
+    shard_id: ShardId,
+    shard_replicas: &[PeerId],
+    resharding: Option<&ReshardState>,
+    private_oram_bucket_store_collection: bool,
+    validated_private_oram_resharding_snapshot: bool,
+) -> bool {
+    validated_private_oram_resharding_snapshot
+        && private_oram_bucket_store_collection
+        && resharding.is_some_and(|resharding| {
+            resharding.direction == crate::operations::cluster_ops::ReshardingDirection::Up
+                && resharding.shard_id == shard_id
+                && shard_replicas == [resharding.peer_id]
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU32;
@@ -470,13 +595,16 @@ mod tests {
             Some("tenant-secret-shard-key".into()),
         );
 
-        validate_private_oram_apply_reshard_state_until_supported(None, true).unwrap();
-        validate_private_oram_apply_reshard_state_until_supported(Some(&resharding), false)
+        validate_private_oram_apply_reshard_state_until_supported(None, true, false).unwrap();
+        validate_private_oram_apply_reshard_state_until_supported(Some(&resharding), false, false)
             .unwrap();
 
-        let err =
-            validate_private_oram_apply_reshard_state_until_supported(Some(&resharding), true)
-                .unwrap_err();
+        let err = validate_private_oram_apply_reshard_state_until_supported(
+            Some(&resharding),
+            true,
+            false,
+        )
+        .unwrap_err();
         let rendered = format!("{err:?}");
 
         assert!(rendered.contains("cannot apply resharding state for private ORAM collections"));
@@ -493,14 +621,21 @@ mod tests {
     fn private_oram_apply_config_layout_guard_redacts_collection_details() {
         let private_params = private_oram_params_fixture();
 
-        validate_private_oram_apply_config_layout_until_supported(&private_params, &private_params)
-            .unwrap();
+        validate_private_oram_apply_config_layout_until_supported(
+            &private_params,
+            &private_params,
+            None,
+            false,
+        )
+        .unwrap();
 
         let mut ordinary_changed = CollectionParams::empty();
         ordinary_changed.shard_number = NonZeroU32::new(2).unwrap();
         validate_private_oram_apply_config_layout_until_supported(
             &CollectionParams::empty(),
             &ordinary_changed,
+            None,
+            false,
         )
         .unwrap();
 
@@ -512,9 +647,13 @@ mod tests {
         changed_replication.replication_factor = NonZeroU32::new(2).unwrap();
 
         for next in [changed_shards, changed_method, changed_replication] {
-            let err =
-                validate_private_oram_apply_config_layout_until_supported(&private_params, &next)
-                    .unwrap_err();
+            let err = validate_private_oram_apply_config_layout_until_supported(
+                &private_params,
+                &next,
+                None,
+                false,
+            )
+            .unwrap_err();
             let rendered = format!("{err:?}");
 
             assert!(rendered.contains("cannot apply shard layout config change"));
@@ -527,6 +666,69 @@ mod tests {
             assert!(!rendered.contains("private_result_oram"));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+        }
+    }
+
+    #[test]
+    fn validated_private_oram_active_reshard_snapshot_authority_is_shape_bounded() {
+        let private_params = private_oram_params_fixture();
+        let up = ReshardState::new(Uuid::nil(), ReshardingDirection::Up, 2, 1, None);
+        let mut scale_up = private_params.clone();
+        scale_up.shard_number = NonZeroU32::new(2).unwrap();
+
+        validate_private_oram_apply_reshard_state_until_supported(Some(&up), true, true).unwrap();
+        validate_private_oram_apply_config_layout_until_supported(
+            &private_params,
+            &scale_up,
+            Some(&up),
+            true,
+        )
+        .unwrap();
+
+        let down = ReshardState::new(Uuid::nil(), ReshardingDirection::Down, 2, 0, None);
+        validate_private_oram_apply_config_layout_until_supported(
+            &private_params,
+            &private_params,
+            Some(&down),
+            true,
+        )
+        .unwrap();
+
+        let mut skipped_generation = private_params.clone();
+        skipped_generation.shard_number = NonZeroU32::new(3).unwrap();
+        validate_private_oram_apply_config_layout_until_supported(
+            &private_params,
+            &skipped_generation,
+            Some(&up),
+            true,
+        )
+        .expect_err("validated scale-up snapshot must advance shard count by exactly one");
+
+        validate_private_oram_apply_config_layout_until_supported(
+            &private_params,
+            &scale_up,
+            None,
+            true,
+        )
+        .expect_err("snapshot authority without active reshard state must fail closed");
+
+        assert!(validated_private_oram_scale_up_target(
+            1,
+            &[2],
+            Some(&up),
+            true,
+            true,
+        ));
+        for (shard_id, replicas, resharding, validated) in [
+            (0, vec![2], Some(&up), true),
+            (1, vec![3], Some(&up), true),
+            (1, vec![2, 3], Some(&up), true),
+            (0, vec![2], Some(&down), true),
+            (1, vec![2], Some(&up), false),
+        ] {
+            assert!(!validated_private_oram_scale_up_target(
+                shard_id, &replicas, resharding, true, validated,
+            ));
         }
     }
 
@@ -658,6 +860,8 @@ mod tests {
         let err = validate_private_oram_apply_config_layout_until_supported(
             &private_params,
             &changed_layout,
+            None,
+            false,
         )
         .unwrap_err();
         let rendered = format!("{err:?}");
@@ -849,6 +1053,7 @@ mod tests {
             &current_mapping,
             &current_replica_peers,
             true,
+            false,
         )
         .unwrap();
 
@@ -869,6 +1074,7 @@ mod tests {
                 &current_mapping,
                 &current_replica_peers,
                 true,
+                false,
             )
             .unwrap_or_else(|err| {
                 panic!(
@@ -899,6 +1105,7 @@ mod tests {
                 &current_mapping,
                 &current_replica_peers,
                 false,
+                false,
             )
             .unwrap();
 
@@ -909,6 +1116,7 @@ mod tests {
                 &current_mapping,
                 &current_replica_peers,
                 true,
+                false,
             )
             .unwrap_err();
             let rendered = format!("{err:?}");
