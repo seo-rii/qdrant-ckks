@@ -152,18 +152,28 @@ pub fn validate_transfer(
             )));
         }
 
-        if let Some(ReplicaState::Dead) = destination_replicas.get(&transfer.to) {
-            return Err(CollectionError::bad_request(format!(
-                "Resharding shard transfer can't be started, \
-                 because destination shard {}/{to_shard_id} is dead",
-                transfer.to,
-            )));
+        match destination_replicas.get(&transfer.to) {
+            Some(ReplicaState::Dead) => {
+                return Err(CollectionError::bad_request(format!(
+                    "Resharding shard transfer can't be started, \
+                     because destination shard {}/{to_shard_id} is dead",
+                    transfer.to,
+                )));
+            }
+            Some(_) => {}
+            None => {
+                return Err(CollectionError::bad_request(format!(
+                    "Resharding shard transfer can't be started, \
+                     because destination shard {}/{to_shard_id} does not exist",
+                    transfer.to,
+                )));
+            }
         }
 
         // Both shard IDs must share the same shard key
         let source_shard_key = shards_key_mapping
             .iter()
-            .find(|(_, shard_ids)| shard_ids.contains(&to_shard_id))
+            .find(|(_, shard_ids)| shard_ids.contains(&transfer.shard_id))
             .map(|(key, _)| key);
         let target_shard_key = shards_key_mapping
             .iter()
@@ -266,4 +276,62 @@ pub fn suggest_transfer_source(
     candidates.sort_unstable_by_key(|(_, count)| **count);
 
     candidates.first().map(|(peer_id, _)| *peer_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resharding_transfer_requires_matching_source_and_target_shard_keys() {
+        let transfer = ShardTransfer {
+            shard_id: 1,
+            to_shard_id: Some(2),
+            from: 11,
+            to: 22,
+            sync: true,
+            method: Some(ShardTransferMethod::ReshardingStreamRecords),
+            private_oram_preinstalled: false,
+            private_oram_layout_transition: None,
+            filter: None,
+        };
+        let peers = HashSet::from([11, 22]);
+        let source_replicas = HashMap::from([(11, ReplicaState::Active)]);
+        let destination_replicas = HashMap::from([(22, ReplicaState::Resharding)]);
+
+        let mut mismatched = ShardKeyMapping::default();
+        mismatched.insert("source".into(), HashSet::from([1]));
+        mismatched.insert("target".into(), HashSet::from([2]));
+        validate_transfer(
+            &transfer,
+            &peers,
+            Some(&source_replicas),
+            Some(&destination_replicas),
+            &HashSet::new(),
+            &mismatched,
+        )
+        .expect_err("resharding transfer across shard keys must fail");
+
+        let mut matching = ShardKeyMapping::default();
+        matching.insert("tenant-a".into(), HashSet::from([1, 2]));
+        validate_transfer(
+            &transfer,
+            &peers,
+            Some(&source_replicas),
+            Some(&destination_replicas),
+            &HashSet::new(),
+            &matching,
+        )
+        .expect("resharding transfer within one shard key must remain valid");
+
+        validate_transfer(
+            &transfer,
+            &peers,
+            Some(&source_replicas),
+            Some(&HashMap::new()),
+            &HashSet::new(),
+            &matching,
+        )
+        .expect_err("resharding transfer requires an existing destination peer replica");
+    }
 }

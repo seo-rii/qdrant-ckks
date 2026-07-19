@@ -552,10 +552,12 @@ impl TableOfContent {
     ) -> Result<(), StorageError> {
         let collection = self.get_collection_unchecked(&collection_id).await?;
         let collection_config = collection.config_snapshot().await;
+        let resharding = collection.resharding_state().await;
         reject_private_oram_shard_transfer_until_supported(
             &collection_id,
             &collection_config.params,
             &transfer_operation,
+            resharding.as_ref(),
         )?;
         let Some(proposal_sender) = self.consensus_proposal_sender.clone() else {
             return Err(StorageError::service_error(
@@ -667,8 +669,9 @@ impl TableOfContent {
                     .await?;
             }
             ShardTransferOperations::Restart(transfer_restart) => {
-                let transfers: HashSet<transfer::ShardTransfer> =
-                    collection.state().await.transfers;
+                let collection_state = collection.state().await;
+                let transfers: HashSet<transfer::ShardTransfer> = collection_state.transfers;
+                let resharding = collection_state.resharding;
 
                 let transfer_key = transfer_restart.key();
 
@@ -683,6 +686,7 @@ impl TableOfContent {
                 validate_private_oram_restart_apply(
                     &collection_config.params,
                     &transfers,
+                    resharding.as_ref(),
                     &old_transfer,
                     &transfer_restart,
                 )?;
@@ -921,6 +925,7 @@ fn reject_private_oram_shard_transfer_until_supported(
     _collection_id: &str,
     params: &CollectionParams,
     transfer_operation: &ShardTransferOperations,
+    resharding: Option<&collection::shards::resharding::ReshardState>,
 ) -> Result<(), StorageError> {
     if !collection_params_use_private_oram_bucket_store(params)
         || matches!(transfer_operation, ShardTransferOperations::Abort { .. })
@@ -930,10 +935,7 @@ fn reject_private_oram_shard_transfer_until_supported(
 
     if let ShardTransferOperations::Start(transfer) | ShardTransferOperations::Finish(transfer) =
         transfer_operation
-        && transfer.private_oram_preinstalled
-        && transfer.to_shard_id.is_none()
-        && transfer.method == Some(ShardTransferMethod::StreamRecords)
-        && transfer.filter.is_none()
+        && transfer.is_private_oram_preinstalled_transfer_for(resharding)
     {
         return Ok(());
     }
@@ -955,6 +957,7 @@ fn reject_private_oram_shard_transfer_until_supported(
 fn validate_private_oram_restart_apply(
     params: &CollectionParams,
     active_transfers: &HashSet<ShardTransfer>,
+    resharding: Option<&collection::shards::resharding::ReshardState>,
     old_transfer: &ShardTransfer,
     restart: &ShardTransferRestart,
 ) -> Result<(), StorageError> {
@@ -974,10 +977,7 @@ fn validate_private_oram_restart_apply(
             .next()
             .is_some_and(|transfer| transfer == old_transfer)
         && old_transfer.key() == restart.key()
-        && old_transfer.private_oram_preinstalled
-        && old_transfer.to_shard_id.is_none()
-        && old_transfer.method == Some(ShardTransferMethod::StreamRecords)
-        && old_transfer.filter.is_none()
+        && old_transfer.is_private_oram_preinstalled_transfer_for(resharding)
         && restart.to_shard_id.is_none()
         && restart.method == ShardTransferMethod::StreamRecords;
     if valid {
@@ -1240,7 +1240,7 @@ mod tests {
     use collection::operations::types::PeerMetadata;
     use collection::shards::replica_set;
     use collection::shards::replica_set::replica_set_state::ReplicaState;
-    use collection::shards::resharding::ReshardKey;
+    use collection::shards::resharding::{ReshardKey, ReshardState, ReshardingStage};
     use collection::shards::shard::PeerId;
     use collection::shards::transfer::{
         ShardTransfer, ShardTransferKey, ShardTransferMethod, ShardTransferRestart,
@@ -1446,6 +1446,7 @@ mod tests {
             "stashBackup.json",
             &params,
             &operation,
+            None,
         )
         .expect_err("private ORAM transfer must fail closed without leaking client-state aliases");
         let rendered = err.to_string();
@@ -1591,12 +1592,14 @@ mod tests {
             "docs",
             &params,
             &ShardTransferOperations::Start(authorized_transfer.clone()),
+            None,
         )
         .expect("verified private ORAM preinstall must allow transfer start");
         reject_private_oram_shard_transfer_until_supported(
             "docs",
             &params,
             &ShardTransferOperations::Finish(authorized_transfer),
+            None,
         )
         .expect("verified private ORAM preinstall must allow transfer finish");
         reject_private_oram_shard_transfer_until_supported(
@@ -1609,8 +1612,46 @@ mod tests {
                 to: 3,
                 method: ShardTransferMethod::StreamRecords,
             }),
+            None,
         )
         .expect("exact private ORAM stream-records restart must reach apply validation");
+
+        let mut resharding =
+            ReshardState::new(Uuid::from_u128(81), ReshardingDirection::Up, 3, 2, None);
+        let resharding_transfer = ShardTransfer {
+            shard_id: 1,
+            to_shard_id: Some(2),
+            from: 2,
+            to: 3,
+            sync: true,
+            method: Some(ShardTransferMethod::ReshardingStreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
+            filter: None,
+        };
+        reject_private_oram_shard_transfer_until_supported(
+            "docs",
+            &params,
+            &ShardTransferOperations::Start(resharding_transfer.clone()),
+            Some(&resharding),
+        )
+        .expect("exact marked private ORAM resharding transfer must start");
+        reject_private_oram_shard_transfer_until_supported(
+            "docs",
+            &params,
+            &ShardTransferOperations::Finish(resharding_transfer.clone()),
+            Some(&resharding),
+        )
+        .expect("exact marked private ORAM resharding transfer must finish");
+
+        resharding.stage = ReshardingStage::ReadHashRingCommitted;
+        reject_private_oram_shard_transfer_until_supported(
+            "docs",
+            &params,
+            &ShardTransferOperations::Start(resharding_transfer),
+            Some(&resharding),
+        )
+        .expect_err("private ORAM resharding transfer must fail after point migration");
     }
 
     #[test]
@@ -1654,10 +1695,21 @@ mod tests {
         validate_private_oram_restart_apply(
             &private_params,
             &HashSet::from([transfer.clone()]),
+            None,
             &transfer,
             &restart,
         )
         .unwrap();
+        let active_resharding =
+            ReshardState::new(Uuid::from_u128(82), ReshardingDirection::Up, 3, 2, None);
+        validate_private_oram_restart_apply(
+            &private_params,
+            &HashSet::from([transfer.clone()]),
+            Some(&active_resharding),
+            &transfer,
+            &restart,
+        )
+        .expect_err("fixed-layout private ORAM restart must fail during active resharding");
 
         let mut unmarked = transfer.clone();
         unmarked.private_oram_preinstalled = false;
@@ -1689,10 +1741,15 @@ mod tests {
                 ]),
             ),
         ] {
-            let rendered =
-                validate_private_oram_restart_apply(&private_params, &active, &candidate, &request)
-                    .unwrap_err()
-                    .to_string();
+            let rendered = validate_private_oram_restart_apply(
+                &private_params,
+                &active,
+                None,
+                &candidate,
+                &request,
+            )
+            .unwrap_err()
+            .to_string();
             assert!(rendered.contains("exact active marked stream-records transfer"));
             assert_private_oram_consensus_guard_redacts_config(&rendered);
         }
@@ -1701,6 +1758,7 @@ mod tests {
         let unchanged = validate_private_oram_restart_apply(
             &ordinary_params,
             &HashSet::from([transfer.clone()]),
+            None,
             &transfer,
             &restart,
         )
@@ -1713,6 +1771,7 @@ mod tests {
         validate_private_oram_restart_apply(
             &ordinary_params,
             &HashSet::from([transfer.clone()]),
+            None,
             &transfer,
             &changed_method,
         )
@@ -1800,9 +1859,10 @@ mod tests {
         ];
 
         for operation in progressing_operations {
-            let err =
-                reject_private_oram_shard_transfer_until_supported("docs", &params, &operation)
-                    .expect_err("private HNSW ORAM transfer progress must fail closed");
+            let err = reject_private_oram_shard_transfer_until_supported(
+                "docs", &params, &operation, None,
+            )
+            .expect_err("private HNSW ORAM transfer progress must fail closed");
             assert!(
                 err.to_string().contains("private ORAM shard transfer")
                     && err
@@ -1820,6 +1880,7 @@ mod tests {
                 transfer: transfer_key,
                 reason: "cleanup unsupported private ORAM transfer".to_string(),
             },
+            None,
         )
         .expect("abort must remain available to clean up unsupported transfer records");
     }
@@ -1876,9 +1937,10 @@ mod tests {
         ];
 
         for operation in progressing_operations {
-            let err =
-                reject_private_oram_shard_transfer_until_supported("docs", &params, &operation)
-                    .expect_err("private result ORAM transfer progress must fail closed");
+            let err = reject_private_oram_shard_transfer_until_supported(
+                "docs", &params, &operation, None,
+            )
+            .expect_err("private result ORAM transfer progress must fail closed");
             assert!(
                 err.to_string().contains("private ORAM shard transfer")
                     && err
@@ -1896,6 +1958,7 @@ mod tests {
                 transfer: transfer_key,
                 reason: "cleanup unsupported private ORAM transfer".to_string(),
             },
+            None,
         )
         .expect("abort must remain available to clean up unsupported transfer records");
     }

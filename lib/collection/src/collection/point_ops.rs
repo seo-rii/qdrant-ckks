@@ -53,9 +53,10 @@ use crate::operations::shard_selector_internal::ShardSelectorInternal;
 use crate::operations::types::*;
 use crate::operations::vector_ops::VectorOperations;
 use crate::operations::{CollectionUpdateOperations, OperationWithClockTag};
+use crate::shards::resharding::ReshardState;
 use crate::shards::shard::{PeerId, ShardId};
 use crate::shards::shard_trait::WaitUntil;
-use crate::shards::transfer::{ShardTransfer, ShardTransferMethod};
+use crate::shards::transfer::ShardTransfer;
 
 const METADATA_BLIND_INDEX_MATCH_ANY_MAX_TOKENS: usize = 64;
 const METADATA_BLIND_INDEX_FILTER_MAX_TOKENS: usize = 256;
@@ -174,17 +175,15 @@ fn reject_private_hnsw_oram_read_only_point_operation(
 fn private_oram_preinstalled_transfer_authorizes_peer_sync(
     operation: &CollectionUpdateOperations,
     transfer: &ShardTransfer,
+    resharding: Option<&ReshardState>,
     this_peer_id: PeerId,
     shard_id: ShardId,
 ) -> bool {
     matches!(
         operation,
         CollectionUpdateOperations::PointOperation(PointOperations::SyncPoints(_))
-    ) && transfer.private_oram_preinstalled
+    ) && transfer.is_private_oram_preinstalled_transfer_for(resharding)
         && transfer.is_target(this_peer_id, shard_id)
-        && transfer.to_shard_id.is_none()
-        && transfer.method == Some(ShardTransferMethod::StreamRecords)
-        && transfer.filter.is_none()
 }
 
 fn encrypted_vector_return_error(
@@ -1027,19 +1026,20 @@ impl Collection {
             return Ok(());
         };
 
-        let private_oram_transfer_sync = !self
-            .shards_holder
-            .read()
-            .await
+        let shards_holder = self.shards_holder.read().await;
+        let resharding = shards_holder.resharding_state();
+        let private_oram_transfer_sync = !shards_holder
             .get_transfers(|transfer| {
                 private_oram_preinstalled_transfer_authorizes_peer_sync(
                     operation,
                     transfer,
+                    resharding.as_ref(),
                     self.this_peer_id,
                     shard_id,
                 )
             })
             .is_empty();
+        drop(shards_holder);
         if !private_oram_transfer_sync {
             reject_private_hnsw_oram_read_only_point_operation(operation, &encryption, true)?;
             reject_private_result_oram_payload_point_operation(operation, &encryption, true)?;
@@ -4264,6 +4264,7 @@ mod tests {
     use super::*;
     use crate::config::{CollectionEncryptionConfig, EncryptionRuleRef};
     use crate::operations::point_ops::PointStructPersisted;
+    use crate::shards::transfer::ShardTransferMethod;
 
     fn blind_index_token(byte: u8) -> String {
         BASE64URL_NOPAD.encode(&[byte; 32])
@@ -4806,6 +4807,7 @@ mod tests {
         assert!(private_oram_preinstalled_transfer_authorizes_peer_sync(
             &sync,
             &transfer,
+            None,
             this_peer_id,
             shard_id,
         ));
@@ -4836,6 +4838,7 @@ mod tests {
             assert!(!private_oram_preinstalled_transfer_authorizes_peer_sync(
                 &sync,
                 &unauthorized,
+                None,
                 this_peer_id,
                 shard_id,
             ));
@@ -4847,8 +4850,42 @@ mod tests {
         assert!(!private_oram_preinstalled_transfer_authorizes_peer_sync(
             &delete,
             &transfer,
+            None,
             this_peer_id,
             shard_id,
+        ));
+
+        let resharding = ReshardState::new(
+            uuid::Uuid::nil(),
+            crate::operations::cluster_ops::ReshardingDirection::Up,
+            this_peer_id,
+            9,
+            None,
+        );
+        let resharding_transfer = ShardTransfer {
+            shard_id: 7,
+            to_shard_id: Some(9),
+            from: 11,
+            to: this_peer_id,
+            sync: true,
+            method: Some(ShardTransferMethod::ReshardingStreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
+            filter: None,
+        };
+        assert!(private_oram_preinstalled_transfer_authorizes_peer_sync(
+            &sync,
+            &resharding_transfer,
+            Some(&resharding),
+            this_peer_id,
+            9,
+        ));
+        assert!(!private_oram_preinstalled_transfer_authorizes_peer_sync(
+            &sync,
+            &resharding_transfer,
+            None,
+            this_peer_id,
+            9,
         ));
     }
 

@@ -13,6 +13,7 @@ use crate::operations::cluster_ops::ReshardingDirection;
 use crate::operations::types::{CollectionError, CollectionResult};
 use crate::shards::local_shard::LocalShard;
 use crate::shards::replica_set::replica_set_state::ReplicaState;
+use crate::shards::resharding::ReshardState;
 use crate::shards::shard::{PeerId, ShardId};
 use crate::shards::shard_holder::ShardHolder;
 use crate::shards::transfer::transfer_tasks_pool::{TransferTaskItem, TransferTaskProgress};
@@ -22,6 +23,24 @@ use crate::shards::transfer::{
 use crate::shards::{shard_initializing_flag_path, transfer};
 
 fn validate_private_oram_transfer_task_start_until_supported(
+    _collection_name: &str,
+    private_oram_bucket_store_collection: bool,
+    transfer: &ShardTransfer,
+    resharding: Option<&ReshardState>,
+) -> CollectionResult<()> {
+    if !private_oram_bucket_store_collection
+        || transfer.is_private_oram_preinstalled_transfer_for(resharding)
+    {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(
+        "cannot start shard transfer task for private ORAM collections without a verified \
+         encrypted ORAM preinstall and consensus-backed epoch/root ownership",
+    ))
+}
+
+fn validate_private_oram_receiving_preinstall_until_supported(
     _collection_name: &str,
     private_oram_bucket_store_collection: bool,
     private_oram_preinstalled: bool,
@@ -97,10 +116,12 @@ impl Collection {
                 .as_ref()
                 .is_some_and(collection_encryption_uses_private_oram_bucket_store)
         };
+        let resharding = self.resharding_state().await;
         validate_private_oram_transfer_task_start_until_supported(
             self.name(),
             private_oram_bucket_store_collection,
-            shard_transfer.private_oram_preinstalled,
+            &shard_transfer,
+            resharding.as_ref(),
         )?;
 
         let do_transfer = {
@@ -485,7 +506,7 @@ impl Collection {
                     .as_ref()
                     .is_some_and(collection_encryption_uses_private_oram_bucket_store)
             };
-            validate_private_oram_transfer_task_start_until_supported(
+            validate_private_oram_receiving_preinstall_until_supported(
                 &collection_name,
                 private_oram_bucket_store_collection,
                 private_oram_preinstalled,
@@ -832,18 +853,31 @@ mod tests {
 
     #[test]
     fn private_oram_transfer_task_start_fails_closed_until_bucket_transfer_supported() {
+        let mut transfer = ShardTransfer {
+            shard_id: 7,
+            to_shard_id: None,
+            from: 11,
+            to: 22,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: false,
+            private_oram_layout_transition: None,
+            filter: None,
+        };
         for collection_name in PRIVATE_ORAM_TRANSFER_COLLECTION_NAMES {
             validate_private_oram_transfer_task_start_until_supported(
                 collection_name,
                 false,
-                false,
+                &transfer,
+                None,
             )
             .unwrap();
 
             let err = validate_private_oram_transfer_task_start_until_supported(
                 collection_name,
                 true,
-                false,
+                &transfer,
+                None,
             )
             .unwrap_err();
             let rendered = format!("{err:?}");
@@ -859,8 +893,44 @@ mod tests {
             assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
             assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
 
-            validate_private_oram_transfer_task_start_until_supported(collection_name, true, true)
-                .expect("verified private ORAM preinstall must allow transfer task startup");
+            transfer.private_oram_preinstalled = true;
+            validate_private_oram_transfer_task_start_until_supported(
+                collection_name,
+                true,
+                &transfer,
+                None,
+            )
+            .expect("verified private ORAM preinstall must allow transfer task startup");
+            validate_private_oram_receiving_preinstall_until_supported(collection_name, true, true)
+                .expect("verified private ORAM preinstall must allow receiver initialization");
+            transfer.private_oram_preinstalled = false;
         }
+
+        let resharding = ReshardState::new(uuid::Uuid::nil(), ReshardingDirection::Up, 22, 9, None);
+        let resharding_transfer = ShardTransfer {
+            shard_id: 7,
+            to_shard_id: Some(9),
+            from: 11,
+            to: 22,
+            sync: true,
+            method: Some(ShardTransferMethod::ReshardingStreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
+            filter: None,
+        };
+        validate_private_oram_transfer_task_start_until_supported(
+            "docs",
+            true,
+            &resharding_transfer,
+            Some(&resharding),
+        )
+        .expect("exact marked private ORAM resharding transfer must start");
+        validate_private_oram_transfer_task_start_until_supported(
+            "docs",
+            true,
+            &resharding_transfer,
+            None,
+        )
+        .expect_err("private ORAM resharding transfer requires active matching state");
     }
 }

@@ -11,7 +11,7 @@ use tokio::time::sleep;
 use super::CollectionId;
 use super::channel_service::ChannelService;
 use super::remote_shard::RemoteShard;
-use super::resharding::ReshardKey;
+use super::resharding::{ReshardKey, ReshardState, ReshardingStage};
 use super::shard::{PeerId, ShardId};
 use crate::operations::cluster_ops::ReshardingDirection;
 use crate::operations::types::{CollectionError, CollectionResult};
@@ -165,6 +165,111 @@ mod tests {
         ] {
             assert!(!rendered.contains(sentinel), "{rendered}");
         }
+    }
+
+    fn resharding_transfer_fixture(
+        direction: ReshardingDirection,
+    ) -> (ReshardState, ShardTransfer) {
+        let state = ReshardState::new(uuid::Uuid::nil(), direction, 22, 9, None);
+        let (shard_id, to_shard_id, from, to) = match direction {
+            ReshardingDirection::Up => (7, 9, 11, 22),
+            ReshardingDirection::Down => (9, 7, 22, 11),
+        };
+        let transfer = ShardTransfer {
+            shard_id,
+            to_shard_id: Some(to_shard_id),
+            from,
+            to,
+            sync: true,
+            method: Some(ShardTransferMethod::ReshardingStreamRecords),
+            private_oram_preinstalled: false,
+            private_oram_layout_transition: None,
+            filter: None,
+        };
+        (state, transfer)
+    }
+
+    #[test]
+    fn exact_resharding_transfer_binds_direction_stage_and_endpoints() {
+        for direction in [ReshardingDirection::Up, ReshardingDirection::Down] {
+            let (state, transfer) = resharding_transfer_fixture(direction);
+            assert!(transfer.is_exact_resharding_transfer_for(&state));
+
+            let mut wrong_stage = state.clone();
+            wrong_stage.stage = ReshardingStage::ReadHashRingCommitted;
+            assert!(!transfer.is_exact_resharding_transfer_for(&wrong_stage));
+
+            for invalid in [
+                ShardTransfer {
+                    sync: false,
+                    ..transfer.clone()
+                },
+                ShardTransfer {
+                    method: Some(ShardTransferMethod::StreamRecords),
+                    ..transfer.clone()
+                },
+                ShardTransfer {
+                    to_shard_id: None,
+                    ..transfer.clone()
+                },
+                ShardTransfer {
+                    to_shard_id: Some(transfer.shard_id),
+                    ..transfer.clone()
+                },
+                ShardTransfer {
+                    filter: Some(Filter::new()),
+                    ..transfer.clone()
+                },
+            ] {
+                assert!(!invalid.is_exact_resharding_transfer_for(&state));
+            }
+
+            let wrong_endpoint = match direction {
+                ReshardingDirection::Up => ShardTransfer {
+                    to: 33,
+                    ..transfer.clone()
+                },
+                ReshardingDirection::Down => ShardTransfer {
+                    from: 33,
+                    ..transfer.clone()
+                },
+            };
+            assert!(!wrong_endpoint.is_exact_resharding_transfer_for(&state));
+        }
+    }
+
+    #[test]
+    fn private_oram_preinstall_authorizes_only_bounded_transfer_shapes() {
+        let (state, transfer) = resharding_transfer_fixture(ReshardingDirection::Up);
+        assert!(!transfer.is_private_oram_preinstalled_transfer_for(Some(&state)));
+
+        let marked = ShardTransfer {
+            private_oram_preinstalled: true,
+            ..transfer
+        };
+        assert!(marked.is_private_oram_preinstalled_transfer_for(Some(&state)));
+        assert!(!marked.is_private_oram_preinstalled_transfer_for(None));
+
+        let stable = ShardTransfer {
+            shard_id: 7,
+            to_shard_id: None,
+            from: 11,
+            to: 22,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
+            filter: None,
+        };
+        assert!(stable.is_private_oram_preinstalled_transfer_for(None));
+        assert!(!stable.is_private_oram_preinstalled_transfer_for(Some(&state)));
+        assert!(
+            !ShardTransfer {
+                method: Some(ShardTransferMethod::Snapshot),
+                ..stable
+            }
+            .is_private_oram_preinstalled_transfer_for(None)
+        );
     }
 }
 
@@ -360,6 +465,58 @@ impl ShardTransfer {
 
     pub fn is_resharding(&self) -> bool {
         self.method.is_some_and(|method| method.is_resharding())
+    }
+
+    /// Whether this is the exact point-migration transfer permitted by an active resharding.
+    pub fn is_exact_resharding_transfer_for(&self, state: &ReshardState) -> bool {
+        if state.stage != ReshardingStage::MigratingPoints
+            || !self.sync
+            || self.method != Some(ShardTransferMethod::ReshardingStreamRecords)
+            || self.filter.is_some()
+            || self.private_oram_layout_transition.is_some()
+        {
+            return false;
+        }
+
+        let Some(to_shard_id) = self.to_shard_id else {
+            return false;
+        };
+        if self.shard_id == to_shard_id {
+            return false;
+        }
+
+        match state.direction {
+            ReshardingDirection::Up => {
+                to_shard_id == state.shard_id
+                    && self.shard_id != state.shard_id
+                    && self.to == state.peer_id
+            }
+            ReshardingDirection::Down => {
+                self.shard_id == state.shard_id
+                    && to_shard_id != state.shard_id
+                    && self.from == state.peer_id
+            }
+        }
+    }
+
+    /// Whether the private ORAM coordinator authorized this transfer's storage preinstall.
+    pub fn is_private_oram_preinstalled_transfer_for(
+        &self,
+        resharding: Option<&ReshardState>,
+    ) -> bool {
+        if !self.private_oram_preinstalled || self.filter.is_some() {
+            return false;
+        }
+
+        match self.method {
+            Some(ShardTransferMethod::StreamRecords) => {
+                resharding.is_none() && self.to_shard_id.is_none()
+            }
+            Some(ShardTransferMethod::ReshardingStreamRecords) => {
+                resharding.is_some_and(|state| self.is_exact_resharding_transfer_for(state))
+            }
+            Some(ShardTransferMethod::Snapshot | ShardTransferMethod::WalDelta) | None => false,
+        }
     }
 
     /// Checks whether this peer and shard ID pair is the source or target of this transfer

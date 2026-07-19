@@ -27,7 +27,6 @@ use collection::shards::channel_service::ChannelService;
 use collection::shards::replica_set::AbortShardTransfer;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::{PeerId, ShardId};
-use collection::shards::transfer::ShardTransferMethod;
 use collection::shards::{CollectionId, replica_set};
 use common::budget::ResourceBudget;
 use common::counter::hardware_accumulator::HwSharedDrain;
@@ -601,14 +600,12 @@ impl TableOfContent {
         let config = collection.config_snapshot().await;
         let private_oram_bucket_store_collection =
             collection_params_use_private_oram_bucket_store(&config.params);
+        let state = collection.state().await;
         let consensus_authorized_preinstall =
             if private_oram_bucket_store_collection && private_oram_preinstalled {
-                collection.state().await.transfers.iter().any(|transfer| {
-                    transfer.private_oram_preinstalled
+                state.transfers.iter().any(|transfer| {
+                    transfer.is_private_oram_preinstalled_transfer_for(state.resharding.as_ref())
                         && transfer.is_target(self.this_peer_id, shard_id)
-                        && transfer.to_shard_id.is_none()
-                        && transfer.method == Some(ShardTransferMethod::StreamRecords)
-                        && transfer.filter.is_none()
                 })
             } else {
                 false

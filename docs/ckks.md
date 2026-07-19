@@ -66,38 +66,46 @@ implementation.
 | Metadata encryption | `metadata/aes-256-gcm@v1` supports selected JSON string metadata values with `metadata-value/v1`; these values use the same server-side AEAD envelope, fail closed for plaintext indexing/filtering, and participate in `encrypted_payload:"decrypted"` reads under the same `payload_decrypt` access policy. `metadata_keys` selectors also support client-generated exact-match blind-index token fields with `metadata-exact-match-token/v1`. | Client-side metadata value encryption should use `payload/client-aead@v1` on the metadata field plus a separate blind-index token field for exact match. Qdrant stores opaque blind-index tokens and never computes them. | CKKS vector metadata sealing is separate from payload metadata value encryption. |
 
 `vector/private-hnsw-oram@v1` is stricter than the generic encrypted
-data-movement policy above. On a fixed shard layout, every peer that owns any
-fully-active shard replica holds the same collection-global encrypted ORAM
-store. Manual movement and automatic dead-replica recovery move one shard at a
-time through `stream_records`, source-side signed full-store preinstall, and a
-verified transfer marker. An exact restart of the sole active marked
-`stream_records` transfer is also supported from its current source peer; the
-source takes a fresh consensus reservation and reinstalls every configured ORAM
-store before submitting the atomic abort/start operation. Exact removal of one
-`Active` replica is supported when all shards are fully active, the target shard
-keeps another replica, and the coordinator remains an owner. The coordinator
-recovers pending writebacks, reserves every private ORAM index through consensus,
-revalidates the layout, and submits a marked single-remove operation. Active
-sessions, dead or transitional replicas, batch removal, and final-replica removal
-fail closed. Removed peers retain opaque ciphertext files but cannot open new
-coordinated sessions unless they still own another active shard replica.
-`ReplicatePoints`, unmarked or method-changing restart, shard-count or shard-key
-layout changes, resharding progress, and shard snapshot export/recovery remain
-fail closed. Consensus snapshot apply also rejects unsupported private ORAM
-transfer state, non-empty resharding state, and shard-info layout, membership, or
-shard layout config changes.
+data-movement policy above. Every peer that owns any fully-active shard replica
+holds the same collection-global encrypted ORAM store. Fixed-layout manual
+movement and automatic dead-replica recovery move one shard at a time through
+`stream_records`, source-side signed full-store preinstall, and a verified
+transfer marker. An exact restart of the sole active marked `stream_records`
+transfer and an exact reserved single-`Active` replica removal are also
+supported.
 
-Raft now persists a separate collection-level private ORAM layout record as the
-foundation for dynamic layout changes. The record contains a monotonic
-generation, a canonical sorted owner-peer union, a shard-layout digest, and a
+Typed scale-up and scale-down resharding use the same encrypted-store ownership
+contract. Start reserves every configured private HNSW/result index and binds
+the expected and next layout to the current epoch/root/writeback state.
+Point migration is accepted only as a source-coordinated
+`ReplicateShard(resharding_stream_records)` that exactly matches the active
+`MigratingPoints` state, shard key, source/destination shards and peers,
+replica endpoint states, `sync=true`, no filter, and no independent layout
+transition. The coordinator preinstalls every configured encrypted ORAM store
+before adding `private_oram_preinstalled`. New sessions and writebacks remain
+blocked from start through finish. Finish revalidates the stable final topology
+and advances the collection-level layout generation before applying the final
+reshard metadata.
+
+`ReplicatePoints`, unmarked or unrelated reshard transfers, reshard-transfer
+restart, shard-key creation/deletion, dead or transitional replica removal,
+batch removal, final-replica removal, and shard snapshot export/recovery remain
+fail closed. Consensus snapshot apply also rejects non-empty active resharding
+state and unsupported private ORAM transfer or shard-layout changes; live typed
+resharding does not yet make active-reshard Raft snapshot recovery safe.
+
+Raft persists a separate collection-level private ORAM layout record consumed
+by fixed-layout transfer/removal and typed scale-up/down resharding. The record
+contains a monotonic generation, a canonical sorted owner-peer union, a
+shard-layout digest, and a
 digest of the private ORAM index epoch/root set. Collection identity is stored
 only through a domain-separated SHA-256 map key, and record debug/log output
 redacts collection identity and both digests. Initial creation must use
 generation 1; later CAS transitions must advance by exactly one, while exact
 replay is idempotent. The map is validated when persistent state or a Raft
 snapshot is loaded and is included in newly generated Raft snapshots; legacy
-snapshots default it to empty. Resharding does not consume this record yet, so
-all resharding and dynamic shard-layout guards described here remain active.
+snapshots default it to empty. Supported reshard finish advances this record by
+exactly one generation; unrelated dynamic layout mutation remains blocked.
 
 The canonical shard-layout digest uses domain
 `qdrant-sec/private-oram-shard-layout-digest/v1` and binds the stable collection
@@ -141,8 +149,8 @@ but their topology must match and the new generation always binds the current
 index states. An abort may leave the exact transfer target replica `Dead`; an
 exact retry excludes only that `(shard, target)` replica from the pre-layout and
 must restore it through the same marked transfer. Any other dead or transitional
-replica still fails closed. Resharding and broader dynamic shard-layout guards
-remain active.
+replica still fails closed. Typed resharding uses a separate layout transition;
+unrelated dynamic shard-layout operations remain blocked.
 
 Private ORAM search and result-fetch providers have their own client-led
 contract:
@@ -154,7 +162,7 @@ contract:
 | Normal Qdrant reads/writes | Dense vector upsert/update, point/vector delete, collection peer `SyncPoints`, `with_vector` reads, ordinary search/query/recommend/discover, grouped paths, search matrix, and `lookup_from`/point-id reference-vector resolution fail closed for the private vector; clients must use the private HNSW session APIs. | Point create/replace/delete, full payload replacement/clear, protected-path payload writes, indexes, filters, ordering, grouping, facets, formulas, and raw payload reads fail closed for the private result path; public non-overlapping payload merges remain ordinary. |
 | Dedicated APIs | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_paths`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_buckets`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. |
 | Snapshot/restore | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and paired result ORAM policy before accepting a restored store. | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and configured binding/runtime policy before accepting a restored store. |
-| Cluster mode | Initial upload installs the exact signed encrypted bundle on the union of all fully-active shard replica owners before the initial Raft ownership CAS. Session open acquires a hashed Raft lease after recovery; `read_paths` requires that exact live lease; commit renews it, durably prepares every owner peer, applies the digest-bound epoch/root CAS, then finalizes remote replicas before the owner. Close releases the exact lease. Fixed-layout manual movement, automatic dead-replica recovery, and exact restart of the sole active marked transfer use signed full-store preinstall before a marked per-shard `stream_records` transfer. Exact single-`Active` replica removal uses a collection-wide reservation and marked consensus update while preserving a remaining owner and replica. Dynamic layout movement, transitional removal, batch removal, and consensus snapshot layout changes remain blocked. | Initial upload, session lease, `read_buckets`, replicated writeback, recovery, and close use the same coordinator contract as HNSW. Result ORAM movement, exact restart, and reserved fixed-layout replica removal follow the same collection-wide ownership policy. |
+| Cluster mode | Initial upload installs the exact signed encrypted bundle on the union of all fully-active shard replica owners before the initial Raft ownership CAS. Session open acquires a hashed Raft lease after recovery; `read_paths` requires that exact live lease; commit renews it, durably prepares every owner peer, applies the digest-bound epoch/root CAS, then finalizes remote replicas before the owner. Close releases the exact lease. Fixed-layout movement/recovery/restart/removal and typed scale-up/down resharding use collection-wide reservations and signed full-store preinstall. Exact point migration requires a marked `resharding_stream_records` transfer matching the active reshard state. Sessions remain blocked throughout active transfer or resharding. Active-reshard snapshot recovery, reshard-transfer restart, shard-key mutation, transitional removal, and batch removal remain blocked. | Initial upload, session lease, `read_buckets`, replicated writeback, recovery, and close use the same coordinator contract as HNSW. Result ORAM movement and typed resharding follow the same collection-wide ownership policy, although current scale-up/down process E2E coverage is HNSW-only. |
 
 The internal Dispatcher writeback coordinator enforces durable local prepare,
 awaited Raft epoch/root CAS, then idempotent local finalize. A writeback epoch
@@ -882,10 +890,13 @@ server scoring, including legacy search/batch search, ordinary query/fusion/cont
 recommend/discover, `lookup_from` or point-id reference-vector resolution,
 grouped search/query, and search matrix paths, fail closed and direct clients
 to the private HNSW ORAM session APIs. Ordinary collection peer `SyncPoints`
-batches are also rejected for private HNSW ORAM collections. The only v1
-exception is a `SyncPoints` request received by the exact target shard while a
-consensus-recorded, source-preinstalled, unfiltered `stream_records` transfer is
-active. That exception does not permit point-level private vector or result
+batches are also rejected for private HNSW ORAM collections. The v1 exceptions
+are a `SyncPoints` request received by the exact target shard of a
+consensus-recorded, source-preinstalled, unfiltered fixed-layout
+`stream_records` transfer, or the exact destination shard of an active
+`MigratingPoints` reshard transfer using `resharding_stream_records`. Both
+require the `private_oram_preinstalled` marker and exact transfer/state
+matching. These exceptions do not permit point-level private vector or result
 payload replay: existing peer validation still rejects any protected vector
 name or private result ORAM payload path. The encrypted ORAM bucket/epoch state
 is installed and verified before the marked transfer starts. Phase 11
@@ -1721,17 +1732,26 @@ writes, and fsync run on Tokio's blocking worker pool so that an install does
 not starve peer health checks or Raft heartbeats. `service.max_request_size_mb`
 applies to each bounded stream frame rather than the aggregate install request;
 the aggregate request still fails closed above the independent 512 MiB limit.
-`ReplicatePoints`, snapshot, WAL, resharding transfer methods, unmarked or
-method-changing restart requests, and dynamic shard-layout changes remain fail
-closed.
-Resharding start and progress operations are blocked for the same collection
-shape. The current resharding data path migrates point payload/vector records
-through a shard proxy, but it does not migrate collection-local private ORAM
-bucket stores or establish consensus-backed epoch/root ownership for the new
-shard layout. The durable collection-level layout CAS record is available, but
-start/preinstall/finish orchestration does not update or verify it yet.
-`AbortResharding` remains allowed for cleanup, while commit,
-finish, and replica-state progress from resharding states fail closed.
+`ReplicatePoints`, snapshot, WAL, unmarked or unrelated resharding transfer
+methods, reshard-transfer restart, method-changing fixed-transfer restart, and
+shard-key layout changes remain fail closed.
+Public scale-up/down resharding is routed through typed private-ORAM start and
+finish Raft operations. Start requires a fully-active stable topology, reserves
+every configured private ORAM index, captures exact epoch/root/writeback state,
+and binds the expected and next shard-layout digests. During
+`MigratingPoints`, only exact source-coordinated
+`ReplicateShard(resharding_stream_records)` transfers are accepted. Each must
+match the active reshard key, source/destination shard and peer, shard-key
+mapping, endpoint replica states, `sync=true`, no filter, and no separate
+layout transition; all encrypted stores are preinstalled before the marker is
+submitted. Hash-ring commits and replica promotion retain the existing stage
+checks, with only the exact scale-up `Resharding -> Active` or scale-down
+`ReshardingScaleDown -> Active` transition allowed. Finish reacquires every
+index reservation, requires the committed write hash ring and fully-active
+final topology, advances the private ORAM layout generation, and then applies
+the final reshard metadata. `AbortResharding` remains available for cleanup.
+New private HNSW/result sessions and writebacks fail closed throughout the
+active reshard so the captured index-state digest cannot drift.
 Shard-key layout changes are blocked for the same reason: `create_sharding_key`
 and `drop_sharding_key` would add or remove shard placement without migrating
 collection-local private ORAM buckets or transferring epoch/root ownership.
@@ -1760,15 +1780,23 @@ layout. As a final guard, only consensus transfer records carrying the verified
 Newly coordinated transfers also carry the exact consensus-bound expected/new
 layout and index-state checkpoint used by the dedicated start/finish Raft
 operations. Legacy marked records remain readable for snapshot/WAL compatibility.
-Restart apply is limited to the exact sole active marked transfer with the same
-key, no temporary shard, no filter, and `stream_records` on both the old and new
-configuration. Unmarked, mismatched, filtered, temporary-shard, and other
-unsupported transfer progress records fail before moving shard data or replica
-state. Unsupported resharding progress records also fail before hash-ring or
-replica-state changes. `Abort` remains allowed for cleanup.
+Fixed-layout restart apply is limited to the exact sole active marked transfer
+with the same key, no temporary shard, no filter, and `stream_records` on both
+the old and new configuration. Unmarked, mismatched, filtered, temporary-shard,
+and other unsupported transfer progress records fail before moving shard data
+or replica state. An active reshard transfer is accepted only when the common
+transfer validator proves the exact `MigratingPoints` shape and
+`private_oram_preinstalled` marker; unsupported resharding progress still
+fails before hash-ring or replica-state changes. `Abort` remains allowed for
+cleanup.
 A three-peer, two-shard RF=2 process test removes a target's collection-global
 HNSW ORAM store, restarts the dead replica, and verifies sequential marked
 recovery of its shard replicas followed by an epoch-43 session on that target.
+Two two-peer HNSW-only process tests exercise public scale-up and scale-down.
+They verify that sessions are blocked during resharding, encrypted stores remain
+available on the final owner union, every peer persists layout generation 2,
+the committed epoch/root session reopens after finish, and ordinary public point
+records remain retrievable.
 Consensus snapshot apply uses the same fail-closed stance. Incoming shard
 transfer state is accepted only for the same verified preinstalled transfer
 shape; unmarked transfer state, non-empty resharding state, and shard layout

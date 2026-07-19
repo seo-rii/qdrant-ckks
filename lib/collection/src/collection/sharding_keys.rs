@@ -29,6 +29,42 @@ impl Collection {
         self.validate_private_oram_replica_set_creation_until_supported()
             .await?;
 
+        self.create_replica_set_authorized(shard_id, shard_key, replicas, init_state)
+            .await
+    }
+
+    pub(crate) async fn create_private_oram_resharding_replica_set(
+        &self,
+        shard_id: ShardId,
+        shard_key: Option<ShardKey>,
+        replicas: &[PeerId],
+        init_state: ReplicaState,
+    ) -> CollectionResult<ShardReplicaSet> {
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
+        validate_private_oram_resharding_replica_set_creation(
+            private_oram_bucket_store_collection,
+            replicas,
+            init_state,
+        )?;
+
+        self.create_replica_set_authorized(shard_id, shard_key, replicas, Some(init_state))
+            .await
+    }
+
+    async fn create_replica_set_authorized(
+        &self,
+        shard_id: ShardId,
+        shard_key: Option<ShardKey>,
+        replicas: &[PeerId],
+        init_state: Option<ReplicaState>,
+    ) -> CollectionResult<ShardReplicaSet> {
         let is_local = replicas.contains(&self.this_peer_id);
 
         let peers = replicas
@@ -367,6 +403,24 @@ fn validate_private_oram_replica_set_creation_until_supported(
     ))
 }
 
+fn validate_private_oram_resharding_replica_set_creation(
+    private_oram_bucket_store_collection: bool,
+    replicas: &[PeerId],
+    init_state: ReplicaState,
+) -> CollectionResult<()> {
+    if private_oram_bucket_store_collection
+        && replicas.len() == 1
+        && init_state == ReplicaState::Resharding
+    {
+        return Ok(());
+    }
+
+    Err(CollectionError::bad_input(
+        "private ORAM resharding replica-set creation requires the typed coordinator, one target \
+         peer, and the resharding replica state",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -600,5 +654,30 @@ mod tests {
         assert!(!rendered.contains("private_result_oram"));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
         assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
+    }
+
+    #[test]
+    fn private_oram_resharding_replica_set_creation_is_typed_and_shape_bounded() {
+        validate_private_oram_resharding_replica_set_creation(true, &[7], ReplicaState::Resharding)
+            .expect("typed scale-up target creation must be allowed");
+
+        for (private_oram, replicas, state) in [
+            (false, vec![7], ReplicaState::Resharding),
+            (true, vec![], ReplicaState::Resharding),
+            (true, vec![7, 9], ReplicaState::Resharding),
+            (true, vec![7], ReplicaState::Active),
+        ] {
+            let err = validate_private_oram_resharding_replica_set_creation(
+                private_oram,
+                &replicas,
+                state,
+            )
+            .expect_err("untyped or malformed resharding target creation must fail");
+            let rendered = format!("{err:?}");
+            assert!(rendered.contains("typed coordinator"));
+            for &leaked_alias in PRIVATE_ORAM_SHARD_KEY_REDACTION_STEMS {
+                assert!(!rendered.contains(leaked_alias), "{rendered}");
+            }
+        }
     }
 }

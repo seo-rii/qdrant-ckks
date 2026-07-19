@@ -40,7 +40,8 @@ impl Collection {
         self.validate_private_oram_resharding_operation_until_supported("start resharding")
             .await?;
 
-        self.start_resharding_authorized(resharding_key).await
+        self.start_resharding_authorized(resharding_key, false)
+            .await
     }
 
     pub async fn start_private_oram_resharding(
@@ -50,12 +51,13 @@ impl Collection {
     ) -> CollectionResult<()> {
         self.validate_private_oram_resharding_consensus_collection()
             .await?;
-        self.start_resharding_authorized(resharding_key).await
+        self.start_resharding_authorized(resharding_key, true).await
     }
 
     async fn start_resharding_authorized(
         &self,
         resharding_key: ReshardKey,
+        private_oram_authorized: bool,
     ) -> CollectionResult<()> {
         {
             let mut shard_holder = self.shards_holder.write().await;
@@ -64,14 +66,23 @@ impl Collection {
 
             // If scaling up, create a new replica set
             let replica_set = if resharding_key.direction == ReshardingDirection::Up {
-                let replica_set = self
-                    .create_replica_set(
+                let replica_set = if private_oram_authorized {
+                    self.create_private_oram_resharding_replica_set(
+                        resharding_key.shard_id,
+                        resharding_key.shard_key.clone(),
+                        &[resharding_key.peer_id],
+                        ReplicaState::Resharding,
+                    )
+                    .await?
+                } else {
+                    self.create_replica_set(
                         resharding_key.shard_id,
                         resharding_key.shard_key.clone(),
                         &[resharding_key.peer_id],
                         Some(ReplicaState::Resharding),
                     )
-                    .await?;
+                    .await?
+                };
 
                 Some(replica_set)
             } else {

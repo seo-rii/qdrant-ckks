@@ -15,7 +15,7 @@ use crate::shards::resharding::ReshardState;
 use crate::shards::shard::{PeerId, ShardId};
 use crate::shards::shard_holder::ShardTransferChange;
 use crate::shards::shard_holder::shard_mapping::ShardKeyMapping;
-use crate::shards::transfer::{ShardTransfer, ShardTransferMethod};
+use crate::shards::transfer::ShardTransfer;
 
 impl Collection {
     pub async fn check_config_compatible(
@@ -45,7 +45,7 @@ impl Collection {
         } = state;
 
         self.apply_config(config).await?;
-        self.apply_shard_transfers(transfers, this_peer_id, abort_transfer)
+        self.apply_shard_transfers(transfers, resharding.as_ref(), this_peer_id, abort_transfer)
             .await?;
         self.apply_reshard_state(resharding).await?;
         self.apply_shard_info(shards, shards_key_mapping).await?;
@@ -57,6 +57,7 @@ impl Collection {
     async fn apply_shard_transfers(
         &self,
         shard_transfers: HashSet<ShardTransfer>,
+        resharding: Option<&ReshardState>,
         this_peer_id: PeerId,
         mut abort_transfer: impl FnMut(ShardTransfer),
     ) -> CollectionResult<()> {
@@ -70,6 +71,7 @@ impl Collection {
         };
         validate_private_oram_apply_shard_transfers_until_supported(
             &shard_transfers,
+            resharding,
             private_oram_bucket_store_collection,
         )?;
 
@@ -383,18 +385,17 @@ fn validate_private_oram_apply_config_layout_until_supported(
 
 fn validate_private_oram_apply_shard_transfers_until_supported(
     shard_transfers: &HashSet<ShardTransfer>,
+    resharding: Option<&ReshardState>,
     private_oram_bucket_store_collection: bool,
 ) -> CollectionResult<()> {
     if !private_oram_bucket_store_collection || shard_transfers.is_empty() {
         return Ok(());
     }
 
-    if shard_transfers.iter().all(|transfer| {
-        transfer.private_oram_preinstalled
-            && transfer.to_shard_id.is_none()
-            && transfer.method == Some(ShardTransferMethod::StreamRecords)
-            && transfer.filter.is_none()
-    }) {
+    if shard_transfers
+        .iter()
+        .all(|transfer| transfer.is_private_oram_preinstalled_transfer_for(resharding))
+    {
         return Ok(());
     }
 
@@ -767,11 +768,14 @@ mod tests {
             filter: None,
         }]);
 
-        validate_private_oram_apply_shard_transfers_until_supported(&HashSet::new(), true).unwrap();
-        validate_private_oram_apply_shard_transfers_until_supported(&transfers, false).unwrap();
+        validate_private_oram_apply_shard_transfers_until_supported(&HashSet::new(), None, true)
+            .unwrap();
+        validate_private_oram_apply_shard_transfers_until_supported(&transfers, None, false)
+            .unwrap();
 
-        let err = validate_private_oram_apply_shard_transfers_until_supported(&transfers, true)
-            .unwrap_err();
+        let err =
+            validate_private_oram_apply_shard_transfers_until_supported(&transfers, None, true)
+                .unwrap_err();
         let rendered = format!("{err:?}");
 
         assert!(
@@ -799,8 +803,34 @@ mod tests {
             private_oram_layout_transition: None,
             filter: None,
         }]);
-        validate_private_oram_apply_shard_transfers_until_supported(&authorized, true)
+        validate_private_oram_apply_shard_transfers_until_supported(&authorized, None, true)
             .expect("verified private ORAM transfer state must apply");
+
+        let resharding =
+            ReshardState::new(Uuid::from_u128(91), ReshardingDirection::Up, 2002, 10, None);
+        let authorized_resharding = HashSet::from([ShardTransfer {
+            shard_id: 9,
+            to_shard_id: Some(10),
+            from: 1001,
+            to: 2002,
+            sync: true,
+            method: Some(ShardTransferMethod::ReshardingStreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
+            filter: None,
+        }]);
+        validate_private_oram_apply_shard_transfers_until_supported(
+            &authorized_resharding,
+            Some(&resharding),
+            true,
+        )
+        .expect("exact marked private ORAM resharding transfer state must apply");
+        validate_private_oram_apply_shard_transfers_until_supported(
+            &authorized_resharding,
+            None,
+            true,
+        )
+        .expect_err("private ORAM resharding transfer requires matching reshard state");
     }
 
     #[test]
