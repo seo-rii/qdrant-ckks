@@ -20,6 +20,27 @@ pub(super) const TRANSFER_BATCH_SIZE: usize = 100;
 /// Minimum version all peers need to be to use the intermediate `ActiveRead` state during transfer
 const STATE_ACTIVE_READ_MIN_VERSION: Version = Version::new(1, 16, 0);
 
+#[cfg(feature = "staging")]
+pub(super) fn staging_transfer_delay() -> Option<std::time::Duration> {
+    std::env::var("QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC")
+        .ok()
+        .and_then(|val| match val.parse::<f64>() {
+            Ok(delay) if delay.is_finite() && delay >= 0.0 => {
+                Some(std::time::Duration::from_secs_f64(delay))
+            }
+            Ok(delay) => {
+                log::warn!(
+                    "Ignoring invalid QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC value: {delay}",
+                );
+                None
+            }
+            Err(err) => {
+                log::warn!("Ignoring invalid QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC value: {err}");
+                None
+            }
+        })
+}
+
 /// Orchestrate shard transfer by streaming records
 ///
 /// This is called on the sender and will arrange all that is needed for the shard transfer
@@ -48,23 +69,7 @@ pub(super) async fn transfer_stream_records(
     let merge_points = filter.is_some();
 
     #[cfg(feature = "staging")]
-    let staging_delay = std::env::var("QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC")
-        .ok()
-        .and_then(|val| match val.parse::<f64>() {
-            Ok(delay) if delay.is_finite() && delay >= 0.0 => {
-                Some(std::time::Duration::from_secs_f64(delay))
-            }
-            Ok(delay) => {
-                log::warn!(
-                    "Ignoring invalid QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC value: {delay}",
-                );
-                None
-            }
-            Err(err) => {
-                log::warn!("Ignoring invalid QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC value: {err}");
-                None
-            }
-        });
+    let staging_delay = staging_transfer_delay();
 
     // Whether we need an intermediate replica state (ActiveRead) during transfer to sync nodes
     // We use this when transferring between different shard IDs to ensure data consistency, this

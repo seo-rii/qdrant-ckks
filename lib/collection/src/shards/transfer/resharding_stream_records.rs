@@ -15,6 +15,8 @@ use crate::shards::remote_shard::RemoteShard;
 use crate::shards::shard::ShardId;
 use crate::shards::shard_holder::SharedShardHolder;
 use crate::shards::transfer::stream_records::TRANSFER_BATCH_SIZE;
+#[cfg(feature = "staging")]
+use crate::shards::transfer::stream_records::staging_transfer_delay;
 
 /// Orchestrate shard transfer by streaming records, but only the points that fall into the new
 /// shard.
@@ -158,6 +160,8 @@ pub(crate) async fn transfer_resharding_stream_records(
     let mut offset = None;
     let mut total_read = Duration::ZERO;
     let mut total_send = Duration::ZERO;
+    #[cfg(feature = "staging")]
+    let staging_delay = staging_transfer_delay();
 
     loop {
         // Read batch under shard holder lock
@@ -179,6 +183,11 @@ pub(crate) async fn transfer_resharding_stream_records(
             // Shard holder lock is dropped here, but the forward proxy update lock is still
             // held inside the prepared batch.
         };
+
+        #[cfg(feature = "staging")]
+        if let Some(delay) = staging_delay {
+            tokio::time::sleep(delay).await;
+        }
 
         // Send batch to remote shard without holding the shard holder lock.
         let result = prepared_batch.send(&remote_shard).await?;

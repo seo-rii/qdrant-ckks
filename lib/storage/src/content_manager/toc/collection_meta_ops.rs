@@ -691,19 +691,28 @@ impl TableOfContent {
                     &transfer_restart,
                 )?;
 
-                // Abort and start transfer
-                Box::pin(self.handle_transfer(
-                    collection_id.clone(),
-                    ShardTransferOperations::Abort {
-                        transfer: transfer_restart.key(),
-                        reason: "restart transfer".into(),
-                    },
-                ))
-                .await?;
+                // An exact private ORAM resharding restart replaces only the transfer task. A
+                // normal resharding abort would also roll back the active reshard operation.
+                if collection_params_use_private_oram_bucket_store(&collection_config.params)
+                    && old_transfer.is_resharding()
+                {
+                    collection
+                        .abort_shard_transfer_for_restart(old_transfer.clone())
+                        .await?;
+                } else {
+                    Box::pin(self.handle_transfer(
+                        collection_id.clone(),
+                        ShardTransferOperations::Abort {
+                            transfer: transfer_restart.key(),
+                            reason: "restart transfer".into(),
+                        },
+                    ))
+                    .await?;
+                }
 
                 let new_transfer = ShardTransfer {
                     shard_id: transfer_restart.shard_id,
-                    to_shard_id: None,
+                    to_shard_id: transfer_restart.to_shard_id,
                     from: transfer_restart.from,
                     to: transfer_restart.to,
                     sync: old_transfer.sync, // Preserve sync flag from the old transfer
@@ -940,11 +949,19 @@ fn reject_private_oram_shard_transfer_until_supported(
         return Ok(());
     }
 
-    if let ShardTransferOperations::Restart(restart) = transfer_operation
-        && restart.to_shard_id.is_none()
-        && restart.method == ShardTransferMethod::StreamRecords
-    {
-        return Ok(());
+    if let ShardTransferOperations::Restart(restart) = transfer_operation {
+        let supported_shape = match restart.method {
+            ShardTransferMethod::StreamRecords => {
+                restart.to_shard_id.is_none() && resharding.is_none()
+            }
+            ShardTransferMethod::ReshardingStreamRecords => {
+                restart.to_shard_id.is_some() && resharding.is_some()
+            }
+            ShardTransferMethod::Snapshot | ShardTransferMethod::WalDelta => false,
+        };
+        if supported_shape {
+            return Ok(());
+        }
     }
 
     Err(StorageError::bad_input(format!(
@@ -978,14 +995,14 @@ fn validate_private_oram_restart_apply(
             .is_some_and(|transfer| transfer == old_transfer)
         && old_transfer.key() == restart.key()
         && old_transfer.is_private_oram_preinstalled_transfer_for(resharding)
-        && restart.to_shard_id.is_none()
-        && restart.method == ShardTransferMethod::StreamRecords;
+        && old_transfer.method == Some(restart.method);
     if valid {
         return Ok(());
     }
 
     Err(StorageError::bad_input(
-        "private ORAM restart transfer requires the exact active marked stream-records transfer",
+        "private ORAM restart transfer requires the exact active marked transfer with an \
+         unchanged method",
     ))
 }
 
@@ -1643,6 +1660,19 @@ mod tests {
             Some(&resharding),
         )
         .expect("exact marked private ORAM resharding transfer must finish");
+        reject_private_oram_shard_transfer_until_supported(
+            "docs",
+            &params,
+            &ShardTransferOperations::Restart(ShardTransferRestart {
+                shard_id: resharding_transfer.shard_id,
+                to_shard_id: resharding_transfer.to_shard_id,
+                from: resharding_transfer.from,
+                to: resharding_transfer.to,
+                method: ShardTransferMethod::ReshardingStreamRecords,
+            }),
+            Some(&resharding),
+        )
+        .expect("exact private ORAM resharding restart must reach apply validation");
 
         resharding.stage = ReshardingStage::ReadHashRingCommitted;
         reject_private_oram_shard_transfer_until_supported(
@@ -1711,6 +1741,44 @@ mod tests {
         )
         .expect_err("fixed-layout private ORAM restart must fail during active resharding");
 
+        let resharding_transfer = ShardTransfer {
+            shard_id: 1,
+            to_shard_id: Some(2),
+            from: 2,
+            to: 3,
+            sync: true,
+            method: Some(ShardTransferMethod::ReshardingStreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
+            filter: None,
+        };
+        let resharding_restart = ShardTransferRestart {
+            shard_id: resharding_transfer.shard_id,
+            to_shard_id: resharding_transfer.to_shard_id,
+            from: resharding_transfer.from,
+            to: resharding_transfer.to,
+            method: ShardTransferMethod::ReshardingStreamRecords,
+        };
+        validate_private_oram_restart_apply(
+            &private_params,
+            &HashSet::from([resharding_transfer.clone()]),
+            Some(&active_resharding),
+            &resharding_transfer,
+            &resharding_restart,
+        )
+        .expect("exact marked resharding restart must be accepted during point migration");
+
+        let mut committed_resharding = active_resharding.clone();
+        committed_resharding.stage = ReshardingStage::ReadHashRingCommitted;
+        validate_private_oram_restart_apply(
+            &private_params,
+            &HashSet::from([resharding_transfer.clone()]),
+            Some(&committed_resharding),
+            &resharding_transfer,
+            &resharding_restart,
+        )
+        .expect_err("private ORAM resharding restart must fail after point migration");
+
         let mut unmarked = transfer.clone();
         unmarked.private_oram_preinstalled = false;
         let mut old_wrong_method = transfer.clone();
@@ -1750,7 +1818,7 @@ mod tests {
             )
             .unwrap_err()
             .to_string();
-            assert!(rendered.contains("exact active marked stream-records transfer"));
+            assert!(rendered.contains("exact active marked transfer"));
             assert_private_oram_consensus_guard_redacts_config(&rendered);
         }
 

@@ -780,6 +780,29 @@ def _request_private_oram_shard_transfer(
     )
 
 
+def _request_private_oram_resharding_transfer(
+    source_url: str,
+    transfer_operation: str,
+    source_shard_id: int,
+    target_shard_id: int,
+    source_peer_id: int,
+    target_peer_id: int,
+) -> requests.Response:
+    return requests.post(
+        f"{source_url}/collections/{COLLECTION}/cluster",
+        json={
+            transfer_operation: {
+                "shard_id": source_shard_id,
+                "to_shard_id": target_shard_id,
+                "from_peer_id": source_peer_id,
+                "to_peer_id": target_peer_id,
+                "method": "resharding_stream_records",
+            }
+        },
+        timeout=60,
+    )
+
+
 def _private_oram_layout_state(peer_dir: pathlib.Path) -> dict | None:
     try:
         with open(peer_dir / "storage" / "raft_state.json") as state_file:
@@ -1515,6 +1538,101 @@ def test_private_oram_restart_repreinstalls_and_completes(
     _wait_for_private_oram_layout(
         peer_dirs, 2, [source_info["peer_id"], target_info["peer_id"]]
     )
+
+
+def test_private_oram_resharding_restart_repreinstalls_and_completes(
+    tmp_path: pathlib.Path,
+):
+    peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(
+        tmp_path,
+        2,
+        1,
+        include_public_vector=True,
+        extra_env={
+            "QDRANT__CLUSTER__RESHARDING_ENABLED": "true",
+            "QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "5",
+        },
+    )
+    skip_if_no_feature(peer_urls[0], "staging")
+    _, target_index, source_url, target_url, source_info, target_info = (
+        _private_oram_transfer_peers(peer_urls)
+    )
+    source_peer_id = source_info["peer_id"]
+    target_peer_id = target_info["peer_id"]
+    source_shard_id = source_info["local_shards"][0]["shard_id"]
+    target_shard_id = source_shard_id + 1
+
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    _upload_result_oram(source_url, fixture)
+    _exercise_result_owner_session(source_url, fixture)
+
+    started_resharding = start_resharding(
+        source_url,
+        collection=COLLECTION,
+        direction="up",
+        peer_id=target_peer_id,
+    )
+    assert_http_ok(started_resharding)
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
+
+    started_transfer = _request_private_oram_resharding_transfer(
+        source_url,
+        "replicate_shard",
+        source_shard_id,
+        target_shard_id,
+        source_peer_id,
+        target_peer_id,
+    )
+    assert_http_ok(started_transfer)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
+    _wait_for_private_oram_layout(peer_dirs, 1, [source_peer_id])
+
+    collection_path = (
+        peer_dirs[target_index] / "storage" / "collections" / COLLECTION
+    )
+    hnsw_store = collection_path / "private_hnsw_oram"
+    result_store = collection_path / "private_result_oram"
+    assert (hnsw_store / VECTOR / "buckets").is_dir()
+    assert (result_store / "buckets").is_dir()
+    shutil.rmtree(hnsw_store)
+    shutil.rmtree(result_store)
+
+    restarted = _request_private_oram_resharding_transfer(
+        source_url,
+        "restart_transfer",
+        source_shard_id,
+        target_shard_id,
+        source_peer_id,
+        target_peer_id,
+    )
+    assert_http_ok(restarted)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
+    assert (hnsw_store / VECTOR / "buckets").is_dir()
+    assert (result_store / "buckets").is_dir()
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
+    _wait_for_private_oram_layout(peer_dirs, 1, [source_peer_id])
+    _assert_private_oram_sessions_blocked_during_resharding(source_url, fixture, True)
+
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 0)
+    activate_replica(
+        source_url,
+        target_peer_id,
+        target_shard_id,
+        collection=COLLECTION,
+    )
+    assert_http_ok(commit_read_hashring(source_url, collection=COLLECTION))
+    assert_http_ok(commit_write_hashring(source_url, collection=COLLECTION))
+    assert_http_ok(finish_resharding(source_url, collection=COLLECTION))
+
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _wait_for_private_oram_layout(peer_dirs, 2, [source_peer_id, target_peer_id])
+    for owner_url in [source_url, target_url]:
+        _assert_private_oram_owner_sessions(owner_url, fixture, True)
 
 
 @pytest.mark.parametrize("index_kind", ["hnsw", "result"])

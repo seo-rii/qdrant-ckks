@@ -444,6 +444,18 @@ impl Collection {
         Ok(())
     }
 
+    /// Stops and unregisters a transfer while preserving its active resharding operation.
+    ///
+    /// Callers must validate that the transfer is immediately replaced by the same exact
+    /// resharding transfer. Normal aborts must use `abort_shard_transfer_and_resharding`.
+    pub async fn abort_shard_transfer_for_restart(
+        &self,
+        transfer: ShardTransfer,
+    ) -> CollectionResult<()> {
+        let shard_holder = self.shards_holder.read().await;
+        self.abort_shard_transfer(transfer, &shard_holder).await
+    }
+
     /// Handles abort of the transfer and also aborts resharding if the transfer was related to resharding
     ///
     /// 1. Unregister the transfer

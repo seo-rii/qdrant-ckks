@@ -717,6 +717,7 @@ pub async fn do_update_collection_cluster(
                 validate_private_oram_restart_transfer(
                     &restart_transfer,
                     &collection_state.transfers,
+                    collection_state.resharding.as_ref(),
                     dispatcher.this_peer_id(),
                 )?;
             }
@@ -1657,6 +1658,18 @@ fn validate_private_oram_cluster_transfer(
         return Ok(PrivateOramClusterTransferRoute::StableLayout);
     }
 
+    if let ClusterOperations::RestartTransfer(RestartTransferOperation { restart_transfer }) =
+        operation
+        && state.resharding.is_some()
+        && private_oram_restart_matches_exact_active_transfer(
+            restart_transfer,
+            &state.transfers,
+            state.resharding.as_ref(),
+        )
+    {
+        return Ok(PrivateOramClusterTransferRoute::Resharding);
+    }
+
     if let ClusterOperations::ReplicateShard(ReplicateShardOperation { replicate_shard }) =
         operation
         && let Some(resharding) = state.resharding.as_ref()
@@ -1734,33 +1747,42 @@ fn validate_private_oram_cluster_transfer(
 fn validate_private_oram_restart_transfer(
     restart: &RestartTransfer,
     active_transfers: &HashSet<ShardTransfer>,
+    resharding: Option<&ReshardState>,
     local_peer_id: PeerId,
 ) -> Result<(), StorageError> {
+    let valid = restart.from_peer_id == local_peer_id
+        && private_oram_restart_matches_exact_active_transfer(
+            restart,
+            active_transfers,
+            resharding,
+        );
+    if valid {
+        return Ok(());
+    }
+
+    Err(StorageError::bad_request(
+        "private ORAM restart transfer requires the exact active marked transfer with an \
+         unchanged method on its current source peer",
+    ))
+}
+
+fn private_oram_restart_matches_exact_active_transfer(
+    restart: &RestartTransfer,
+    active_transfers: &HashSet<ShardTransfer>,
+    resharding: Option<&ReshardState>,
+) -> bool {
     let transfer_key = ShardTransferKey {
         shard_id: restart.shard_id,
         to_shard_id: restart.to_shard_id,
         to: restart.to_peer_id,
         from: restart.from_peer_id,
     };
-    let valid = restart.from_peer_id == local_peer_id
-        && restart.to_shard_id.is_none()
-        && restart.method == ShardTransferMethod::StreamRecords
-        && active_transfers.len() == 1
+    active_transfers.len() == 1
         && active_transfers.iter().next().is_some_and(|transfer| {
             transfer.key() == transfer_key
-                && transfer.to_shard_id.is_none()
-                && transfer.method == Some(ShardTransferMethod::StreamRecords)
-                && transfer.private_oram_preinstalled
-                && transfer.filter.is_none()
-        });
-    if valid {
-        return Ok(());
-    }
-
-    Err(StorageError::bad_request(
-        "private ORAM restart transfer requires the exact active marked stream-records transfer \
-         on its current source peer",
-    ))
+                && transfer.method == Some(restart.method)
+                && transfer.is_private_oram_preinstalled_transfer_for(resharding)
+        })
 }
 
 fn classify_private_oram_cluster_resharding_route(
@@ -2680,8 +2702,13 @@ mod tests {
             private_oram_layout_transition: None,
             filter: None,
         };
-        validate_private_oram_restart_transfer(&restart, &HashSet::from([transfer.clone()]), 7)
-            .unwrap();
+        validate_private_oram_restart_transfer(
+            &restart,
+            &HashSet::from([transfer.clone()]),
+            None,
+            7,
+        )
+        .unwrap();
 
         let mut unmarked = transfer.clone();
         unmarked.private_oram_preinstalled = false;
@@ -2706,12 +2733,79 @@ mod tests {
             (wrong_method, HashSet::from([transfer.clone()]), 7),
             (temporary, HashSet::from([transfer]), 7),
         ] {
-            let rendered = validate_private_oram_restart_transfer(&request, &transfers, local_peer)
-                .unwrap_err()
-                .to_string();
-            assert!(rendered.contains("exact active marked stream-records transfer"));
+            let rendered =
+                validate_private_oram_restart_transfer(&request, &transfers, None, local_peer)
+                    .unwrap_err()
+                    .to_string();
+            assert!(rendered.contains("exact active marked transfer"));
             assert!(!rendered.contains("private_hnsw_oram"));
             assert!(!rendered.contains("private_result_oram"));
+        }
+    }
+
+    #[test]
+    fn private_oram_resharding_restart_requires_exact_active_marked_transfer() {
+        for direction in [ReshardingDirection::Up, ReshardingDirection::Down] {
+            let (mut state, operation) = private_oram_resharding_transfer_state(direction);
+            let ClusterOperations::ReplicateShard(ReplicateShardOperation { replicate_shard }) =
+                operation
+            else {
+                unreachable!();
+            };
+            let transfer = ShardTransfer {
+                shard_id: replicate_shard.shard_id,
+                to_shard_id: replicate_shard.to_shard_id,
+                from: replicate_shard.from_peer_id,
+                to: replicate_shard.to_peer_id,
+                sync: true,
+                method: replicate_shard.method,
+                private_oram_preinstalled: true,
+                private_oram_layout_transition: None,
+                filter: None,
+            };
+            state.transfers.insert(transfer.clone());
+            let restart = RestartTransfer {
+                shard_id: transfer.shard_id,
+                to_shard_id: transfer.to_shard_id,
+                from_peer_id: transfer.from,
+                to_peer_id: transfer.to,
+                method: ShardTransferMethod::ReshardingStreamRecords,
+            };
+            let restart_operation = ClusterOperations::RestartTransfer(RestartTransferOperation {
+                restart_transfer: restart.clone(),
+            });
+
+            assert_eq!(
+                validate_private_oram_cluster_transfer("docs", &state, &restart_operation).unwrap(),
+                PrivateOramClusterTransferRoute::Resharding,
+            );
+            validate_private_oram_restart_transfer(
+                &restart,
+                &state.transfers,
+                state.resharding.as_ref(),
+                transfer.from,
+            )
+            .unwrap();
+
+            let mut wrong_method = restart.clone();
+            wrong_method.method = ShardTransferMethod::StreamRecords;
+            validate_private_oram_restart_transfer(
+                &wrong_method,
+                &state.transfers,
+                state.resharding.as_ref(),
+                transfer.from,
+            )
+            .expect_err("resharding restart must preserve its transfer method");
+
+            state.resharding.as_mut().unwrap().stage =
+                collection::shards::resharding::ReshardingStage::ReadHashRingCommitted;
+            validate_private_oram_restart_transfer(
+                &restart,
+                &state.transfers,
+                state.resharding.as_ref(),
+                transfer.from,
+            )
+            .expect_err("resharding restart must remain in point migration");
         }
     }
 
