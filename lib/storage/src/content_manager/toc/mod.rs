@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use api::rest::models::HardwareUsage;
 use collection::collection::{Collection, RequestShardTransfer};
@@ -95,6 +95,7 @@ pub struct TableOfContent {
     /// Aggregation of all hardware measurements for each alias or collection config.
     collection_hw_metrics: DashMap<CollectionId, Arc<HwSharedDrain>>,
     client_payload_nonce_replay_cache: Mutex<ClientPayloadNonceReplayCache>,
+    private_oram_snapshot_recovery_abort_requests: Mutex<HashMap<CollectionId, Instant>>,
     /// Collector for various telemetry/metrics.
     telemetry: TocTelemetryCollector,
 }
@@ -329,6 +330,7 @@ impl TableOfContent {
             collection_create_lock: Default::default(),
             collection_hw_metrics: DashMap::new(),
             client_payload_nonce_replay_cache: Mutex::new(ClientPayloadNonceReplayCache::default()),
+            private_oram_snapshot_recovery_abort_requests: Default::default(),
             telemetry,
         })
     }

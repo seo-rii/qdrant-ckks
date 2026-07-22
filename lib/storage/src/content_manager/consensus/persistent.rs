@@ -31,7 +31,8 @@ use crate::content_manager::consensus_ops::{
     PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramReshardingOperation,
     PrivateOramSessionLease, PrivateOramShardKeyLayoutChange, PrivateOramShardKeyLayoutChangeKind,
     PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
-    canonical_private_oram_index_state_digest, private_oram_transfer_consensus_layouts,
+    canonical_private_oram_index_state_digest,
+    private_oram_layout_is_precommitted_transfer_recovery, private_oram_transfer_consensus_layouts,
     private_oram_transfer_consensus_states,
 };
 use crate::types::{PeerAddressById, PeerMetadataById};
@@ -654,7 +655,7 @@ impl Persistent {
     pub fn validate_private_oram_shard_transfer_start(
         &self,
         operation: &PrivateOramShardTransferStart,
-    ) -> Result<(), StorageError> {
+    ) -> Result<Option<CompareAndSwapPrivateOramLayout>, StorageError> {
         let transition = private_oram_transfer_transition(
             &operation.collection_meta,
             PrivateOramTransferOperationKind::Start,
@@ -674,15 +675,32 @@ impl Persistent {
                 return Err(invalid_private_oram_transfer_transition());
             }
         }
-        if self.private_oram_layout(&layout_key).as_ref() != Some(&expected_layout) {
+        let layout = CompareAndSwapPrivateOramLayout {
+            key: layout_key,
+            expected: Some(expected_layout.clone()),
+            new: new_layout.clone(),
+        };
+        validate_private_oram_layout_cas(&layout)
+            .map_err(|_| invalid_private_oram_transfer_transition())?;
+
+        let current = self
+            .private_oram_layout(&layout.key)
+            .ok_or_else(invalid_private_oram_transfer_transition)?;
+        if current == expected_layout || current == new_layout {
+            return Ok(None);
+        }
+        if !private_oram_layout_is_precommitted_transfer_recovery(
+            &current,
+            &expected_layout,
+            &new_layout,
+        ) {
             return Err(invalid_private_oram_transfer_transition());
         }
-        validate_private_oram_layout_cas(&CompareAndSwapPrivateOramLayout {
-            key: layout_key,
-            expected: Some(expected_layout),
+        Ok(Some(CompareAndSwapPrivateOramLayout {
+            key: layout.key,
+            expected: Some(current),
             new: new_layout,
-        })
-        .map_err(|_| invalid_private_oram_transfer_transition())
+        }))
     }
 
     pub fn validate_private_oram_shard_transfer_finish(
@@ -2229,6 +2247,68 @@ mod tests {
             )),
         };
 
+        let recovery_temp = tempfile::tempdir().unwrap();
+        let mut recovery_start = start.clone();
+        let CollectionMetaOperations::TransferShard(_, ShardTransferOperations::Start(transfer)) =
+            recovery_start.collection_meta.as_mut()
+        else {
+            unreachable!();
+        };
+        let transition = transfer.private_oram_layout_transition.as_mut().unwrap();
+        transition.expected.index_state_digest = new.index_state_digest.clone();
+        let recovery_expected = PrivateOramConsensusLayout {
+            index_state_digest: new.index_state_digest.clone(),
+            ..expected.clone()
+        };
+        let precommitted = PrivateOramConsensusLayout {
+            generation: recovery_expected.generation,
+            owner_peer_ids: new.owner_peer_ids.clone(),
+            layout_digest: new.layout_digest.clone(),
+            index_state_digest: new.index_state_digest.clone(),
+        };
+        let mut recovery =
+            Persistent::load_or_init(recovery_temp.path(), true, false, Some(7)).unwrap();
+        for (key, epoch) in &states {
+            recovery
+                .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                    key: key.clone(),
+                    expected: None,
+                    new: epoch.clone(),
+                })
+                .unwrap();
+            recovery
+                .compare_and_swap_private_oram_session_lease(
+                    &CompareAndSwapPrivateOramSessionLease {
+                        key: key.clone(),
+                        expected: None,
+                        new: Some(lease.clone()),
+                    },
+                )
+                .unwrap();
+        }
+        recovery
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: layout_key.clone(),
+                expected: None,
+                new: precommitted.clone(),
+            })
+            .unwrap();
+        let recovery_cas = recovery
+            .validate_private_oram_shard_transfer_start(&recovery_start)
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovery_cas.expected, Some(precommitted));
+        assert_eq!(recovery_cas.new, new.clone());
+        recovery
+            .compare_and_swap_private_oram_layout(&recovery_cas)
+            .unwrap();
+        assert_eq!(
+            recovery
+                .validate_private_oram_shard_transfer_start(&recovery_start)
+                .unwrap(),
+            None,
+        );
+
         let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
         for (key, epoch) in &states {
             persistent
@@ -2256,9 +2336,12 @@ mod tests {
             })
             .unwrap();
 
-        persistent
-            .validate_private_oram_shard_transfer_start(&start)
-            .unwrap();
+        assert!(
+            persistent
+                .validate_private_oram_shard_transfer_start(&start)
+                .unwrap()
+                .is_none()
+        );
         let layout_cas = persistent
             .validate_private_oram_shard_transfer_finish(&finish)
             .unwrap();

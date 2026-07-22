@@ -657,9 +657,15 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         let topology_state = self
             .toc
             .private_oram_shard_transfer_start_state(operation)?;
-        self.persistent
+        let precommitted_recovery = self
+            .persistent
             .read()
             .validate_private_oram_shard_transfer_start(operation)?;
+        if let Some(layout) = precommitted_recovery {
+            self.persistent
+                .write()
+                .compare_and_swap_private_oram_layout(&layout)?;
+        }
         if topology_state == PrivateOramLayoutTransitionState::Pending {
             let apply_result = self
                 .toc
@@ -2147,21 +2153,22 @@ mod tests {
         let layout_key = PrivateOramLayoutKey {
             collection_id: collection_id.to_string(),
         };
+        let index_state_digest = canonical_private_oram_index_state_digest(
+            collection_id,
+            &[(epoch_key.clone(), epoch.clone())],
+        )
+        .unwrap();
         let current = PrivateOramConsensusLayout {
             generation: 1,
             owner_peer_ids: vec![7],
             layout_digest: BASE64URL_NOPAD.encode(&[44; 32]),
-            index_state_digest: BASE64URL_NOPAD.encode(&[45; 32]),
+            index_state_digest: index_state_digest.clone(),
         };
         let next = PrivateOramConsensusLayout {
             generation: 2,
             owner_peer_ids: vec![7, 9],
             layout_digest: BASE64URL_NOPAD.encode(&[46; 32]),
-            index_state_digest: canonical_private_oram_index_state_digest(
-                collection_id,
-                &[(epoch_key.clone(), epoch.clone())],
-            )
-            .unwrap(),
+            index_state_digest,
         };
         let transfer = ShardTransfer {
             shard_id: 1,
@@ -2221,6 +2228,15 @@ mod tests {
                 .unwrap(),
             ..Default::default()
         };
+        let recovery_epoch_key = epoch_key.clone();
+        let recovery_epoch = epoch.clone();
+        let recovery_lease = lease.clone();
+        let precommitted = PrivateOramConsensusLayout {
+            generation: current.generation,
+            owner_peer_ids: next.owner_peer_ids.clone(),
+            layout_digest: next.layout_digest.clone(),
+            index_state_digest: next.index_state_digest.clone(),
+        };
 
         let mut persistent = Persistent::load_or_init(dir.path(), true, false, Some(7)).unwrap();
         persistent
@@ -2265,8 +2281,69 @@ mod tests {
         assert_eq!(manager.private_oram_layout(&layout_key), Some(next.clone()));
         assert_eq!(collections.finish_apply_count.load(Ordering::SeqCst), 1);
         assert!(manager.apply_normal_entry(&finish_entry).unwrap());
-        assert_eq!(manager.private_oram_layout(&layout_key), Some(next));
+        assert_eq!(manager.private_oram_layout(&layout_key), Some(next.clone()));
         assert_eq!(collections.finish_apply_count.load(Ordering::SeqCst), 1);
+
+        let recovery_dir = Builder::new()
+            .prefix("private_oram_precommitted_recovery_transition")
+            .tempdir()
+            .unwrap();
+        let mut recovery_persistent =
+            Persistent::load_or_init(recovery_dir.path(), true, false, Some(7)).unwrap();
+        recovery_persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: recovery_epoch_key.clone(),
+                expected: None,
+                new: recovery_epoch,
+            })
+            .unwrap();
+        recovery_persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: recovery_epoch_key,
+                expected: None,
+                new: Some(recovery_lease),
+            })
+            .unwrap();
+        recovery_persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: layout_key.clone(),
+                expected: None,
+                new: precommitted,
+            })
+            .unwrap();
+        let recovery_collections = Arc::new(ShardTransferCollections::new());
+        let (sender, _) = mpsc::channel();
+        let recovery_manager = ConsensusManager::new(
+            recovery_persistent,
+            recovery_collections.clone(),
+            OperationSender::new(sender),
+            recovery_dir.path(),
+            PeerMetadata::current(),
+        )
+        .unwrap();
+
+        assert!(recovery_manager.apply_normal_entry(&start_entry).unwrap());
+        assert_eq!(
+            recovery_manager.private_oram_layout(&layout_key),
+            Some(next.clone()),
+        );
+        assert_eq!(
+            recovery_collections
+                .start_apply_count
+                .load(Ordering::SeqCst),
+            1,
+        );
+        assert!(recovery_manager.apply_normal_entry(&start_entry).unwrap());
+        assert_eq!(
+            recovery_manager.private_oram_layout(&layout_key),
+            Some(next),
+        );
+        assert_eq!(
+            recovery_collections
+                .start_apply_count
+                .load(Ordering::SeqCst),
+            1,
+        );
     }
 
     #[test]

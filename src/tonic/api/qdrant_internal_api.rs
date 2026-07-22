@@ -63,7 +63,7 @@ use storage::content_manager::consensus_ops::{
     PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
     PrivateOramEpochKey, PrivateOramIndexKind, PrivateOramLayoutKey,
     PrivateOramReshardingOperation, PrivateOramSessionLease, PrivateOramShardTransferStart,
-    private_oram_index_keys_for_config,
+    private_oram_index_keys_for_config, private_oram_layout_is_precommitted_transfer_recovery,
 };
 use storage::content_manager::errors::StorageError;
 use storage::content_manager::toc::TableOfContent;
@@ -908,12 +908,19 @@ pub(crate) async fn private_oram_shard_transfer_start_operation(
         .await?;
     let expected = match existing {
         Some(existing) => {
-            if !private_oram_layout_topology_matches(&existing, &captured_current) {
+            if private_oram_layout_topology_matches(&existing, &captured_current) {
+                existing
+            } else if private_oram_layout_is_precommitted_transfer_recovery(
+                &existing,
+                &captured_current,
+                &new,
+            ) {
+                captured_current.clone()
+            } else {
                 return Err(StorageError::bad_request(
                     "private ORAM consensus layout state does not match the stable collection layout",
                 ));
             }
-            existing
         }
         None => {
             dispatcher

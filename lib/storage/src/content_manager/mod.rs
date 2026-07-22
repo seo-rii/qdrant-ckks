@@ -1248,6 +1248,22 @@ pub mod consensus_ops {
         layout.owner_peer_ids == owner_peer_ids && layout.layout_digest == layout_digest
     }
 
+    pub fn private_oram_layout_is_precommitted_transfer_recovery(
+        current: &PrivateOramConsensusLayout,
+        expected: &PrivateOramConsensusLayout,
+        new: &PrivateOramConsensusLayout,
+    ) -> bool {
+        current.generation == expected.generation
+            && expected
+                .generation
+                .checked_add(1)
+                .is_some_and(|generation| generation == new.generation)
+            && current.owner_peer_ids == new.owner_peer_ids
+            && current.layout_digest == new.layout_digest
+            && current.index_state_digest == expected.index_state_digest
+            && current.index_state_digest == new.index_state_digest
+    }
+
     fn invalid_private_oram_layout_transition_input() -> StorageError {
         StorageError::bad_request("private ORAM collection layout transition is invalid")
     }
@@ -1637,6 +1653,7 @@ mod test {
         classify_private_oram_resharding_layout_transition,
         classify_private_oram_shard_key_layout_transition,
         classify_private_oram_shard_transfer_layout_transition,
+        private_oram_layout_is_precommitted_transfer_recovery,
     };
 
     fn private_oram_shard_transfer_fixture(
@@ -2772,6 +2789,52 @@ mod test {
             assert!(error.contains("layout transition is invalid"), "{error}");
             assert!(!error.contains("qdrant-sec-transfer-collection-sentinel"));
         }
+    }
+
+    #[test]
+    fn private_oram_precommitted_transfer_recovery_is_exactly_bounded() {
+        let (_, _, _, mut expected, new) = private_oram_shard_transfer_fixture(true);
+        expected.index_state_digest = new.index_state_digest.clone();
+        let current = PrivateOramConsensusLayout {
+            generation: expected.generation,
+            owner_peer_ids: new.owner_peer_ids.clone(),
+            layout_digest: new.layout_digest.clone(),
+            index_state_digest: new.index_state_digest.clone(),
+        };
+
+        assert!(private_oram_layout_is_precommitted_transfer_recovery(
+            &current, &expected, &new,
+        ));
+        for malformed in [
+            PrivateOramConsensusLayout {
+                generation: current.generation + 1,
+                ..current.clone()
+            },
+            PrivateOramConsensusLayout {
+                owner_peer_ids: expected.owner_peer_ids.clone(),
+                ..current.clone()
+            },
+            PrivateOramConsensusLayout {
+                layout_digest: expected.layout_digest.clone(),
+                ..current.clone()
+            },
+            PrivateOramConsensusLayout {
+                index_state_digest: BASE64URL_NOPAD.encode(&[99; 32]),
+                ..current.clone()
+            },
+        ] {
+            assert!(!private_oram_layout_is_precommitted_transfer_recovery(
+                &malformed, &expected, &new,
+            ));
+        }
+
+        let mut skipped_generation = new.clone();
+        skipped_generation.generation += 1;
+        assert!(!private_oram_layout_is_precommitted_transfer_recovery(
+            &current,
+            &expected,
+            &skipped_generation,
+        ));
     }
 
     #[test]

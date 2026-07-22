@@ -24,6 +24,7 @@ env_logger = { workspace = true }
 [dependencies]
 ahash = { workspace = true }
 fs-err = { workspace = true }
+nix = { workspace = true, features = ["fs"] }
 thiserror = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }
