@@ -927,7 +927,9 @@ def _private_oram_transfer_peers(
     ]
     assert len(source_indices) == 1
     source_index = source_indices[0]
-    target_index = 1 - source_index
+    target_index = next(
+        index for index in range(len(peer_urls)) if index != source_index
+    )
     return (
         source_index,
         target_index,
@@ -2232,6 +2234,182 @@ def test_private_oram_active_reshard_snapshot_bootstraps_new_non_owner_peer(
     assert "must own an active shard replica" in non_owner_session.text
     assert not list(peer_dirs[2].rglob("private_hnsw_oram"))
     assert not list(peer_dirs[2].rglob("private_result_oram"))
+
+
+def test_private_oram_active_reshard_snapshot_bootstraps_wiped_scale_up_target(
+    tmp_path: pathlib.Path,
+):
+    extra_env = {
+        "QDRANT__CLUSTER__RESHARDING_ENABLED": "true",
+        "QDRANT__CLUSTER__CONSENSUS__COMPACT_WAL_ENTRIES": "1",
+        "QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "20",
+    }
+    peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(
+        tmp_path,
+        3,
+        1,
+        include_public_vector=True,
+        extra_env=extra_env,
+    )
+    skip_if_no_feature(peer_urls[0], "staging")
+    source_index, target_index, source_url, target_url, source_info, target_info = (
+        _private_oram_transfer_peers(peer_urls)
+    )
+    remaining_index = next(
+        index
+        for index in range(len(peer_urls))
+        if index not in {source_index, target_index}
+    )
+    source_peer_id = source_info["peer_id"]
+    target_peer_id = target_info["peer_id"]
+    source_shard_id = source_info["local_shards"][0]["shard_id"]
+    target_shard_id = source_shard_id + 1
+
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    _upload_result_oram(source_url, fixture)
+    _exercise_result_owner_session(source_url, fixture)
+    _wait_for_private_oram_epochs(peer_dirs, NEXT_EPOCH, 2)
+
+    assert_http_ok(
+        start_resharding(
+            source_url,
+            collection=COLLECTION,
+            direction="up",
+            peer_id=target_peer_id,
+        )
+    )
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
+    assert_http_ok(
+        _request_private_oram_resharding_transfer(
+            source_url,
+            "replicate_shard",
+            source_shard_id,
+            target_shard_id,
+            source_peer_id,
+            target_peer_id,
+        )
+    )
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
+
+    source_process = processes[source_index]
+    target_process = processes[target_index]
+    remaining_process = processes[remaining_index]
+    source_port = source_process.p2p_port
+    target_port = target_process.p2p_port
+    restart_bootstrap_uri = get_uri(remaining_process.p2p_port)
+    target_process.kill()
+    processes.remove(target_process)
+
+    surviving_urls = [source_url, peer_urls[remaining_index]]
+    wait_for(
+        lambda: (
+            (leader := get_cluster_info(source_url)["raft_info"]["leader"])
+            is not None
+            and get_cluster_info(peer_urls[remaining_index])["raft_info"]["leader"]
+            == leader
+        ),
+        wait_for_timeout=30,
+    )
+    leader_peer_id = get_cluster_info(source_url)["raft_info"]["leader"]
+    metadata_url = next(
+        url
+        for url in surviving_urls
+        if get_cluster_info(url)["peer_id"] == leader_peer_id
+    )
+    for index in range(8):
+        response = requests.put(
+            f"{metadata_url}/cluster/metadata/keys/private-oram-target-snapshot-{index}?wait=true",
+            json=index,
+            timeout=30,
+        )
+        assert_http_ok(response)
+
+    source_process.kill()
+    processes.remove(source_process)
+    target_collection_path = (
+        peer_dirs[target_index] / "storage" / "collections" / COLLECTION
+    )
+    shutil.rmtree(target_collection_path)
+
+    target_log = "private_oram_active_reshard_snapshot_wiped_target.log"
+    target_url = start_peer(
+        peer_dirs[target_index],
+        target_log,
+        restart_bootstrap_uri,
+        port=target_port,
+        extra_env=extra_env,
+    )
+    peer_urls[target_index] = target_url
+    wait_for_peer_online(target_url, path="/cluster")
+    wait_for(
+        lambda: requests.get(
+            f"{target_url}/collections/{COLLECTION}/cluster", timeout=5
+        ).status_code
+        == 200,
+        wait_for_timeout=30,
+    )
+    wait_for_collection_resharding_operations_count(target_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
+    target_log_path = pathlib.Path(init_pytest_log_folder()) / target_log
+    wait_for(
+        lambda: target_log_path.exists()
+        and "Applying snapshot" in target_log_path.read_text(),
+        wait_for_timeout=30,
+    )
+    assert not list(target_collection_path.rglob("private_hnsw_oram"))
+    assert not list(target_collection_path.rglob("private_result_oram"))
+
+    source_log = "private_oram_active_reshard_snapshot_source_restarted.log"
+    source_url = start_peer(
+        peer_dirs[source_index],
+        source_log,
+        restart_bootstrap_uri,
+        port=source_port,
+        extra_env=extra_env,
+    )
+    peer_urls[source_index] = source_url
+    wait_for_peer_online(source_url, path="/cluster")
+    current_leader = get_cluster_info(target_url)["raft_info"]["leader"]
+    wait_for_uniform_cluster_status(peer_urls, current_leader)
+    source_log_path = pathlib.Path(init_pytest_log_folder()) / source_log
+    wait_for(
+        lambda: source_log_path.exists()
+        and "Automatically restarting a missing private ORAM resharding transfer"
+        in source_log_path.read_text(),
+        wait_for_timeout=30,
+    )
+    wait_for(
+        lambda: _private_oram_buckets_dir(peer_dirs[target_index], "hnsw").is_dir()
+        and _private_oram_buckets_dir(peer_dirs[target_index], "result").is_dir(),
+        wait_for_timeout=30,
+    )
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 0)
+    _assert_private_oram_sessions_blocked_during_resharding(
+        target_url, fixture, True
+    )
+
+    activate_replica(
+        source_url,
+        target_peer_id,
+        target_shard_id,
+        collection=COLLECTION,
+    )
+    assert_http_ok(commit_read_hashring(source_url, collection=COLLECTION))
+    assert_http_ok(commit_write_hashring(source_url, collection=COLLECTION))
+    assert_http_ok(finish_resharding(source_url, collection=COLLECTION))
+
+    wait_for_collection_resharding_operations_count(source_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _wait_for_private_oram_layout(
+        peer_dirs,
+        2,
+        [source_peer_id, target_peer_id],
+    )
+    for owner_url in [source_url, target_url]:
+        _assert_private_oram_owner_sessions(owner_url, fixture, True)
 
 
 def test_private_oram_active_scale_down_recovers_from_raft_snapshot(

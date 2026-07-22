@@ -757,6 +757,49 @@ fn private_oram_snapshot_layout_matches(
     Ok(())
 }
 
+fn private_oram_snapshot_can_bootstrap_new_scale_up_target(
+    incoming: &collection_state::State,
+    resharding: &ReshardState,
+    layout: &PrivateOramConsensusLayout,
+    this_peer_id: PeerId,
+) -> bool {
+    if resharding.direction != ReshardingDirection::Up
+        || resharding.stage != ReshardingStage::MigratingPoints
+        || resharding.peer_id != this_peer_id
+        || layout.owner_peer_ids.contains(&this_peer_id)
+        || incoming.transfers.len() != 1
+    {
+        return false;
+    }
+
+    let Some(target_shard) = incoming.shards.get(&resharding.shard_id) else {
+        return false;
+    };
+    if target_shard.replicas.len() != 1
+        || target_shard.replicas.get(&this_peer_id) != Some(&ReplicaState::Resharding)
+        || incoming.shards.iter().any(|(shard_id, shard)| {
+            *shard_id != resharding.shard_id && shard.replicas.contains_key(&this_peer_id)
+        })
+    {
+        return false;
+    }
+
+    let transfer = incoming
+        .transfers
+        .iter()
+        .next()
+        .expect("validated one private ORAM resharding transfer");
+    transfer.to == this_peer_id
+        && transfer.from != this_peer_id
+        && transfer.to_shard_id == Some(resharding.shard_id)
+        && transfer.is_private_oram_preinstalled_transfer_for(Some(resharding))
+        && incoming
+            .shards
+            .get(&transfer.shard_id)
+            .and_then(|shard| shard.replicas.get(&transfer.from))
+            == Some(&ReplicaState::Active)
+}
+
 fn validate_private_oram_active_reshard_snapshot(
     collection_name: &str,
     current: Option<&collection_state::State>,
@@ -831,15 +874,22 @@ fn validate_private_oram_active_reshard_snapshot(
     )?;
 
     let Some(current) = current else {
-        if incoming_layout.owner_peer_ids.contains(&this_peer_id)
-            || incoming
+        let topology_only_non_owner = !incoming_layout.owner_peer_ids.contains(&this_peer_id)
+            && !incoming
                 .shards
                 .values()
                 .any(|shard| shard.replicas.contains_key(&this_peer_id))
-            || incoming
+            && !incoming
                 .transfers
                 .iter()
-                .any(|transfer| transfer.from == this_peer_id || transfer.to == this_peer_id)
+                .any(|transfer| transfer.from == this_peer_id || transfer.to == this_peer_id);
+        if !topology_only_non_owner
+            && !private_oram_snapshot_can_bootstrap_new_scale_up_target(
+                incoming,
+                incoming_resharding,
+                incoming_layout,
+                this_peer_id,
+            )
         {
             return Err(invalid_private_oram_resharding_snapshot());
         }
@@ -1244,7 +1294,7 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_new_peer_active_reshard_snapshot_allows_only_topology_only_non_owner() {
+    fn private_oram_new_peer_active_reshard_snapshot_allows_only_recoverable_roles() {
         let (_, incoming, epochs, layouts) = private_oram_active_snapshot_fixture();
         let empty_epochs = HashMap::new();
         let empty_layouts = HashMap::new();
@@ -1334,23 +1384,70 @@ mod tests {
             .is_err()
         );
 
-        for peer_id in [11, 22] {
-            assert!(
-                validate_private_oram_active_reshard_snapshot(
-                    "docs",
-                    None,
-                    &incoming,
-                    PrivateOramSnapshotState {
-                        incoming_epochs: &epochs,
-                        current_epochs: &empty_epochs,
-                        incoming_layouts: &layouts,
-                        current_layouts: &empty_layouts,
-                    },
-                    peer_id,
-                )
+        let snapshot = PrivateOramSnapshotState {
+            incoming_epochs: &epochs,
+            current_epochs: &empty_epochs,
+            incoming_layouts: &layouts,
+            current_layouts: &empty_layouts,
+        };
+        assert!(
+            validate_private_oram_active_reshard_snapshot("docs", None, &incoming, snapshot, 11,)
                 .is_err()
-            );
-        }
+        );
+        assert!(
+            validate_private_oram_active_reshard_snapshot("docs", None, &incoming, snapshot, 22,)
+                .unwrap()
+        );
+
+        let mut missing_transfer = incoming.clone();
+        missing_transfer.transfers.clear();
+        assert!(
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                None,
+                &missing_transfer,
+                snapshot,
+                22,
+            )
+            .is_err()
+        );
+
+        let mut active_target = incoming.clone();
+        *active_target
+            .shards
+            .get_mut(&1)
+            .unwrap()
+            .replicas
+            .get_mut(&22)
+            .unwrap() = ReplicaState::Active;
+        assert!(
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                None,
+                &active_target,
+                snapshot,
+                22,
+            )
+            .is_err()
+        );
+
+        let mut target_is_existing_owner = incoming;
+        target_is_existing_owner
+            .shards
+            .get_mut(&0)
+            .unwrap()
+            .replicas
+            .insert(22, ReplicaState::Active);
+        assert!(
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                None,
+                &target_is_existing_owner,
+                snapshot,
+                22,
+            )
+            .is_err()
+        );
     }
 
     #[test]
