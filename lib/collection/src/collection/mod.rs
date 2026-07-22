@@ -23,7 +23,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use api::grpc::qdrant::RequestPrivateOramShardRecoveryRequest;
+use api::grpc::qdrant::{
+    RequestPrivateOramReshardingResumeRequest, RequestPrivateOramShardRecoveryRequest,
+};
 use clean::ShardCleanTasks;
 use common::budget::ResourceBudget;
 use common::save_on_disk::SaveOnDisk;
@@ -66,7 +68,7 @@ use crate::shards::shard_holder::shard_mapping::ShardKeyMapping;
 use crate::shards::shard_holder::{ShardHolder, SharedShardHolder, shard_not_found_error};
 use crate::shards::transfer::helpers::check_transfer_conflicts_strict;
 use crate::shards::transfer::transfer_tasks_pool::{TaskResult, TransferTasksPool};
-use crate::shards::transfer::{ShardTransfer, ShardTransferMethod};
+use crate::shards::transfer::{ShardTransfer, ShardTransferKey, ShardTransferMethod};
 use crate::shards::{CollectionId, replica_set};
 use crate::telemetry::CollectionsAggregatedTelemetry;
 
@@ -76,6 +78,7 @@ const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_ENTRY_MAX_BYTES: usize = 512;
 const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_MAX_BYTES: u64 = CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_CAPACITY
     as u64
     * (CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_ENTRY_MAX_BYTES as u64 + 1);
+const PRIVATE_ORAM_RESHARDING_RESUME_REQUEST_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Collection's data is split into several shards.
 pub struct Collection {
@@ -107,6 +110,7 @@ pub struct Collection {
     client_payload_nonce_replay_cache: Mutex<ClientPayloadNonceReplayCache>,
     crypto_payload_migration_lock: Mutex<()>,
     private_oram_automatic_recovery_tasks: Arc<Mutex<HashSet<ShardId>>>,
+    private_oram_resharding_resume_requests: Arc<Mutex<HashSet<ShardTransferKey>>>,
     // Background tasks to clean shards
     shard_clean_tasks: ShardCleanTasks,
 }
@@ -387,6 +391,7 @@ impl Collection {
             client_payload_nonce_replay_cache: Mutex::new(ClientPayloadNonceReplayCache::default()),
             crypto_payload_migration_lock: Mutex::new(()),
             private_oram_automatic_recovery_tasks: Default::default(),
+            private_oram_resharding_resume_requests: Default::default(),
             shard_clean_tasks: Default::default(),
         })
     }
@@ -517,6 +522,7 @@ impl Collection {
             }),
             crypto_payload_migration_lock: Mutex::new(()),
             private_oram_automatic_recovery_tasks: Default::default(),
+            private_oram_resharding_resume_requests: Default::default(),
             shard_clean_tasks: Default::default(),
         };
 
@@ -978,6 +984,48 @@ impl Collection {
         // Check for un-reported finished transfers
         let outgoing_transfers = shard_holder.get_outgoing_transfers(self.this_peer_id);
         let resharding_state = shard_holder.resharding_state();
+        let incoming_private_oram_resharding_resume_requests = shard_holder
+            .get_transfers(|transfer| transfer.to == self.this_peer_id)
+            .into_iter()
+            .filter_map(|transfer| {
+                private_oram_resharding_resume_request(
+                    self.name(),
+                    self.this_peer_id,
+                    private_oram_bucket_store_collection,
+                    &transfer,
+                    resharding_state.as_ref(),
+                )
+                .map(|request| (transfer.key(), request))
+            })
+            .collect::<Vec<_>>();
+        let resume_requests = {
+            let mut pending = self.private_oram_resharding_resume_requests.lock().await;
+            incoming_private_oram_resharding_resume_requests
+                .into_iter()
+                .filter(|(key, _)| pending.insert((*key).clone()))
+                .collect::<Vec<_>>()
+        };
+        for (transfer_key, request) in resume_requests {
+            let channel_service = self.channel_service.clone();
+            let pending = self.private_oram_resharding_resume_requests.clone();
+            self.update_runtime.spawn(async move {
+                let source_peer_id = request.source_peer_id;
+                let response = channel_service
+                    .request_private_oram_resharding_resume(source_peer_id, request)
+                    .await;
+                match response {
+                    Ok(response) if response.accepted => {}
+                    Ok(_) => log::warn!(
+                        "Private ORAM resharding resume was not accepted by source peer {source_peer_id}"
+                    ),
+                    Err(error) => log::warn!(
+                        "Failed to request private ORAM resharding resume from source peer {source_peer_id}: {error}"
+                    ),
+                }
+                tokio::time::sleep(PRIVATE_ORAM_RESHARDING_RESUME_REQUEST_INTERVAL).await;
+                pending.lock().await.remove(&transfer_key);
+            });
+        }
         let tasks_lock = self.transfer_tasks.lock().await;
         for transfer in outgoing_transfers {
             match tasks_lock
@@ -992,7 +1040,7 @@ impl Collection {
                         self.this_peer_id,
                     ) {
                         log::warn!(
-                            "Private ORAM resharding transfer task is missing; preserving the active transfer until an exact restart request re-preinstalls its encrypted stores",
+                            "Private ORAM resharding transfer task is missing; preserving the active transfer while the target requests an exact automatic restart",
                         );
                         continue;
                     }
@@ -1235,7 +1283,7 @@ impl Collection {
     }
 
     /// Whether a source peer restart must preserve an active private ORAM reshard transfer until
-    /// the source submits the exact restart request that re-preinstalls the encrypted stores.
+    /// the target requests the exact automatic restart that re-preinstalls the encrypted stores.
     pub async fn should_preserve_private_oram_transfer_on_peer_restart(
         &self,
         transfer: &ShardTransfer,
@@ -1616,6 +1664,28 @@ fn private_oram_resharding_transfer_requires_exact_restart(
         && transfer.from == restarted_peer_id
         && transfer.is_resharding()
         && transfer.is_private_oram_preinstalled_transfer_for(resharding_state)
+}
+
+fn private_oram_resharding_resume_request(
+    collection_name: &str,
+    this_peer_id: PeerId,
+    private_oram_bucket_store_collection: bool,
+    transfer: &ShardTransfer,
+    resharding_state: Option<&ReshardState>,
+) -> Option<RequestPrivateOramReshardingResumeRequest> {
+    if !private_oram_bucket_store_collection
+        || transfer.to != this_peer_id
+        || !transfer.is_private_oram_preinstalled_transfer_for(resharding_state)
+    {
+        return None;
+    }
+    Some(RequestPrivateOramReshardingResumeRequest {
+        collection_name: collection_name.to_string(),
+        shard_id: transfer.shard_id,
+        to_shard_id: transfer.to_shard_id?,
+        source_peer_id: transfer.from,
+        target_peer_id: transfer.to,
+    })
 }
 
 fn validate_private_oram_resharding_replica_state_until_supported(
@@ -2185,6 +2255,84 @@ mod tests {
             Some(&advanced_state),
             transfer.from,
         ));
+    }
+
+    #[test]
+    fn private_oram_resharding_resume_request_is_target_and_active_transfer_bounded() {
+        let up = ReshardState::new(uuid::Uuid::nil(), ReshardingDirection::Up, 22, 9, None);
+        let transfer = ShardTransfer {
+            shard_id: 7,
+            to_shard_id: Some(9),
+            from: 11,
+            to: 22,
+            sync: true,
+            method: Some(ShardTransferMethod::ReshardingStreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
+            filter: None,
+        };
+
+        let request =
+            private_oram_resharding_resume_request("docs", transfer.to, true, &transfer, Some(&up))
+                .unwrap();
+        assert_eq!(request.collection_name, "docs");
+        assert_eq!(request.shard_id, transfer.shard_id);
+        assert_eq!(request.to_shard_id, transfer.to_shard_id.unwrap());
+        assert_eq!(request.source_peer_id, transfer.from);
+        assert_eq!(request.target_peer_id, transfer.to);
+
+        assert!(
+            private_oram_resharding_resume_request(
+                "docs",
+                transfer.from,
+                true,
+                &transfer,
+                Some(&up),
+            )
+            .is_none()
+        );
+        assert!(
+            private_oram_resharding_resume_request(
+                "docs",
+                transfer.to,
+                false,
+                &transfer,
+                Some(&up),
+            )
+            .is_none()
+        );
+        let unmarked = ShardTransfer {
+            private_oram_preinstalled: false,
+            ..transfer.clone()
+        };
+        assert!(
+            private_oram_resharding_resume_request(
+                "docs",
+                transfer.to,
+                true,
+                &unmarked,
+                Some(&up),
+            )
+            .is_none()
+        );
+
+        let down = ReshardState::new(
+            uuid::Uuid::nil(),
+            ReshardingDirection::Down,
+            transfer.from,
+            transfer.shard_id,
+            None,
+        );
+        assert!(
+            private_oram_resharding_resume_request(
+                "docs",
+                transfer.to,
+                true,
+                &transfer,
+                Some(&down),
+            )
+            .is_some()
+        );
     }
 
     #[test]

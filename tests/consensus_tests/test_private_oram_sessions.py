@@ -1674,7 +1674,7 @@ def test_private_oram_resharding_restart_repreinstalls_and_completes(
         _assert_private_oram_owner_sessions(owner_url, fixture, True)
 
 
-def test_private_oram_resharding_source_crash_preserves_exact_restart(
+def test_private_oram_resharding_source_crash_automatically_repreinstalls_and_resumes(
     tmp_path: pathlib.Path,
 ):
     extra_env = {
@@ -1727,9 +1727,21 @@ def test_private_oram_resharding_source_crash_preserves_exact_restart(
     source_port = processes[source_index].p2p_port
     restart_bootstrap_uri = get_uri(processes[target_index].p2p_port)
     processes.pop(source_index).kill()
+    wait_for_collection_resharding_operations_count(target_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
+
+    collection_path = (
+        peer_dirs[target_index] / "storage" / "collections" / COLLECTION
+    )
+    hnsw_store = collection_path / "private_hnsw_oram"
+    result_store = collection_path / "private_result_oram"
+    shutil.rmtree(hnsw_store)
+    shutil.rmtree(result_store)
+
+    restarted_log = "private_oram_resharding_source_restarted.log"
     restarted_url = start_peer(
         peer_dirs[source_index],
-        "private_oram_resharding_source_restarted.log",
+        restarted_log,
         restart_bootstrap_uri,
         port=source_port,
         extra_env=extra_env,
@@ -1740,33 +1752,22 @@ def test_private_oram_resharding_source_crash_preserves_exact_restart(
     wait_for_uniform_cluster_status(peer_urls, leader)
 
     wait_for_collection_resharding_operations_count(source_url, COLLECTION, 1)
-    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
-    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
-    _wait_for_private_oram_layout(peer_dirs, 1, [source_peer_id])
-    _assert_private_oram_sessions_blocked_during_resharding(source_url, fixture, True)
-
-    collection_path = (
-        peer_dirs[target_index] / "storage" / "collections" / COLLECTION
+    restarted_log_path = pathlib.Path(init_pytest_log_folder()) / restarted_log
+    wait_for(
+        lambda: restarted_log_path.exists()
+        and "Automatically restarting a missing private ORAM resharding transfer"
+        in restarted_log_path.read_text(),
+        wait_for_timeout=30,
     )
-    hnsw_store = collection_path / "private_hnsw_oram"
-    result_store = collection_path / "private_result_oram"
-    shutil.rmtree(hnsw_store)
-    shutil.rmtree(result_store)
-
-    assert_http_ok(
-        _request_private_oram_resharding_transfer(
-            source_url,
-            "restart_transfer",
-            source_shard_id,
-            target_shard_id,
-            source_peer_id,
-            target_peer_id,
-        )
+    wait_for(
+        lambda: (hnsw_store / VECTOR / "buckets").is_dir()
+        and (result_store / "buckets").is_dir(),
+        wait_for_timeout=30,
     )
-    assert (hnsw_store / VECTOR / "buckets").is_dir()
-    assert (result_store / "buckets").is_dir()
     wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
     wait_for_collection_shard_transfers_count(target_url, COLLECTION, 0)
+    _wait_for_private_oram_layout(peer_dirs, 1, [source_peer_id])
+    _assert_private_oram_sessions_blocked_during_resharding(source_url, fixture, True)
 
     activate_replica(
         source_url,

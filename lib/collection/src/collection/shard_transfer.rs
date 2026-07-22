@@ -69,6 +69,14 @@ impl Collection {
             .check_transfer_exists(transfer_key)
     }
 
+    pub async fn shard_transfer_task_is_missing(&self, transfer_key: &ShardTransferKey) -> bool {
+        self.transfer_tasks
+            .lock()
+            .await
+            .get_task_status(transfer_key)
+            .is_none()
+    }
+
     async fn is_prevent_unoptimized(&self) -> bool {
         self.effective_optimizers_config()
             .await

@@ -8,6 +8,7 @@ use api::grpc::qdrant::{
     CompletePrivateOramWritebackRequest, InstallPrivateOramIndexRequest,
     InstallPrivateOramIndexResponse, InstallPrivateOramLiveReplicaRequest,
     InstallPrivateOramLiveReplicaResponse, PreparePrivateOramWritebackRequest,
+    RequestPrivateOramReshardingResumeRequest, RequestPrivateOramReshardingResumeResponse,
     RequestPrivateOramShardRecoveryRequest, RequestPrivateOramShardRecoveryResponse,
     WaitOnConsensusCommitRequest,
 };
@@ -290,6 +291,33 @@ impl ChannelService {
         .map_err(|_| {
             CollectionError::service_error(format!(
                 "Failed to request private ORAM shard recovery from peer {peer_id}"
+            ))
+        })
+    }
+
+    pub async fn request_private_oram_resharding_resume(
+        &self,
+        peer_id: PeerId,
+        request: RequestPrivateOramReshardingResumeRequest,
+    ) -> CollectionResult<RequestPrivateOramReshardingResumeResponse> {
+        self.with_qdrant_client_timeout(
+            peer_id,
+            Some(PRIVATE_ORAM_INSTALL_GRPC_TIMEOUT),
+            PRIVATE_ORAM_INSTALL_RETRIES,
+            |mut client| {
+                let request = request.clone();
+                async move {
+                    client
+                        .request_private_oram_resharding_resume(Request::new(request))
+                        .await
+                }
+            },
+        )
+        .await
+        .map(tonic::Response::into_inner)
+        .map_err(|_| {
+            CollectionError::service_error(format!(
+                "Failed to request private ORAM resharding resume from peer {peer_id}"
             ))
         })
     }
@@ -580,6 +608,21 @@ mod tests {
         };
         let error = service
             .request_private_oram_shard_recovery(13, recovery)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("peer 13"));
+        assert!(!error.contains(collection_sentinel));
+
+        let resume = RequestPrivateOramReshardingResumeRequest {
+            collection_name: collection_sentinel.to_string(),
+            shard_id: 3,
+            to_shard_id: 5,
+            source_peer_id: 13,
+            target_peer_id: 17,
+        };
+        let error = service
+            .request_private_oram_resharding_resume(13, resume)
             .await
             .unwrap_err()
             .to_string();

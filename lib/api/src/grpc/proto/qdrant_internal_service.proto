@@ -53,6 +53,8 @@ service QdrantInternal {
   // Ask the active source peer to preinstall and submit automatic shard recovery.
   rpc RequestPrivateOramShardRecovery(RequestPrivateOramShardRecoveryRequest)
       returns (RequestPrivateOramShardRecoveryResponse) {}
+  rpc RequestPrivateOramReshardingResume(RequestPrivateOramReshardingResumeRequest)
+      returns (RequestPrivateOramReshardingResumeResponse) {}
 }
 
 message GetConsensusCommitRequest {}
@@ -240,5 +242,17 @@ message RequestPrivateOramShardRecoveryRequest {
 }
 
 message RequestPrivateOramShardRecoveryResponse {
+  bool accepted = 1;
+}
+
+message RequestPrivateOramReshardingResumeRequest {
+  string collection_name = 1;
+  uint32 shard_id = 2;
+  uint32 to_shard_id = 3;
+  uint64 source_peer_id = 4;
+  uint64 target_peer_id = 5;
+}
+
+message RequestPrivateOramReshardingResumeResponse {
   bool accepted = 1;
 }

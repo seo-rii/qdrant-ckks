@@ -16036,6 +16036,28 @@ pub struct RequestPrivateOramShardRecoveryResponse {
     #[prost(bool, tag = "1")]
     pub accepted: bool,
 }
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RequestPrivateOramReshardingResumeRequest {
+    #[prost(string, tag = "1")]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub shard_id: u32,
+    #[prost(uint32, tag = "3")]
+    pub to_shard_id: u32,
+    #[prost(uint64, tag = "4")]
+    pub source_peer_id: u64,
+    #[prost(uint64, tag = "5")]
+    pub target_peer_id: u64,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RequestPrivateOramReshardingResumeResponse {
+    #[prost(bool, tag = "1")]
+    pub accepted: bool,
+}
 /// Internal-only wire contract for replicated private ORAM writebacks. The RPC
 /// methods using these messages are registered only after receiver-side runtime,
 /// signature, fixed-budget, and exact-transition validation is connected.
@@ -16514,6 +16536,38 @@ pub mod qdrant_internal_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn request_private_oram_resharding_resume(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::RequestPrivateOramReshardingResumeRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::RequestPrivateOramReshardingResumeResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.QdrantInternal/RequestPrivateOramReshardingResume",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "qdrant.QdrantInternal",
+                        "RequestPrivateOramReshardingResume",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -16617,6 +16671,13 @@ pub mod qdrant_internal_server {
             request: tonic::Request<super::RequestPrivateOramShardRecoveryRequest>,
         ) -> std::result::Result<
             tonic::Response<super::RequestPrivateOramShardRecoveryResponse>,
+            tonic::Status,
+        >;
+        async fn request_private_oram_resharding_resume(
+            &self,
+            request: tonic::Request<super::RequestPrivateOramReshardingResumeRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::RequestPrivateOramReshardingResumeResponse>,
             tonic::Status,
         >;
     }
@@ -17306,6 +17367,61 @@ pub mod qdrant_internal_server {
                     let fut = async move {
                         let inner = inner.0;
                         let method = RequestPrivateOramShardRecoverySvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.QdrantInternal/RequestPrivateOramReshardingResume" => {
+                    #[allow(non_camel_case_types)]
+                    struct RequestPrivateOramReshardingResumeSvc<T: QdrantInternal>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: QdrantInternal,
+                    > tonic::server::UnaryService<
+                        super::RequestPrivateOramReshardingResumeRequest,
+                    > for RequestPrivateOramReshardingResumeSvc<T> {
+                        type Response = super::RequestPrivateOramReshardingResumeResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::RequestPrivateOramReshardingResumeRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as QdrantInternal>::request_private_oram_resharding_resume(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = RequestPrivateOramReshardingResumeSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

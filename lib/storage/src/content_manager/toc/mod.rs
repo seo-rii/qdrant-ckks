@@ -685,7 +685,7 @@ impl TableOfContent {
                         .await
                     {
                         log::warn!(
-                            "Preserving an active private ORAM resharding transfer after its source peer restarted; an exact restart request is required",
+                            "Preserving an active private ORAM resharding transfer after its source peer restarted; the target will request an exact automatic restart",
                         );
                         continue;
                     }
