@@ -1033,6 +1033,7 @@ impl Dispatcher {
         keys: &[PrivateOramEpochKey],
         reservation_lease_id_hash: &str,
         generation: u64,
+        preinstalled_new_owner_peer_ids: &[PeerId],
         collection_meta: &CollectionMetaOperations,
     ) -> Result<
         (
@@ -1128,6 +1129,7 @@ impl Dispatcher {
                     kind: PrivateOramShardKeyLayoutChangeKind::Create,
                     shard_key: operation.shard_key.clone(),
                     entries: changed_entries,
+                    preinstalled_new_owner_peer_ids: preinstalled_new_owner_peer_ids.to_vec(),
                 }
             }
             CollectionMetaOperations::DropShardKey(operation)
@@ -1141,6 +1143,7 @@ impl Dispatcher {
                         .filter(|entry| entry.shard_key.as_ref() == Some(&operation.shard_key))
                         .cloned()
                         .collect(),
+                    preinstalled_new_owner_peer_ids: preinstalled_new_owner_peer_ids.to_vec(),
                 }
             }
             _ => return Err(invalid_private_oram_layout_transition()),

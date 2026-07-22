@@ -602,7 +602,7 @@ def test_private_oram_custom_shard_key_layout_mutation_is_consensus_bound(
         initial_shard_key="tenant-drop",
         initial_shard_key_placement=[0, 1],
     )
-    coordinator_url, removed_owner_url, non_owner_url = peer_urls
+    coordinator_url, removed_owner_url, new_owner_url = peer_urls
     peer_ids = [get_cluster_info(peer_url)["peer_id"] for peer_url in peer_urls]
 
     _upload_hnsw(coordinator_url, fixture)
@@ -625,27 +625,58 @@ def test_private_oram_custom_shard_key_layout_mutation_is_consensus_bound(
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
     wait_for_collection_local_shards_count(coordinator_url, COLLECTION, 2)
     wait_for_collection_local_shards_count(removed_owner_url, COLLECTION, 1)
-    wait_for_collection_local_shards_count(non_owner_url, COLLECTION, 0)
+    wait_for_collection_local_shards_count(new_owner_url, COLLECTION, 0)
     _wait_for_private_oram_layout(peer_dirs, 2, peer_ids[:2])
     _assert_replica_can_open_current_sessions(removed_owner_url)
 
-    unsupported_new_owner = requests.put(
-        f"{coordinator_url}/collections/{COLLECTION}/shards?timeout=60",
-        json={
-            "shard_key": "tenant-new-owner",
-            "shards_number": 1,
-            "replication_factor": 1,
-            "placement": [peer_ids[2]],
-        },
-        timeout=60,
+    new_owner_request = {
+        "shard_key": "tenant-new-owner",
+        "shards_number": 1,
+        "replication_factor": 1,
+        "placement": [peer_ids[2]],
+    }
+    malformed_store = (
+        peer_dirs[2]
+        / "storage"
+        / "collections"
+        / COLLECTION
+        / "private_result_oram"
     )
-    assert 400 <= unsupported_new_owner.status_code < 600
+    malformed_epochs = malformed_store / "epochs"
+    malformed_epochs.mkdir(parents=True)
+    (malformed_epochs / "current.json").write_text("{}")
+    try:
+        failed_new_owner = requests.put(
+            f"{coordinator_url}/collections/{COLLECTION}/shards?timeout=60",
+            json=new_owner_request,
+            timeout=60,
+        )
+    finally:
+        shutil.rmtree(malformed_store)
+    assert 400 <= failed_new_owner.status_code < 600
     for secret in [
         fixture["hnsw"]["commit"]["new_root_hash"],
         fixture["result"]["commit"]["new_root_hash"],
     ]:
-        assert secret not in unsupported_new_owner.text
+        assert secret not in failed_new_owner.text
+    wait_for_collection_local_shards_count(new_owner_url, COLLECTION, 0)
     _wait_for_private_oram_layout(peer_dirs, 2, peer_ids[:2])
+    assert _private_oram_buckets_dir(peer_dirs[2], "hnsw").is_dir()
+
+    create_new_owner = requests.put(
+        f"{coordinator_url}/collections/{COLLECTION}/shards?timeout=60",
+        json=new_owner_request,
+        timeout=60,
+    )
+    assert_http_ok(create_new_owner)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    wait_for_collection_local_shards_count(coordinator_url, COLLECTION, 2)
+    wait_for_collection_local_shards_count(removed_owner_url, COLLECTION, 1)
+    wait_for_collection_local_shards_count(new_owner_url, COLLECTION, 1)
+    _wait_for_private_oram_layout(peer_dirs, 3, peer_ids)
+    assert _private_oram_buckets_dir(peer_dirs[2], "hnsw").is_dir()
+    assert _private_oram_buckets_dir(peer_dirs[2], "result").is_dir()
+    _assert_replica_can_open_current_sessions(new_owner_url)
 
     drop_initial = requests.post(
         f"{coordinator_url}/collections/{COLLECTION}/shards/delete?timeout=60",
@@ -656,8 +687,10 @@ def test_private_oram_custom_shard_key_layout_mutation_is_consensus_bound(
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
     wait_for_collection_local_shards_count(coordinator_url, COLLECTION, 1)
     wait_for_collection_local_shards_count(removed_owner_url, COLLECTION, 0)
-    _wait_for_private_oram_layout(peer_dirs, 3, [peer_ids[0]])
+    wait_for_collection_local_shards_count(new_owner_url, COLLECTION, 1)
+    _wait_for_private_oram_layout(peer_dirs, 4, [peer_ids[0], peer_ids[2]])
     _assert_replica_can_open_current_sessions(coordinator_url)
+    _assert_replica_can_open_current_sessions(new_owner_url)
 
     assert _private_oram_buckets_dir(peer_dirs[1], "hnsw").is_dir()
     assert _private_oram_buckets_dir(peer_dirs[1], "result").is_dir()
@@ -673,13 +706,38 @@ def test_private_oram_custom_shard_key_layout_mutation_is_consensus_bound(
     )
     assert 400 <= removed_owner_session.status_code < 600
 
+    drop_new_owner = requests.post(
+        f"{coordinator_url}/collections/{COLLECTION}/shards/delete?timeout=60",
+        json={"shard_key": "tenant-new-owner"},
+        timeout=60,
+    )
+    assert_http_ok(drop_new_owner)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    wait_for_collection_local_shards_count(coordinator_url, COLLECTION, 1)
+    wait_for_collection_local_shards_count(removed_owner_url, COLLECTION, 0)
+    wait_for_collection_local_shards_count(new_owner_url, COLLECTION, 0)
+    _wait_for_private_oram_layout(peer_dirs, 5, [peer_ids[0]])
+    assert _private_oram_buckets_dir(peer_dirs[2], "hnsw").is_dir()
+    assert _private_oram_buckets_dir(peer_dirs[2], "result").is_dir()
+    removed_new_owner_session = requests.post(
+        f"{new_owner_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session",
+        json={
+            "client_id": "tenant-a/removed-new-shard-key-owner",
+            "desired_epoch": NEXT_EPOCH,
+            "fixed_budget": True,
+            "result_privacy": "private_payload_oram_required",
+        },
+        timeout=30,
+    )
+    assert 400 <= removed_new_owner_session.status_code < 600
+
     final_drop = requests.post(
         f"{coordinator_url}/collections/{COLLECTION}/shards/delete?timeout=60",
         json={"shard_key": "tenant-retained"},
         timeout=60,
     )
     assert 400 <= final_drop.status_code < 600
-    _wait_for_private_oram_layout(peer_dirs, 3, [peer_ids[0]])
+    _wait_for_private_oram_layout(peer_dirs, 5, [peer_ids[0]])
 
 
 def test_private_oram_existing_layout_advances_after_replica_removal_and_transfer(

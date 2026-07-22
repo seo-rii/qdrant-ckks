@@ -354,6 +354,8 @@ pub mod consensus_ops {
         pub kind: PrivateOramShardKeyLayoutChangeKind,
         pub shard_key: ShardKey,
         pub entries: Vec<PrivateOramShardLayoutEntry>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub preinstalled_new_owner_peer_ids: Vec<PeerId>,
     }
 
     impl fmt::Debug for PrivateOramShardKeyLayoutChange {
@@ -362,6 +364,10 @@ pub mod consensus_ops {
                 .field("kind", &self.kind)
                 .field("shard_key", &"[redacted]")
                 .field("entry_count", &self.entries.len())
+                .field(
+                    "preinstalled_new_owner_count",
+                    &self.preinstalled_new_owner_peer_ids.len(),
+                )
                 .finish()
         }
     }
@@ -714,6 +720,11 @@ pub mod consensus_ops {
         if sharding_method != ShardingMethod::Custom
             || change.entries.is_empty()
             || change.entries.len() > PRIVATE_ORAM_CONSENSUS_MAX_RECORDS
+            || change.preinstalled_new_owner_peer_ids.len() > PRIVATE_ORAM_LAYOUT_MAX_OWNERS
+            || change
+                .preinstalled_new_owner_peer_ids
+                .windows(2)
+                .any(|owners| owners[0] >= owners[1])
             || change
                 .entries
                 .iter()
@@ -744,12 +755,7 @@ pub mod consensus_ops {
                         .checked_add(offset)
                         .and_then(|shard_id| shard_id.checked_add(1))
                         .ok_or_else(invalid_private_oram_layout_transition_input)?;
-                    if entry.shard_id != expected_shard_id
-                        || entry
-                            .owner_peer_ids
-                            .iter()
-                            .any(|owner| !current_owner_peer_ids.contains(owner))
-                    {
+                    if entry.shard_id != expected_shard_id {
                         return Err(invalid_private_oram_layout_transition_input());
                     }
                 }
@@ -778,7 +784,26 @@ pub mod consensus_ops {
                 post_entries
             }
         };
-        canonical_private_oram_shard_layout_digest(collection_id, sharding_method, &post_entries)?;
+        let (post_owner_peer_ids, _) = canonical_private_oram_shard_layout_digest(
+            collection_id,
+            sharding_method,
+            &post_entries,
+        )?;
+        let preinstalled_new_owner_peer_ids = post_owner_peer_ids
+            .iter()
+            .copied()
+            .filter(|owner| current_owner_peer_ids.binary_search(owner).is_err())
+            .collect::<Vec<_>>();
+        match change.kind {
+            PrivateOramShardKeyLayoutChangeKind::Create
+                if preinstalled_new_owner_peer_ids == change.preinstalled_new_owner_peer_ids => {}
+            PrivateOramShardKeyLayoutChangeKind::Drop
+                if change.preinstalled_new_owner_peer_ids.is_empty() => {}
+            PrivateOramShardKeyLayoutChangeKind::Create
+            | PrivateOramShardKeyLayoutChangeKind::Drop => {
+                return Err(invalid_private_oram_layout_transition_input());
+            }
+        }
         Ok(post_entries)
     }
 
@@ -1910,6 +1935,7 @@ mod test {
                         shard_key: Some(ShardKey::Keyword(shard_key_sentinel.into())),
                         owner_peer_ids: vec![7],
                     }],
+                    preinstalled_new_owner_peer_ids: Vec::new(),
                 }),
                 collection_meta: Box::new(CollectionMetaOperations::Nop { token: 7 }),
             },
@@ -2429,6 +2455,7 @@ mod test {
                     owner_peer_ids: vec![7],
                 },
             ],
+            preinstalled_new_owner_peer_ids: Vec::new(),
         };
         let mut post_entries = pre_entries.clone();
         post_entries.extend(change.entries.clone());
@@ -2477,19 +2504,69 @@ mod test {
 
         let mut new_owner_change = change.clone();
         new_owner_change.entries[0].owner_peer_ids = vec![11];
+        let mut new_owner_post_entries = pre_entries.clone();
+        new_owner_post_entries.extend(new_owner_change.entries.clone());
+        let (new_owner_peer_ids, new_owner_digest) = canonical_private_oram_shard_layout_digest(
+            collection_id,
+            ShardingMethod::Custom,
+            &new_owner_post_entries,
+        )
+        .unwrap();
+        let new_owner_layout = PrivateOramConsensusLayout {
+            generation: 4,
+            owner_peer_ids: new_owner_peer_ids,
+            layout_digest: new_owner_digest,
+            index_state_digest: expected.index_state_digest.clone(),
+        };
         let error = classify_private_oram_shard_key_layout_transition(
             collection_id,
             ShardingMethod::Custom,
             &pre_entries,
             &new_owner_change,
             &expected,
-            &new,
+            &new_owner_layout,
         )
         .unwrap_err()
         .to_string();
         assert!(error.contains("layout transition is invalid"), "{error}");
         assert!(!error.contains(collection_id), "{error}");
         assert!(!error.contains("beta-secret-sentinel"), "{error}");
+
+        new_owner_change.preinstalled_new_owner_peer_ids = vec![11];
+        for (entries, state) in [
+            (&pre_entries, PrivateOramLayoutTransitionState::Pending),
+            (
+                &new_owner_post_entries,
+                PrivateOramLayoutTransitionState::Applied,
+            ),
+        ] {
+            assert_eq!(
+                classify_private_oram_shard_key_layout_transition(
+                    collection_id,
+                    ShardingMethod::Custom,
+                    entries,
+                    &new_owner_change,
+                    &expected,
+                    &new_owner_layout,
+                )
+                .unwrap(),
+                state,
+            );
+        }
+
+        let mut forged_preinstall = new_owner_change;
+        forged_preinstall.preinstalled_new_owner_peer_ids = vec![12];
+        assert!(
+            classify_private_oram_shard_key_layout_transition(
+                collection_id,
+                ShardingMethod::Custom,
+                &pre_entries,
+                &forged_preinstall,
+                &expected,
+                &new_owner_layout,
+            )
+            .is_err()
+        );
 
         let mut skipped_id_change = change;
         skipped_id_change.entries[1].shard_id = 5;
@@ -2504,6 +2581,26 @@ mod test {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn private_oram_shard_key_layout_change_defaults_missing_preinstall_marker_closed() {
+        let shard_key = ShardKey::Keyword("legacy-key".into());
+        let change = PrivateOramShardKeyLayoutChange {
+            kind: PrivateOramShardKeyLayoutChangeKind::Create,
+            shard_key: shard_key.clone(),
+            entries: vec![PrivateOramShardLayoutEntry {
+                shard_id: 2,
+                shard_key: Some(shard_key),
+                owner_peer_ids: vec![7],
+            }],
+            preinstalled_new_owner_peer_ids: Vec::new(),
+        };
+
+        let encoded = serde_cbor::to_vec(&change).unwrap();
+        let decoded: PrivateOramShardKeyLayoutChange = serde_cbor::from_slice(&encoded).unwrap();
+        assert_eq!(decoded, change);
+        assert!(decoded.preinstalled_new_owner_peer_ids.is_empty());
     }
 
     #[test]
@@ -2534,6 +2631,7 @@ mod test {
             kind: PrivateOramShardKeyLayoutChangeKind::Drop,
             shard_key: beta,
             entries: dropped_entries,
+            preinstalled_new_owner_peer_ids: Vec::new(),
         };
         let (pre_owners, pre_digest) = canonical_private_oram_shard_layout_digest(
             collection_id,
@@ -2585,6 +2683,20 @@ mod test {
             PrivateOramLayoutTransitionState::Applied,
         );
 
+        let mut preinstalled_drop = change.clone();
+        preinstalled_drop.preinstalled_new_owner_peer_ids = vec![11];
+        assert!(
+            classify_private_oram_shard_key_layout_transition(
+                collection_id,
+                ShardingMethod::Custom,
+                &pre_entries,
+                &preinstalled_drop,
+                &expected,
+                &new,
+            )
+            .is_err()
+        );
+
         let final_key_expected = PrivateOramConsensusLayout {
             generation: 1,
             owner_peer_ids: new.owner_peer_ids.clone(),
@@ -2595,6 +2707,7 @@ mod test {
             kind: PrivateOramShardKeyLayoutChangeKind::Drop,
             shard_key: retained_entries[0].shard_key.clone().unwrap(),
             entries: retained_entries.clone(),
+            preinstalled_new_owner_peer_ids: Vec::new(),
         };
         assert!(
             classify_private_oram_shard_key_layout_transition(

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -787,6 +787,7 @@ pub(crate) async fn private_oram_shard_key_layout_transition(
     collection_name: &str,
     config: &CollectionConfigInternal,
     reservation: &PrivateOramTransferReservation,
+    preinstalled_new_owner_peer_ids: &[PeerId],
     collection_meta: CollectionMetaOperations,
 ) -> Result<PrivateOramCollectionLayoutTransition, StorageError> {
     if !matches!(
@@ -821,6 +822,7 @@ pub(crate) async fn private_oram_shard_key_layout_transition(
             &keys,
             &lease_id_hash,
             generation,
+            preinstalled_new_owner_peer_ids,
             &collection_meta,
         )
         .await?;
@@ -1117,43 +1119,26 @@ pub(crate) async fn prepare_private_oram_shard_transfer(
         return Ok(reservation);
     }
 
-    for key in &reservation.keys {
-        let install_result = match key.index_kind {
-            PrivateOramIndexKind::Hnsw => {
-                install_private_hnsw_live_replica_on_peer(
-                    dispatcher,
-                    auth,
-                    settings,
-                    collection_name,
-                    &key.index_name,
-                    target_peer,
-                    &lease_id_hash,
-                )
-                .await
-            }
-            PrivateOramIndexKind::ResultPayload => {
-                install_private_result_oram_live_replica_on_peer(
-                    dispatcher,
-                    auth,
-                    settings,
-                    collection_name,
-                    target_peer,
-                    &lease_id_hash,
-                )
-                .await
-            }
-        };
-        if let Err(error) = install_result {
-            if release_private_oram_transfer_reservation(dispatcher, &reservation)
-                .await
-                .is_err()
-            {
-                log::warn!(
-                    "failed to release private ORAM transfer reservation after live install failure"
-                );
-            }
-            return Err(error);
+    if let Err(error) = install_private_oram_live_replica_set_on_peer(
+        dispatcher,
+        auth,
+        settings,
+        collection_name,
+        &reservation,
+        target_peer,
+        &lease_id_hash,
+    )
+    .await
+    {
+        if release_private_oram_transfer_reservation(dispatcher, &reservation)
+            .await
+            .is_err()
+        {
+            log::warn!(
+                "failed to release private ORAM transfer reservation after live install failure"
+            );
         }
+        return Err(error);
     }
 
     Ok(reservation)
@@ -1230,6 +1215,106 @@ pub(crate) async fn prepare_private_oram_collection_layout_change(
         return Err(error);
     }
     Ok(reservation)
+}
+
+pub(crate) async fn prepare_private_oram_shard_key_layout_change(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    config: &CollectionConfigInternal,
+    collection_meta: CollectionMetaOperations,
+) -> Result<
+    (
+        PrivateOramTransferReservation,
+        PrivateOramCollectionLayoutTransition,
+    ),
+    StorageError,
+> {
+    let reservation = prepare_private_oram_collection_layout_change(
+        dispatcher,
+        auth,
+        settings,
+        collection_name,
+        config,
+    )
+    .await?;
+    let preparation = async {
+        let current = private_oram_current_layout_candidate_for_reservation(
+            dispatcher,
+            collection_name,
+            config,
+            &reservation,
+        )
+        .await?;
+        let current_owner_peer_ids = current.owner_peer_ids.into_iter().collect::<BTreeSet<_>>();
+        let preinstalled_new_owner_peer_ids = match &collection_meta {
+            CollectionMetaOperations::CreateShardKey(operation)
+                if operation.initial_state == Some(ReplicaState::Active) =>
+            {
+                let requested_owner_peer_ids = operation
+                    .placement
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .collect::<BTreeSet<_>>();
+                if requested_owner_peer_ids.is_empty() {
+                    return Err(StorageError::bad_request(
+                        "private ORAM shard-key layout transition is invalid",
+                    ));
+                }
+                requested_owner_peer_ids
+                    .difference(&current_owner_peer_ids)
+                    .copied()
+                    .collect::<Vec<_>>()
+            }
+            CollectionMetaOperations::DropShardKey(_) => Vec::new(),
+            _ => {
+                return Err(StorageError::bad_request(
+                    "private ORAM shard-key layout transition is invalid",
+                ));
+            }
+        };
+        let transition = private_oram_shard_key_layout_transition(
+            dispatcher,
+            collection_name,
+            config,
+            &reservation,
+            &preinstalled_new_owner_peer_ids,
+            collection_meta,
+        )
+        .await?;
+        let lease_id_hash = private_oram_session_lease_hash(&reservation.session_id)?;
+        for target_peer in &preinstalled_new_owner_peer_ids {
+            install_private_oram_live_replica_set_on_peer(
+                dispatcher,
+                auth,
+                settings,
+                collection_name,
+                &reservation,
+                *target_peer,
+                &lease_id_hash,
+            )
+            .await?;
+        }
+        Ok(transition)
+    }
+    .await;
+
+    match preparation {
+        Ok(transition) => Ok((reservation, transition)),
+        Err(error) => {
+            if release_private_oram_transfer_reservation(dispatcher, &reservation)
+                .await
+                .is_err()
+            {
+                log::warn!(
+                    "failed to release private ORAM shard-key reservation after preparation failure"
+                );
+            }
+            Err(error)
+        }
+    }
 }
 
 pub(crate) async fn prepare_private_oram_replica_removal(
@@ -1499,6 +1584,45 @@ pub(crate) async fn coordinate_private_result_oram_initial_upload(
             None,
         )
         .await
+}
+
+async fn install_private_oram_live_replica_set_on_peer(
+    dispatcher: &Dispatcher,
+    auth: &Auth,
+    settings: &Settings,
+    collection_name: &str,
+    reservation: &PrivateOramTransferReservation,
+    target_peer: PeerId,
+    lease_id_hash: &str,
+) -> Result<(), StorageError> {
+    for key in &reservation.keys {
+        match key.index_kind {
+            PrivateOramIndexKind::Hnsw => {
+                install_private_hnsw_live_replica_on_peer(
+                    dispatcher,
+                    auth,
+                    settings,
+                    collection_name,
+                    &key.index_name,
+                    target_peer,
+                    lease_id_hash,
+                )
+                .await?;
+            }
+            PrivateOramIndexKind::ResultPayload => {
+                install_private_result_oram_live_replica_on_peer(
+                    dispatcher,
+                    auth,
+                    settings,
+                    collection_name,
+                    target_peer,
+                    lease_id_hash,
+                )
+                .await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn install_private_hnsw_live_replica_on_peer(

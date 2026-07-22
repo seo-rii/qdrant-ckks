@@ -51,11 +51,11 @@ use super::private_hnsw::begin_private_hnsw_collection_snapshot;
 use super::private_result_oram::begin_private_result_oram_collection_snapshot;
 use crate::settings::Settings;
 use crate::tonic::api::qdrant_internal_api::{
-    prepare_private_oram_collection_layout_change, prepare_private_oram_replica_removal,
-    prepare_private_oram_resharding_finish, prepare_private_oram_shard_transfer,
+    prepare_private_oram_replica_removal, prepare_private_oram_resharding_finish,
+    prepare_private_oram_shard_key_layout_change, prepare_private_oram_shard_transfer,
     private_oram_replica_removal_layout_transition, private_oram_resharding_finish_operation,
-    private_oram_resharding_start_operation, private_oram_shard_key_layout_transition,
-    private_oram_shard_transfer_start_operation, release_private_oram_transfer_reservation,
+    private_oram_resharding_start_operation, private_oram_shard_transfer_start_operation,
+    release_private_oram_transfer_reservation,
 };
 pub async fn do_collection_exists(
     toc: &TableOfContent,
@@ -1464,36 +1464,15 @@ async fn submit_shard_key_change_with_private_oram_reservation(
     auth: Auth,
     wait_timeout: Option<Duration>,
 ) -> Result<bool, StorageError> {
-    let reservation = prepare_private_oram_collection_layout_change(
+    let (reservation, transition) = prepare_private_oram_shard_key_layout_change(
         dispatcher,
         &auth,
         settings,
         &collection_name,
         config,
-    )
-    .await?;
-    let transition = private_oram_shard_key_layout_transition(
-        dispatcher,
-        &collection_name,
-        config,
-        &reservation,
         operation,
     )
-    .await;
-    let transition = match transition {
-        Ok(transition) => transition,
-        Err(error) => {
-            if release_private_oram_transfer_reservation(dispatcher, &reservation)
-                .await
-                .is_err()
-            {
-                log::warn!(
-                    "failed to release private ORAM shard-key reservation after layout transition preparation failure"
-                );
-            }
-            return Err(error);
-        }
-    };
+    .await?;
     let result = dispatcher
         .submit_private_oram_collection_layout_transition(transition, auth, wait_timeout)
         .await;

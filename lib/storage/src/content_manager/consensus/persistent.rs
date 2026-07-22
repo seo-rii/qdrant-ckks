@@ -29,9 +29,10 @@ use crate::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramSessionLease, PrivateOramCollectionLayoutTransition,
     PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramEpochKey,
     PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramReshardingOperation,
-    PrivateOramSessionLease, PrivateOramShardKeyLayoutChangeKind, PrivateOramShardTransferFinish,
-    PrivateOramShardTransferStart, canonical_private_oram_index_state_digest,
-    private_oram_transfer_consensus_layouts, private_oram_transfer_consensus_states,
+    PrivateOramSessionLease, PrivateOramShardKeyLayoutChange, PrivateOramShardKeyLayoutChangeKind,
+    PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
+    canonical_private_oram_index_state_digest, private_oram_transfer_consensus_layouts,
+    private_oram_transfer_consensus_states,
 };
 use crate::types::{PeerAddressById, PeerMetadataById};
 
@@ -516,6 +517,13 @@ impl Persistent {
                 return Err(invalid_private_oram_collection_layout_transition());
             }
             (None, _) => {}
+        }
+        if let Some(change) = transition.shard_key_change.as_ref() {
+            validate_private_oram_shard_key_preinstalled_owners(
+                change,
+                expected_layout,
+                &transition.layout.new,
+            )?;
         }
 
         let mut states = Vec::with_capacity(transition.leases.len());
@@ -1005,6 +1013,48 @@ fn validate_private_oram_layout_cas(
             ));
         }
         None => {}
+    }
+    Ok(())
+}
+
+fn validate_private_oram_shard_key_preinstalled_owners(
+    change: &PrivateOramShardKeyLayoutChange,
+    expected: &PrivateOramConsensusLayout,
+    new: &PrivateOramConsensusLayout,
+) -> Result<(), StorageError> {
+    if change.preinstalled_new_owner_peer_ids.len() > PRIVATE_ORAM_LAYOUT_MAX_OWNERS
+        || change
+            .preinstalled_new_owner_peer_ids
+            .windows(2)
+            .any(|owners| owners[0] >= owners[1])
+    {
+        return Err(invalid_private_oram_collection_layout_transition());
+    }
+
+    let expected_is_subset = expected
+        .owner_peer_ids
+        .iter()
+        .all(|owner| new.owner_peer_ids.binary_search(owner).is_ok());
+    let new_is_subset = new
+        .owner_peer_ids
+        .iter()
+        .all(|owner| expected.owner_peer_ids.binary_search(owner).is_ok());
+    let added_owners = new
+        .owner_peer_ids
+        .iter()
+        .copied()
+        .filter(|owner| expected.owner_peer_ids.binary_search(owner).is_err())
+        .collect::<Vec<_>>();
+    let valid = match change.kind {
+        PrivateOramShardKeyLayoutChangeKind::Create => {
+            expected_is_subset && added_owners == change.preinstalled_new_owner_peer_ids
+        }
+        PrivateOramShardKeyLayoutChangeKind::Drop => {
+            new_is_subset && change.preinstalled_new_owner_peer_ids.is_empty()
+        }
+    };
+    if !valid {
+        return Err(invalid_private_oram_collection_layout_transition());
     }
     Ok(())
 }
@@ -1775,6 +1825,58 @@ mod tests {
                 .is_err()
         );
 
+        let mut new_owner_transition = transition.clone();
+        new_owner_transition.layout.new.owner_peer_ids = vec![7, 9, 11];
+        new_owner_transition.layout.new.layout_digest = BASE64URL_NOPAD.encode(&[49; 32]);
+        new_owner_transition.collection_meta = Box::new(
+            crate::content_manager::collection_meta_ops::CollectionMetaOperations::CreateShardKey(
+                crate::content_manager::collection_meta_ops::CreateShardKey {
+                    collection_name: "docs".to_string(),
+                    shard_key: shard_key_sentinel.clone(),
+                    placement: vec![vec![11]],
+                    initial_state: Some(ReplicaState::Active),
+                },
+            ),
+        );
+        new_owner_transition.shard_key_change = Some(PrivateOramShardKeyLayoutChange {
+            kind: PrivateOramShardKeyLayoutChangeKind::Create,
+            shard_key: shard_key_sentinel.clone(),
+            entries: vec![PrivateOramShardLayoutEntry {
+                shard_id: 2,
+                shard_key: Some(shard_key_sentinel.clone()),
+                owner_peer_ids: vec![11],
+            }],
+            preinstalled_new_owner_peer_ids: vec![11],
+        });
+        persistent
+            .validate_private_oram_collection_layout_transition(&new_owner_transition)
+            .unwrap();
+
+        let mut missing_new_owner_preinstall = new_owner_transition.clone();
+        missing_new_owner_preinstall
+            .shard_key_change
+            .as_mut()
+            .unwrap()
+            .preinstalled_new_owner_peer_ids
+            .clear();
+        assert!(
+            persistent
+                .validate_private_oram_collection_layout_transition(&missing_new_owner_preinstall,)
+                .is_err()
+        );
+
+        let mut forged_new_owner_preinstall = new_owner_transition;
+        forged_new_owner_preinstall
+            .shard_key_change
+            .as_mut()
+            .unwrap()
+            .preinstalled_new_owner_peer_ids = vec![12];
+        assert!(
+            persistent
+                .validate_private_oram_collection_layout_transition(&forged_new_owner_preinstall,)
+                .is_err()
+        );
+
         let mut mismatched_descriptor = transition.clone();
         mismatched_descriptor.shard_key_change = Some(PrivateOramShardKeyLayoutChange {
             kind: PrivateOramShardKeyLayoutChangeKind::Drop,
@@ -1784,6 +1886,7 @@ mod tests {
                 shard_key: Some(shard_key_sentinel),
                 owner_peer_ids: vec![7],
             }],
+            preinstalled_new_owner_peer_ids: Vec::new(),
         });
         assert!(
             persistent
