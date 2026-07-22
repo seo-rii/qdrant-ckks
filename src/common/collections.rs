@@ -51,9 +51,10 @@ use super::private_hnsw::begin_private_hnsw_collection_snapshot;
 use super::private_result_oram::begin_private_result_oram_collection_snapshot;
 use crate::settings::Settings;
 use crate::tonic::api::qdrant_internal_api::{
-    prepare_private_oram_replica_removal, prepare_private_oram_resharding_finish,
-    prepare_private_oram_shard_transfer, private_oram_replica_removal_layout_transition,
-    private_oram_resharding_finish_operation, private_oram_resharding_start_operation,
+    prepare_private_oram_collection_layout_change, prepare_private_oram_replica_removal,
+    prepare_private_oram_resharding_finish, prepare_private_oram_shard_transfer,
+    private_oram_replica_removal_layout_transition, private_oram_resharding_finish_operation,
+    private_oram_resharding_start_operation, private_oram_shard_key_layout_transition,
     private_oram_shard_transfer_start_operation, release_private_oram_transfer_reservation,
 };
 pub async fn do_collection_exists(
@@ -339,11 +340,11 @@ pub async fn do_update_collection_cluster(
         &collection_state.config,
         &operation,
     );
-    reject_private_oram_cluster_shard_key_change_until_supported(
-        &collection_name,
-        &collection_state.config,
-        &operation,
-    )?;
+    let private_oram_shard_key_change =
+        classify_private_oram_cluster_shard_key_change(&collection_state.config, &operation);
+    let private_oram_initial_shard_key_bootstrap = private_oram_shard_key_change
+        && collection_state.shards.is_empty()
+        && matches!(&operation, ClusterOperations::CreateShardingKey(_));
     let private_oram_replica_removal = validate_private_oram_cluster_replica_removal(
         &collection_name,
         &collection_state,
@@ -627,6 +628,15 @@ pub async fn do_update_collection_cluster(
                     }
                 }
             }
+            if private_oram_shard_key_change
+                && create_sharding_key
+                    .initial_state
+                    .is_some_and(|state| state != replica_set_state::ReplicaState::Active)
+            {
+                return Err(StorageError::bad_request(
+                    "private ORAM shard-key creation requires Active replicas",
+                ));
+            }
 
             let shard_keys_mapping = state.shards_key_mapping;
             if shard_keys_mapping.contains_key(&create_sharding_key.shard_key) {
@@ -659,18 +669,32 @@ pub async fn do_update_collection_cluster(
             let exact_placement =
                 generate_even_placement(peers_pool, shard_number, replication_factor);
 
-            dispatcher
-                .submit_collection_meta_op(
-                    CollectionMetaOperations::CreateShardKey(CreateShardKey {
-                        collection_name,
-                        shard_key: create_sharding_key.shard_key,
-                        placement: exact_placement,
-                        initial_state: create_sharding_key.initial_state,
-                    }),
+            let operation = CollectionMetaOperations::CreateShardKey(CreateShardKey {
+                collection_name: collection_name.clone(),
+                shard_key: create_sharding_key.shard_key,
+                placement: exact_placement,
+                initial_state: if private_oram_shard_key_change {
+                    Some(replica_set_state::ReplicaState::Active)
+                } else {
+                    create_sharding_key.initial_state
+                },
+            });
+            if private_oram_shard_key_change && !private_oram_initial_shard_key_bootstrap {
+                submit_shard_key_change_with_private_oram_reservation(
+                    dispatcher,
+                    settings,
+                    &state.config,
+                    collection_name,
+                    operation,
                     auth,
                     wait_timeout,
                 )
                 .await
+            } else {
+                dispatcher
+                    .submit_collection_meta_op(operation, auth, wait_timeout)
+                    .await
+            }
         }
         ClusterOperations::DropShardingKey(drop_sharding_key_op) => {
             let drop_sharding_key = drop_sharding_key_op.drop_sharding_key;
@@ -699,16 +723,26 @@ pub async fn do_update_collection_cluster(
                 });
             }
 
-            dispatcher
-                .submit_collection_meta_op(
-                    CollectionMetaOperations::DropShardKey(DropShardKey {
-                        collection_name,
-                        shard_key: drop_sharding_key.shard_key,
-                    }),
+            let operation = CollectionMetaOperations::DropShardKey(DropShardKey {
+                collection_name: collection_name.clone(),
+                shard_key: drop_sharding_key.shard_key,
+            });
+            if private_oram_shard_key_change {
+                submit_shard_key_change_with_private_oram_reservation(
+                    dispatcher,
+                    settings,
+                    &state.config,
+                    collection_name,
+                    operation,
                     auth,
                     wait_timeout,
                 )
                 .await
+            } else {
+                dispatcher
+                    .submit_collection_meta_op(operation, auth, wait_timeout)
+                    .await
+            }
         }
         ClusterOperations::RestartTransfer(RestartTransferOperation { restart_transfer }) => {
             // TODO(reshading): Deduplicate resharding operations handling?
@@ -1421,6 +1455,64 @@ async fn submit_restart_transfer_with_private_oram_preinstall(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn submit_shard_key_change_with_private_oram_reservation(
+    dispatcher: &Dispatcher,
+    settings: &Settings,
+    config: &CollectionConfigInternal,
+    collection_name: String,
+    operation: CollectionMetaOperations,
+    auth: Auth,
+    wait_timeout: Option<Duration>,
+) -> Result<bool, StorageError> {
+    let reservation = prepare_private_oram_collection_layout_change(
+        dispatcher,
+        &auth,
+        settings,
+        &collection_name,
+        config,
+    )
+    .await?;
+    let transition = private_oram_shard_key_layout_transition(
+        dispatcher,
+        &collection_name,
+        config,
+        &reservation,
+        operation,
+    )
+    .await;
+    let transition = match transition {
+        Ok(transition) => transition,
+        Err(error) => {
+            if release_private_oram_transfer_reservation(dispatcher, &reservation)
+                .await
+                .is_err()
+            {
+                log::warn!(
+                    "failed to release private ORAM shard-key reservation after layout transition preparation failure"
+                );
+            }
+            return Err(error);
+        }
+    };
+    let result = dispatcher
+        .submit_private_oram_collection_layout_transition(transition, auth, wait_timeout)
+        .await;
+    if result.is_ok() {
+        if release_private_oram_transfer_reservation(dispatcher, &reservation)
+            .await
+            .is_err()
+        {
+            log::warn!("failed to release private ORAM shard-key reservation");
+        }
+    } else {
+        log::warn!(
+            "retaining private ORAM shard-key reservation after uncertain consensus submission"
+        );
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn submit_replica_removal_with_private_oram_reservation(
     dispatcher: &Dispatcher,
     settings: &Settings,
@@ -1805,23 +1897,12 @@ fn cluster_operation_progresses_resharding(operation: &ClusterOperations) -> boo
     )
 }
 
-fn reject_private_oram_cluster_shard_key_change_until_supported(
-    _collection_name: &str,
+fn classify_private_oram_cluster_shard_key_change(
     config: &CollectionConfigInternal,
     operation: &ClusterOperations,
-) -> Result<(), StorageError> {
-    if !cluster_operation_changes_shard_keys(operation)
-        || !collection_uses_private_oram_bucket_store(config)
-    {
-        return Ok(());
-    }
-
-    Err(StorageError::BadRequest {
-        description: "cannot change shard keys for private ORAM collections: collection-local \
-                      ORAM bucket migration and consensus-backed epoch/root ownership are not \
-                      implemented for shard-key layout changes"
-            .to_string(),
-    })
+) -> bool {
+    cluster_operation_changes_shard_keys(operation)
+        && collection_uses_private_oram_bucket_store(config)
 }
 
 fn cluster_operation_changes_shard_keys(operation: &ClusterOperations) -> bool {
@@ -3014,10 +3095,6 @@ mod tests {
             .into_iter()
             .next()
             .unwrap();
-        let shard_key_operation = private_oram_shard_key_change_operations()
-            .into_iter()
-            .next()
-            .unwrap();
         let replica_operation = private_oram_drop_replica_operation();
         let transfer_state = replica_removal_state(config.clone());
 
@@ -3032,17 +3109,6 @@ mod tests {
                 .expect_err("private ORAM transfer must fail closed without alias leaks")
                 .to_string(),
                 "explicit stream_records",
-            ),
-            (
-                "shard-key",
-                reject_private_oram_cluster_shard_key_change_until_supported(
-                    collection_name,
-                    &config,
-                    &shard_key_operation,
-                )
-                .expect_err("private ORAM shard-key changes must fail closed without alias leaks")
-                .to_string(),
-                "shard-key layout changes",
             ),
             (
                 "replica-removal",
@@ -3206,57 +3272,27 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_shard_key_guard_blocks_layout_changes_until_bucket_migration_supported() {
-        let collection_name = "private-oram-shard-key-secret-collection";
-        for (label, config, sentinels) in [
-            (
-                "private HNSW ORAM",
-                private_hnsw_collection_config(),
-                [
-                    "tenant-a/vector-private-rk",
-                    "docs_text_private_hnsw",
-                    PRIVATE_HNSW_ORAM_BINDING,
-                    "private_hnsw_oram",
-                    collection_name,
-                ],
-            ),
+    fn private_oram_shard_key_route_is_classified_without_config_leakage() {
+        for (label, config) in [
+            ("private HNSW ORAM", private_hnsw_collection_config()),
             (
                 "private result ORAM",
                 private_result_oram_collection_config(),
-                [
-                    "tenant-a/result-private-rk",
-                    "body_private_result_oram",
-                    PRIVATE_RESULT_ORAM_BINDING,
-                    "private_result_oram",
-                    collection_name,
-                ],
             ),
         ] {
             for operation in private_oram_shard_key_change_operations() {
-                let err = reject_private_oram_cluster_shard_key_change_until_supported(
-                    collection_name,
-                    &config,
-                    &operation,
-                )
-                .expect_err("private ORAM shard-key layout changes must fail closed");
                 assert!(
-                    err.to_string().contains("shard-key layout changes")
-                        && err
-                            .to_string()
-                            .contains("consensus-backed epoch/root ownership"),
-                    "unexpected {label} shard-key error for {operation:?}: {err}",
+                    classify_private_oram_cluster_shard_key_change(&config, &operation),
+                    "unexpected {label} route for {operation:?}",
                 );
-                assert_no_private_oram_config_leak(&err.to_string(), &sentinels);
             }
         }
 
         for operation in private_oram_shard_key_change_operations() {
-            reject_private_oram_cluster_shard_key_change_until_supported(
-                collection_name,
+            assert!(!classify_private_oram_cluster_shard_key_change(
                 &ordinary_collection_config(),
                 &operation,
-            )
-            .expect("ordinary collection shard-key layout changes must stay open");
+            ));
         }
     }
 

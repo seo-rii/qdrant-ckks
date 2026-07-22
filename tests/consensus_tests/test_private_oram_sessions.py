@@ -191,6 +191,9 @@ def _start_private_oram_cluster(
     include_public_vector: bool = False,
     write_consistency_factor: int | None = None,
     started_peer_count: int | None = None,
+    sharding_method: str = "auto",
+    initial_shard_key: str = "tenant-initial",
+    initial_shard_key_placement: list[int] | None = None,
 ) -> tuple[list[str], list[pathlib.Path], dict, int, str]:
     if started_peer_count is None:
         started_peer_count = peer_count
@@ -247,6 +250,7 @@ def _start_private_oram_cluster(
             "vectors": vectors,
             "shard_number": shard_number,
             "replication_factor": replication_factor,
+            "sharding_method": sharding_method,
             "write_consistency_factor": (
                 replication_factor
                 if write_consistency_factor is None
@@ -265,6 +269,26 @@ def _start_private_oram_cluster(
     )
     assert_http_ok(create)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+
+    if sharding_method == "custom":
+        peer_ids = [get_cluster_info(peer_url)["peer_id"] for peer_url in peer_urls]
+        placement_indices = (
+            list(range(started_peer_count))
+            if initial_shard_key_placement is None
+            else initial_shard_key_placement
+        )
+        initial_shard = requests.put(
+            f"{bootstrap_api}/collections/{COLLECTION}/shards?timeout=60",
+            json={
+                "shard_key": initial_shard_key,
+                "shards_number": shard_number,
+                "replication_factor": replication_factor,
+                "placement": [peer_ids[index] for index in placement_indices],
+            },
+            timeout=60,
+        )
+        assert_http_ok(initial_shard)
+        wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
 
     fixture = _private_oram_fixture(
         _collection_uuid(bootstrap_api), fixture_profile, result_privacy
@@ -565,6 +589,97 @@ def test_private_oram_replica_removal_requires_idle_index_and_retains_owner(
             fixture["result"]["commit"]["new_root_hash"],
         ]:
             assert secret not in response.text
+
+
+def test_private_oram_custom_shard_key_layout_mutation_is_consensus_bound(
+    tmp_path: pathlib.Path,
+):
+    peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(
+        tmp_path,
+        3,
+        2,
+        sharding_method="custom",
+        initial_shard_key="tenant-drop",
+        initial_shard_key_placement=[0, 1],
+    )
+    coordinator_url, removed_owner_url, non_owner_url = peer_urls
+    peer_ids = [get_cluster_info(peer_url)["peer_id"] for peer_url in peer_urls]
+
+    _upload_hnsw(coordinator_url, fixture)
+    _exercise_hnsw_owner_session(coordinator_url, fixture)
+    _upload_result_oram(coordinator_url, fixture)
+    _exercise_result_owner_session(coordinator_url, fixture)
+    assert all(_private_oram_layout_state(peer_dir) is None for peer_dir in peer_dirs)
+
+    create_retained = requests.put(
+        f"{coordinator_url}/collections/{COLLECTION}/shards?timeout=60",
+        json={
+            "shard_key": "tenant-retained",
+            "shards_number": 1,
+            "replication_factor": 1,
+            "placement": [peer_ids[0]],
+        },
+        timeout=60,
+    )
+    assert_http_ok(create_retained)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    wait_for_collection_local_shards_count(coordinator_url, COLLECTION, 2)
+    wait_for_collection_local_shards_count(removed_owner_url, COLLECTION, 1)
+    wait_for_collection_local_shards_count(non_owner_url, COLLECTION, 0)
+    _wait_for_private_oram_layout(peer_dirs, 2, peer_ids[:2])
+    _assert_replica_can_open_current_sessions(removed_owner_url)
+
+    unsupported_new_owner = requests.put(
+        f"{coordinator_url}/collections/{COLLECTION}/shards?timeout=60",
+        json={
+            "shard_key": "tenant-new-owner",
+            "shards_number": 1,
+            "replication_factor": 1,
+            "placement": [peer_ids[2]],
+        },
+        timeout=60,
+    )
+    assert 400 <= unsupported_new_owner.status_code < 600
+    for secret in [
+        fixture["hnsw"]["commit"]["new_root_hash"],
+        fixture["result"]["commit"]["new_root_hash"],
+    ]:
+        assert secret not in unsupported_new_owner.text
+    _wait_for_private_oram_layout(peer_dirs, 2, peer_ids[:2])
+
+    drop_initial = requests.post(
+        f"{coordinator_url}/collections/{COLLECTION}/shards/delete?timeout=60",
+        json={"shard_key": "tenant-drop"},
+        timeout=60,
+    )
+    assert_http_ok(drop_initial)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    wait_for_collection_local_shards_count(coordinator_url, COLLECTION, 1)
+    wait_for_collection_local_shards_count(removed_owner_url, COLLECTION, 0)
+    _wait_for_private_oram_layout(peer_dirs, 3, [peer_ids[0]])
+    _assert_replica_can_open_current_sessions(coordinator_url)
+
+    assert _private_oram_buckets_dir(peer_dirs[1], "hnsw").is_dir()
+    assert _private_oram_buckets_dir(peer_dirs[1], "result").is_dir()
+    removed_owner_session = requests.post(
+        f"{removed_owner_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session",
+        json={
+            "client_id": "tenant-a/removed-shard-key-owner",
+            "desired_epoch": NEXT_EPOCH,
+            "fixed_budget": True,
+            "result_privacy": "private_payload_oram_required",
+        },
+        timeout=30,
+    )
+    assert 400 <= removed_owner_session.status_code < 600
+
+    final_drop = requests.post(
+        f"{coordinator_url}/collections/{COLLECTION}/shards/delete?timeout=60",
+        json={"shard_key": "tenant-retained"},
+        timeout=60,
+    )
+    assert 400 <= final_drop.status_code < 600
+    _wait_for_private_oram_layout(peer_dirs, 3, [peer_ids[0]])
 
 
 def test_private_oram_existing_layout_advances_after_replica_removal_and_transfer(

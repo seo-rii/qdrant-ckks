@@ -7,6 +7,7 @@ use std::{cmp, fmt};
 
 use atomicwrites::{AllowOverwrite, AtomicFile};
 use collection::operations::types::PeerMetadata;
+use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::PeerId;
 use data_encoding::BASE64URL_NOPAD;
 use fs_err as fs;
@@ -28,9 +29,9 @@ use crate::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramSessionLease, PrivateOramCollectionLayoutTransition,
     PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramEpochKey,
     PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramReshardingOperation,
-    PrivateOramSessionLease, PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
-    canonical_private_oram_index_state_digest, private_oram_transfer_consensus_layouts,
-    private_oram_transfer_consensus_states,
+    PrivateOramSessionLease, PrivateOramShardKeyLayoutChangeKind, PrivateOramShardTransferFinish,
+    PrivateOramShardTransferStart, canonical_private_oram_index_state_digest,
+    private_oram_transfer_consensus_layouts, private_oram_transfer_consensus_states,
 };
 use crate::types::{PeerAddressById, PeerMetadataById};
 
@@ -492,6 +493,29 @@ impl Persistent {
             || expected_layout.layout_digest == transition.layout.new.layout_digest
         {
             return Err(invalid_private_oram_collection_layout_transition());
+        }
+        match (
+            transition.shard_key_change.as_ref(),
+            transition.collection_meta.as_ref(),
+        ) {
+            (None, CollectionMetaOperations::CreateShardKey(_))
+            | (None, CollectionMetaOperations::DropShardKey(_)) => {
+                return Err(invalid_private_oram_collection_layout_transition());
+            }
+            (Some(change), CollectionMetaOperations::CreateShardKey(operation))
+                if change.kind == PrivateOramShardKeyLayoutChangeKind::Create
+                    && change.shard_key == operation.shard_key
+                    && operation.initial_state == Some(ReplicaState::Active)
+                    && !change.entries.is_empty()
+                    && change.entries.len() == operation.placement.len() => {}
+            (Some(change), CollectionMetaOperations::DropShardKey(operation))
+                if change.kind == PrivateOramShardKeyLayoutChangeKind::Drop
+                    && change.shard_key == operation.shard_key
+                    && !change.entries.is_empty() => {}
+            (Some(_), _) => {
+                return Err(invalid_private_oram_collection_layout_transition());
+            }
+            (None, _) => {}
         }
 
         let mut states = Vec::with_capacity(transition.leases.len());
@@ -1239,7 +1263,8 @@ mod tests {
     use super::*;
     use crate::content_manager::consensus_ops::{
         PrivateOramLayoutIndexStateBinding, PrivateOramLayoutLeaseBinding,
-        PrivateOramReshardingLayoutTransition,
+        PrivateOramReshardingLayoutTransition, PrivateOramShardKeyLayoutChange,
+        PrivateOramShardLayoutEntry,
     };
 
     #[test]
@@ -1700,6 +1725,7 @@ mod tests {
                     lease: lease.clone(),
                 },
             ],
+            shard_key_change: None,
             collection_meta: Box::new(
                 crate::content_manager::collection_meta_ops::CollectionMetaOperations::Nop {
                     token: 7,
@@ -1732,6 +1758,38 @@ mod tests {
         persistent
             .validate_private_oram_collection_layout_transition(&transition)
             .unwrap();
+
+        let shard_key_sentinel = ShardKey::Keyword("private-layout-key-sentinel".into());
+        let mut missing_descriptor = transition.clone();
+        missing_descriptor.collection_meta = Box::new(
+            crate::content_manager::collection_meta_ops::CollectionMetaOperations::DropShardKey(
+                crate::content_manager::collection_meta_ops::DropShardKey {
+                    collection_name: "docs".to_string(),
+                    shard_key: shard_key_sentinel.clone(),
+                },
+            ),
+        );
+        assert!(
+            persistent
+                .validate_private_oram_collection_layout_transition(&missing_descriptor)
+                .is_err()
+        );
+
+        let mut mismatched_descriptor = transition.clone();
+        mismatched_descriptor.shard_key_change = Some(PrivateOramShardKeyLayoutChange {
+            kind: PrivateOramShardKeyLayoutChangeKind::Drop,
+            shard_key: shard_key_sentinel.clone(),
+            entries: vec![PrivateOramShardLayoutEntry {
+                shard_id: 1,
+                shard_key: Some(shard_key_sentinel),
+                owner_peer_ids: vec![7],
+            }],
+        });
+        assert!(
+            persistent
+                .validate_private_oram_collection_layout_transition(&mismatched_descriptor)
+                .is_err()
+        );
 
         let mut wrong_lease = transition.clone();
         wrong_lease.leases[0].lease.lease_id_hash = BASE64URL_NOPAD.encode(&[48; 32]);

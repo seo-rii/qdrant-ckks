@@ -108,13 +108,18 @@ impl Collection {
         shard_key: ShardKey,
         placement: ShardsPlacement,
         init_state: ReplicaState,
+        private_oram_consensus_authorized: bool,
     ) -> CollectionResult<()> {
-        self.validate_private_oram_shard_key_change_until_supported("create shard key")
-            .await?;
+        let state = self.state().await;
+        self.validate_private_oram_shard_key_change_authorization(
+            "create shard key",
+            private_oram_consensus_authorized,
+            state.shards.is_empty() && init_state == ReplicaState::Active,
+        )
+        .await?;
 
         let hw_counter = HwMeasurementAcc::disposable(); // Internal operation. No measurement needed.
 
-        let state = self.state().await;
         match state.config.params.sharding_method.unwrap_or_default() {
             ShardingMethod::Auto => {
                 return Err(CollectionError::bad_request(format!(
@@ -162,7 +167,7 @@ impl Collection {
             let shard_id = max_shard_id + idx as ShardId + 1;
 
             let replica_set = self
-                .create_replica_set(
+                .create_replica_set_authorized(
                     shard_id,
                     Some(shard_key.clone()),
                     shard_replicas_placement,
@@ -238,9 +243,17 @@ impl Collection {
         Ok(())
     }
 
-    pub async fn drop_shard_key(&self, shard_key: ShardKey) -> CollectionResult<()> {
-        self.validate_private_oram_shard_key_change_until_supported("drop shard key")
-            .await?;
+    pub async fn drop_shard_key(
+        &self,
+        shard_key: ShardKey,
+        private_oram_consensus_authorized: bool,
+    ) -> CollectionResult<()> {
+        self.validate_private_oram_shard_key_change_authorization(
+            "drop shard key",
+            private_oram_consensus_authorized,
+            false,
+        )
+        .await?;
 
         let state = self.state().await;
 
@@ -319,9 +332,11 @@ impl Collection {
         Ok(replicas)
     }
 
-    async fn validate_private_oram_shard_key_change_until_supported(
+    async fn validate_private_oram_shard_key_change_authorization(
         &self,
         operation_name: &str,
+        private_oram_consensus_authorized: bool,
+        private_oram_initial_bootstrap: bool,
     ) -> CollectionResult<()> {
         let private_oram_bucket_store_collection = {
             let config = self.collection_config.read().await;
@@ -331,9 +346,11 @@ impl Collection {
                 .as_ref()
                 .is_some_and(collection_encryption_uses_private_oram_bucket_store)
         };
-        validate_private_oram_shard_key_change_until_supported(
+        validate_private_oram_shard_key_change_authorization(
             operation_name,
             private_oram_bucket_store_collection,
+            private_oram_consensus_authorized,
+            private_oram_initial_bootstrap,
         )
     }
 
@@ -374,18 +391,23 @@ async fn cleanup_unadded_replica_set(replica_set: ShardReplicaSet) -> Collection
     }
 }
 
-fn validate_private_oram_shard_key_change_until_supported(
+fn validate_private_oram_shard_key_change_authorization(
     _operation_name: &str,
     private_oram_bucket_store_collection: bool,
+    private_oram_consensus_authorized: bool,
+    private_oram_initial_bootstrap: bool,
 ) -> CollectionResult<()> {
-    if !private_oram_bucket_store_collection {
+    if (private_oram_bucket_store_collection
+        && (private_oram_consensus_authorized || private_oram_initial_bootstrap))
+        || (!private_oram_bucket_store_collection
+            && !private_oram_consensus_authorized
+            && !private_oram_initial_bootstrap)
+    {
         return Ok(());
     }
 
     Err(CollectionError::bad_input(
-        "cannot change shard-key layout for private ORAM collections: collection-local encrypted ORAM \
-         buckets cannot be moved or deleted by shard-key layout changes until ORAM bucket \
-         migration and consensus-backed epoch/root ownership are implemented",
+        "private ORAM shard-key layout change authorization is invalid",
     ))
 }
 
@@ -613,27 +635,40 @@ mod tests {
     ];
 
     #[test]
-    fn private_oram_shard_key_change_guard_redacts_collection_details() {
-        validate_private_oram_shard_key_change_until_supported("create shard key", false).unwrap();
+    fn private_oram_shard_key_change_requires_matching_consensus_authority() {
+        validate_private_oram_shard_key_change_authorization(
+            "create shard key",
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        validate_private_oram_shard_key_change_authorization("create shard key", true, true, false)
+            .unwrap();
+        validate_private_oram_shard_key_change_authorization("create shard key", true, false, true)
+            .unwrap();
 
         for &operation_name in PRIVATE_ORAM_SHARD_KEY_OPERATION_NAMES {
-            let err = validate_private_oram_shard_key_change_until_supported(operation_name, true)
+            for (private_oram_collection, consensus_authorized) in [(true, false), (false, true)] {
+                let err = validate_private_oram_shard_key_change_authorization(
+                    operation_name,
+                    private_oram_collection,
+                    consensus_authorized,
+                    false,
+                )
                 .unwrap_err();
-            let rendered = format!("{err:?}");
+                let rendered = format!("{err:?}");
 
-            assert!(
-                rendered.contains("cannot change shard-key layout for private ORAM collections")
-            );
-            assert!(rendered.contains("collection-local encrypted ORAM buckets"));
-            assert!(rendered.contains("consensus-backed epoch/root"));
-            assert!(!rendered.contains(operation_name));
-            for &leaked_alias in PRIVATE_ORAM_SHARD_KEY_REDACTION_STEMS {
-                assert!(!rendered.contains(leaked_alias), "{rendered}");
+                assert!(rendered.contains("shard-key layout change authorization is invalid"));
+                assert!(!rendered.contains(operation_name));
+                for &leaked_alias in PRIVATE_ORAM_SHARD_KEY_REDACTION_STEMS {
+                    assert!(!rendered.contains(leaked_alias), "{rendered}");
+                }
+                assert!(!rendered.contains("private_hnsw_oram"));
+                assert!(!rendered.contains("private_result_oram"));
+                assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
+                assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
             }
-            assert!(!rendered.contains("private_hnsw_oram"));
-            assert!(!rendered.contains("private_result_oram"));
-            assert!(!rendered.contains(qdrant_sec::PRIVATE_HNSW_ORAM_BINDING));
-            assert!(!rendered.contains(qdrant_sec::PRIVATE_RESULT_ORAM_BINDING));
         }
     }
 

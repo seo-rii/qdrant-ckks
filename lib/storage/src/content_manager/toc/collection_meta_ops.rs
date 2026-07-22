@@ -19,7 +19,9 @@ use super::{COLLECTION_DELETE_SPIN_INTERVAL, COLLECTION_DELETE_WAIT_TIMEOUT, Tab
 use crate::common::utils::try_unwrap_with_timeout_async;
 use crate::content_manager::collection_meta_ops::*;
 use crate::content_manager::collections_ops::Checker as _;
-use crate::content_manager::consensus_ops::{ConsensusOperations, PrivateOramReshardingOperation};
+use crate::content_manager::consensus_ops::{
+    ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramReshardingOperation,
+};
 use crate::content_manager::errors::StorageError;
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
 
@@ -28,6 +30,12 @@ static CREATE_CUSTOM_SHARDS_IN_INITIALIZING_STATE: LazyLock<semver::Version> =
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum ReshardingApplyAuthority {
+    Ordinary,
+    PrivateOramConsensus,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum ShardKeyApplyAuthority {
     Ordinary,
     PrivateOramConsensus,
 }
@@ -143,14 +151,18 @@ impl TableOfContent {
                     create_shard_key.placement,
                     create_shard_key.initial_state,
                 );
-                self.create_shard_key(create_shard_key).await.map(|()| true)
+                self.create_shard_key(create_shard_key, ShardKeyApplyAuthority::Ordinary)
+                    .await
+                    .map(|()| true)
             }
             CollectionMetaOperations::DropShardKey(drop_shard_key) => {
                 log::debug!(
                     "Drop shard key for collection {}, shard_key_present true",
                     drop_shard_key.collection_name,
                 );
-                self.drop_shard_key(drop_shard_key).await.map(|()| true)
+                self.drop_shard_key(drop_shard_key, ShardKeyApplyAuthority::Ordinary)
+                    .await
+                    .map(|()| true)
             }
             CollectionMetaOperations::CreatePayloadIndex(create_payload_index) => {
                 log::debug!(
@@ -426,6 +438,27 @@ impl TableOfContent {
         )
         .await?;
         Ok(true)
+    }
+
+    /// # Cancel safety
+    ///
+    /// This method is *not* cancel safe.
+    pub(super) async fn perform_private_oram_collection_layout_meta_op(
+        &self,
+        transition: &PrivateOramCollectionLayoutTransition,
+    ) -> Result<bool, StorageError> {
+        let operation = (*transition.collection_meta).clone();
+        match operation {
+            CollectionMetaOperations::CreateShardKey(operation) => self
+                .create_shard_key(operation, ShardKeyApplyAuthority::PrivateOramConsensus)
+                .await
+                .map(|()| true),
+            CollectionMetaOperations::DropShardKey(operation) => self
+                .drop_shard_key(operation, ShardKeyApplyAuthority::PrivateOramConsensus)
+                .await
+                .map(|()| true),
+            operation => self.perform_collection_meta_op(operation).await,
+        }
     }
 
     async fn handle_resharding(
@@ -836,7 +869,11 @@ impl TableOfContent {
     /// ## Cancel safety
     ///
     /// This function is **not** cancel safe.
-    async fn create_shard_key(&self, operation: CreateShardKey) -> Result<(), StorageError> {
+    async fn create_shard_key(
+        &self,
+        operation: CreateShardKey,
+        authority: ShardKeyApplyAuthority,
+    ) -> Result<(), StorageError> {
         let use_initializing_state = self.is_distributed()
             && self
                 .get_channel_service()
@@ -854,10 +891,15 @@ impl TableOfContent {
             .get_collection_unchecked(&operation.collection_name)
             .await?;
         let collection_config = collection.config_snapshot().await;
-        reject_private_oram_shard_key_change_until_supported(
+        let private_oram_initial_bootstrap = authority == ShardKeyApplyAuthority::Ordinary
+            && collection_params_use_private_oram_bucket_store(&collection_config.params)
+            && operation.initial_state == Some(ReplicaState::Active)
+            && collection.state().await.shards.is_empty();
+        validate_private_oram_shard_key_change_authorization(
             &operation.collection_name,
             &collection_config.params,
-            "create_shard_key",
+            authority,
+            private_oram_initial_bootstrap,
         )?;
         if collection_params_require_crypto_runtime_transfer_parity(&collection_config.params) {
             validate_encrypted_create_shard_key_crypto_runtime_parity(
@@ -869,23 +911,38 @@ impl TableOfContent {
         }
 
         collection
-            .create_shard_key(operation.shard_key, operation.placement, init_state)
+            .create_shard_key(
+                operation.shard_key,
+                operation.placement,
+                init_state,
+                authority == ShardKeyApplyAuthority::PrivateOramConsensus,
+            )
             .await?;
 
         Ok(())
     }
 
-    async fn drop_shard_key(&self, operation: DropShardKey) -> Result<(), StorageError> {
+    async fn drop_shard_key(
+        &self,
+        operation: DropShardKey,
+        authority: ShardKeyApplyAuthority,
+    ) -> Result<(), StorageError> {
         let collection = self
             .get_collection_unchecked(&operation.collection_name)
             .await?;
         let collection_config = collection.config_snapshot().await;
-        reject_private_oram_shard_key_change_until_supported(
+        validate_private_oram_shard_key_change_authorization(
             &operation.collection_name,
             &collection_config.params,
-            "drop_shard_key",
+            authority,
+            false,
         )?;
-        collection.drop_shard_key(operation.shard_key).await?;
+        collection
+            .drop_shard_key(
+                operation.shard_key,
+                authority == ShardKeyApplyAuthority::PrivateOramConsensus,
+            )
+            .await?;
         Ok(())
     }
 
@@ -1093,20 +1150,26 @@ fn replica_state_operation_touches_resharding_state(operation: &SetShardReplicaS
     )
 }
 
-fn reject_private_oram_shard_key_change_until_supported(
+fn validate_private_oram_shard_key_change_authorization(
     _collection_id: &str,
     params: &CollectionParams,
-    _operation: &str,
+    authority: ShardKeyApplyAuthority,
+    private_oram_initial_bootstrap: bool,
 ) -> Result<(), StorageError> {
-    if !collection_params_use_private_oram_bucket_store(params) {
+    let private_oram_collection = collection_params_use_private_oram_bucket_store(params);
+    if (private_oram_collection
+        && (authority == ShardKeyApplyAuthority::PrivateOramConsensus
+            || private_oram_initial_bootstrap))
+        || (!private_oram_collection
+            && authority == ShardKeyApplyAuthority::Ordinary
+            && !private_oram_initial_bootstrap)
+    {
         return Ok(());
     }
 
-    Err(StorageError::bad_input(format!(
-        "private ORAM shard-key layout changes are not supported for private ORAM collections: \
-         collection-local ORAM bucket migration and consensus-backed epoch/root ownership are not \
-         implemented for shard-key layout changes",
-    )))
+    Err(StorageError::bad_input(
+        "private ORAM shard-key layout change authorization is invalid",
+    ))
 }
 
 fn validate_private_oram_replica_removal_authorization(
@@ -1266,16 +1329,16 @@ mod tests {
 
     use super::{
         PRIVATE_HNSW_ORAM_BINDING, PRIVATE_RESULT_ORAM_BINDING, ReshardingApplyAuthority,
-        collection_params_require_crypto_runtime_transfer_parity,
+        ShardKeyApplyAuthority, collection_params_require_crypto_runtime_transfer_parity,
         reject_private_oram_resharding_replica_state_until_supported,
         reject_private_oram_resharding_until_supported,
-        reject_private_oram_shard_key_change_until_supported,
         reject_private_oram_shard_transfer_until_supported,
         validate_encrypted_create_shard_key_crypto_runtime_parity,
         validate_encrypted_resharding_crypto_runtime_parity,
         validate_encrypted_transfer_crypto_runtime_parity,
         validate_private_oram_replica_removal_authorization,
         validate_private_oram_resharding_apply_authority, validate_private_oram_restart_apply,
+        validate_private_oram_shard_key_change_authorization,
     };
     use crate::content_manager::collection_meta_ops::{
         ReshardingOperation, SetShardReplicaState, ShardTransferOperations,
@@ -2195,7 +2258,7 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_consensus_shard_key_changes_fail_closed_until_bucket_migration_exists() {
+    fn private_oram_shard_key_changes_require_matching_apply_authority() {
         let private_hnsw_params = CollectionParams {
             encryption: Some(CollectionEncryptionConfig {
                 version: 1,
@@ -2237,39 +2300,54 @@ mod tests {
             ("private HNSW ORAM", private_hnsw_params),
             ("private result ORAM", private_result_params),
         ] {
-            for operation in [
-                "create_shard_key",
-                "drop_shard_key",
-                "operation-secret-sentinel",
-            ] {
-                let err = reject_private_oram_shard_key_change_until_supported(
-                    "docs", &params, operation,
-                )
-                .expect_err("private ORAM shard-key changes must fail closed");
-                assert!(
-                    err.to_string().contains("shard-key layout changes")
-                        && err
-                            .to_string()
-                            .contains("consensus-backed epoch/root ownership"),
-                    "unexpected {label} {operation} error: {err}",
-                );
-                assert!(!err.to_string().contains(operation), "{err}");
-                assert_private_oram_consensus_guard_redacts_config(&err.to_string());
-            }
+            validate_private_oram_shard_key_change_authorization(
+                "docs",
+                &params,
+                ShardKeyApplyAuthority::PrivateOramConsensus,
+                false,
+            )
+            .expect("private ORAM shard-key changes require consensus authority");
+            validate_private_oram_shard_key_change_authorization(
+                "docs",
+                &params,
+                ShardKeyApplyAuthority::Ordinary,
+                true,
+            )
+            .expect("empty private ORAM collections permit initial shard-key bootstrap");
+            let err = validate_private_oram_shard_key_change_authorization(
+                "docs",
+                &params,
+                ShardKeyApplyAuthority::Ordinary,
+                false,
+            )
+            .expect_err("ordinary apply authority must reject private ORAM shard-key changes");
+            assert!(
+                err.to_string()
+                    .contains("shard-key layout change authorization is invalid"),
+                "unexpected {label} error: {err}",
+            );
+            assert_private_oram_consensus_guard_redacts_config(&err.to_string());
         }
 
-        reject_private_oram_shard_key_change_until_supported(
+        validate_private_oram_shard_key_change_authorization(
             "docs",
             &CollectionParams::empty(),
-            "create_shard_key",
+            ShardKeyApplyAuthority::Ordinary,
+            false,
         )
         .expect("ordinary collection create_shard_key must stay open");
-        reject_private_oram_shard_key_change_until_supported(
-            "docs",
+        let err = validate_private_oram_shard_key_change_authorization(
+            "operation-secret-sentinel",
             &CollectionParams::empty(),
-            "drop_shard_key",
+            ShardKeyApplyAuthority::PrivateOramConsensus,
+            false,
         )
-        .expect("ordinary collection drop_shard_key must stay open");
+        .expect_err("private ORAM consensus authority must reject ordinary collections");
+        assert!(
+            err.to_string()
+                .contains("shard-key layout change authorization is invalid")
+        );
+        assert!(!err.to_string().contains("operation-secret-sentinel"));
     }
 
     #[test]

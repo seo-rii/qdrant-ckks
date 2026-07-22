@@ -630,7 +630,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         if topology_state == PrivateOramLayoutTransitionState::Pending {
             let apply_result = self
                 .toc
-                .perform_collection_meta_op((*transition.collection_meta).clone());
+                .perform_private_oram_collection_layout_meta_op(transition);
             if !matches!(apply_result, Ok(true))
                 && self.toc.private_oram_layout_transition_state(transition)?
                     != PrivateOramLayoutTransitionState::Applied
@@ -2061,6 +2061,7 @@ mod tests {
                 key: epoch_key.clone(),
                 lease: lease.clone(),
             }],
+            shard_key_change: None,
             collection_meta: Box::new(
                 crate::content_manager::collection_meta_ops::CollectionMetaOperations::Nop {
                     token: 7,
