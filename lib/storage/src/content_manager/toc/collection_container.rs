@@ -698,9 +698,10 @@ fn private_oram_snapshot_layout_matches(
 
 fn validate_private_oram_active_reshard_snapshot(
     collection_name: &str,
-    current: &collection_state::State,
+    current: Option<&collection_state::State>,
     incoming: &collection_state::State,
     snapshot: consensus_manager::PrivateOramSnapshotState<'_>,
+    this_peer_id: PeerId,
 ) -> Result<bool, StorageError> {
     let Some(incoming_resharding) = incoming.resharding.as_ref() else {
         return Ok(false);
@@ -709,28 +710,35 @@ fn validate_private_oram_active_reshard_snapshot(
     if incoming_keys.is_empty() {
         return Ok(false);
     }
-    let current_keys = private_oram_index_keys_for_config(&current.config, collection_name)?;
     let collection_id = incoming
         .config
         .stable_crypto_id(collection_name)
         .map_err(|_| invalid_private_oram_resharding_snapshot())?;
-    if incoming_keys != current_keys
-        || current
-            .config
-            .stable_crypto_id(collection_name)
-            .map_err(|_| invalid_private_oram_resharding_snapshot())?
-            != collection_id
-        || current.config.params.sharding_method != incoming.config.params.sharding_method
-        || current.config.params.replication_factor != incoming.config.params.replication_factor
-    {
-        return Err(invalid_private_oram_resharding_snapshot());
+    if let Some(current) = current {
+        let current_keys = private_oram_index_keys_for_config(&current.config, collection_name)?;
+        if incoming_keys != current_keys
+            || current
+                .config
+                .stable_crypto_id(collection_name)
+                .map_err(|_| invalid_private_oram_resharding_snapshot())?
+                != collection_id
+            || current.config.params.sharding_method != incoming.config.params.sharding_method
+            || current.config.params.replication_factor != incoming.config.params.replication_factor
+        {
+            return Err(invalid_private_oram_resharding_snapshot());
+        }
     }
 
     let mut index_states = Vec::with_capacity(incoming_keys.len());
     for key in &incoming_keys {
         let incoming_epoch = private_oram_epoch_snapshot_value(snapshot.incoming_epochs, key)
             .ok_or_else(invalid_private_oram_resharding_snapshot)?;
-        if private_oram_epoch_snapshot_value(snapshot.current_epochs, key) != Some(incoming_epoch) {
+        let current_epoch = private_oram_epoch_snapshot_value(snapshot.current_epochs, key);
+        let current_epoch_matches = match current {
+            Some(_) => current_epoch == Some(incoming_epoch),
+            None => current_epoch.is_none() || current_epoch == Some(incoming_epoch),
+        };
+        if !current_epoch_matches {
             return Err(invalid_private_oram_resharding_snapshot());
         }
         index_states.push((key.clone(), incoming_epoch.clone()));
@@ -746,7 +754,7 @@ fn validate_private_oram_active_reshard_snapshot(
             .ok_or_else(invalid_private_oram_resharding_snapshot)?;
     let current_layout = private_oram_layout_snapshot_value(snapshot.current_layouts, &layout_key);
     if current_layout.is_some_and(|current_layout| current_layout != incoming_layout)
-        || current_layout.is_none() && incoming_layout.generation != 1
+        || current.is_some() && current_layout.is_none() && incoming_layout.generation != 1
         || incoming_layout.index_state_digest != index_state_digest
     {
         return Err(invalid_private_oram_resharding_snapshot());
@@ -760,6 +768,22 @@ fn validate_private_oram_active_reshard_snapshot(
         &incoming_entries,
         incoming_layout,
     )?;
+
+    let Some(current) = current else {
+        if incoming_layout.owner_peer_ids.contains(&this_peer_id)
+            || incoming
+                .shards
+                .values()
+                .any(|shard| shard.replicas.contains_key(&this_peer_id))
+            || incoming
+                .transfers
+                .iter()
+                .any(|transfer| transfer.from == this_peer_id || transfer.to == this_peer_id)
+        {
+            return Err(invalid_private_oram_resharding_snapshot());
+        }
+        return Ok(true);
+    };
 
     match current.resharding.as_ref() {
         None => {
@@ -1049,19 +1073,31 @@ mod tests {
             current_layouts: &layouts,
         };
         assert!(
-            validate_private_oram_active_reshard_snapshot("docs", &current, &incoming, context,)
-                .unwrap()
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                Some(&current),
+                &incoming,
+                context,
+                33,
+            )
+            .unwrap()
         );
         assert!(
-            validate_private_oram_active_reshard_snapshot("docs", &incoming, &incoming, context,)
-                .unwrap()
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                Some(&incoming),
+                &incoming,
+                context,
+                33,
+            )
+            .unwrap()
         );
 
         let mut wrong_layouts = layouts.clone();
         wrong_layouts.values_mut().next().unwrap().layout_digest = BASE64URL_NOPAD.encode(&[9; 32]);
         let err = validate_private_oram_active_reshard_snapshot(
             "docs",
-            &current,
+            Some(&current),
             &incoming,
             PrivateOramSnapshotState {
                 incoming_epochs: &epochs,
@@ -1069,6 +1105,7 @@ mod tests {
                 incoming_layouts: &wrong_layouts,
                 current_layouts: &layouts,
             },
+            33,
         )
         .unwrap_err();
         assert!(
@@ -1081,7 +1118,7 @@ mod tests {
         assert!(
             validate_private_oram_active_reshard_snapshot(
                 "docs",
-                &current,
+                Some(&current),
                 &incoming,
                 PrivateOramSnapshotState {
                     incoming_epochs: &wrong_epochs,
@@ -1089,6 +1126,7 @@ mod tests {
                     incoming_layouts: &layouts,
                     current_layouts: &layouts,
                 },
+                33,
             )
             .is_err()
         );
@@ -1105,12 +1143,24 @@ mod tests {
             current_layouts: &empty_layouts,
         };
         assert!(
-            validate_private_oram_active_reshard_snapshot("docs", &current, &incoming, context,)
-                .unwrap()
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                Some(&current),
+                &incoming,
+                context,
+                33,
+            )
+            .unwrap()
         );
         assert!(
-            validate_private_oram_active_reshard_snapshot("docs", &incoming, &incoming, context,)
-                .unwrap()
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                Some(&incoming),
+                &incoming,
+                context,
+                33,
+            )
+            .unwrap()
         );
 
         let mut later_layouts = layouts.clone();
@@ -1118,7 +1168,7 @@ mod tests {
         assert!(
             validate_private_oram_active_reshard_snapshot(
                 "docs",
-                &current,
+                Some(&current),
                 &incoming,
                 PrivateOramSnapshotState {
                     incoming_epochs: &epochs,
@@ -1126,9 +1176,120 @@ mod tests {
                     incoming_layouts: &later_layouts,
                     current_layouts: &empty_layouts,
                 },
+                33,
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn private_oram_new_peer_active_reshard_snapshot_allows_only_topology_only_non_owner() {
+        let (_, incoming, epochs, layouts) = private_oram_active_snapshot_fixture();
+        let empty_epochs = HashMap::new();
+        let empty_layouts = HashMap::new();
+
+        assert!(
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                None,
+                &incoming,
+                PrivateOramSnapshotState {
+                    incoming_epochs: &epochs,
+                    current_epochs: &empty_epochs,
+                    incoming_layouts: &layouts,
+                    current_layouts: &empty_layouts,
+                },
+                33,
+            )
+            .unwrap()
+        );
+
+        let mut later_layouts = layouts.clone();
+        later_layouts.values_mut().next().unwrap().generation = 7;
+        assert!(
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                None,
+                &incoming,
+                PrivateOramSnapshotState {
+                    incoming_epochs: &epochs,
+                    current_epochs: &empty_epochs,
+                    incoming_layouts: &later_layouts,
+                    current_layouts: &empty_layouts,
+                },
+                33,
+            )
+            .unwrap()
+        );
+        assert!(
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                None,
+                &incoming,
+                PrivateOramSnapshotState {
+                    incoming_epochs: &epochs,
+                    current_epochs: &epochs,
+                    incoming_layouts: &later_layouts,
+                    current_layouts: &later_layouts,
+                },
+                33,
+            )
+            .unwrap()
+        );
+
+        let mut wrong_epochs = epochs.clone();
+        wrong_epochs.values_mut().next().unwrap().index_epoch += 1;
+        assert!(
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                None,
+                &incoming,
+                PrivateOramSnapshotState {
+                    incoming_epochs: &epochs,
+                    current_epochs: &wrong_epochs,
+                    incoming_layouts: &layouts,
+                    current_layouts: &empty_layouts,
+                },
+                33,
+            )
+            .is_err()
+        );
+
+        let mut wrong_layouts = layouts.clone();
+        wrong_layouts.values_mut().next().unwrap().generation += 1;
+        assert!(
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                None,
+                &incoming,
+                PrivateOramSnapshotState {
+                    incoming_epochs: &epochs,
+                    current_epochs: &empty_epochs,
+                    incoming_layouts: &layouts,
+                    current_layouts: &wrong_layouts,
+                },
+                33,
+            )
+            .is_err()
+        );
+
+        for peer_id in [11, 22] {
+            assert!(
+                validate_private_oram_active_reshard_snapshot(
+                    "docs",
+                    None,
+                    &incoming,
+                    PrivateOramSnapshotState {
+                        incoming_epochs: &epochs,
+                        current_epochs: &empty_epochs,
+                        incoming_layouts: &layouts,
+                        current_layouts: &empty_layouts,
+                    },
+                    peer_id,
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]
@@ -1151,8 +1312,14 @@ mod tests {
             })
             .collect();
         assert!(
-            validate_private_oram_active_reshard_snapshot("docs", &current, &unmarked, context,)
-                .is_err()
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                Some(&current),
+                &unmarked,
+                context,
+                33,
+            )
+            .is_err()
         );
 
         let mut advanced = incoming.clone();
@@ -1165,8 +1332,14 @@ mod tests {
             .replicas
             .insert(22, ReplicaState::Active);
         assert!(
-            validate_private_oram_active_reshard_snapshot("docs", &advanced, &incoming, context,)
-                .is_err()
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                Some(&advanced),
+                &incoming,
+                context,
+                33,
+            )
+            .is_err()
         );
 
         let mut active_current = incoming.clone();
@@ -1179,9 +1352,10 @@ mod tests {
         assert!(
             validate_private_oram_active_reshard_snapshot(
                 "docs",
-                &active_current,
+                Some(&active_current),
                 &incoming,
                 context,
+                33,
             )
             .is_err()
         );
@@ -1265,14 +1439,26 @@ mod tests {
         };
 
         assert!(
-            validate_private_oram_active_reshard_snapshot("docs", &current, &incoming, context,)
-                .unwrap()
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                Some(&current),
+                &incoming,
+                context,
+                33,
+            )
+            .unwrap()
         );
         let mut committed = incoming.clone();
         committed.resharding.as_mut().unwrap().stage = ReshardingStage::ReadHashRingCommitted;
         assert!(
-            validate_private_oram_active_reshard_snapshot("docs", &incoming, &committed, context,)
-                .unwrap()
+            validate_private_oram_active_reshard_snapshot(
+                "docs",
+                Some(&incoming),
+                &committed,
+                context,
+                33,
+            )
+            .unwrap()
         );
 
         let mut receiver_transition = incoming.clone();
@@ -1285,9 +1471,10 @@ mod tests {
         assert!(
             validate_private_oram_active_reshard_snapshot(
                 "docs",
-                &current,
+                Some(&current),
                 &receiver_transition,
                 context,
+                33,
             )
             .unwrap()
         );
@@ -1302,9 +1489,10 @@ mod tests {
         assert!(
             validate_private_oram_active_reshard_snapshot(
                 "docs",
-                &current,
+                Some(&current),
                 &wrong_target,
                 context,
+                33,
             )
             .is_err()
         );
@@ -1343,15 +1531,16 @@ impl TableOfContent {
                 }
                 let private_oram_snapshot = private_oram_snapshot
                     .ok_or_else(invalid_private_oram_resharding_snapshot)?;
-                let collection = collections
-                    .get(id)
-                    .ok_or_else(invalid_private_oram_resharding_snapshot)?;
-                let current = collection.state().await;
+                let current = match collections.get(id) {
+                    Some(collection) => Some(collection.state().await),
+                    None => None,
+                };
                 if validate_private_oram_active_reshard_snapshot(
                     id,
-                    &current,
+                    current.as_ref(),
                     state,
                     private_oram_snapshot,
+                    self.this_peer_id,
                 )? {
                     validated_private_oram_resharding.insert(id.clone());
                 }
