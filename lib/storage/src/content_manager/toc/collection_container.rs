@@ -820,6 +820,9 @@ impl TableOfContent {
                     continue;
                 }
                 if state == ReplicaState::Dead {
+                    if peer_id == transfer.to && shard_id != transfer.shard_id {
+                        owner_peer_ids.push(peer_id);
+                    }
                     continue;
                 }
                 if state != ReplicaState::Active {
@@ -1420,8 +1423,9 @@ fn private_oram_snapshot_can_rollback_redundant_pre_layout_owner(
         .filter(|entry| entry.owner_peer_ids.contains(&this_peer_id))
         .collect::<Vec<_>>();
     if is_scale_down_endpoint
-        && (local_pre_layout_entries.len() != 1
-            || local_pre_layout_entries[0].shard_id != resharding.shard_id)
+        && !local_pre_layout_entries
+            .iter()
+            .any(|entry| entry.shard_id == resharding.shard_id)
     {
         return false;
     }
@@ -2444,6 +2448,7 @@ mod tests {
                     ShardInfo {
                         replicas: HashMap::from([
                             (11, ReplicaState::Active),
+                            (22, ReplicaState::Active),
                             (44, ReplicaState::Active),
                         ]),
                     },
@@ -2487,7 +2492,7 @@ mod tests {
                 PrivateOramShardLayoutEntry {
                     shard_id: 0,
                     shard_key: None,
-                    owner_peer_ids: vec![11, 44],
+                    owner_peer_ids: vec![11, 22, 44],
                 },
                 PrivateOramShardLayoutEntry {
                     shard_id: 1,
@@ -2520,6 +2525,25 @@ mod tests {
             classify_private_oram_active_reshard_snapshot("docs", None, &incoming, snapshot, 22,)
                 .unwrap(),
             Some(PrivateOramActiveReshardSnapshotAction::AbortForReplicaRecovery),
+        );
+
+        let mut nonredundant_local_shard = incoming.clone();
+        nonredundant_local_shard
+            .shards
+            .get_mut(&0)
+            .unwrap()
+            .replicas
+            .retain(|peer_id, _| *peer_id == 22);
+        assert!(
+            classify_private_oram_active_reshard_snapshot(
+                "docs",
+                None,
+                &nonredundant_local_shard,
+                snapshot,
+                22,
+            )
+            .is_err(),
+            "every local pre-layout shard must retain another active replica",
         );
 
         incoming.transfers.insert(ShardTransfer {

@@ -2338,9 +2338,9 @@ fn private_oram_transition(
 }
 
 fn private_oram_shard_transfer_pre_layout_owners(
-    _shard_id: ShardId,
+    shard_id: ShardId,
     peers: &HashMap<PeerId, ReplicaState>,
-    _transfer: &ShardTransfer,
+    transfer: &ShardTransfer,
 ) -> Result<Vec<PeerId>, StorageError> {
     if peers.is_empty() {
         return Err(invalid_private_oram_layout_transition());
@@ -2348,7 +2348,11 @@ fn private_oram_shard_transfer_pre_layout_owners(
 
     let mut owner_peer_ids = Vec::with_capacity(peers.len());
     for (&peer_id, &state) in peers {
-        if state == ReplicaState::Active {
+        if state == ReplicaState::Active
+            || state == ReplicaState::Dead
+                && peer_id == transfer.to
+                && shard_id != transfer.shard_id
+        {
             owner_peer_ids.push(peer_id);
         } else if state != ReplicaState::Dead {
             return Err(invalid_private_oram_layout_transition());
@@ -2357,6 +2361,7 @@ fn private_oram_shard_transfer_pre_layout_owners(
     if owner_peer_ids.is_empty() {
         return Err(invalid_private_oram_layout_transition());
     }
+    owner_peer_ids.sort_unstable();
     Ok(owner_peer_ids)
 }
 
@@ -2797,11 +2802,15 @@ mod tests {
         assert_eq!(
             private_oram_shard_transfer_pre_layout_owners(
                 4,
-                &HashMap::from([(13, ReplicaState::Active), (11, ReplicaState::Dead)]),
+                &HashMap::from([
+                    (9, ReplicaState::Dead),
+                    (13, ReplicaState::Active),
+                    (11, ReplicaState::Dead),
+                ]),
                 &transfer,
             )
             .unwrap(),
-            vec![13],
+            vec![9, 13],
         );
 
         for (shard_id, peers) in [

@@ -2944,7 +2944,7 @@ def test_private_oram_active_scale_down_recovers_from_raft_snapshot(
         _assert_private_oram_owner_sessions(peer_urls[receiver_index], fixture, True)
 
 
-def test_private_oram_active_scale_down_snapshot_rolls_back_for_wiped_redundant_endpoint(
+def test_private_oram_active_scale_down_snapshot_rolls_back_for_wiped_multishard_redundant_endpoint(
     tmp_path: pathlib.Path,
 ):
     extra_env = {
@@ -2954,7 +2954,7 @@ def test_private_oram_active_scale_down_snapshot_rolls_back_for_wiped_redundant_
     peer_urls, peer_dirs, fixture, leader, _ = _start_private_oram_cluster(
         tmp_path,
         4,
-        2,
+        3,
         shard_number=2,
         include_public_vector=True,
         extra_env=extra_env,
@@ -2975,19 +2975,21 @@ def test_private_oram_active_scale_down_snapshot_rolls_back_for_wiped_redundant_
     target_shard_id = max(owner_indices_by_shard)
     receiver_indices = owner_indices_by_shard[receiver_shard_id]
     target_indices = owner_indices_by_shard[target_shard_id]
-    assert len(receiver_indices) == 2
-    assert len(target_indices) == 2
-    assert set(receiver_indices).isdisjoint(target_indices)
+    assert len(receiver_indices) == 3
+    assert len(target_indices) == 3
 
     endpoint_index = next(
         index
-        for index in target_indices
+        for index in set(receiver_indices).intersection(target_indices)
         if peer_ids[index] != leader
     )
-    coordinator_url = peer_urls[receiver_indices[0]]
     endpoint_url = peer_urls[endpoint_index]
+    coordinator_url = endpoint_url
     endpoint_peer_id = peer_ids[endpoint_index]
     receiver_peer_ids = [peer_ids[index] for index in receiver_indices]
+    migration_receiver_peer_ids = [
+        peer_id for peer_id in receiver_peer_ids if peer_id != endpoint_peer_id
+    ]
     initial_owner_indices = sorted(
         {
             index
@@ -3013,7 +3015,7 @@ def test_private_oram_active_scale_down_snapshot_rolls_back_for_wiped_redundant_
         )
     )
     wait_for_collection_resharding_operations_count(coordinator_url, COLLECTION, 1)
-    for receiver_peer_id in receiver_peer_ids:
+    for receiver_peer_id in migration_receiver_peer_ids:
         migrate_points(
             endpoint_url,
             receiver_peer_id,
@@ -3078,7 +3080,7 @@ def test_private_oram_active_scale_down_snapshot_rolls_back_for_wiped_redundant_
     wait_for_collection_shard_transfers_count(leader_url, COLLECTION, 0)
     wait_for_collection_shard_transfers_count(restarted_url, COLLECTION, 0)
     wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
-    _wait_for_private_oram_layout(peer_dirs, 2, initial_owner_peer_ids)
+    _wait_for_private_oram_layout(peer_dirs, 3, initial_owner_peer_ids)
     assert not (
         wiped_collection_path / "private_oram_snapshot_recovery.json"
     ).exists()
@@ -3090,7 +3092,7 @@ def test_private_oram_active_scale_down_snapshot_rolls_back_for_wiped_redundant_
         shard["shard_id"]
         for shard in restarted_info["local_shards"]
         if shard["state"] == "Active"
-    } == {target_shard_id}
+    } == {receiver_shard_id, target_shard_id}
     for owner_index in initial_owner_indices:
         _assert_private_oram_owner_sessions(peer_urls[owner_index], fixture, True)
 

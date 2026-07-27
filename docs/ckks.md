@@ -1914,6 +1914,11 @@ neither its point shard nor encrypted buckets. An already loaded owner or
 endpoint must also have each configured local index at the exact consensus
 epoch/root, so retaining collection metadata while deleting an HNSW or
 result-ORAM store fails closed.
+The same rule applies to a scale-down endpoint that owns multiple pre-layout
+shards: the endpoint must own the removed shard and every local shard must have
+another `Active` replica. Recovery aborts the whole reshard before restoring
+each missing replica; it never reconstructs only the removed shard from
+snapshot metadata.
 The subsequent fixed-layout recovery may coexist with `Dead` replicas left by
 the aborted transfer. Those replicas are excluded from the pre-layout owner
 set only when the remaining `Active` owner digest exactly matches the
