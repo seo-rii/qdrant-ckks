@@ -1897,6 +1897,17 @@ checks described above. Unsupported transfer state and unrelated layout
 changes fail before local collection mutation. Snapshot apply itself does not
 move encrypted buckets or start tasks; the target-triggered resume protocol
 handles an exact restored missing source task afterward.
+Fixed-layout active transfer snapshots have a separate preflight for a locally
+missing collection. It requires one exact marked `stream_records` transfer,
+`Active` source and pre-layout owners, a `Partial` target, ordered configured
+index checkpoints, the exact consensus-bound transition, and the pre-layout
+with a generation-`+1` post-layout. Only a topology-only peer outside every
+owner, replica, source, and target set may bootstrap this state. A wiped
+owner, source, or target is rejected before the collection directory is
+created; the historical preinstall marker is not treated as proof that its
+encrypted stores survived. An already loaded owner or endpoint must also have
+each configured local index at the exact consensus epoch/root, so retaining
+collection metadata while deleting an HNSW or result-ORAM store fails closed.
 A four-peer RF=2 process test also erases a redundant non-endpoint owner during
 scale-up, restores it from an active-reshard snapshot, and verifies exact
 rollback, marker cleanup, both encrypted-store reinstalls, precommitted layout

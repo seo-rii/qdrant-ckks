@@ -8,6 +8,8 @@ use collection::collection::Collection;
 use collection::collection_state;
 use collection::config::{CollectionParams, ShardingMethod};
 use collection::operations::cluster_ops::ReshardingDirection;
+use collection::private_hnsw_oram_store::PrivateHnswOramStore;
+use collection::private_result_oram_store::PrivateResultOramStore;
 use collection::shards::CollectionId;
 use collection::shards::collection_shard_distribution::CollectionShardDistribution;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
@@ -25,7 +27,7 @@ use crate::content_manager::consensus::persistent::{
 };
 use crate::content_manager::consensus_ops::{
     ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusLayout,
-    PrivateOramLayoutTransitionState, PrivateOramReshardingOperation,
+    PrivateOramIndexKind, PrivateOramLayoutTransitionState, PrivateOramReshardingOperation,
     PrivateOramShardKeyLayoutChange, PrivateOramShardKeyLayoutChangeKind,
     PrivateOramShardLayoutEntry, PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
     canonical_private_oram_index_state_digest, canonical_private_oram_shard_layout_digest,
@@ -795,6 +797,10 @@ fn invalid_private_oram_resharding_snapshot() -> StorageError {
     StorageError::bad_request("private ORAM active reshard Raft snapshot state is invalid")
 }
 
+fn invalid_private_oram_active_transfer_snapshot() -> StorageError {
+    StorageError::bad_request("private ORAM active shard transfer Raft snapshot state is invalid")
+}
+
 fn private_oram_snapshot_shard_key(
     state: &collection_state::State,
     shard_id: collection::shards::shard::ShardId,
@@ -859,6 +865,215 @@ fn private_oram_stable_snapshot_layout_entries(
         });
     }
     Ok(entries)
+}
+
+fn private_oram_active_transfer_snapshot_layout_entries(
+    state: &collection_state::State,
+) -> Result<
+    (
+        &collection::shards::transfer::ShardTransfer,
+        Vec<PrivateOramShardLayoutEntry>,
+    ),
+    StorageError,
+> {
+    if state.resharding.is_some() || state.transfers.len() != 1 {
+        return Err(invalid_private_oram_active_transfer_snapshot());
+    }
+    let transfer = state
+        .transfers
+        .iter()
+        .next()
+        .expect("validated one private ORAM shard transfer");
+    if !transfer.is_private_oram_preinstalled_transfer_for(None) {
+        return Err(invalid_private_oram_active_transfer_snapshot());
+    }
+
+    let sharding_method = state.config.params.sharding_method.unwrap_or_default();
+    validate_private_oram_snapshot_shard_mapping(state, sharding_method)
+        .map_err(|_| invalid_private_oram_active_transfer_snapshot())?;
+    let mut transfer_shard_seen = false;
+    let mut entries = Vec::with_capacity(state.shards.len());
+    for (shard_id, shard) in &state.shards {
+        if shard.replicas.is_empty() {
+            return Err(invalid_private_oram_active_transfer_snapshot());
+        }
+        let is_transfer_shard = *shard_id == transfer.shard_id;
+        if is_transfer_shard {
+            transfer_shard_seen = true;
+            if shard.replicas.get(&transfer.from) != Some(&ReplicaState::Active)
+                || shard.replicas.get(&transfer.to) != Some(&ReplicaState::Partial)
+            {
+                return Err(invalid_private_oram_active_transfer_snapshot());
+            }
+        }
+        if shard.replicas.iter().any(|(peer_id, state)| {
+            is_transfer_shard && *peer_id == transfer.to && *state != ReplicaState::Partial
+                || (!is_transfer_shard || *peer_id != transfer.to) && *state != ReplicaState::Active
+        }) {
+            return Err(invalid_private_oram_active_transfer_snapshot());
+        }
+
+        entries.push(PrivateOramShardLayoutEntry {
+            shard_id: *shard_id,
+            shard_key: private_oram_snapshot_shard_key(state, *shard_id, sharding_method)
+                .map_err(|_| invalid_private_oram_active_transfer_snapshot())?,
+            owner_peer_ids: shard
+                .replicas
+                .iter()
+                .filter_map(|(peer_id, replica_state)| {
+                    (*replica_state == ReplicaState::Active).then_some(*peer_id)
+                })
+                .collect(),
+        });
+    }
+    if !transfer_shard_seen {
+        return Err(invalid_private_oram_active_transfer_snapshot());
+    }
+    Ok((transfer, entries))
+}
+
+fn validate_private_oram_active_transfer_local_store(
+    collection_path: &Path,
+    key: &crate::content_manager::consensus_ops::PrivateOramEpochKey,
+    expected: &crate::content_manager::consensus_ops::PrivateOramConsensusEpoch,
+) -> Result<(), StorageError> {
+    let matches = match key.index_kind {
+        PrivateOramIndexKind::Hnsw => {
+            let current = PrivateHnswOramStore::new(collection_path, &key.index_name)
+                .and_then(|store| store.read_current_epoch())
+                .map_err(|_| invalid_private_oram_active_transfer_snapshot())?;
+            current.index_epoch == expected.index_epoch && current.root_hash == expected.root_hash
+        }
+        PrivateOramIndexKind::ResultPayload => {
+            let current = PrivateResultOramStore::new(collection_path)
+                .read_current_epoch()
+                .map_err(|_| invalid_private_oram_active_transfer_snapshot())?;
+            current.index_epoch == expected.index_epoch && current.root_hash == expected.root_hash
+        }
+    };
+    if !matches {
+        return Err(invalid_private_oram_active_transfer_snapshot());
+    }
+    Ok(())
+}
+
+fn validate_private_oram_active_transfer_snapshot(
+    collection_name: &str,
+    current: Option<&collection_state::State>,
+    current_collection_path: Option<&Path>,
+    incoming: &collection_state::State,
+    snapshot: consensus_manager::PrivateOramSnapshotState<'_>,
+    this_peer_id: PeerId,
+) -> Result<bool, StorageError> {
+    if incoming.resharding.is_some() || incoming.transfers.is_empty() {
+        return Ok(false);
+    }
+    let incoming_keys = private_oram_index_keys_for_config(&incoming.config, collection_name)?;
+    if incoming_keys.is_empty() {
+        return Ok(false);
+    }
+
+    let collection_id = incoming
+        .config
+        .stable_crypto_id(collection_name)
+        .map_err(|_| invalid_private_oram_active_transfer_snapshot())?;
+    if let Some(current) = current {
+        let current_keys = private_oram_index_keys_for_config(&current.config, collection_name)?;
+        if incoming_keys != current_keys
+            || current
+                .config
+                .stable_crypto_id(collection_name)
+                .map_err(|_| invalid_private_oram_active_transfer_snapshot())?
+                != collection_id
+            || current.config.params.sharding_method != incoming.config.params.sharding_method
+            || current.config.params.replication_factor != incoming.config.params.replication_factor
+        {
+            return Err(invalid_private_oram_active_transfer_snapshot());
+        }
+    }
+
+    let (transfer, entries) = private_oram_active_transfer_snapshot_layout_entries(incoming)?;
+    let transition = transfer
+        .private_oram_layout_transition
+        .as_ref()
+        .ok_or_else(invalid_private_oram_active_transfer_snapshot)?;
+    let transition_states = private_oram_transfer_consensus_states(transition);
+    if transition_states.len() != incoming_keys.len()
+        || !transition_states
+            .iter()
+            .map(|(key, _)| key)
+            .eq(incoming_keys.iter())
+    {
+        return Err(invalid_private_oram_active_transfer_snapshot());
+    }
+    let mut index_states = Vec::with_capacity(incoming_keys.len());
+    for (key, (_, transition_state)) in incoming_keys.iter().zip(&transition_states) {
+        let incoming_epoch = private_oram_epoch_snapshot_value(snapshot.incoming_epochs, key)
+            .ok_or_else(invalid_private_oram_active_transfer_snapshot)?;
+        let current_epoch = private_oram_epoch_snapshot_value(snapshot.current_epochs, key);
+        let current_epoch_matches = match current {
+            Some(_) => current_epoch == Some(incoming_epoch),
+            None => current_epoch.is_none() || current_epoch == Some(incoming_epoch),
+        };
+        if !current_epoch_matches || transition_state != incoming_epoch {
+            return Err(invalid_private_oram_active_transfer_snapshot());
+        }
+        index_states.push((key.clone(), incoming_epoch.clone()));
+    }
+    let index_state_digest =
+        canonical_private_oram_index_state_digest(&collection_id, &index_states)
+            .map_err(|_| invalid_private_oram_active_transfer_snapshot())?;
+    let (layout_key, expected_layout, new_layout) =
+        private_oram_transfer_consensus_layouts(transition);
+    if layout_key.collection_id != collection_id
+        || expected_layout.index_state_digest != index_state_digest
+        || new_layout.index_state_digest != index_state_digest
+        || expected_layout
+            .generation
+            .checked_add(1)
+            .is_none_or(|generation| generation != new_layout.generation)
+    {
+        return Err(invalid_private_oram_active_transfer_snapshot());
+    }
+    let incoming_layout =
+        private_oram_layout_snapshot_value(snapshot.incoming_layouts, &layout_key)
+            .ok_or_else(invalid_private_oram_active_transfer_snapshot)?;
+    let current_layout = private_oram_layout_snapshot_value(snapshot.current_layouts, &layout_key);
+    if incoming_layout != &expected_layout
+        || current_layout.is_some_and(|layout| layout != incoming_layout)
+        || classify_private_oram_shard_transfer_layout_transition(
+            &collection_id,
+            incoming.config.params.sharding_method.unwrap_or_default(),
+            &entries,
+            transfer,
+            &expected_layout,
+            &new_layout,
+        )
+        .map_err(|_| invalid_private_oram_active_transfer_snapshot())?
+            != PrivateOramLayoutTransitionState::Pending
+    {
+        return Err(invalid_private_oram_active_transfer_snapshot());
+    }
+
+    let topology_only_non_owner = !incoming_layout.owner_peer_ids.contains(&this_peer_id)
+        && !incoming
+            .shards
+            .values()
+            .any(|shard| shard.replicas.contains_key(&this_peer_id))
+        && transfer.from != this_peer_id
+        && transfer.to != this_peer_id;
+    if current.is_none() && !topology_only_non_owner {
+        return Err(invalid_private_oram_active_transfer_snapshot());
+    }
+    if current.is_some() && !topology_only_non_owner {
+        let collection_path =
+            current_collection_path.ok_or_else(invalid_private_oram_active_transfer_snapshot)?;
+        for (key, state) in &index_states {
+            validate_private_oram_active_transfer_local_store(collection_path, key, state)?;
+        }
+    }
+
+    Ok(true)
 }
 
 fn private_oram_active_reshard_snapshot_layout_entries(
@@ -1251,7 +1466,11 @@ mod tests {
     use collection::optimizers_builder::OptimizersConfig;
     use collection::shards::replica_set::replica_set_state::ReplicaState;
     use collection::shards::resharding::{ReshardState, ReshardingStage};
-    use collection::shards::transfer::{ShardTransfer, ShardTransferMethod};
+    use collection::shards::transfer::{
+        PrivateOramTransferIndexKind, PrivateOramTransferIndexState,
+        PrivateOramTransferLayoutState, PrivateOramTransferLayoutTransition, ShardTransfer,
+        ShardTransferMethod,
+    };
     use data_encoding::BASE64URL_NOPAD;
     use fs_err as fs;
     use segment::types::HnswConfig;
@@ -1262,16 +1481,19 @@ mod tests {
         collection_params_bind_crypto_identity, encrypted_uuid_mismatch_requires_fail_closed,
         private_oram_snapshot_recovery_marker_path, read_private_oram_snapshot_recovery_marker,
         remove_private_oram_snapshot_recovery_marker,
-        validate_private_oram_active_reshard_snapshot, write_private_oram_snapshot_recovery_marker,
+        validate_private_oram_active_reshard_snapshot,
+        validate_private_oram_active_transfer_snapshot,
+        write_private_oram_snapshot_recovery_marker,
     };
     use crate::content_manager::consensus::persistent::{
         private_oram_epoch_key_digest, private_oram_layout_key_digest,
     };
     use crate::content_manager::consensus_manager::PrivateOramSnapshotState;
     use crate::content_manager::consensus_ops::{
-        PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramLayoutKey,
-        PrivateOramShardLayoutEntry, canonical_private_oram_index_state_digest,
-        canonical_private_oram_shard_layout_digest, private_oram_index_keys_for_config,
+        PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramIndexKind,
+        PrivateOramLayoutKey, PrivateOramShardLayoutEntry,
+        canonical_private_oram_index_state_digest, canonical_private_oram_shard_layout_digest,
+        private_oram_index_keys_for_config,
     };
 
     fn encrypted_params() -> CollectionParams {
@@ -1424,6 +1646,117 @@ mod tests {
         (current, incoming, epochs, layouts)
     }
 
+    fn private_oram_active_transfer_snapshot_fixture() -> (
+        State,
+        HashMap<String, PrivateOramConsensusEpoch>,
+        HashMap<String, PrivateOramConsensusLayout>,
+    ) {
+        let mut config = private_oram_snapshot_config(1);
+        config.params.replication_factor = NonZeroU32::new(2).unwrap();
+        let collection_id = config.stable_crypto_id("docs").unwrap();
+        let keys = private_oram_index_keys_for_config(&config, "docs").unwrap();
+        let epoch = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[7; 32]),
+            writeback_digest: Some(BASE64URL_NOPAD.encode(&[8; 32])),
+        };
+        let index_state_digest = canonical_private_oram_index_state_digest(
+            &collection_id,
+            &[(keys[0].clone(), epoch.clone())],
+        )
+        .unwrap();
+        let pre_entries = vec![PrivateOramShardLayoutEntry {
+            shard_id: 0,
+            shard_key: None,
+            owner_peer_ids: vec![11, 12],
+        }];
+        let post_entries = vec![PrivateOramShardLayoutEntry {
+            shard_id: 0,
+            shard_key: None,
+            owner_peer_ids: vec![11, 12, 22],
+        }];
+        let (pre_owners, pre_digest) = canonical_private_oram_shard_layout_digest(
+            &collection_id,
+            ShardingMethod::Auto,
+            &pre_entries,
+        )
+        .unwrap();
+        let (post_owners, post_digest) = canonical_private_oram_shard_layout_digest(
+            &collection_id,
+            ShardingMethod::Auto,
+            &post_entries,
+        )
+        .unwrap();
+        let expected = PrivateOramTransferLayoutState {
+            generation: 1,
+            owner_peer_ids: pre_owners,
+            layout_digest: pre_digest,
+            index_state_digest: index_state_digest.clone(),
+        };
+        let new = PrivateOramTransferLayoutState {
+            generation: 2,
+            owner_peer_ids: post_owners,
+            layout_digest: post_digest,
+            index_state_digest,
+        };
+        let transfer = ShardTransfer {
+            shard_id: 0,
+            to_shard_id: None,
+            from: 11,
+            to: 22,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: Some(PrivateOramTransferLayoutTransition {
+                collection_id: collection_id.clone(),
+                expected: expected.clone(),
+                new,
+                index_states: vec![PrivateOramTransferIndexState {
+                    index_kind: match keys[0].index_kind {
+                        PrivateOramIndexKind::Hnsw => PrivateOramTransferIndexKind::Hnsw,
+                        PrivateOramIndexKind::ResultPayload => {
+                            PrivateOramTransferIndexKind::ResultPayload
+                        }
+                    },
+                    index_name: keys[0].index_name.clone(),
+                    index_epoch: epoch.index_epoch,
+                    root_hash: epoch.root_hash.clone(),
+                    writeback_digest: epoch.writeback_digest.clone(),
+                }],
+            }),
+            filter: None,
+        };
+        let incoming = State {
+            config,
+            shards: AHashMap::from([(
+                0,
+                ShardInfo {
+                    replicas: HashMap::from([
+                        (11, ReplicaState::Active),
+                        (12, ReplicaState::Active),
+                        (22, ReplicaState::Partial),
+                    ]),
+                },
+            )]),
+            resharding: None,
+            transfers: HashSet::from([transfer]),
+            shards_key_mapping: Default::default(),
+            payload_index_schema: PayloadIndexSchema::default(),
+        };
+        let epochs = HashMap::from([(private_oram_epoch_key_digest(&keys[0]), epoch)]);
+        let layout_key = PrivateOramLayoutKey { collection_id };
+        let layouts = HashMap::from([(
+            private_oram_layout_key_digest(&layout_key),
+            PrivateOramConsensusLayout {
+                generation: expected.generation,
+                owner_peer_ids: expected.owner_peer_ids,
+                layout_digest: expected.layout_digest,
+                index_state_digest: expected.index_state_digest,
+            },
+        )]);
+        (incoming, epochs, layouts)
+    }
+
     #[test]
     fn collection_params_bind_crypto_identity_for_encrypted_configs() {
         assert!(!collection_params_bind_crypto_identity(
@@ -1449,6 +1782,108 @@ mod tests {
         assert!(encrypted_uuid_mismatch_requires_fail_closed(
             &plaintext, &encrypted,
         ));
+    }
+
+    #[test]
+    fn active_private_oram_transfer_snapshot_rejects_wiped_owners_and_endpoints() {
+        let (incoming, epochs, layouts) = private_oram_active_transfer_snapshot_fixture();
+        let empty_epochs = HashMap::new();
+        let empty_layouts = HashMap::new();
+        let snapshot = PrivateOramSnapshotState {
+            incoming_epochs: &epochs,
+            current_epochs: &empty_epochs,
+            incoming_layouts: &layouts,
+            current_layouts: &empty_layouts,
+        };
+
+        assert!(
+            validate_private_oram_active_transfer_snapshot(
+                "docs", None, None, &incoming, snapshot, 11,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_private_oram_active_transfer_snapshot(
+                "docs", None, None, &incoming, snapshot, 22,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_private_oram_active_transfer_snapshot(
+                "docs", None, None, &incoming, snapshot, 12,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_private_oram_active_transfer_snapshot(
+                "docs", None, None, &incoming, snapshot, 33,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn active_private_oram_transfer_snapshot_rejects_missing_current_owner_store() {
+        let (incoming, epochs, layouts) = private_oram_active_transfer_snapshot_fixture();
+        let snapshot = PrivateOramSnapshotState {
+            incoming_epochs: &epochs,
+            current_epochs: &epochs,
+            incoming_layouts: &layouts,
+            current_layouts: &layouts,
+        };
+        let temp = tempfile::tempdir().unwrap();
+
+        assert!(
+            validate_private_oram_active_transfer_snapshot(
+                "docs",
+                Some(&incoming),
+                Some(temp.path()),
+                &incoming,
+                snapshot,
+                11,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_private_oram_active_transfer_snapshot(
+                "docs",
+                Some(&incoming),
+                Some(temp.path()),
+                &incoming,
+                snapshot,
+                33,
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn active_private_oram_transfer_snapshot_rejects_generation_skip() {
+        let (mut incoming, epochs, layouts) = private_oram_active_transfer_snapshot_fixture();
+        let mut transfer = incoming.transfers.iter().next().unwrap().clone();
+        transfer
+            .private_oram_layout_transition
+            .as_mut()
+            .unwrap()
+            .new
+            .generation += 1;
+        incoming.transfers.clear();
+        incoming.transfers.insert(transfer);
+        let empty_epochs = HashMap::new();
+        let empty_layouts = HashMap::new();
+        let snapshot = PrivateOramSnapshotState {
+            incoming_epochs: &epochs,
+            current_epochs: &empty_epochs,
+            incoming_layouts: &layouts,
+            current_layouts: &empty_layouts,
+        };
+
+        assert!(
+            validate_private_oram_active_transfer_snapshot(
+                "docs", None, None, &incoming, snapshot, 33,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -2196,17 +2631,33 @@ impl TableOfContent {
             let mut validated_private_oram_resharding = HashSet::new();
             let mut private_oram_snapshot_recovery_aborts = HashMap::new();
             for (id, state) in &data.collections {
-                if state.resharding.is_none()
-                    || private_oram_index_keys_for_config(&state.config, id)?.is_empty()
+                if private_oram_index_keys_for_config(&state.config, id)?.is_empty()
+                    || state.resharding.is_none() && state.transfers.is_empty()
                 {
                     continue;
                 }
                 let private_oram_snapshot = private_oram_snapshot
                     .ok_or_else(invalid_private_oram_resharding_snapshot)?;
-                let current = match collections.get(id) {
-                    Some(collection) => Some(collection.state().await),
-                    None => None,
+                let (current, current_collection_path) = match collections.get(id) {
+                    Some(collection) => (
+                        Some(collection.state().await),
+                        Some(collection.path().to_path_buf()),
+                    ),
+                    None => (None, None),
                 };
+                if validate_private_oram_active_transfer_snapshot(
+                    id,
+                    current.as_ref(),
+                    current_collection_path.as_deref(),
+                    state,
+                    private_oram_snapshot,
+                    self.this_peer_id,
+                )? {
+                    continue;
+                }
+                if state.resharding.is_none() {
+                    continue;
+                }
                 if let Some(action) = classify_private_oram_active_reshard_snapshot(
                     id,
                     current.as_ref(),

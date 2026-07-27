@@ -1760,6 +1760,124 @@ def test_private_oram_restart_repreinstalls_and_completes(
     )
 
 
+@pytest.mark.parametrize("wipe_mode", ["collection", "stores"])
+def test_private_oram_active_transfer_snapshot_rejects_wiped_target(
+    tmp_path: pathlib.Path, wipe_mode: str,
+):
+    extra_env = {
+        "QDRANT__CLUSTER__CONSENSUS__COMPACT_WAL_ENTRIES": "1",
+        "QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "180",
+    }
+    peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(
+        tmp_path,
+        3,
+        1,
+        extra_env=extra_env,
+    )
+    skip_if_no_feature(peer_urls[0], "staging")
+    source_index, target_index, source_url, target_url, source_info, target_info = (
+        _private_oram_transfer_peers(peer_urls)
+    )
+    remaining_index = next(
+        index
+        for index in range(len(peer_urls))
+        if index not in {source_index, target_index}
+    )
+    shard_id = source_info["local_shards"][0]["shard_id"]
+
+    _upload_hnsw(source_url, fixture)
+    _exercise_hnsw_owner_session(source_url, fixture)
+    _upload_result_oram(source_url, fixture)
+    _exercise_result_owner_session(source_url, fixture)
+    _wait_for_private_oram_epochs(peer_dirs, NEXT_EPOCH, 2)
+    started = _request_private_oram_shard_transfer(
+        source_url,
+        "replicate_shard",
+        shard_id,
+        source_info["peer_id"],
+        target_info["peer_id"],
+    )
+    assert_http_ok(started)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
+
+    target_process = processes[target_index]
+    remaining_process = processes[remaining_index]
+    target_port = target_process.p2p_port
+    restart_bootstrap_uri = get_uri(remaining_process.p2p_port)
+    target_process.kill()
+    processes.remove(target_process)
+    surviving_urls = [source_url, peer_urls[remaining_index]]
+    surviving_peer_ids = {
+        get_cluster_info(url)["peer_id"] for url in surviving_urls
+    }
+    wait_for(
+        lambda: (
+            (leader := get_cluster_info(source_url)["raft_info"]["leader"]) is not None
+            and leader in surviving_peer_ids
+            and get_cluster_info(peer_urls[remaining_index])["raft_info"]["leader"]
+            == leader
+        ),
+        wait_for_timeout=60,
+    )
+    leader_peer_id = get_cluster_info(source_url)["raft_info"]["leader"]
+    metadata_url = next(
+        url
+        for url in surviving_urls
+        if get_cluster_info(url)["peer_id"] == leader_peer_id
+    )
+    for index in range(8):
+        response = requests.put(
+            f"{metadata_url}/cluster/metadata/keys/private-oram-fixed-transfer-snapshot-{index}?wait=true",
+            json=index,
+            timeout=30,
+        )
+        assert_http_ok(response)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 1)
+
+    target_collection_path = (
+        peer_dirs[target_index] / "storage" / "collections" / COLLECTION
+    )
+    if wipe_mode == "collection":
+        shutil.rmtree(target_collection_path)
+    else:
+        shutil.rmtree(target_collection_path / "private_hnsw_oram")
+        shutil.rmtree(target_collection_path / "private_result_oram")
+    target_log = f"private_oram_fixed_transfer_snapshot_wiped_target_{wipe_mode}.log"
+    restarted_url = start_peer(
+        peer_dirs[target_index],
+        target_log,
+        restart_bootstrap_uri,
+        port=target_port,
+        extra_env=extra_env,
+    )
+    peer_urls[target_index] = restarted_url
+    wait_for_peer_online(restarted_url, path="/cluster")
+
+    target_log_path = pathlib.Path(init_pytest_log_folder()) / target_log
+    wait_for(
+        lambda: target_log_path.exists()
+        and "private ORAM active shard transfer Raft snapshot state is invalid"
+        in target_log_path.read_text(),
+        wait_for_timeout=60,
+    )
+    target_log_text = target_log_path.read_text()
+    for secret in [
+        fixture["hnsw"]["manifest"]["root_hash"],
+        fixture["hnsw"]["commit"]["new_root_hash"],
+        fixture["hnsw"]["manifest_signature"]["sig"],
+        fixture["hnsw"]["buckets"][0]["ciphertext"],
+        fixture["result"]["manifest"]["root_hash"],
+        fixture["result"]["commit"]["new_root_hash"],
+        fixture["result"]["manifest_signature"]["sig"],
+        fixture["result"]["buckets"][0]["ciphertext"],
+    ]:
+        assert secret not in target_log_text
+    assert target_collection_path.exists() == (wipe_mode == "stores")
+    assert not list(peer_dirs[target_index].rglob("private_hnsw_oram"))
+    assert not list(peer_dirs[target_index].rglob("private_result_oram"))
+
+
 def test_private_oram_resharding_restart_repreinstalls_and_completes(
     tmp_path: pathlib.Path,
 ):
