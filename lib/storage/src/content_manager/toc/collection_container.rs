@@ -287,7 +287,10 @@ impl CollectionContainer for TableOfContent {
                     read_private_oram_snapshot_recovery_marker(collection.path())?
                 {
                     match collection.resharding_state().await {
-                        Some(state) if state.key() == marker.resharding_key => {
+                        Some(state)
+                            if state.key() == marker.resharding_key
+                                && state.stage == ReshardingStage::MigratingPoints =>
+                        {
                             let should_request_abort = {
                                 let mut requests = self
                                     .private_oram_snapshot_recovery_abort_requests
@@ -330,6 +333,7 @@ impl CollectionContainer for TableOfContent {
                                     ));
                                 }
                             }
+                            continue;
                         }
                         Some(_) => {
                             return Err(invalid_private_oram_snapshot_recovery_marker());
@@ -996,8 +1000,8 @@ fn private_oram_snapshot_can_rollback_redundant_pre_layout_owner(
     pre_layout_entries: &[PrivateOramShardLayoutEntry],
     this_peer_id: PeerId,
 ) -> bool {
+    let is_scale_down_endpoint = resharding.peer_id == this_peer_id;
     if resharding.stage != ReshardingStage::MigratingPoints
-        || resharding.peer_id == this_peer_id
         || !layout.owner_peer_ids.contains(&this_peer_id)
         || incoming
             .transfers
@@ -1006,11 +1010,29 @@ fn private_oram_snapshot_can_rollback_redundant_pre_layout_owner(
     {
         return false;
     }
+    if is_scale_down_endpoint
+        && (resharding.direction != ReshardingDirection::Down
+            || !incoming.transfers.is_empty()
+            || incoming.shards.values().any(|shard| {
+                shard
+                    .replicas
+                    .values()
+                    .any(|state| *state != ReplicaState::Active)
+            }))
+    {
+        return false;
+    }
 
     let local_pre_layout_entries = pre_layout_entries
         .iter()
         .filter(|entry| entry.owner_peer_ids.contains(&this_peer_id))
         .collect::<Vec<_>>();
+    if is_scale_down_endpoint
+        && (local_pre_layout_entries.len() != 1
+            || local_pre_layout_entries[0].shard_id != resharding.shard_id)
+    {
+        return false;
+    }
     !local_pre_layout_entries.is_empty()
         && local_pre_layout_entries.iter().all(|entry| {
             incoming.shards.get(&entry.shard_id).is_some_and(|shard| {
@@ -1768,6 +1790,120 @@ mod tests {
             classify_private_oram_active_reshard_snapshot("docs", None, &committed, snapshot, 12,)
                 .is_err(),
             "snapshot rollback must close after the read hash ring is committed",
+        );
+    }
+
+    #[test]
+    fn private_oram_wiped_redundant_scale_down_endpoint_requires_exact_rollback() {
+        let mut incoming = State {
+            config: private_oram_snapshot_config(2),
+            shards: AHashMap::from([
+                (
+                    0,
+                    ShardInfo {
+                        replicas: HashMap::from([
+                            (11, ReplicaState::Active),
+                            (44, ReplicaState::Active),
+                        ]),
+                    },
+                ),
+                (
+                    1,
+                    ShardInfo {
+                        replicas: HashMap::from([
+                            (22, ReplicaState::Active),
+                            (33, ReplicaState::Active),
+                        ]),
+                    },
+                ),
+            ]),
+            resharding: Some(ReshardState::new(
+                Uuid::nil(),
+                ReshardingDirection::Down,
+                22,
+                1,
+                None,
+            )),
+            transfers: HashSet::new(),
+            shards_key_mapping: Default::default(),
+            payload_index_schema: PayloadIndexSchema::default(),
+        };
+        let collection_id = incoming.config.stable_crypto_id("docs").unwrap();
+        let keys = private_oram_index_keys_for_config(&incoming.config, "docs").unwrap();
+        let epoch = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[23; 32]),
+            writeback_digest: Some(BASE64URL_NOPAD.encode(&[24; 32])),
+        };
+        let epochs = HashMap::from([(private_oram_epoch_key_digest(&keys[0]), epoch.clone())]);
+        let index_state_digest =
+            canonical_private_oram_index_state_digest(&collection_id, &[(keys[0].clone(), epoch)])
+                .unwrap();
+        let (owner_peer_ids, layout_digest) = canonical_private_oram_shard_layout_digest(
+            &collection_id,
+            ShardingMethod::Auto,
+            &[
+                PrivateOramShardLayoutEntry {
+                    shard_id: 0,
+                    shard_key: None,
+                    owner_peer_ids: vec![11, 44],
+                },
+                PrivateOramShardLayoutEntry {
+                    shard_id: 1,
+                    shard_key: None,
+                    owner_peer_ids: vec![22, 33],
+                },
+            ],
+        )
+        .unwrap();
+        let layout_key = PrivateOramLayoutKey { collection_id };
+        let layouts = HashMap::from([(
+            private_oram_layout_key_digest(&layout_key),
+            PrivateOramConsensusLayout {
+                generation: 1,
+                owner_peer_ids,
+                layout_digest,
+                index_state_digest,
+            },
+        )]);
+        let empty_epochs = HashMap::new();
+        let empty_layouts = HashMap::new();
+        let snapshot = PrivateOramSnapshotState {
+            incoming_epochs: &epochs,
+            current_epochs: &empty_epochs,
+            incoming_layouts: &layouts,
+            current_layouts: &empty_layouts,
+        };
+
+        assert_eq!(
+            classify_private_oram_active_reshard_snapshot("docs", None, &incoming, snapshot, 22,)
+                .unwrap(),
+            Some(PrivateOramActiveReshardSnapshotAction::AbortForReplicaRecovery),
+        );
+
+        incoming.transfers.insert(ShardTransfer {
+            shard_id: 1,
+            to_shard_id: Some(0),
+            from: 22,
+            to: 11,
+            sync: true,
+            method: Some(ShardTransferMethod::ReshardingStreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
+            filter: None,
+        });
+        assert!(
+            classify_private_oram_active_reshard_snapshot("docs", None, &incoming, snapshot, 22,)
+                .is_err(),
+            "an in-flight scale-down transfer source must remain fail closed",
+        );
+
+        incoming.transfers.clear();
+        incoming.resharding.as_mut().unwrap().stage = ReshardingStage::ReadHashRingCommitted;
+        assert!(
+            classify_private_oram_active_reshard_snapshot("docs", None, &incoming, snapshot, 22,)
+                .is_err(),
+            "a committed scale-down endpoint must remain fail closed",
         );
     }
 

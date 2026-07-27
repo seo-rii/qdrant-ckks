@@ -2692,6 +2692,157 @@ def test_private_oram_active_scale_down_recovers_from_raft_snapshot(
         _assert_private_oram_owner_sessions(peer_urls[receiver_index], fixture, True)
 
 
+def test_private_oram_active_scale_down_snapshot_rolls_back_for_wiped_redundant_endpoint(
+    tmp_path: pathlib.Path,
+):
+    extra_env = {
+        "QDRANT__CLUSTER__RESHARDING_ENABLED": "true",
+        "QDRANT__CLUSTER__CONSENSUS__COMPACT_WAL_ENTRIES": "1",
+    }
+    peer_urls, peer_dirs, fixture, leader, _ = _start_private_oram_cluster(
+        tmp_path,
+        4,
+        2,
+        shard_number=2,
+        include_public_vector=True,
+        extra_env=extra_env,
+    )
+    peer_ids = [get_cluster_info(peer_url)["peer_id"] for peer_url in peer_urls]
+    cluster_infos = [
+        get_collection_cluster_info(peer_url, COLLECTION) for peer_url in peer_urls
+    ]
+    owner_indices_by_shard: dict[int, list[int]] = {}
+    for peer_index, info in enumerate(cluster_infos):
+        for shard in info["local_shards"]:
+            if shard["state"] == "Active":
+                owner_indices_by_shard.setdefault(shard["shard_id"], []).append(
+                    peer_index
+                )
+    assert len(owner_indices_by_shard) == 2
+    receiver_shard_id = min(owner_indices_by_shard)
+    target_shard_id = max(owner_indices_by_shard)
+    receiver_indices = owner_indices_by_shard[receiver_shard_id]
+    target_indices = owner_indices_by_shard[target_shard_id]
+    assert len(receiver_indices) == 2
+    assert len(target_indices) == 2
+    assert set(receiver_indices).isdisjoint(target_indices)
+
+    endpoint_index = next(
+        index
+        for index in target_indices
+        if peer_ids[index] != leader
+    )
+    coordinator_url = peer_urls[receiver_indices[0]]
+    endpoint_url = peer_urls[endpoint_index]
+    endpoint_peer_id = peer_ids[endpoint_index]
+    receiver_peer_ids = [peer_ids[index] for index in receiver_indices]
+    initial_owner_indices = sorted(
+        {
+            index
+            for owner_indices in owner_indices_by_shard.values()
+            for index in owner_indices
+        }
+    )
+    initial_owner_peer_ids = sorted(peer_ids[index] for index in initial_owner_indices)
+
+    _upload_hnsw(coordinator_url, fixture)
+    _exercise_hnsw_owner_session(coordinator_url, fixture)
+    _upload_result_oram(coordinator_url, fixture)
+    _exercise_result_owner_session(coordinator_url, fixture)
+    _wait_for_private_oram_epochs(peer_dirs, NEXT_EPOCH, 2)
+    _wait_for_crypto_runtime_capability_metadata(peer_dirs, len(peer_urls))
+
+    assert_http_ok(
+        start_resharding(
+            coordinator_url,
+            collection=COLLECTION,
+            direction="down",
+            peer_id=endpoint_peer_id,
+        )
+    )
+    wait_for_collection_resharding_operations_count(coordinator_url, COLLECTION, 1)
+    for receiver_peer_id in receiver_peer_ids:
+        migrate_points(
+            endpoint_url,
+            receiver_peer_id,
+            receiver_shard_id,
+            endpoint_peer_id,
+            target_shard_id,
+            "down",
+            collection=COLLECTION,
+        )
+        activate_replica(
+            endpoint_url,
+            receiver_peer_id,
+            receiver_shard_id,
+            collection=COLLECTION,
+        )
+    wait_for_collection_shard_transfers_count(endpoint_url, COLLECTION, 0)
+    wait_for_collection_resharding_operations_count(endpoint_url, COLLECTION, 1)
+    _wait_for_private_oram_layout(peer_dirs, 1, initial_owner_peer_ids)
+
+    endpoint_process = processes[endpoint_index]
+    endpoint_port = endpoint_process.p2p_port
+    leader_index = peer_ids.index(leader)
+    leader_url = peer_urls[leader_index]
+    restart_bootstrap_uri = get_uri(processes[leader_index].p2p_port)
+    endpoint_process.kill()
+    processes.remove(endpoint_process)
+
+    for index in range(8):
+        assert_http_ok(
+            requests.put(
+                f"{leader_url}/cluster/metadata/keys/private-oram-scale-down-endpoint-rollback-{index}?wait=true",
+                json=index,
+                timeout=30,
+            )
+        )
+
+    wiped_collection_path = (
+        peer_dirs[endpoint_index] / "storage" / "collections" / COLLECTION
+    )
+    shutil.rmtree(wiped_collection_path)
+    restarted_log = "private_oram_scale_down_endpoint_rollback.log"
+    restarted_url = start_peer(
+        peer_dirs[endpoint_index],
+        restarted_log,
+        restart_bootstrap_uri,
+        port=endpoint_port,
+        extra_env=extra_env,
+    )
+    peer_urls[endpoint_index] = restarted_url
+    wait_for_peer_online(restarted_url, path="/cluster")
+    wait_for_uniform_cluster_status(peer_urls, leader)
+
+    restarted_log_path = pathlib.Path(init_pytest_log_folder()) / restarted_log
+    wait_for(
+        lambda: restarted_log_path.exists()
+        and "Applying snapshot" in restarted_log_path.read_text()
+        and "Requesting private ORAM active reshard rollback for snapshot replica recovery"
+        in restarted_log_path.read_text(),
+        wait_for_timeout=30,
+    )
+    wait_for_collection_resharding_operations_count(leader_url, COLLECTION, 0)
+    wait_for_collection_shard_transfers_count(leader_url, COLLECTION, 0)
+    wait_for_collection_shard_transfers_count(restarted_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _wait_for_private_oram_layout(peer_dirs, 2, initial_owner_peer_ids)
+    assert not (
+        wiped_collection_path / "private_oram_snapshot_recovery.json"
+    ).exists()
+    assert _private_oram_buckets_dir(peer_dirs[endpoint_index], "hnsw").is_dir()
+    assert _private_oram_buckets_dir(peer_dirs[endpoint_index], "result").is_dir()
+
+    restarted_info = get_collection_cluster_info(restarted_url, COLLECTION)
+    assert {
+        shard["shard_id"]
+        for shard in restarted_info["local_shards"]
+        if shard["state"] == "Active"
+    } == {target_shard_id}
+    for owner_index in initial_owner_indices:
+        _assert_private_oram_owner_sessions(peer_urls[owner_index], fixture, True)
+
+
 @pytest.mark.parametrize("index_kind", ["hnsw", "result"])
 def test_private_oram_replica_prepare_failure_preserves_epoch(
     tmp_path: pathlib.Path, index_kind: str
