@@ -54,6 +54,27 @@ impl Collection {
             .await
     }
 
+    pub async fn apply_validated_private_oram_transfer_snapshot_recovery_state(
+        &self,
+        state: State,
+        this_peer_id: PeerId,
+        abort_transfer: impl FnMut(ShardTransfer),
+    ) -> CollectionResult<()> {
+        if state.resharding.is_some()
+            || state.transfers.len() != 1
+            || !state
+                .transfers
+                .iter()
+                .all(|transfer| transfer.is_private_oram_preinstalled_transfer_for(None))
+        {
+            return Err(CollectionError::bad_input(
+                "validated private ORAM transfer snapshot recovery state must contain one fixed-layout transfer",
+            ));
+        }
+        self.apply_state_internal(state, this_peer_id, abort_transfer, true)
+            .await
+    }
+
     async fn apply_state_internal(
         &self,
         state: State,

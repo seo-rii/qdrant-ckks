@@ -15,6 +15,7 @@ use collection::shards::collection_shard_distribution::CollectionShardDistributi
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::resharding::{ReshardKey, ReshardState, ReshardingStage};
 use collection::shards::shard::PeerId;
+use collection::shards::transfer::ShardTransfer;
 use fs_err::OpenOptions;
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +42,8 @@ use crate::content_manager::errors::StorageError;
 use crate::content_manager::{CollectionContainer, consensus_manager};
 
 const PRIVATE_ORAM_SNAPSHOT_RECOVERY_MARKER_FILE: &str = "private_oram_snapshot_recovery.json";
-const PRIVATE_ORAM_SNAPSHOT_RECOVERY_MARKER_VERSION: u16 = 1;
+const PRIVATE_ORAM_SNAPSHOT_RECOVERY_MARKER_VERSION: u16 = 2;
+const PRIVATE_ORAM_SNAPSHOT_RECOVERY_MARKER_LEGACY_VERSION: u16 = 1;
 const PRIVATE_ORAM_SNAPSHOT_RECOVERY_MARKER_MAX_BYTES: u64 = 16 * 1024;
 const PRIVATE_ORAM_SNAPSHOT_RECOVERY_ABORT_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -49,7 +51,39 @@ const PRIVATE_ORAM_SNAPSHOT_RECOVERY_ABORT_RETRY_INTERVAL: Duration = Duration::
 #[serde(deny_unknown_fields)]
 struct PrivateOramSnapshotRecoveryMarker {
     version: u16,
-    resharding_key: ReshardKey,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resharding_key: Option<ReshardKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shard_transfer: Option<ShardTransfer>,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+enum PrivateOramSnapshotRecoveryOperation {
+    Resharding(ReshardKey),
+    ShardTransfer(ShardTransfer),
+}
+
+impl PrivateOramSnapshotRecoveryMarker {
+    fn operation(&self) -> Result<PrivateOramSnapshotRecoveryOperation, StorageError> {
+        match (
+            self.version,
+            self.resharding_key.as_ref(),
+            self.shard_transfer.as_ref(),
+        ) {
+            (
+                PRIVATE_ORAM_SNAPSHOT_RECOVERY_MARKER_LEGACY_VERSION
+                | PRIVATE_ORAM_SNAPSHOT_RECOVERY_MARKER_VERSION,
+                Some(resharding_key),
+                None,
+            ) => Ok(PrivateOramSnapshotRecoveryOperation::Resharding(
+                resharding_key.clone(),
+            )),
+            (PRIVATE_ORAM_SNAPSHOT_RECOVERY_MARKER_VERSION, None, Some(shard_transfer)) => Ok(
+                PrivateOramSnapshotRecoveryOperation::ShardTransfer(shard_transfer.clone()),
+            ),
+            _ => Err(invalid_private_oram_snapshot_recovery_marker()),
+        }
+    }
 }
 
 fn invalid_private_oram_snapshot_recovery_marker() -> StorageError {
@@ -103,19 +137,22 @@ fn read_private_oram_snapshot_recovery_marker(
     }
     let marker: PrivateOramSnapshotRecoveryMarker = serde_json::from_slice(&bytes)
         .map_err(|_| invalid_private_oram_snapshot_recovery_marker())?;
-    if marker.version != PRIVATE_ORAM_SNAPSHOT_RECOVERY_MARKER_VERSION {
-        return Err(invalid_private_oram_snapshot_recovery_marker());
-    }
+    marker.operation()?;
     Ok(Some(marker))
 }
 
-fn write_private_oram_snapshot_recovery_marker(
+fn write_private_oram_snapshot_recovery_operation(
     collection_path: &Path,
-    resharding_key: &ReshardKey,
+    operation: PrivateOramSnapshotRecoveryOperation,
 ) -> Result<(), StorageError> {
+    let (resharding_key, shard_transfer) = match operation {
+        PrivateOramSnapshotRecoveryOperation::Resharding(key) => (Some(key), None),
+        PrivateOramSnapshotRecoveryOperation::ShardTransfer(transfer) => (None, Some(transfer)),
+    };
     let marker = PrivateOramSnapshotRecoveryMarker {
         version: PRIVATE_ORAM_SNAPSHOT_RECOVERY_MARKER_VERSION,
-        resharding_key: resharding_key.clone(),
+        resharding_key,
+        shard_transfer,
     };
     if let Some(existing) = read_private_oram_snapshot_recovery_marker(collection_path)? {
         return if existing == marker {
@@ -145,6 +182,26 @@ fn write_private_oram_snapshot_recovery_marker(
     Ok(())
 }
 
+fn write_private_oram_snapshot_recovery_marker(
+    collection_path: &Path,
+    resharding_key: &ReshardKey,
+) -> Result<(), StorageError> {
+    write_private_oram_snapshot_recovery_operation(
+        collection_path,
+        PrivateOramSnapshotRecoveryOperation::Resharding(resharding_key.clone()),
+    )
+}
+
+fn write_private_oram_transfer_snapshot_recovery_marker(
+    collection_path: &Path,
+    shard_transfer: &ShardTransfer,
+) -> Result<(), StorageError> {
+    write_private_oram_snapshot_recovery_operation(
+        collection_path,
+        PrivateOramSnapshotRecoveryOperation::ShardTransfer(shard_transfer.clone()),
+    )
+}
+
 fn remove_private_oram_snapshot_recovery_marker(
     collection_path: &Path,
 ) -> Result<(), StorageError> {
@@ -162,6 +219,12 @@ fn remove_private_oram_snapshot_recovery_marker(
 enum PrivateOramActiveReshardSnapshotAction {
     Apply,
     AbortForReplicaRecovery,
+}
+
+#[derive(Clone, Eq, PartialEq)]
+enum PrivateOramActiveTransferSnapshotAction {
+    Apply,
+    AbortForReplicaRecovery(ShardTransfer),
 }
 
 impl CollectionContainer for TableOfContent {
@@ -288,64 +351,143 @@ impl CollectionContainer for TableOfContent {
                 if let Some(marker) =
                     read_private_oram_snapshot_recovery_marker(collection.path())?
                 {
-                    match collection.resharding_state().await {
-                        Some(state)
-                            if state.key() == marker.resharding_key
-                                && state.stage == ReshardingStage::MigratingPoints =>
-                        {
-                            let should_request_abort = {
-                                let mut requests = self
-                                    .private_oram_snapshot_recovery_abort_requests
-                                    .lock()
-                                    .await;
-                                let now = Instant::now();
-                                match requests.get(collection.name()) {
-                                    Some(last_request)
-                                        if now.duration_since(*last_request)
-                                            < PRIVATE_ORAM_SNAPSHOT_RECOVERY_ABORT_RETRY_INTERVAL =>
-                                    {
-                                        false
-                                    }
-                                    _ => {
-                                        requests.insert(collection.name().to_string(), now);
-                                        true
-                                    }
-                                }
-                            };
-                            if should_request_abort {
-                                log::warn!(
-                                    "Requesting private ORAM active reshard rollback for snapshot replica recovery",
-                                );
-                                let Some(proposal_sender) = &self.consensus_proposal_sender else {
-                                    return Err(invalid_private_oram_snapshot_recovery_marker());
-                                };
-                                if proposal_sender
-                                    .send(ConsensusOperations::abort_resharding(
-                                        collection.name().to_string(),
-                                        marker.resharding_key,
-                                    ))
-                                    .is_err()
+                    match marker.operation()? {
+                        PrivateOramSnapshotRecoveryOperation::Resharding(resharding_key) => {
+                            match collection.resharding_state().await {
+                                Some(state)
+                                    if state.key() == resharding_key
+                                        && state.stage == ReshardingStage::MigratingPoints =>
                                 {
+                                    let should_request_abort = {
+                                        let mut requests = self
+                                            .private_oram_snapshot_recovery_abort_requests
+                                            .lock()
+                                            .await;
+                                        let now = Instant::now();
+                                        match requests.get(collection.name()) {
+                                            Some(last_request)
+                                                if now.duration_since(*last_request)
+                                                    < PRIVATE_ORAM_SNAPSHOT_RECOVERY_ABORT_RETRY_INTERVAL =>
+                                            {
+                                                false
+                                            }
+                                            _ => {
+                                                requests
+                                                    .insert(collection.name().to_string(), now);
+                                                true
+                                            }
+                                        }
+                                    };
+                                    if should_request_abort {
+                                        log::warn!(
+                                            "Requesting private ORAM active reshard rollback for snapshot replica recovery",
+                                        );
+                                        let Some(proposal_sender) =
+                                            &self.consensus_proposal_sender
+                                        else {
+                                            return Err(
+                                                invalid_private_oram_snapshot_recovery_marker(),
+                                            );
+                                        };
+                                        if proposal_sender
+                                            .send(ConsensusOperations::abort_resharding(
+                                                collection.name().to_string(),
+                                                resharding_key,
+                                            ))
+                                            .is_err()
+                                        {
+                                            self.private_oram_snapshot_recovery_abort_requests
+                                                .lock()
+                                                .await
+                                                .remove(collection.name());
+                                            return Err(StorageError::service_error(
+                                                "private ORAM snapshot recovery abort could not be scheduled",
+                                            ));
+                                        }
+                                    }
+                                    continue;
+                                }
+                                Some(_) => {
+                                    return Err(
+                                        invalid_private_oram_snapshot_recovery_marker(),
+                                    );
+                                }
+                                None => {
+                                    remove_private_oram_snapshot_recovery_marker(
+                                        collection.path(),
+                                    )?;
                                     self.private_oram_snapshot_recovery_abort_requests
                                         .lock()
                                         .await
                                         .remove(collection.name());
-                                    return Err(StorageError::service_error(
-                                        "private ORAM snapshot recovery abort could not be scheduled",
-                                    ));
                                 }
                             }
-                            continue;
                         }
-                        Some(_) => {
-                            return Err(invalid_private_oram_snapshot_recovery_marker());
-                        }
-                        None => {
-                            remove_private_oram_snapshot_recovery_marker(collection.path())?;
-                            self.private_oram_snapshot_recovery_abort_requests
-                                .lock()
-                                .await
-                                .remove(collection.name());
+                        PrivateOramSnapshotRecoveryOperation::ShardTransfer(expected_transfer) => {
+                            let state = collection.state().await;
+                            if state.resharding.is_some()
+                                || state.transfers.len() > 1
+                                || state.transfers.iter().next().is_some_and(|transfer| {
+                                    transfer != &expected_transfer
+                                })
+                            {
+                                return Err(invalid_private_oram_snapshot_recovery_marker());
+                            }
+                            if state.transfers.is_empty() {
+                                remove_private_oram_snapshot_recovery_marker(collection.path())?;
+                                self.private_oram_snapshot_recovery_abort_requests
+                                    .lock()
+                                    .await
+                                    .remove(collection.name());
+                            } else {
+                                let should_request_abort = {
+                                    let mut requests = self
+                                        .private_oram_snapshot_recovery_abort_requests
+                                        .lock()
+                                        .await;
+                                    let now = Instant::now();
+                                    match requests.get(collection.name()) {
+                                        Some(last_request)
+                                            if now.duration_since(*last_request)
+                                                < PRIVATE_ORAM_SNAPSHOT_RECOVERY_ABORT_RETRY_INTERVAL =>
+                                        {
+                                            false
+                                        }
+                                        _ => {
+                                            requests.insert(collection.name().to_string(), now);
+                                            true
+                                        }
+                                    }
+                                };
+                                if should_request_abort {
+                                    log::warn!(
+                                        "Requesting private ORAM active shard transfer rollback for snapshot replica recovery",
+                                    );
+                                    let Some(proposal_sender) = &self.consensus_proposal_sender
+                                    else {
+                                        return Err(
+                                            invalid_private_oram_snapshot_recovery_marker(),
+                                        );
+                                    };
+                                    if proposal_sender
+                                        .send(ConsensusOperations::abort_transfer(
+                                            collection.name().to_string(),
+                                            expected_transfer,
+                                            "private ORAM snapshot replica recovery",
+                                        ))
+                                        .is_err()
+                                    {
+                                        self.private_oram_snapshot_recovery_abort_requests
+                                            .lock()
+                                            .await
+                                            .remove(collection.name());
+                                        return Err(StorageError::service_error(
+                                            "private ORAM snapshot recovery abort could not be scheduled",
+                                        ));
+                                    }
+                                }
+                                continue;
+                            }
                         }
                     }
                 }
@@ -677,11 +819,7 @@ impl TableOfContent {
                     }
                     continue;
                 }
-                if !transfer_is_active
-                    && matches!(phase, PrivateOramShardTransferPhase::Start)
-                    && is_transfer_target
-                    && state == ReplicaState::Dead
-                {
+                if state == ReplicaState::Dead {
                     continue;
                 }
                 if state != ReplicaState::Active {
@@ -957,6 +1095,31 @@ fn validate_private_oram_active_transfer_local_store(
     Ok(())
 }
 
+fn private_oram_active_transfer_snapshot_can_rollback_redundant_owner(
+    incoming: &collection_state::State,
+    transfer: &ShardTransfer,
+    expected_layout: &PrivateOramConsensusLayout,
+    entries: &[PrivateOramShardLayoutEntry],
+    this_peer_id: PeerId,
+) -> bool {
+    if transfer.to == this_peer_id || !expected_layout.owner_peer_ids.contains(&this_peer_id) {
+        return false;
+    }
+    let local_entries = entries
+        .iter()
+        .filter(|entry| entry.owner_peer_ids.contains(&this_peer_id))
+        .collect::<Vec<_>>();
+    !local_entries.is_empty()
+        && local_entries.iter().all(|entry| {
+            incoming.shards.get(&entry.shard_id).is_some_and(|shard| {
+                shard.replicas.get(&this_peer_id) == Some(&ReplicaState::Active)
+                    && shard.replicas.iter().any(|(peer_id, state)| {
+                        *peer_id != this_peer_id && *state == ReplicaState::Active
+                    })
+            })
+        })
+}
+
 fn validate_private_oram_active_transfer_snapshot(
     collection_name: &str,
     current: Option<&collection_state::State>,
@@ -964,13 +1127,13 @@ fn validate_private_oram_active_transfer_snapshot(
     incoming: &collection_state::State,
     snapshot: consensus_manager::PrivateOramSnapshotState<'_>,
     this_peer_id: PeerId,
-) -> Result<bool, StorageError> {
+) -> Result<Option<PrivateOramActiveTransferSnapshotAction>, StorageError> {
     if incoming.resharding.is_some() || incoming.transfers.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
     let incoming_keys = private_oram_index_keys_for_config(&incoming.config, collection_name)?;
     if incoming_keys.is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
 
     let collection_id = incoming
@@ -1062,10 +1225,24 @@ fn validate_private_oram_active_transfer_snapshot(
             .any(|shard| shard.replicas.contains_key(&this_peer_id))
         && transfer.from != this_peer_id
         && transfer.to != this_peer_id;
-    if current.is_none() && !topology_only_non_owner {
+    if current.is_none() {
+        if topology_only_non_owner {
+            return Ok(Some(PrivateOramActiveTransferSnapshotAction::Apply));
+        }
+        if private_oram_active_transfer_snapshot_can_rollback_redundant_owner(
+            incoming,
+            transfer,
+            &expected_layout,
+            &entries,
+            this_peer_id,
+        ) {
+            return Ok(Some(
+                PrivateOramActiveTransferSnapshotAction::AbortForReplicaRecovery(transfer.clone()),
+            ));
+        }
         return Err(invalid_private_oram_active_transfer_snapshot());
     }
-    if current.is_some() && !topology_only_non_owner {
+    if !topology_only_non_owner {
         let collection_path =
             current_collection_path.ok_or_else(invalid_private_oram_active_transfer_snapshot)?;
         for (key, state) in &index_states {
@@ -1073,7 +1250,7 @@ fn validate_private_oram_active_transfer_snapshot(
         }
     }
 
-    Ok(true)
+    Ok(Some(PrivateOramActiveTransferSnapshotAction::Apply))
 }
 
 fn private_oram_active_reshard_snapshot_layout_entries(
@@ -1477,13 +1654,15 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        PrivateOramActiveReshardSnapshotAction, classify_private_oram_active_reshard_snapshot,
+        PrivateOramActiveReshardSnapshotAction, PrivateOramActiveTransferSnapshotAction,
+        PrivateOramSnapshotRecoveryOperation, classify_private_oram_active_reshard_snapshot,
         collection_params_bind_crypto_identity, encrypted_uuid_mismatch_requires_fail_closed,
         private_oram_snapshot_recovery_marker_path, read_private_oram_snapshot_recovery_marker,
         remove_private_oram_snapshot_recovery_marker,
         validate_private_oram_active_reshard_snapshot,
         validate_private_oram_active_transfer_snapshot,
         write_private_oram_snapshot_recovery_marker,
+        write_private_oram_transfer_snapshot_recovery_marker,
     };
     use crate::content_manager::consensus::persistent::{
         private_oram_epoch_key_digest, private_oram_layout_key_digest,
@@ -1646,13 +1825,16 @@ mod tests {
         (current, incoming, epochs, layouts)
     }
 
-    fn private_oram_active_transfer_snapshot_fixture() -> (
+    fn private_oram_active_transfer_snapshot_fixture(
+        pre_owner_peer_ids: &[u64],
+    ) -> (
         State,
         HashMap<String, PrivateOramConsensusEpoch>,
         HashMap<String, PrivateOramConsensusLayout>,
     ) {
         let mut config = private_oram_snapshot_config(1);
-        config.params.replication_factor = NonZeroU32::new(2).unwrap();
+        config.params.replication_factor =
+            NonZeroU32::new(pre_owner_peer_ids.len() as u32).unwrap();
         let collection_id = config.stable_crypto_id("docs").unwrap();
         let keys = private_oram_index_keys_for_config(&config, "docs").unwrap();
         let epoch = PrivateOramConsensusEpoch {
@@ -1668,12 +1850,15 @@ mod tests {
         let pre_entries = vec![PrivateOramShardLayoutEntry {
             shard_id: 0,
             shard_key: None,
-            owner_peer_ids: vec![11, 12],
+            owner_peer_ids: pre_owner_peer_ids.to_vec(),
         }];
+        let mut post_owner_peer_ids = pre_owner_peer_ids.to_vec();
+        post_owner_peer_ids.push(22);
+        post_owner_peer_ids.sort_unstable();
         let post_entries = vec![PrivateOramShardLayoutEntry {
             shard_id: 0,
             shard_key: None,
-            owner_peer_ids: vec![11, 12, 22],
+            owner_peer_ids: post_owner_peer_ids,
         }];
         let (pre_owners, pre_digest) = canonical_private_oram_shard_layout_digest(
             &collection_id,
@@ -1726,18 +1911,14 @@ mod tests {
             }),
             filter: None,
         };
+        let mut replicas = pre_owner_peer_ids
+            .iter()
+            .map(|peer_id| (*peer_id, ReplicaState::Active))
+            .collect::<HashMap<_, _>>();
+        replicas.insert(22, ReplicaState::Partial);
         let incoming = State {
             config,
-            shards: AHashMap::from([(
-                0,
-                ShardInfo {
-                    replicas: HashMap::from([
-                        (11, ReplicaState::Active),
-                        (12, ReplicaState::Active),
-                        (22, ReplicaState::Partial),
-                    ]),
-                },
-            )]),
+            shards: AHashMap::from([(0, ShardInfo { replicas })]),
             resharding: None,
             transfers: HashSet::from([transfer]),
             shards_key_mapping: Default::default(),
@@ -1785,8 +1966,49 @@ mod tests {
     }
 
     #[test]
-    fn active_private_oram_transfer_snapshot_rejects_wiped_owners_and_endpoints() {
-        let (incoming, epochs, layouts) = private_oram_active_transfer_snapshot_fixture();
+    fn active_private_oram_transfer_snapshot_recovers_redundant_owners_only() {
+        let (incoming, epochs, layouts) = private_oram_active_transfer_snapshot_fixture(&[11, 12]);
+        let empty_epochs = HashMap::new();
+        let empty_layouts = HashMap::new();
+        let snapshot = PrivateOramSnapshotState {
+            incoming_epochs: &epochs,
+            current_epochs: &empty_epochs,
+            incoming_layouts: &layouts,
+            current_layouts: &empty_layouts,
+        };
+
+        assert!(matches!(
+            validate_private_oram_active_transfer_snapshot(
+                "docs", None, None, &incoming, snapshot, 11,
+            )
+            .unwrap(),
+            Some(PrivateOramActiveTransferSnapshotAction::AbortForReplicaRecovery(_))
+        ));
+        assert!(
+            validate_private_oram_active_transfer_snapshot(
+                "docs", None, None, &incoming, snapshot, 22,
+            )
+            .is_err()
+        );
+        assert!(matches!(
+            validate_private_oram_active_transfer_snapshot(
+                "docs", None, None, &incoming, snapshot, 12,
+            )
+            .unwrap(),
+            Some(PrivateOramActiveTransferSnapshotAction::AbortForReplicaRecovery(_))
+        ));
+        assert!(matches!(
+            validate_private_oram_active_transfer_snapshot(
+                "docs", None, None, &incoming, snapshot, 33,
+            )
+            .unwrap(),
+            Some(PrivateOramActiveTransferSnapshotAction::Apply)
+        ));
+    }
+
+    #[test]
+    fn active_private_oram_transfer_snapshot_rejects_wiped_sole_source() {
+        let (incoming, epochs, layouts) = private_oram_active_transfer_snapshot_fixture(&[11]);
         let empty_epochs = HashMap::new();
         let empty_layouts = HashMap::new();
         let snapshot = PrivateOramSnapshotState {
@@ -1802,29 +2024,11 @@ mod tests {
             )
             .is_err()
         );
-        assert!(
-            validate_private_oram_active_transfer_snapshot(
-                "docs", None, None, &incoming, snapshot, 22,
-            )
-            .is_err()
-        );
-        assert!(
-            validate_private_oram_active_transfer_snapshot(
-                "docs", None, None, &incoming, snapshot, 12,
-            )
-            .is_err()
-        );
-        assert!(
-            validate_private_oram_active_transfer_snapshot(
-                "docs", None, None, &incoming, snapshot, 33,
-            )
-            .unwrap()
-        );
     }
 
     #[test]
     fn active_private_oram_transfer_snapshot_rejects_missing_current_owner_store() {
-        let (incoming, epochs, layouts) = private_oram_active_transfer_snapshot_fixture();
+        let (incoming, epochs, layouts) = private_oram_active_transfer_snapshot_fixture(&[11, 12]);
         let snapshot = PrivateOramSnapshotState {
             incoming_epochs: &epochs,
             current_epochs: &epochs,
@@ -1844,7 +2048,7 @@ mod tests {
             )
             .is_err()
         );
-        assert!(
+        assert!(matches!(
             validate_private_oram_active_transfer_snapshot(
                 "docs",
                 Some(&incoming),
@@ -1853,13 +2057,15 @@ mod tests {
                 snapshot,
                 33,
             )
-            .unwrap()
-        );
+            .unwrap(),
+            Some(PrivateOramActiveTransferSnapshotAction::Apply)
+        ));
     }
 
     #[test]
     fn active_private_oram_transfer_snapshot_rejects_generation_skip() {
-        let (mut incoming, epochs, layouts) = private_oram_active_transfer_snapshot_fixture();
+        let (mut incoming, epochs, layouts) =
+            private_oram_active_transfer_snapshot_fixture(&[11, 12]);
         let mut transfer = incoming.transfers.iter().next().unwrap().clone();
         transfer
             .private_oram_layout_transition
@@ -2352,7 +2558,10 @@ mod tests {
         let marker = read_private_oram_snapshot_recovery_marker(temp.path())
             .unwrap()
             .unwrap();
-        assert_eq!(marker.resharding_key, key);
+        assert!(matches!(
+            marker.operation().unwrap(),
+            PrivateOramSnapshotRecoveryOperation::Resharding(actual) if actual == key
+        ));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -2372,6 +2581,20 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+
+        let (incoming, _, _) = private_oram_active_transfer_snapshot_fixture(&[11, 12]);
+        let transfer = incoming.transfers.iter().next().unwrap().clone();
+        write_private_oram_transfer_snapshot_recovery_marker(temp.path(), &transfer).unwrap();
+        write_private_oram_transfer_snapshot_recovery_marker(temp.path(), &transfer).unwrap();
+        assert!(write_private_oram_snapshot_recovery_marker(temp.path(), &key).is_err());
+        let marker = read_private_oram_snapshot_recovery_marker(temp.path())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            marker.operation().unwrap(),
+            PrivateOramSnapshotRecoveryOperation::ShardTransfer(actual) if actual == transfer
+        ));
+        remove_private_oram_snapshot_recovery_marker(temp.path()).unwrap();
 
         let marker_path = private_oram_snapshot_recovery_marker_path(temp.path());
         fs::write(&marker_path, b"recovery-marker-secret-sentinel").unwrap();
@@ -2630,6 +2853,7 @@ impl TableOfContent {
             let mut collections = self.collections.write().await;
             let mut validated_private_oram_resharding = HashSet::new();
             let mut private_oram_snapshot_recovery_aborts = HashMap::new();
+            let mut private_oram_transfer_snapshot_recovery_aborts = HashMap::new();
             for (id, state) in &data.collections {
                 if private_oram_index_keys_for_config(&state.config, id)?.is_empty()
                     || state.resharding.is_none() && state.transfers.is_empty()
@@ -2645,7 +2869,7 @@ impl TableOfContent {
                     ),
                     None => (None, None),
                 };
-                if validate_private_oram_active_transfer_snapshot(
+                if let Some(action) = validate_private_oram_active_transfer_snapshot(
                     id,
                     current.as_ref(),
                     current_collection_path.as_deref(),
@@ -2653,6 +2877,13 @@ impl TableOfContent {
                     private_oram_snapshot,
                     self.this_peer_id,
                 )? {
+                    if let PrivateOramActiveTransferSnapshotAction::AbortForReplicaRecovery(
+                        transfer,
+                    ) = action
+                    {
+                        private_oram_transfer_snapshot_recovery_aborts
+                            .insert(id.clone(), transfer);
+                    }
                     continue;
                 }
                 if state.resharding.is_none() {
@@ -2741,6 +2972,13 @@ impl TableOfContent {
                             &collection_path,
                             resharding_key,
                         )?;
+                    } else if let Some(transfer) =
+                        private_oram_transfer_snapshot_recovery_aborts.get(id)
+                    {
+                        write_private_oram_transfer_snapshot_recovery_marker(
+                            &collection_path,
+                            transfer,
+                        )?;
                     }
                     let shard_distribution =
                         CollectionShardDistribution::from_shards_info(state.shards.clone());
@@ -2802,7 +3040,15 @@ impl TableOfContent {
                                 )
                             };
                         };
-                        if validated_private_oram_resharding.contains(id) {
+                        if private_oram_transfer_snapshot_recovery_aborts.contains_key(id) {
+                            collection
+                                .apply_validated_private_oram_transfer_snapshot_recovery_state(
+                                    state.clone(),
+                                    self.this_peer_id(),
+                                    abort_transfer,
+                                )
+                                .await?;
+                        } else if validated_private_oram_resharding.contains(id) {
                             collection
                                 .apply_validated_private_oram_resharding_snapshot_state(
                                     state.clone(),

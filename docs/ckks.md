@@ -1903,11 +1903,23 @@ missing collection. It requires one exact marked `stream_records` transfer,
 index checkpoints, the exact consensus-bound transition, and the pre-layout
 with a generation-`+1` post-layout. Only a topology-only peer outside every
 owner, replica, source, and target set may bootstrap this state. A wiped
-owner, source, or target is rejected before the collection directory is
-created; the historical preinstall marker is not treated as proof that its
-encrypted stores survived. An already loaded owner or endpoint must also have
-each configured local index at the exact consensus epoch/root, so retaining
-collection metadata while deleting an HNSW or result-ORAM store fails closed.
+target is rejected before the collection directory is created; the historical
+preinstall marker is not treated as proof that its encrypted stores survived.
+A wiped pre-layout owner or source may recover only when every local shard has
+another `Active` replica. Snapshot apply writes a durable marker without
+starting the captured transfer task, then requests an exact transfer abort.
+Normal replica recovery starts only after consensus no longer contains that
+transfer. A sole source remains fail closed because the Raft snapshot contains
+neither its point shard nor encrypted buckets. An already loaded owner or
+endpoint must also have each configured local index at the exact consensus
+epoch/root, so retaining collection metadata while deleting an HNSW or
+result-ORAM store fails closed.
+The subsequent fixed-layout recovery may coexist with `Dead` replicas left by
+the aborted transfer. Those replicas are excluded from the pre-layout owner
+set only when the remaining `Active` owner digest exactly matches the
+consensus layout; a dead consensus owner still causes a mismatch and fails
+closed. Each recovered replica then advances the layout through the normal
+reserved generation-`+1` transfer CAS.
 A four-peer RF=2 process test also erases a redundant non-endpoint owner during
 scale-up, restores it from an active-reshard snapshot, and verifies exact
 rollback, marker cleanup, both encrypted-store reinstalls, precommitted layout

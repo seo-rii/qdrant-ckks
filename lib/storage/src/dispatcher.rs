@@ -2338,9 +2338,9 @@ fn private_oram_transition(
 }
 
 fn private_oram_shard_transfer_pre_layout_owners(
-    shard_id: ShardId,
+    _shard_id: ShardId,
     peers: &HashMap<PeerId, ReplicaState>,
-    transfer: &ShardTransfer,
+    _transfer: &ShardTransfer,
 ) -> Result<Vec<PeerId>, StorageError> {
     if peers.is_empty() {
         return Err(invalid_private_oram_layout_transition());
@@ -2350,10 +2350,7 @@ fn private_oram_shard_transfer_pre_layout_owners(
     for (&peer_id, &state) in peers {
         if state == ReplicaState::Active {
             owner_peer_ids.push(peer_id);
-        } else if !(shard_id == transfer.shard_id
-            && peer_id == transfer.to
-            && state == ReplicaState::Dead)
-        {
+        } else if state != ReplicaState::Dead {
             return Err(invalid_private_oram_layout_transition());
         }
     }
@@ -2761,7 +2758,7 @@ mod tests {
     }
 
     #[test]
-    fn private_oram_transfer_pre_layout_excludes_only_exact_dead_target() {
+    fn private_oram_transfer_pre_layout_excludes_dead_nonowners() {
         let transfer = ShardTransfer {
             shard_id: 3,
             to_shard_id: None,
@@ -2784,16 +2781,33 @@ mod tests {
             private_oram_shard_transfer_pre_layout_owners(3, &dead_target, &transfer).unwrap(),
             vec![7],
         );
+        assert_eq!(
+            private_oram_shard_transfer_pre_layout_owners(
+                3,
+                &HashMap::from([
+                    (7, ReplicaState::Active),
+                    (9, ReplicaState::Dead),
+                    (11, ReplicaState::Dead),
+                ]),
+                &transfer,
+            )
+            .unwrap(),
+            vec![7],
+        );
+        assert_eq!(
+            private_oram_shard_transfer_pre_layout_owners(
+                4,
+                &HashMap::from([(13, ReplicaState::Active), (11, ReplicaState::Dead)]),
+                &transfer,
+            )
+            .unwrap(),
+            vec![13],
+        );
 
         for (shard_id, peers) in [
-            (4, dead_target),
             (
                 3,
                 HashMap::from([(7, ReplicaState::Active), (9, ReplicaState::Partial)]),
-            ),
-            (
-                3,
-                HashMap::from([(7, ReplicaState::Active), (11, ReplicaState::Dead)]),
             ),
             (3, HashMap::from([(9, ReplicaState::Dead)])),
         ] {
