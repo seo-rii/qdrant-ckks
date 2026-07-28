@@ -1910,10 +1910,13 @@ another `Active` replica. Snapshot apply writes a durable marker without
 starting the captured transfer task, then requests an exact transfer abort.
 Normal replica recovery starts only after consensus no longer contains that
 transfer. A sole source remains fail closed because the Raft snapshot contains
-neither its point shard nor encrypted buckets. An already loaded owner or
-endpoint must also have each configured local index at the exact consensus
-epoch/root, so retaining collection metadata while deleting an HNSW or
-result-ORAM store fails closed.
+neither its point shard nor encrypted buckets. The same applies to any
+non-redundant pre-layout owner or scale-down endpoint: recovery requires an
+external backup containing the point shard, encrypted bucket stores, and
+client-held ORAM state; Raft metadata alone is not a backup. An already loaded
+owner or endpoint must also have each configured local index at the exact
+consensus epoch/root, so retaining collection metadata while deleting an HNSW
+or result-ORAM store fails closed.
 The same rule applies to a scale-down endpoint that owns multiple pre-layout
 shards: the endpoint must own the removed shard and every local shard must have
 another `Active` replica. Recovery aborts the whole reshard before restoring

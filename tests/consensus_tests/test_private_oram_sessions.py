@@ -3097,6 +3097,149 @@ def test_private_oram_active_scale_down_snapshot_rolls_back_for_wiped_multishard
         _assert_private_oram_owner_sessions(peer_urls[owner_index], fixture, True)
 
 
+def test_private_oram_active_scale_down_snapshot_rejects_wiped_nonredundant_endpoint(
+    tmp_path: pathlib.Path,
+):
+    extra_env = {
+        "QDRANT__CLUSTER__RESHARDING_ENABLED": "true",
+        "QDRANT__CLUSTER__CONSENSUS__COMPACT_WAL_ENTRIES": "1",
+    }
+    peer_urls, peer_dirs, fixture, leader, _ = _start_private_oram_cluster(
+        tmp_path,
+        3,
+        1,
+        shard_number=2,
+        include_public_vector=True,
+        extra_env=extra_env,
+    )
+    peer_ids = [get_cluster_info(peer_url)["peer_id"] for peer_url in peer_urls]
+    cluster_infos = [
+        get_collection_cluster_info(peer_url, COLLECTION) for peer_url in peer_urls
+    ]
+    owner_index_by_shard = {
+        shard["shard_id"]: peer_index
+        for peer_index, info in enumerate(cluster_infos)
+        for shard in info["local_shards"]
+        if shard["state"] == "Active"
+    }
+    assert len(owner_index_by_shard) == 2
+    target_shard_id = max(owner_index_by_shard)
+    receiver_shard_id = min(owner_index_by_shard)
+    endpoint_index = owner_index_by_shard[target_shard_id]
+    receiver_index = owner_index_by_shard[receiver_shard_id]
+    endpoint_url = peer_urls[endpoint_index]
+    coordinator_url = peer_urls[receiver_index]
+    endpoint_peer_id = peer_ids[endpoint_index]
+    receiver_peer_id = peer_ids[receiver_index]
+
+    _upload_hnsw(coordinator_url, fixture)
+    _upload_result_oram(coordinator_url, fixture)
+    _wait_for_private_oram_epochs(peer_dirs, BASE_EPOCH, 2)
+    _wait_for_crypto_runtime_capability_metadata(peer_dirs, len(peer_urls))
+
+    assert_http_ok(
+        start_resharding(
+            coordinator_url,
+            collection=COLLECTION,
+            direction="down",
+            peer_id=endpoint_peer_id,
+        )
+    )
+    wait_for_collection_resharding_operations_count(coordinator_url, COLLECTION, 1)
+    migrate_points(
+        endpoint_url,
+        receiver_peer_id,
+        receiver_shard_id,
+        endpoint_peer_id,
+        target_shard_id,
+        "down",
+        collection=COLLECTION,
+    )
+    activate_replica(
+        endpoint_url,
+        receiver_peer_id,
+        receiver_shard_id,
+        collection=COLLECTION,
+    )
+    wait_for_collection_shard_transfers_count(endpoint_url, COLLECTION, 0)
+    wait_for_collection_resharding_operations_count(endpoint_url, COLLECTION, 1)
+
+    endpoint_process = processes[endpoint_index]
+    endpoint_port = endpoint_process.p2p_port
+    restart_bootstrap_uri = get_uri(processes[receiver_index].p2p_port)
+    endpoint_process.kill()
+    processes.remove(endpoint_process)
+
+    surviving_urls = [
+        peer_url for index, peer_url in enumerate(peer_urls) if index != endpoint_index
+    ]
+    surviving_peer_ids = {
+        get_cluster_info(peer_url)["peer_id"] for peer_url in surviving_urls
+    }
+    wait_for(
+        lambda: (
+            (new_leader := get_cluster_info(surviving_urls[0])["raft_info"]["leader"])
+            is not None
+            and new_leader in surviving_peer_ids
+            and get_cluster_info(surviving_urls[1])["raft_info"]["leader"]
+            == new_leader
+        ),
+        wait_for_timeout=60,
+    )
+    new_leader = get_cluster_info(surviving_urls[0])["raft_info"]["leader"]
+    metadata_url = next(
+        peer_url
+        for peer_url in surviving_urls
+        if get_cluster_info(peer_url)["peer_id"] == new_leader
+    )
+    for index in range(8):
+        assert_http_ok(
+            requests.put(
+                f"{metadata_url}/cluster/metadata/keys/private-oram-nonredundant-endpoint-{index}?wait=true",
+                json=index,
+                timeout=30,
+            )
+        )
+
+    wiped_collection_path = (
+        peer_dirs[endpoint_index] / "storage" / "collections" / COLLECTION
+    )
+    shutil.rmtree(wiped_collection_path)
+    restarted_log = "private_oram_nonredundant_endpoint_snapshot_rejected.log"
+    restarted_url = start_peer(
+        peer_dirs[endpoint_index],
+        restarted_log,
+        restart_bootstrap_uri,
+        port=endpoint_port,
+        extra_env=extra_env,
+    )
+    peer_urls[endpoint_index] = restarted_url
+    wait_for_peer_online(restarted_url, path="/cluster")
+
+    restarted_log_path = pathlib.Path(init_pytest_log_folder()) / restarted_log
+    wait_for(
+        lambda: restarted_log_path.exists()
+        and "private ORAM active reshard Raft snapshot state is invalid"
+        in restarted_log_path.read_text(),
+        wait_for_timeout=60,
+    )
+    restarted_log_text = restarted_log_path.read_text()
+    for secret in [
+        fixture["hnsw"]["manifest"]["root_hash"],
+        fixture["hnsw"]["commit"]["new_root_hash"],
+        fixture["hnsw"]["manifest_signature"]["sig"],
+        fixture["hnsw"]["buckets"][0]["ciphertext"],
+        fixture["result"]["manifest"]["root_hash"],
+        fixture["result"]["commit"]["new_root_hash"],
+        fixture["result"]["manifest_signature"]["sig"],
+        fixture["result"]["buckets"][0]["ciphertext"],
+    ]:
+        assert secret not in restarted_log_text
+    assert not wiped_collection_path.exists()
+    assert not list(peer_dirs[endpoint_index].rglob("private_hnsw_oram"))
+    assert not list(peer_dirs[endpoint_index].rglob("private_result_oram"))
+
+
 @pytest.mark.parametrize("index_kind", ["hnsw", "result"])
 def test_private_oram_replica_prepare_failure_preserves_epoch(
     tmp_path: pathlib.Path, index_kind: str
