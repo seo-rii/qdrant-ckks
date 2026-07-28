@@ -145,6 +145,62 @@ change also fails closed.
 An explicit exact `RestartTransfer` remains an operator fallback. Sessions
 remain blocked throughout the active reshard.
 
+### Private ORAM v2 development boundary
+
+The v1 private HNSW and result ORAM providers remain read-only bulk-built
+contracts. Dynamic insertion changes signed occupancy, HNSW state, optional
+result state, and client recovery state together, so it will use new
+`vector/private-hnsw-oram@v2` and `payload/private-result-oram@v2` providers
+rather than changing v1 in place. V2 is limited to fixed-capacity append-only
+insertion with one logical writer. Update, delete, tree resize, and concurrent
+writers remain out of scope.
+
+The first shared v2 primitive is
+`PrivateOramExternalRecoveryCheckpoint`, signed under
+`qdrant-sec/private-oram-external-recovery-checkpoint-signature/v1`. It binds:
+
+- stable collection identity and monotonic backup generation
+- source peer and canonical sorted local shard ids
+- consensus layout generation, canonical owner union, layout digest, and
+  private index-state digest
+- exact closed collection snapshot byte size and the existing Qdrant
+  lowercase-hex SHA-256 checksum
+- base64url SHA-256 digest of the complete encrypted client recovery-state set
+- owner signing key id and creation time
+
+The crypto crate exposes checked package, canonical message, Ed25519 signing,
+shape validation, and exact restore-context verification helpers. The
+canonical message uses a 4-byte big-endian domain length, fixed big-endian
+numeric values, and 8-byte big-endian UTF-8 string lengths. Shape validation
+rejects unknown JSON fields, unsupported versions, zero generation or snapshot
+size, empty, duplicated, or unsorted owner/shard sets, a source outside the
+owner set, malformed digests, malformed signatures, and owner-key mismatch.
+Deterministic message-digest and Ed25519 known-answer tests pin this encoding.
+
+This checkpoint is not yet consumed by a server restore endpoint. It does not
+make non-redundant-owner recovery supported by itself. A complete external
+recovery set consists of the Qdrant collection snapshot and signed checkpoint
+plus encrypted client recovery state retained out of band. Existing client
+snapshots protect position maps and stashes, but the complete recovery-state
+format must additionally protect the HNSW entry node and the local point-token
+mapping required by `ids_visible`. Client RK material, position maps, stashes,
+entry nodes, token maps, and encrypted client-state bodies must never be
+uploaded into Qdrant's collection-local ORAM store or included in a Qdrant
+snapshot. Only the complete encrypted set digest is checkpointed.
+
+Server rollout proceeds in dependency order. First, a wiped fixed-layout
+transfer target with a live source will request source-side fresh full-store
+preinstall before restarting the exact marked transfer. Next, external restore
+will admit an owner-signed checkpoint only under an expiring consensus
+recovery lease, exact current layout/index-state match, no conflicting
+session/transfer/reshard, full point/private-store preflight, and exact commit
+CAS. Initial external restore is restricted to the same peer identity still
+named by consensus. Finally, the v2 mutable provider will use an immutable
+capacity manifest plus a monotonic owner-signed state record and one
+collection-wide HNSW/result mutation CAS. Until each phase lands and its
+multi-process crash tests pass, the corresponding v1 fail-closed behavior
+remains authoritative.
+
 Raft persists a separate collection-level private ORAM layout record consumed
 by fixed-layout transfer/removal and typed scale-up/down resharding. The record
 contains a monotonic generation, a canonical sorted owner-peer union, a

@@ -3,7 +3,7 @@
 이 문서는 `RISK_REGISTER.md`의 대형 작업을 구현 순서대로 정리한다. 작은 방어 패치는 이미 별도 커밋으로 일부 처리됐고, 여기서는 설계, migration, 테스트 인프라, 구조 변경이 필요한 작업만 다룬다.
 
 기준 브랜치: `sec`
-최종 갱신: 2026-07-19
+최종 갱신: 2026-07-28
 
 ## 작업 원칙
 
@@ -45,8 +45,8 @@
 - Encrypted payload read policy: raw envelope 반환은 기본값이고, REST/gRPC redacted/decrypted modes와 collection-scoped `payload_decrypt` capability는 연결되어 있다. 남은 범위는 export/read dump 정책과 SDK-side client envelope decrypt flow다.
 - KMS/Vault key providers: local/env/file/fd/`unix_socket`/`vault_kv2`/wrapped material 기반은 있지만 external KMS lifecycle은 future work다.
 - Broader distributed integration: current unit/integration coverage는 많지만 multi-node parity/restore/replay ledger e2e는 남아 있다.
-- Private HNSW ORAM productionization: read-only bulk-built consensus-backed single-writer MVP, result ORAM fetch path, fixed multi-shard owner-union replication, per-shard manual/automatic `stream_records` preinstall, ReplicateShard/MoveShard/automatic recovery process E2E, partial live-preinstall failure/retry, active transfer abort/retry, exact active marked fixed-layout 및 reshard transfer restart/repreinstall, active reshard source hard-crash 상태 보존과 target-triggered automatic fresh-preinstall resume, existing-peer active-reshard Raft snapshot topology recovery, topology-only non-owner, exact scale-up target, 그리고 `MigratingPoints`의 redundant non-endpoint pre-layout owner와 transfer-complete single-shard scale-down endpoint snapshot bootstrap, durable exact-reshard rollback marker, precommitted recovery layout CAS, chunked internal full-store transport, 63-bucket large-bundle process benchmark, durable collection-level layout CAS, typed scale-up/scale-down reshard start/progress/finish, exact active `resharding_stream_records` preinstall, existing/new-owner custom shard-key create와 non-final drop, HNSW-only 및 HNSW+result process E2E 기반은 들어갔다. 남은 범위는 dynamic online HNSW insertion, multi-writer ownership, non-redundant 또는 multi-shard pre-layout owner, active transfer source/target, fixed-layout transfer snapshot store proof이다.
-- 2026-07-28 snapshot 상태 교정: fixed-layout active transfer는 ordered index checkpoint와 consensus-bound pre/post layout을 검증하고, wiped target 및 기존 owner의 store-only 삭제를 mutation 전에 거부한다. 모든 로컬 shard에 다른 `Active` replica가 있는 wiped fixed-transfer source/owner와 transfer-complete scale-down endpoint는 durable exact-abort marker 뒤 stable automatic recovery를 수행하며, multi-shard endpoint는 shard별 generation-`+1` CAS로 복구한다. RF=1 비중복 owner/source와 active transfer target은 Raft snapshot에 point shard와 encrypted buckets가 없으므로 계속 fail closed 한다. 따라서 위 항목의 multi-shard pre-layout owner, redundant active-transfer source, fixed-layout snapshot proof는 완료됐고, 남은 범위는 dynamic online HNSW insertion, multi-writer ownership, 비중복 owner의 외부 백업 restore workflow, active transfer target의 fresh-preinstall recovery다.
+- Private HNSW ORAM productionization: read-only bulk-built consensus-backed single-writer MVP, result ORAM fetch path, fixed multi-shard owner-union replication, per-shard manual/automatic `stream_records` preinstall, ReplicateShard/MoveShard/automatic recovery process E2E, partial live-preinstall failure/retry, active transfer abort/retry, exact active marked fixed-layout 및 reshard transfer restart/repreinstall, active reshard source hard-crash 상태 보존과 target-triggered automatic fresh-preinstall resume, existing-peer active-reshard Raft snapshot topology recovery, topology-only non-owner, exact scale-up target, 그리고 `MigratingPoints`의 redundant non-endpoint pre-layout owner와 transfer-complete single-shard scale-down endpoint snapshot bootstrap, durable exact-reshard rollback marker, precommitted recovery layout CAS, chunked internal full-store transport, 63-bucket large-bundle process benchmark, durable collection-level layout CAS, typed scale-up/scale-down reshard start/progress/finish, exact active `resharding_stream_records` preinstall, existing/new-owner custom shard-key create와 non-final drop, HNSW-only 및 HNSW+result process E2E 기반은 들어갔다. Phase 12의 남은 v2 범위는 active transfer target fresh-preinstall, non-redundant owner external restore, 새 provider의 fixed-capacity append-only insertion이며 true multi-writer는 v3로 분리한다.
+- 2026-07-28 snapshot 상태 교정: fixed-layout active transfer는 ordered index checkpoint와 consensus-bound pre/post layout을 검증하고, wiped target 및 기존 owner의 store-only 삭제를 mutation 전에 거부한다. 모든 로컬 shard에 다른 `Active` replica가 있는 wiped fixed-transfer source/owner와 transfer-complete scale-down endpoint는 durable exact-abort marker 뒤 stable automatic recovery를 수행하며, multi-shard endpoint는 shard별 generation-`+1` CAS로 복구한다. RF=1 비중복 owner/source와 active transfer target은 Raft snapshot에 point shard와 encrypted buckets가 없으므로 계속 fail closed 한다. 따라서 위 항목의 multi-shard pre-layout owner, redundant active-transfer source, fixed-layout snapshot proof는 완료됐다. Phase 12 A1에서는 signed external recovery checkpoint crypto contract를 시작했지만 server restore admission은 아직 없으므로 RF=1 owner와 active target의 v1 fail-closed 경계는 유지된다.
 
 ## Phase 0: 기준선 고정
 
@@ -614,3 +614,196 @@
 - `vector/client-ckks@v1`는 server-blind opaque storage, `vector/openfhe-ckks@v1`는 trusted-bridge search, `vector/private-hnsw-oram@v1`는 client-led ORAM-HNSW search로 명확히 분리된다.
 - Qdrant는 private provider에서 vector/query plaintext, distance/score, HNSW traversal decision, top-k result 결정을 수행하지 않는다.
 - private provider의 snapshot/restore/shard transfer는 encrypted buckets, manifest, epoch/root metadata만 다루고 fail-closed 검증을 갖춘다.
+
+## Phase 12: Private ORAM v2 Recovery and Append-Only Mutation
+
+목표: Phase 11의 read-only bulk-built v1 provider를 운영 복구가 가능하고
+fixed-capacity append insertion을 지원하는 v2 provider로 확장한다.
+
+Versioning:
+
+- `vector/private-hnsw-oram@v1`와 `payload/private-result-oram@v1`는 현재
+  read-only bulk-built contract로 유지한다.
+- Dynamic insertion은 signed manifest의 logical/dummy count와 HNSW/result
+  상태를 함께 바꾸므로 in-place v1 확장으로 처리하지 않는다.
+- 새 mutable contract는 `vector/private-hnsw-oram@v2`,
+  `payload/private-result-oram@v2`, 대응하는 `/v2` binding으로 분리한다.
+- v1에서 v2로의 전환은 client-side full rebuild와 새 signed initial upload를
+  요구하며 server-side in-place migration은 지원하지 않는다.
+
+v2 최소 범위:
+
+- live source가 있는 wiped fixed-layout transfer target의 fresh-preinstall recovery
+- RF=1 및 multi-shard non-redundant owner의 signed external backup restore
+- fixed-capacity append-only insertion과 optional paired result payload insertion
+- single logical writer, fixed padded mutation budget, client WAL
+- update, delete, tree resize, online capacity expansion, true multi-writer는 비목표
+
+보안 불변식:
+
+- Qdrant는 client RK, vector/query plaintext, node/neighbor id, point token,
+  position map, stash, distance, traversal state를 보유하지 않는다.
+- 모든 mutable state는 monotonic `state_seq`, layout generation, HNSW/result
+  epochs/roots, occupancy commitment, encrypted client recovery-state digest로
+  하나의 owner-signed state record에 결합한다.
+- Paired HNSW/result mode에서는 한 collection-wide mutation CAS가 두 상태를
+  함께 전진시킨다. 한쪽만 새 epoch인 상태는 session과 recovery에서 거부한다.
+- Mutation 전 client WAL을 fsync하고, server CAS acknowledgement 뒤 새 encrypted
+  client checkpoint를 승격한다. 이전 checkpoint는 rollback recovery까지 보존한다.
+- Insert는 고정 round/path/writeback budget과 dummy padding을 사용하고 예약
+  capacity나 stash limit을 넘으면 server mutation 전에 거부한다.
+- Backup/restore/transfer/mutation 중 일반 session과 ordinary point/vector/payload
+  mutation API는 fail closed 한다.
+- Client는 최신 backup generation, signed checkpoint, complete encrypted client
+  recovery state를 pin한다. 이 pin 또는 외부 transparency log 없이 fully
+  compromised server rollback은 막을 수 없다.
+
+### V2-A: Signed External Recovery Checkpoint
+
+Checkpoint domain:
+
+`qdrant-sec/private-oram-external-recovery-checkpoint-signature/v1`
+
+Signed fields:
+
+- version, stable collection id, monotonic backup generation
+- source peer id, canonical sorted local shard ids
+- layout generation, canonical sorted owner-peer union
+- shard-layout digest, private index-state digest
+- exact closed collection snapshot byte size와 기존 Qdrant lowercase-hex SHA-256
+- complete encrypted client recovery-state set의 base64url SHA-256 digest
+- owner signing key id, creation time
+
+작업:
+
+- Crypto crate에 deny-unknown-fields DTO, redacted `Debug`, canonical
+  length-prefixed big-endian message, package/sign/verify helper를 추가한다.
+- Shape validator는 zero generation/size, empty/duplicate/unsorted owner 또는
+  shard set, source-owner mismatch, malformed digest/signature를 서명 전에 거부한다.
+- Restore validator는 collection/source/shards/layout/index/snapshot/client-state
+  context를 exact match하고 owner-key registry로 Ed25519 signature를 검증한다.
+- SDK complete recovery state는 기존 position map/stash 외 entry node와
+  `ids_visible` point-token map을 encrypted body에 포함한다. Result ORAM state도
+  동일 backup generation에 묶는다.
+- Client-state ciphertext body는 recovery checkpoint, Qdrant API, Qdrant snapshot에
+  넣지 않는다. Checkpoint에는 complete encrypted set의 digest만 넣는다.
+
+현재 완료 범위:
+
+- Recovery checkpoint DTO와 canonical package/sign/verify, exact context validator,
+  deterministic known-answer 및 malformed/tamper/redaction unit test를 추가했다.
+- Server export/restore endpoint와 complete client recovery-state DTO는 아직
+  구현하지 않았으므로 이 primitive만으로 RF=1 restore가 지원되지는 않는다.
+
+완료 조건:
+
+- Snapshot byte, client recovery state, consensus layout/index state 중 하나라도
+  바뀌면 checkpoint 검증이 실패한다.
+- SDK는 모든 private index의 epoch/root와 complete client state가 일치할 때만
+  backup generation을 complete로 승격한다.
+
+### V2-B: Fixed-Layout Active Target Fresh Preinstall
+
+작업:
+
+- Existing active marked `stream_records` transfer의 wiped target에 durable
+  recovery intent를 남기고 target-triggered resume request를 허용한다.
+- Source는 exact transfer id/method/source/target/layout transition을 재검증하고
+  새 reservation 아래 every configured HNSW/result full store를 다시 설치한다.
+- Target은 full-store acknowledgement를 durable하게 기록한 뒤 기존 exact
+  `RestartTransfer(StreamRecords)` path로 point migration을 재개한다.
+- Stale target-local buckets, source unavailable, transfer drift, target already
+  active, competing transfer/reshard는 계속 fail closed 한다.
+
+테스트:
+
+- 기존 wiped-target rejection fixture를 bounded success fixture로 확장한다.
+- source preinstall 전/중/후 crash, duplicate resume, stale root/signature,
+  method/endpoint drift를 process E2E로 고정한다.
+
+완료 조건:
+
+- Wiped target은 live source의 freshly verified full-store bundle 없이는 transfer를
+  재개하지 않는다.
+- Session은 store install과 exact transfer completion 전까지 열리지 않는다.
+
+### V2-C: Non-Redundant Owner External Restore
+
+작업:
+
+- Admin-only begin/upload/verify/commit/abort restore protocol과 expiring consensus
+  recovery lease를 추가한다.
+- 초기 범위는 consensus가 계속 가리키는 동일 peer identity 복구다. Replacement
+  peer는 restore 완료 후 별도 topology transition으로 처리한다.
+- Upload는 bounded chunks를 private temp directory에 저장하고 checkpoint의
+  exact size/lowercase-hex SHA-256을 검증한다.
+- Verify는 stable UUID/config, exact source shard set, point shard files,
+  HNSW/result manifest signature, every bucket/hash/commitment/Merkle root,
+  current epoch/root를 기존 restore preflight로 재검증한다.
+- Commit은 durable recovery marker 아래 point shards와 collection-local ORAM
+  stores를 install하고 exact layout/index-state/recovery-lease CAS를 제출한다.
+- temp write, verify, local install, consensus commit, marker cleanup crash point마다
+  old 전체 상태 또는 new 전체 상태만 복구한다.
+
+완료 조건:
+
+- RF=1 single/multi-shard owner를 snapshot, signed checkpoint, out-of-band complete
+  client recovery state로 복구하고 첫 proof-verified read/writeback을 성공한다.
+- Stale backup generation/layout/root, wrong archive/client-state digest, partial
+  shard set, expired lease, crash injection은 상태를 보존하며 fail closed 한다.
+
+### V2-D: Mutable State and Append-Only Insert
+
+작업:
+
+- Immutable manifest에는 HNSW/ORAM config와 fixed capacity를 두고 mutable
+  `PrivateOramSignedStateV2`에는 state sequence, logical/dummy occupancy,
+  HNSW/result epochs/roots, client-state digest를 둔다.
+- `private-oram-mutation/v1` signature는 mutation id/expiry, old/new signed state,
+  point operation digest, fixed padded HNSW/result bucket batches를 묶는다.
+- Coordinator는 every-owner prepare, point-shard WAL durability, collection-wide
+  mutation CAS, remote-before-local finalize를 durable journal로 수행한다.
+- D1은 fixed-capacity append insertion만 연다. Update/delete/rewire compaction,
+  capacity resize, full rebuild swap은 후속 protocol로 남긴다.
+- 일반 upsert/update_vectors/payload write는 v2 private names에서도 계속 거부한다.
+
+테스트:
+
+- HNSW-only와 paired HNSW/result append, duplicate token/mutation id, capacity/stash
+  overflow, stale writer/state sequence, partial prepare/finalize를 검증한다.
+- CAS 전후 crash matrix에서 old 또는 new point/index/client checkpoint 전체만
+  선택되는지 검증한다.
+- Insert별 path/response/writeback 크기가 inserted node level과 neighbor count에
+  무관하게 고정되는지 leakage fixture로 고정한다.
+
+완료 조건:
+
+- Append 후 recall 기준과 paired payload 조회가 통과하고, mixed HNSW/result
+  epoch는 관찰·복구·검색할 수 없다.
+- Snapshot, WAL, logs, metrics, panic/error report에 vector/token/client-state
+  sentinel이 없다.
+
+### V2-E: Release Gate and Deferred Multi-Writer
+
+작업:
+
+- Backup rotation, client-state escrow, restore drill, key-loss 절차를 runbook으로
+  작성한다.
+- Active target recovery, RF=1 external restore, append mutation을 Linux
+  multi-process cluster E2E와 latency/bandwidth/write-amplification benchmark로
+  고정한다.
+- v2는 single logical writer로 release한다.
+
+Deferred v3:
+
+- Writer identity handoff에는 complete encrypted client-state transfer,
+  monotonic fencing token, stale-writer rejection이 먼저 필요하다.
+- True concurrent writers는 ORAM position map/stash merge와 access-pattern
+  privacy protocol이 필요하므로 v2에 포함하지 않는다.
+
+완료 조건:
+
+- v2 release checklist가 recovery, atomic mutation, rollback, leakage,
+  performance gate를 모두 통과한다.
+- 운영자가 matching server snapshot과 complete encrypted client recovery-state
+  backup을 자동 점검하고 정기 restore drill로 검증할 수 있다.
