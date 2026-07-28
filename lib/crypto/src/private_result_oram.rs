@@ -6053,7 +6053,7 @@ mod tests {
                         .ok_or(PrivateResultOramError::InvalidFetchPlanField("leaf"))
                 },
             ),
-            Err(PrivateResultOramError::InvalidFetchPlanField("point_token"))
+            Err(PrivateResultOramError::DuplicatePointToken)
         );
         assert_eq!(state.position(&block_a.payload_fetch_token), Some(2));
         assert_eq!(state.position(&block_b.payload_fetch_token), Some(3));
