@@ -10,6 +10,7 @@ pub mod openfhe;
 pub mod payload;
 pub mod private_hnsw_client;
 pub mod private_hnsw_oram;
+pub mod private_oram_recovery;
 pub mod private_result_oram;
 pub mod vector;
 
@@ -138,6 +139,18 @@ pub use private_hnsw_oram::{
     validate_private_hnsw_oram_read_paths_signature,
     validate_private_hnsw_oram_upload_bundle as validate_server_private_hnsw_oram_upload_bundle,
     validate_private_hnsw_oram_upload_bundle_with_signature as validate_server_private_hnsw_oram_upload_bundle_with_signature,
+};
+pub use private_oram_recovery::{
+    PRIVATE_ORAM_EXTERNAL_RECOVERY_CHECKPOINT_SIGNATURE_DOMAIN,
+    PRIVATE_ORAM_EXTERNAL_RECOVERY_CHECKPOINT_VERSION, PrivateOramExternalRecoveryCheckpoint,
+    PrivateOramExternalRecoveryCheckpointBundle, PrivateOramRecoveryError,
+    PrivateOramRecoverySignature, PrivateOramRecoveryValidationContext,
+    package_private_oram_external_recovery_checkpoint,
+    sign_private_oram_external_recovery_checkpoint,
+    try_private_oram_external_recovery_checkpoint_signature_message,
+    validate_private_oram_external_recovery_checkpoint,
+    validate_private_oram_external_recovery_checkpoint_shape,
+    validate_private_oram_recovery_signature_shape,
 };
 pub use private_result_oram::{
     PRIVATE_RESULT_ORAM_BUCKET_AEAD_DOMAIN, PRIVATE_RESULT_ORAM_BUCKET_COMMITMENT_DOMAIN,
