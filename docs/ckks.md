@@ -179,29 +179,79 @@ size, empty, duplicated, or unsorted owner/shard sets, a source outside the
 owner set, malformed digests, malformed signatures, and owner-key mismatch.
 Deterministic message-digest and Ed25519 known-answer tests pin this encoding.
 
-This checkpoint is not yet consumed by a server restore endpoint. It does not
-make non-redundant-owner recovery supported by itself. A complete external
-recovery set consists of the Qdrant collection snapshot and signed checkpoint
-plus encrypted client recovery state retained out of band. Existing client
-snapshots protect position maps and stashes, but the complete recovery-state
-format must additionally protect the HNSW entry node and the local point-token
-mapping required by `ids_visible`. Client RK material, position maps, stashes,
-entry nodes, token maps, and encrypted client-state bodies must never be
-uploaded into Qdrant's collection-local ORAM store or included in a Qdrant
-snapshot. Only the complete encrypted set digest is checkpointed.
+The server now consumes this checkpoint through a distributed, admin-only
+external recovery admission protocol:
+
+- `POST /collections/{collection}/private-oram/recovery/begin`
+- `POST /collections/{collection}/private-oram/recovery/upload`
+- `GET /collections/{collection}/private-oram/recovery/status`
+- `POST /collections/{collection}/private-oram/recovery/verify`
+- `POST /collections/{collection}/private-oram/recovery/abort`
+
+There is deliberately no `commit` endpoint yet. `verify` restores the archive
+into an isolated pending directory, validates it, fsyncs it, and promotes it
+only to an operation-local `verified_collection` directory. It never replaces
+the live collection, installs a private ORAM store, changes a replica state, or
+advances the committed backup generation.
+
+`begin` is accepted only on the same peer identity named as the signed source.
+It requires the current stable collection UUID and crypto config, the exact
+canonical local shard set, the exact consensus layout and every private index
+epoch/root, no private ORAM session lease, no pending generic snapshot recovery
+marker, and one identical owner signing public key across all bound private
+HNSW and result ORAM rules. The server stages the signed checkpoint before
+submitting a collection-wide consensus lease. The lease is one hour, renews
+with a bounded sliding window during upload or verification, and fences private
+ORAM session, epoch/root, and layout transitions. Consensus stores only a
+domain-separated hash of the random 32-byte operation token. The raw token is
+returned by `begin` and must be retained by the operator.
+
+Upload is an ordered multipart stream with fixed 8 MiB chunks except for the
+final chunk. Every chunk carries a lowercase-hex SHA-256, and the completed
+archive must match the checkpoint's exact byte size and SHA-256. Staging uses
+private non-symlink directories and regular files, owner/mode checks, exclusive
+per-collection file locking, atomic state replacement, fsync ordering, and
+crash reconciliation that truncates an uncommitted archive suffix. Duplicate
+chunks are idempotent only when their stored bytes hash identically.
+
+Status accepts the operation token only in
+`x-qdrant-private-oram-recovery-token`; query-string tokens are ignored.
+Recovery responses carry `Cache-Control: no-store`, access logs redact query
+and unexpected suffix values, and metrics accept only the five fixed route
+shapes. Abort requires the same owner peer and operation token, but remains
+available after lease expiry so an expired operation can be cleared. A later
+valid begin may take over an expired lease and best-effort removes superseded
+local staging.
+
+Verification rechecks the checkpoint signature and current consensus binding,
+then restores the closed snapshot in isolation. It requires byte-for-byte
+collection config equality and stable identity, the exact source-local shard
+set, valid point-shard and payload-index structure, and complete signed HNSW
+and result ORAM stores at the checkpointed epochs and roots. A stale layout,
+index state, archive, signature, bucket set, or lease fails closed.
+
+A complete external recovery set still consists of the Qdrant collection
+snapshot and signed checkpoint plus encrypted client recovery state retained
+out of band. Existing client snapshots protect position maps and stashes, but
+the complete recovery-state format must additionally protect the HNSW entry
+node and the local point-token mapping required by `ids_visible`. Client RK
+material, position maps, stashes, entry nodes, token maps, and encrypted
+client-state bodies must never be uploaded into Qdrant's collection-local ORAM
+store or included in a Qdrant snapshot. Only the complete encrypted set digest
+is checkpointed.
 
 Server rollout proceeds in dependency order. A wiped fixed-layout transfer
 target with a live source now requests source-side fresh full-store preinstall
-before restarting the exact marked transfer. Next, external restore will admit
-an owner-signed checkpoint only under an expiring consensus
-recovery lease, exact current layout/index-state match, no conflicting
-session/transfer/reshard, full point/private-store preflight, and exact commit
-CAS. Initial external restore is restricted to the same peer identity still
-named by consensus. Finally, the v2 mutable provider will use an immutable
-capacity manifest plus a monotonic owner-signed state record and one
-collection-wide HNSW/result mutation CAS. Until each phase lands and its
-multi-process crash tests pass, the corresponding v1 fail-closed behavior
-remains authoritative.
+before restarting the exact marked transfer. External restore now has signed
+checkpoint admission, an expiring consensus recovery lease, bounded encrypted
+archive staging, and full isolated preflight on the same peer identity still
+named by consensus. The next recovery step is a durable install marker,
+all-shard/all-index local install, activation barrier, and exact consensus
+commit CAS with crash recovery. Only after that step lands may a commit route
+be exposed. Finally, the v2 mutable provider will use an immutable capacity
+manifest plus a monotonic owner-signed state record and one collection-wide
+HNSW/result mutation CAS. Until each phase lands and its multi-process crash
+tests pass, the corresponding v1 fail-closed behavior remains authoritative.
 
 Raft persists a separate collection-level private ORAM layout record consumed
 by fixed-layout transfer/removal and typed scale-up/down resharding. The record
