@@ -144,6 +144,113 @@ pub mod consensus_ops {
     }
 
     #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramExternalRecoveryKey {
+        pub collection_id: CollectionId,
+    }
+
+    impl fmt::Debug for PrivateOramExternalRecoveryKey {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramExternalRecoveryKey")
+                .field("collection_id", &"[redacted]")
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramExternalRecoveryLease {
+        pub owner_peer_id: PeerId,
+        pub operation_id_hash: String,
+        pub checkpoint_digest: String,
+        pub backup_generation: u64,
+        pub issued_at_unix: u64,
+        pub expires_at_unix: u64,
+    }
+
+    impl fmt::Debug for PrivateOramExternalRecoveryLease {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramExternalRecoveryLease")
+                .field("owner_peer_id", &self.owner_peer_id)
+                .field("operation_id_hash", &"[redacted]")
+                .field("checkpoint_digest", &"[redacted]")
+                .field("backup_generation", &self.backup_generation)
+                .field("issued_at_unix", &self.issued_at_unix)
+                .field("expires_at_unix", &self.expires_at_unix)
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramExternalRecoveryState {
+        pub committed_backup_generation: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub committed_checkpoint_digest: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub active_lease: Option<PrivateOramExternalRecoveryLease>,
+    }
+
+    impl fmt::Debug for PrivateOramExternalRecoveryState {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramExternalRecoveryState")
+                .field(
+                    "committed_backup_generation",
+                    &self.committed_backup_generation,
+                )
+                .field(
+                    "has_committed_checkpoint_digest",
+                    &self.committed_checkpoint_digest.is_some(),
+                )
+                .field("active_lease", &self.active_lease)
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct CompareAndSwapPrivateOramExternalRecovery {
+        pub key: PrivateOramExternalRecoveryKey,
+        pub expected: Option<PrivateOramExternalRecoveryState>,
+        pub new: Option<PrivateOramExternalRecoveryState>,
+    }
+
+    impl fmt::Debug for CompareAndSwapPrivateOramExternalRecovery {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("CompareAndSwapPrivateOramExternalRecovery")
+                .field("key", &self.key)
+                .field("has_expected", &self.expected.is_some())
+                .field("has_new", &self.new.is_some())
+                .finish()
+        }
+    }
+
+    #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone, Copy)]
+    #[serde(rename_all = "snake_case")]
+    pub enum PrivateOramExternalRecoveryPhase {
+        Begin,
+        Renew,
+        Commit,
+        Abort,
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramExternalRecoveryOperation {
+        pub phase: PrivateOramExternalRecoveryPhase,
+        pub recovery: CompareAndSwapPrivateOramExternalRecovery,
+        pub layout: PrivateOramConsensusLayout,
+        pub index_states: Vec<PrivateOramLayoutIndexStateBinding>,
+    }
+
+    impl fmt::Debug for PrivateOramExternalRecoveryOperation {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramExternalRecoveryOperation")
+                .field("phase", &self.phase)
+                .field("has_expected", &self.recovery.expected.is_some())
+                .field("has_new", &self.recovery.new.is_some())
+                .field("layout_generation", &self.layout.generation)
+                .field("index_state_count", &self.index_states.len())
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
     pub struct PrivateOramLayoutKey {
         pub collection_id: CollectionId,
     }
@@ -1302,6 +1409,7 @@ pub mod consensus_ops {
         FinishPrivateOramShardTransfer(PrivateOramShardTransferFinish),
         StartPrivateOramResharding(PrivateOramReshardingOperation),
         FinishPrivateOramResharding(PrivateOramReshardingOperation),
+        ApplyPrivateOramExternalRecovery(PrivateOramExternalRecoveryOperation),
     }
 
     impl TryFrom<&RaftEntry> for ConsensusOperations {
@@ -1480,6 +1588,10 @@ pub mod consensus_ops {
                     .field("has_expected", &operation.expected.is_some())
                     .field("has_new", &operation.new.is_some())
                     .finish(),
+                ConsensusOperations::ApplyPrivateOramExternalRecovery(operation) => f
+                    .debug_tuple("ApplyPrivateOramExternalRecovery")
+                    .field(operation)
+                    .finish(),
                 ConsensusOperations::CompareAndSwapPrivateOramLayout(operation) => f
                     .debug_struct("CompareAndSwapPrivateOramLayout")
                     .field("has_expected", &operation.expected.is_some())
@@ -1638,10 +1750,12 @@ mod test {
 
     use super::collection_meta_ops::CollectionMetaOperations;
     use super::consensus_ops::{
-        CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
-        CompareAndSwapPrivateOramSessionLease, ConsensusOperations,
-        PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
-        PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramIndexKind,
+        CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramExternalRecovery,
+        CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramSessionLease,
+        ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
+        PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramExternalRecoveryKey,
+        PrivateOramExternalRecoveryLease, PrivateOramExternalRecoveryOperation,
+        PrivateOramExternalRecoveryPhase, PrivateOramExternalRecoveryState, PrivateOramIndexKind,
         PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding,
         PrivateOramLayoutTransitionState, PrivateOramReshardingLayoutTransition,
         PrivateOramSessionLease, PrivateOramShardKeyLayoutChange,
@@ -1873,6 +1987,59 @@ mod test {
                 "{rendered}"
             );
             assert!(!rendered.contains("lease-vector-sentinel"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn private_oram_external_recovery_log_projection_redacts_identity_and_hashes() {
+        let collection_sentinel = "qdrant-sec-private-oram-recovery-collection-sentinel";
+        let operation_hash_sentinel = "qdrant-sec-private-oram-recovery-operation-sentinel";
+        let checkpoint_digest_sentinel = "qdrant-sec-private-oram-recovery-checkpoint-sentinel";
+        let operation = ConsensusOperations::ApplyPrivateOramExternalRecovery(
+            PrivateOramExternalRecoveryOperation {
+                phase: PrivateOramExternalRecoveryPhase::Begin,
+                recovery: CompareAndSwapPrivateOramExternalRecovery {
+                    key: PrivateOramExternalRecoveryKey {
+                        collection_id: collection_sentinel.to_string(),
+                    },
+                    expected: None,
+                    new: Some(PrivateOramExternalRecoveryState {
+                        committed_backup_generation: 0,
+                        committed_checkpoint_digest: None,
+                        active_lease: Some(PrivateOramExternalRecoveryLease {
+                            owner_peer_id: 7,
+                            operation_id_hash: operation_hash_sentinel.to_string(),
+                            checkpoint_digest: checkpoint_digest_sentinel.to_string(),
+                            backup_generation: 7,
+                            issued_at_unix: 100,
+                            expires_at_unix: 160,
+                        }),
+                    }),
+                },
+                layout: PrivateOramConsensusLayout {
+                    generation: 1,
+                    owner_peer_ids: vec![7],
+                    layout_digest: "qdrant-sec-private-oram-recovery-layout-sentinel".to_string(),
+                    index_state_digest: "qdrant-sec-private-oram-recovery-index-state-sentinel"
+                        .to_string(),
+                },
+                index_states: Vec::new(),
+            },
+        );
+
+        for rendered in [
+            format!("{operation:?}"),
+            format!("{:?}", operation.redacted_log()),
+        ] {
+            assert!(rendered.contains("PrivateOramExternalRecovery"));
+            assert!(!rendered.contains(collection_sentinel), "{rendered}");
+            assert!(!rendered.contains(operation_hash_sentinel), "{rendered}");
+            assert!(!rendered.contains(checkpoint_digest_sentinel), "{rendered}");
+            assert!(!rendered.contains("recovery-layout-sentinel"), "{rendered}");
+            assert!(
+                !rendered.contains("recovery-index-state-sentinel"),
+                "{rendered}"
+            );
         }
     }
 

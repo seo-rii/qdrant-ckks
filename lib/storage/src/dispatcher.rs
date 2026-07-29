@@ -36,8 +36,9 @@ use crate::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
     CompareAndSwapPrivateOramSessionLease, PrivateOramCollectionLayoutTransition,
     PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramEpochKey,
-    PrivateOramIndexKind, PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey,
-    PrivateOramLayoutLeaseBinding, PrivateOramReshardingLayoutTransition,
+    PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryOperation,
+    PrivateOramExternalRecoveryState, PrivateOramIndexKind, PrivateOramLayoutIndexStateBinding,
+    PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding, PrivateOramReshardingLayoutTransition,
     PrivateOramReshardingOperation, PrivateOramSessionLease, PrivateOramShardKeyLayoutChange,
     PrivateOramShardKeyLayoutChangeKind, PrivateOramShardLayoutEntry,
     PrivateOramShardTransferStart, canonical_private_oram_index_state_digest,
@@ -409,6 +410,30 @@ impl Dispatcher {
         if !applied {
             return Err(StorageError::service_error(
                 "private ORAM consensus layout CAS was not applied",
+            ));
+        }
+        Ok(())
+    }
+
+    pub async fn submit_private_oram_external_recovery(
+        &self,
+        operation: PrivateOramExternalRecoveryOperation,
+        wait_timeout: Option<Duration>,
+    ) -> Result<(), StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM external recovery operation requires distributed mode",
+            )
+        })?;
+        let applied = consensus_state
+            .propose_consensus_op_with_await(
+                ConsensusOperations::ApplyPrivateOramExternalRecovery(operation),
+                wait_timeout,
+            )
+            .await?;
+        if !applied {
+            return Err(StorageError::service_error(
+                "private ORAM external recovery operation was not applied",
             ));
         }
         Ok(())
@@ -2085,6 +2110,18 @@ impl Dispatcher {
             )
         })?;
         Ok(consensus_state.private_oram_layout(key))
+    }
+
+    pub fn private_oram_consensus_external_recovery(
+        &self,
+        key: &PrivateOramExternalRecoveryKey,
+    ) -> Result<Option<PrivateOramExternalRecoveryState>, StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM external recovery state requires distributed mode",
+            )
+        })?;
+        Ok(consensus_state.private_oram_external_recovery(key))
     }
 
     pub async fn await_consensus_sync(

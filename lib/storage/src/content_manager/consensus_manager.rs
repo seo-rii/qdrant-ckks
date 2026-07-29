@@ -31,9 +31,10 @@ use super::CollectionContainer;
 use super::alias_mapping::AliasMapping;
 use super::consensus_ops::{
     ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
-    PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramLayoutKey,
-    PrivateOramLayoutTransitionState, PrivateOramReshardingOperation, PrivateOramSessionLease,
-    PrivateOramShardTransferFinish, PrivateOramShardTransferStart, SnapshotStatus,
+    PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramExternalRecoveryKey,
+    PrivateOramExternalRecoveryState, PrivateOramLayoutKey, PrivateOramLayoutTransitionState,
+    PrivateOramReshardingOperation, PrivateOramSessionLease, PrivateOramShardTransferFinish,
+    PrivateOramShardTransferStart, SnapshotStatus,
 };
 use super::errors::StorageError;
 use crate::content_manager::consensus::consensus_wal::ConsensusOpWal;
@@ -69,6 +70,8 @@ pub struct SnapshotData {
     pub private_oram_session_leases: HashMap<String, PrivateOramSessionLease>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub private_oram_layouts: HashMap<String, PrivateOramConsensusLayout>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_oram_external_recoveries: HashMap<String, PrivateOramExternalRecoveryState>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -577,6 +580,11 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 .write()
                 .compare_and_swap_private_oram_session_lease(&operation)
                 .map(|()| true),
+            ConsensusOperations::ApplyPrivateOramExternalRecovery(operation) => self
+                .persistent
+                .write()
+                .apply_private_oram_external_recovery(&operation)
+                .map(|()| true),
             ConsensusOperations::CompareAndSwapPrivateOramLayout(operation) => self
                 .persistent
                 .write()
@@ -811,20 +819,31 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             private_oram_epochs,
             private_oram_session_leases,
             private_oram_layouts,
+            private_oram_external_recoveries,
         } = snapshot.get_data().try_into()?;
 
         Persistent::validate_private_oram_snapshot_state(
             &private_oram_epochs,
             &private_oram_session_leases,
             &private_oram_layouts,
+            &private_oram_external_recoveries,
         )?;
-        let (current_private_oram_epochs, current_private_oram_layouts) = {
+        let (
+            current_private_oram_epochs,
+            current_private_oram_layouts,
+            current_private_oram_external_recoveries,
+        ) = {
             let persistent = self.persistent.read();
             (
                 persistent.private_oram_epochs.clone(),
                 persistent.private_oram_layouts.clone(),
+                persistent.private_oram_external_recoveries.clone(),
             )
         };
+        crate::content_manager::consensus::persistent::validate_private_oram_external_recovery_snapshot_transition(
+            &current_private_oram_external_recoveries,
+            &private_oram_external_recoveries,
+        )?;
         self.toc
             .apply_collections_snapshot_with_private_oram_state(
                 collections_data,
@@ -843,6 +862,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             private_oram_epochs,
             private_oram_session_leases,
             private_oram_layouts,
+            private_oram_external_recoveries,
         )?;
 
         // Clear now obsolete WAL entries after persisting new Raft state
@@ -1086,6 +1106,13 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         key: &PrivateOramEpochKey,
     ) -> Option<PrivateOramSessionLease> {
         self.persistent.read().private_oram_session_lease(key)
+    }
+
+    pub fn private_oram_external_recovery(
+        &self,
+        key: &PrivateOramExternalRecoveryKey,
+    ) -> Option<PrivateOramExternalRecoveryState> {
+        self.persistent.read().private_oram_external_recovery(key)
     }
 
     pub fn private_oram_layout(
@@ -1343,6 +1370,7 @@ impl<C: CollectionContainer> Storage for ConsensusManager<C> {
             private_oram_epochs: persistent.private_oram_epochs.clone(),
             private_oram_session_leases: persistent.private_oram_session_leases.clone(),
             private_oram_layouts: persistent.private_oram_layouts.clone(),
+            private_oram_external_recoveries: persistent.private_oram_external_recoveries.clone(),
         };
 
         let raft_state = persistent.state();
@@ -1463,10 +1491,12 @@ mod tests {
     use crate::content_manager::consensus::operation_sender::OperationSender;
     use crate::content_manager::consensus::persistent::Persistent;
     use crate::content_manager::consensus_ops::{
-        CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
-        CompareAndSwapPrivateOramSessionLease, ConsensusOperations,
-        PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
-        PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramIndexKind,
+        CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramExternalRecovery,
+        CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramSessionLease,
+        ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
+        PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramExternalRecoveryKey,
+        PrivateOramExternalRecoveryLease, PrivateOramExternalRecoveryOperation,
+        PrivateOramExternalRecoveryPhase, PrivateOramExternalRecoveryState, PrivateOramIndexKind,
         PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding,
         PrivateOramLayoutTransitionState, PrivateOramReshardingLayoutTransition,
         PrivateOramReshardingOperation, PrivateOramSessionLease, PrivateOramShardTransferFinish,
@@ -2676,6 +2706,117 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_external_recovery_survives_raft_snapshot_restore() {
+        let source_dir = Builder::new()
+            .prefix("private_oram_recovery_raft_source")
+            .tempdir()
+            .unwrap();
+        let (source, _) = setup_storages(Vec::new(), source_dir.path());
+        let key = PrivateOramExternalRecoveryKey {
+            collection_id: "collection-uuid-1".to_string(),
+        };
+        let epoch_key = PrivateOramEpochKey {
+            collection_id: key.collection_id.clone(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let epoch = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[40; 32]),
+            writeback_digest: None,
+        };
+        let index_states = vec![PrivateOramLayoutIndexStateBinding {
+            key: epoch_key.clone(),
+            state: epoch.clone(),
+        }];
+        let layout = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7],
+            layout_digest: BASE64URL_NOPAD.encode(&[39; 32]),
+            index_state_digest: canonical_private_oram_index_state_digest(
+                &key.collection_id,
+                &[(epoch_key.clone(), epoch.clone())],
+            )
+            .unwrap(),
+        };
+        let checkpoint_digest = BASE64URL_NOPAD.encode(&[41; 32]);
+        let acquired = PrivateOramExternalRecoveryState {
+            committed_backup_generation: 0,
+            committed_checkpoint_digest: None,
+            active_lease: Some(PrivateOramExternalRecoveryLease {
+                owner_peer_id: 7,
+                operation_id_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+                checkpoint_digest: checkpoint_digest.clone(),
+                backup_generation: 7,
+                issued_at_unix: 100,
+                expires_at_unix: 160,
+            }),
+        };
+        let committed = PrivateOramExternalRecoveryState {
+            committed_backup_generation: 7,
+            committed_checkpoint_digest: Some(checkpoint_digest),
+            active_lease: None,
+        };
+
+        assert!(
+            source
+                .apply_normal_entry(&private_oram_epoch_entry(epoch_key, None, epoch,))
+                .unwrap()
+        );
+        assert!(
+            source
+                .apply_normal_entry(&private_oram_layout_entry(
+                    PrivateOramLayoutKey {
+                        collection_id: key.collection_id.clone(),
+                    },
+                    None,
+                    layout.clone(),
+                ))
+                .unwrap()
+        );
+        assert!(
+            source
+                .apply_normal_entry(&private_oram_external_recovery_entry(
+                    PrivateOramExternalRecoveryPhase::Begin,
+                    CompareAndSwapPrivateOramExternalRecovery {
+                        key: key.clone(),
+                        expected: None,
+                        new: Some(acquired.clone()),
+                    },
+                    layout.clone(),
+                    index_states.clone(),
+                ))
+                .unwrap()
+        );
+        assert!(
+            source
+                .apply_normal_entry(&private_oram_external_recovery_entry(
+                    PrivateOramExternalRecoveryPhase::Commit,
+                    CompareAndSwapPrivateOramExternalRecovery {
+                        key: key.clone(),
+                        expected: Some(acquired),
+                        new: Some(committed.clone()),
+                    },
+                    layout,
+                    index_states,
+                ))
+                .unwrap()
+        );
+
+        let snapshot = source.snapshot(0, 0).unwrap();
+        let snapshot_data: SnapshotData = snapshot.get_data().try_into().unwrap();
+        assert_eq!(snapshot_data.private_oram_external_recoveries.len(), 1);
+
+        let target_dir = Builder::new()
+            .prefix("private_oram_recovery_raft_target")
+            .tempdir()
+            .unwrap();
+        let (target, _) = setup_storages(Vec::new(), target_dir.path());
+        target.apply_snapshot(&snapshot).unwrap().unwrap();
+        assert_eq!(target.private_oram_external_recovery(&key), Some(committed));
+    }
+
+    #[test]
     fn private_oram_layout_cas_replays_and_survives_raft_snapshot_restore() {
         let source_dir = Builder::new()
             .prefix("private_oram_layout_raft_source")
@@ -2738,7 +2879,12 @@ mod tests {
             generation: 1,
             owner_peer_ids: vec![7],
             layout_digest: valid_digest.clone(),
-            index_state_digest: valid_digest,
+            index_state_digest: valid_digest.clone(),
+        };
+        let recovery = PrivateOramExternalRecoveryState {
+            committed_backup_generation: 1,
+            committed_checkpoint_digest: Some(valid_digest),
+            active_lease: None,
         };
         let malformed_snapshots = [
             SnapshotData {
@@ -2752,6 +2898,7 @@ mod tests {
                 )]),
                 private_oram_session_leases: Default::default(),
                 private_oram_layouts: Default::default(),
+                private_oram_external_recoveries: Default::default(),
             },
             SnapshotData {
                 collections_data: Default::default(),
@@ -2764,6 +2911,7 @@ mod tests {
                     lease,
                 )]),
                 private_oram_layouts: Default::default(),
+                private_oram_external_recoveries: Default::default(),
             },
             SnapshotData {
                 collections_data: Default::default(),
@@ -2775,6 +2923,20 @@ mod tests {
                 private_oram_layouts: std::collections::HashMap::from([(
                     "invalid-layout-key".to_string(),
                     layout,
+                )]),
+                private_oram_external_recoveries: Default::default(),
+            },
+            SnapshotData {
+                collections_data: Default::default(),
+                address_by_id: Default::default(),
+                metadata_by_id: Default::default(),
+                cluster_metadata: Default::default(),
+                private_oram_epochs: Default::default(),
+                private_oram_session_leases: Default::default(),
+                private_oram_layouts: Default::default(),
+                private_oram_external_recoveries: std::collections::HashMap::from([(
+                    "invalid-recovery-key".to_string(),
+                    recovery,
                 )]),
             },
         ];
@@ -2797,6 +2959,7 @@ mod tests {
             assert!(persistent.private_oram_epochs.is_empty());
             assert!(persistent.private_oram_session_leases.is_empty());
             assert!(persistent.private_oram_layouts.is_empty());
+            assert!(persistent.private_oram_external_recoveries.is_empty());
         }
     }
 
@@ -2810,6 +2973,7 @@ mod tests {
             private_oram_epochs: Default::default(),
             private_oram_session_leases: Default::default(),
             private_oram_layouts: Default::default(),
+            private_oram_external_recoveries: Default::default(),
         };
         let mut legacy_value = serde_json::to_value(snapshot).unwrap();
         legacy_value
@@ -2824,11 +2988,16 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("private_oram_layouts");
+        legacy_value
+            .as_object_mut()
+            .unwrap()
+            .remove("private_oram_external_recoveries");
 
         let decoded: SnapshotData = serde_json::from_value(legacy_value).unwrap();
         assert!(decoded.private_oram_epochs.is_empty());
         assert!(decoded.private_oram_session_leases.is_empty());
         assert!(decoded.private_oram_layouts.is_empty());
+        assert!(decoded.private_oram_external_recoveries.is_empty());
     }
 
     #[test]
@@ -2866,6 +3035,26 @@ mod tests {
     ) -> Entry {
         let operation = ConsensusOperations::CompareAndSwapPrivateOramSessionLease(
             CompareAndSwapPrivateOramSessionLease { key, expected, new },
+        );
+        Entry {
+            data: serde_cbor::to_vec(&operation).unwrap(),
+            ..Default::default()
+        }
+    }
+
+    fn private_oram_external_recovery_entry(
+        phase: PrivateOramExternalRecoveryPhase,
+        recovery: CompareAndSwapPrivateOramExternalRecovery,
+        layout: PrivateOramConsensusLayout,
+        index_states: Vec<PrivateOramLayoutIndexStateBinding>,
+    ) -> Entry {
+        let operation = ConsensusOperations::ApplyPrivateOramExternalRecovery(
+            PrivateOramExternalRecoveryOperation {
+                phase,
+                recovery,
+                layout,
+                index_states,
+            },
         );
         Entry {
             data: serde_cbor::to_vec(&operation).unwrap(),

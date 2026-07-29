@@ -25,13 +25,15 @@ use crate::content_manager::collection_meta_ops::{
 };
 use crate::content_manager::consensus::entry_queue::{EntryApplyProgressQueue, EntryId};
 use crate::content_manager::consensus_ops::{
-    CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
-    CompareAndSwapPrivateOramSessionLease, PrivateOramCollectionLayoutTransition,
-    PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramEpochKey,
-    PrivateOramIndexKind, PrivateOramLayoutKey, PrivateOramReshardingOperation,
-    PrivateOramSessionLease, PrivateOramShardKeyLayoutChange, PrivateOramShardKeyLayoutChangeKind,
-    PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
-    canonical_private_oram_index_state_digest,
+    CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramExternalRecovery,
+    CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramSessionLease,
+    PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
+    PrivateOramEpochKey, PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryLease,
+    PrivateOramExternalRecoveryOperation, PrivateOramExternalRecoveryPhase,
+    PrivateOramExternalRecoveryState, PrivateOramIndexKind, PrivateOramLayoutKey,
+    PrivateOramReshardingOperation, PrivateOramSessionLease, PrivateOramShardKeyLayoutChange,
+    PrivateOramShardKeyLayoutChangeKind, PrivateOramShardTransferFinish,
+    PrivateOramShardTransferStart, canonical_private_oram_index_state_digest,
     private_oram_layout_is_precommitted_transfer_recovery, private_oram_transfer_consensus_layouts,
     private_oram_transfer_consensus_states,
 };
@@ -43,10 +45,13 @@ const STATE_FILE_NAME_CBOR: &str = "raft_state";
 const STATE_FILE_NAME: &str = "raft_state.json";
 const PRIVATE_ORAM_EPOCH_KEY_DOMAIN: &[u8] = b"qdrant-sec/private-oram-consensus-epoch-key/v1";
 const PRIVATE_ORAM_LAYOUT_KEY_DOMAIN: &[u8] = b"qdrant-sec/private-oram-consensus-layout-key/v1";
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_KEY_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-external-recovery-consensus-key/v1";
 const PRIVATE_ORAM_EPOCH_MAX_RECORDS: usize = 1_000_000;
 const PRIVATE_ORAM_LAYOUT_MAX_OWNERS: usize = 10_000;
 const PRIVATE_ORAM_SHA256_BASE64URL_LEN: usize = 43;
 const PRIVATE_ORAM_SESSION_LEASE_MAX_SECS: u64 = 3_600;
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_LEASE_MAX_SECS: u64 = 3_600;
 
 /// State of the Raft consensus, which should be saved between restarts.
 /// State of the collections, aliases and transfers are stored as regular storage.
@@ -77,6 +82,8 @@ pub struct Persistent {
     pub private_oram_session_leases: HashMap<String, PrivateOramSessionLease>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub private_oram_layouts: HashMap<String, PrivateOramConsensusLayout>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_oram_external_recoveries: HashMap<String, PrivateOramExternalRecoveryState>,
     pub this_peer_id: PeerId,
     #[serde(skip)]
     pub path: PathBuf,
@@ -118,6 +125,10 @@ impl fmt::Debug for Persistent {
                 "private_oram_layout_count",
                 &self.private_oram_layouts.len(),
             )
+            .field(
+                "private_oram_external_recovery_count",
+                &self.private_oram_external_recoveries.len(),
+            )
             .field("this_peer_id", &self.this_peer_id)
             .field("path", &self.path)
             .field("dirty", &self.dirty.load(Ordering::Relaxed))
@@ -130,10 +141,12 @@ impl Persistent {
         private_oram_epochs: &HashMap<String, PrivateOramConsensusEpoch>,
         private_oram_session_leases: &HashMap<String, PrivateOramSessionLease>,
         private_oram_layouts: &HashMap<String, PrivateOramConsensusLayout>,
+        private_oram_external_recoveries: &HashMap<String, PrivateOramExternalRecoveryState>,
     ) -> Result<(), StorageError> {
         validate_private_oram_epoch_snapshot(private_oram_epochs)?;
         validate_private_oram_session_lease_snapshot(private_oram_session_leases)?;
-        validate_private_oram_layout_snapshot(private_oram_layouts)
+        validate_private_oram_layout_snapshot(private_oram_layouts)?;
+        validate_private_oram_external_recovery_snapshot(private_oram_external_recoveries)
     }
 
     pub fn state(&self) -> &RaftState {
@@ -153,10 +166,16 @@ impl Persistent {
         new_private_oram_epochs: HashMap<String, PrivateOramConsensusEpoch>,
         new_private_oram_session_leases: HashMap<String, PrivateOramSessionLease>,
         new_private_oram_layouts: HashMap<String, PrivateOramConsensusLayout>,
+        new_private_oram_external_recoveries: HashMap<String, PrivateOramExternalRecoveryState>,
     ) -> Result<(), StorageError> {
         validate_private_oram_epoch_snapshot(&new_private_oram_epochs)?;
         validate_private_oram_session_lease_snapshot(&new_private_oram_session_leases)?;
         validate_private_oram_layout_snapshot(&new_private_oram_layouts)?;
+        validate_private_oram_external_recovery_snapshot(&new_private_oram_external_recoveries)?;
+        validate_private_oram_external_recovery_snapshot_transition(
+            &self.private_oram_external_recoveries,
+            &new_private_oram_external_recoveries,
+        )?;
         // IF YOU ADD NEW DATA INTO `PERSISTENT` STATE, DON'T FORGET TO ALSO ADD IT INTO RAFT SNAPSHOT!
         let Self {
             state,
@@ -169,6 +188,7 @@ impl Persistent {
             private_oram_epochs,
             private_oram_session_leases,
             private_oram_layouts,
+            private_oram_external_recoveries,
             this_peer_id: _,
             path: _,
             dirty: _,
@@ -189,6 +209,7 @@ impl Persistent {
         *private_oram_epochs = new_private_oram_epochs;
         *private_oram_session_leases = new_private_oram_session_leases;
         *private_oram_layouts = new_private_oram_layouts;
+        *private_oram_external_recoveries = new_private_oram_external_recoveries;
 
         // Last Raft commit and last snapshot index must be equal and persisted in one operation
         // Our `ConsensusManager::new` function relies on this for reconciling WAL clears
@@ -385,6 +406,11 @@ impl Persistent {
         operation: &CompareAndSwapPrivateOramEpoch,
     ) -> Result<(), StorageError> {
         validate_private_oram_epoch_cas(operation)?;
+        if self.private_oram_external_recovery_is_active(&operation.key.collection_id) {
+            return Err(StorageError::bad_request(
+                "private ORAM epoch/root CAS conflicts with active external recovery",
+            ));
+        }
         let key = private_oram_epoch_key_digest(&operation.key);
         let current = self.private_oram_epochs.get(&key);
         if current == Some(&operation.new) {
@@ -434,6 +460,13 @@ impl Persistent {
         operation: &CompareAndSwapPrivateOramSessionLease,
     ) -> Result<(), StorageError> {
         validate_private_oram_session_lease_cas(operation)?;
+        if operation.new.is_some()
+            && self.private_oram_external_recovery_is_active(&operation.key.collection_id)
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM session lease conflicts with active external recovery",
+            ));
+        }
         let key = private_oram_epoch_key_digest(&operation.key);
         let current = self.private_oram_session_leases.get(&key);
         if current == operation.new.as_ref() {
@@ -469,6 +502,171 @@ impl Persistent {
                 }
             }
             return Err(err);
+        }
+        Ok(())
+    }
+
+    pub fn private_oram_external_recovery(
+        &self,
+        key: &PrivateOramExternalRecoveryKey,
+    ) -> Option<PrivateOramExternalRecoveryState> {
+        self.private_oram_external_recoveries
+            .get(&private_oram_external_recovery_key_digest(key))
+            .cloned()
+    }
+
+    fn private_oram_external_recovery_is_active(&self, collection_id: &str) -> bool {
+        self.private_oram_external_recovery(&PrivateOramExternalRecoveryKey {
+            collection_id: collection_id.to_string(),
+        })
+        .and_then(|state| state.active_lease)
+        .is_some()
+    }
+
+    fn compare_and_swap_private_oram_external_recovery(
+        &mut self,
+        operation: &CompareAndSwapPrivateOramExternalRecovery,
+    ) -> Result<(), StorageError> {
+        validate_private_oram_external_recovery_cas(operation)?;
+        let key = private_oram_external_recovery_key_digest(&operation.key);
+        let current = self.private_oram_external_recoveries.get(&key);
+        if current == operation.new.as_ref() {
+            return Ok(());
+        }
+        if current != operation.expected.as_ref() {
+            return Err(StorageError::bad_request(
+                "private ORAM external recovery CAS precondition failed",
+            ));
+        }
+        if current.is_none()
+            && operation.new.is_some()
+            && self.private_oram_external_recoveries.len() >= PRIVATE_ORAM_EPOCH_MAX_RECORDS
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM external recovery capacity exceeded",
+            ));
+        }
+
+        let previous = match &operation.new {
+            Some(new) => self
+                .private_oram_external_recoveries
+                .insert(key.clone(), new.clone()),
+            None => self.private_oram_external_recoveries.remove(&key),
+        };
+        if let Err(err) = self.save() {
+            match previous {
+                Some(previous) => {
+                    self.private_oram_external_recoveries.insert(key, previous);
+                }
+                None => {
+                    self.private_oram_external_recoveries.remove(&key);
+                }
+            }
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    pub fn apply_private_oram_external_recovery(
+        &mut self,
+        operation: &PrivateOramExternalRecoveryOperation,
+    ) -> Result<(), StorageError> {
+        self.validate_private_oram_external_recovery_operation(operation)?;
+        self.compare_and_swap_private_oram_external_recovery(&operation.recovery)
+    }
+
+    fn validate_private_oram_external_recovery_operation(
+        &self,
+        operation: &PrivateOramExternalRecoveryOperation,
+    ) -> Result<(), StorageError> {
+        validate_private_oram_external_recovery_cas(&operation.recovery)
+            .map_err(|_| invalid_private_oram_external_recovery_operation())?;
+        validate_private_oram_consensus_layout(&operation.layout)
+            .map_err(|_| invalid_private_oram_external_recovery_operation())?;
+        if operation.index_states.is_empty()
+            || operation.index_states.len() > PRIVATE_ORAM_EPOCH_MAX_RECORDS
+        {
+            return Err(invalid_private_oram_external_recovery_operation());
+        }
+
+        let collection_id = &operation.recovery.key.collection_id;
+        let layout_key = PrivateOramLayoutKey {
+            collection_id: collection_id.clone(),
+        };
+        if self.private_oram_layout(&layout_key).as_ref() != Some(&operation.layout) {
+            return Err(invalid_private_oram_external_recovery_operation());
+        }
+
+        let mut states = Vec::with_capacity(operation.index_states.len());
+        let mut previous_key = None;
+        for binding in &operation.index_states {
+            let key_order = private_oram_epoch_key_order(&binding.key);
+            if &binding.key.collection_id != collection_id
+                || self.private_oram_epoch(&binding.key).as_ref() != Some(&binding.state)
+                || previous_key
+                    .as_ref()
+                    .is_some_and(|previous| previous >= &key_order)
+            {
+                return Err(invalid_private_oram_external_recovery_operation());
+            }
+            if self.private_oram_session_lease(&binding.key).is_some() {
+                return Err(StorageError::bad_request(
+                    "private ORAM external recovery conflicts with active session lease",
+                ));
+            }
+            previous_key = Some(key_order);
+            states.push((binding.key.clone(), binding.state.clone()));
+        }
+        let index_state_digest = canonical_private_oram_index_state_digest(collection_id, &states)
+            .map_err(|_| invalid_private_oram_external_recovery_operation())?;
+        if operation.layout.index_state_digest != index_state_digest {
+            return Err(invalid_private_oram_external_recovery_operation());
+        }
+
+        let expected = operation.recovery.expected.as_ref();
+        let new = operation.recovery.new.as_ref();
+        let expected_lease = expected.and_then(|state| state.active_lease.as_ref());
+        let new_lease = new.and_then(|state| state.active_lease.as_ref());
+        let same_recovery = expected_lease
+            .zip(new_lease)
+            .is_some_and(|(expected, new)| {
+                expected.owner_peer_id == new.owner_peer_id
+                    && expected.operation_id_hash == new.operation_id_hash
+                    && expected.checkpoint_digest == new.checkpoint_digest
+                    && expected.backup_generation == new.backup_generation
+            });
+        let phase_is_valid = match operation.phase {
+            PrivateOramExternalRecoveryPhase::Begin => {
+                new_lease.is_some() && (expected_lease.is_none() || !same_recovery)
+            }
+            PrivateOramExternalRecoveryPhase::Renew => same_recovery,
+            PrivateOramExternalRecoveryPhase::Commit => {
+                expected_lease.is_some()
+                    && new.is_some_and(|state| {
+                        state.active_lease.is_none()
+                            && state.committed_backup_generation
+                                > expected
+                                    .expect("commit phase requires expected recovery state")
+                                    .committed_backup_generation
+                    })
+            }
+            PrivateOramExternalRecoveryPhase::Abort => {
+                expected_lease.is_some() && new_lease.is_none()
+            }
+        };
+        let owner_peer_id = new_lease
+            .or(expected_lease)
+            .map(|lease| lease.owner_peer_id);
+        if !phase_is_valid
+            || owner_peer_id.is_none_or(|owner| {
+                operation
+                    .layout
+                    .owner_peer_ids
+                    .binary_search(&owner)
+                    .is_err()
+            })
+        {
+            return Err(invalid_private_oram_external_recovery_operation());
         }
         Ok(())
     }
@@ -773,6 +971,11 @@ impl Persistent {
         operation: &CompareAndSwapPrivateOramLayout,
     ) -> Result<(), StorageError> {
         validate_private_oram_layout_cas(operation)?;
+        if self.private_oram_external_recovery_is_active(&operation.key.collection_id) {
+            return Err(StorageError::bad_request(
+                "private ORAM layout CAS conflicts with active external recovery",
+            ));
+        }
         let key = private_oram_layout_key_digest(&operation.key);
         let current = self.private_oram_layouts.get(&key);
         if current == Some(&operation.new) {
@@ -886,6 +1089,7 @@ impl Persistent {
             private_oram_epochs: Default::default(),
             private_oram_session_leases: Default::default(),
             private_oram_layouts: Default::default(),
+            private_oram_external_recoveries: Default::default(),
             this_peer_id,
             path,
             latest_snapshot_meta: Default::default(),
@@ -901,6 +1105,7 @@ impl Persistent {
         validate_private_oram_epoch_snapshot(&state.private_oram_epochs)?;
         validate_private_oram_session_lease_snapshot(&state.private_oram_session_leases)?;
         validate_private_oram_layout_snapshot(&state.private_oram_layouts)?;
+        validate_private_oram_external_recovery_snapshot(&state.private_oram_external_recoveries)?;
         state.path = path;
         Ok(state)
     }
@@ -911,6 +1116,7 @@ impl Persistent {
         validate_private_oram_epoch_snapshot(&state.private_oram_epochs)?;
         validate_private_oram_session_lease_snapshot(&state.private_oram_session_leases)?;
         validate_private_oram_layout_snapshot(&state.private_oram_layouts)?;
+        validate_private_oram_external_recovery_snapshot(&state.private_oram_external_recoveries)?;
         state.path = path;
         Ok(state)
     }
@@ -967,6 +1173,15 @@ pub(crate) fn private_oram_layout_snapshot_value<'a>(
     layouts.get(&private_oram_layout_key_digest(key))
 }
 
+pub(crate) fn private_oram_external_recovery_key_digest(
+    key: &PrivateOramExternalRecoveryKey,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(PRIVATE_ORAM_EXTERNAL_RECOVERY_KEY_DOMAIN);
+    update_length_prefixed(&mut hasher, key.collection_id.as_bytes());
+    BASE64URL_NOPAD.encode(&hasher.finalize())
+}
+
 fn update_length_prefixed(hasher: &mut Sha256, value: &[u8]) {
     hasher.update((value.len() as u64).to_be_bytes());
     hasher.update(value);
@@ -1005,6 +1220,150 @@ fn validate_private_oram_epoch_key(key: &PrivateOramEpochKey) -> Result<(), Stor
     }
 
     Ok(())
+}
+
+fn validate_private_oram_external_recovery_cas(
+    operation: &CompareAndSwapPrivateOramExternalRecovery,
+) -> Result<(), StorageError> {
+    validate_private_oram_external_recovery_key(&operation.key)?;
+    if operation.expected.is_none() && operation.new.is_none() {
+        return Err(invalid_private_oram_external_recovery_transition());
+    }
+    if let Some(expected) = &operation.expected {
+        validate_private_oram_external_recovery_state(expected)?;
+    }
+    if let Some(new) = &operation.new {
+        validate_private_oram_external_recovery_state(new)?;
+    }
+
+    match (&operation.expected, &operation.new) {
+        (None, Some(new)) => {
+            if new.committed_backup_generation != 0
+                || new.committed_checkpoint_digest.is_some()
+                || new.active_lease.is_none()
+            {
+                return Err(invalid_private_oram_external_recovery_transition());
+            }
+        }
+        (Some(expected), None) => {
+            if expected.committed_backup_generation != 0 || expected.active_lease.is_none() {
+                return Err(invalid_private_oram_external_recovery_transition());
+            }
+        }
+        (Some(expected), Some(new))
+            if new.committed_backup_generation == expected.committed_backup_generation =>
+        {
+            if new.committed_checkpoint_digest != expected.committed_checkpoint_digest {
+                return Err(invalid_private_oram_external_recovery_transition());
+            }
+            match (&expected.active_lease, &new.active_lease) {
+                (None, Some(_)) => {}
+                (Some(_), None) if expected.committed_backup_generation > 0 => {}
+                (Some(expected_lease), Some(new_lease)) => {
+                    validate_private_oram_external_recovery_lease_transition(
+                        expected_lease,
+                        new_lease,
+                    )?;
+                }
+                _ => return Err(invalid_private_oram_external_recovery_transition()),
+            }
+        }
+        (Some(expected), Some(new))
+            if new.committed_backup_generation > expected.committed_backup_generation =>
+        {
+            let Some(active_lease) = &expected.active_lease else {
+                return Err(invalid_private_oram_external_recovery_transition());
+            };
+            if new.committed_backup_generation != active_lease.backup_generation
+                || new.committed_checkpoint_digest.as_deref()
+                    != Some(active_lease.checkpoint_digest.as_str())
+                || new.active_lease.is_some()
+            {
+                return Err(invalid_private_oram_external_recovery_transition());
+            }
+        }
+        _ => return Err(invalid_private_oram_external_recovery_transition()),
+    }
+    Ok(())
+}
+
+fn validate_private_oram_external_recovery_key(
+    key: &PrivateOramExternalRecoveryKey,
+) -> Result<(), StorageError> {
+    if key.collection_id.is_empty() || key.collection_id.len() > 1024 {
+        return Err(StorageError::bad_request(
+            "private ORAM external recovery key is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_oram_external_recovery_state(
+    state: &PrivateOramExternalRecoveryState,
+) -> Result<(), StorageError> {
+    let committed_digest_is_valid = match (
+        state.committed_backup_generation,
+        state.committed_checkpoint_digest.as_deref(),
+    ) {
+        (0, None) => true,
+        (0, Some(_)) | (_, None) => false,
+        (_, Some(digest)) => validate_private_oram_consensus_digest(digest).is_ok(),
+    };
+    if !committed_digest_is_valid {
+        return Err(invalid_private_oram_external_recovery_state());
+    }
+    if let Some(active_lease) = &state.active_lease {
+        validate_private_oram_external_recovery_lease(active_lease)?;
+        if active_lease.backup_generation <= state.committed_backup_generation {
+            return Err(invalid_private_oram_external_recovery_state());
+        }
+    }
+    Ok(())
+}
+
+fn validate_private_oram_external_recovery_lease(
+    lease: &PrivateOramExternalRecoveryLease,
+) -> Result<(), StorageError> {
+    let valid = lease.backup_generation > 0
+        && validate_private_oram_consensus_digest(&lease.operation_id_hash).is_ok()
+        && validate_private_oram_consensus_digest(&lease.checkpoint_digest).is_ok()
+        && lease.expires_at_unix > lease.issued_at_unix
+        && lease.expires_at_unix - lease.issued_at_unix
+            <= PRIVATE_ORAM_EXTERNAL_RECOVERY_LEASE_MAX_SECS;
+    if !valid {
+        return Err(invalid_private_oram_external_recovery_state());
+    }
+    Ok(())
+}
+
+fn validate_private_oram_external_recovery_lease_transition(
+    expected: &PrivateOramExternalRecoveryLease,
+    new: &PrivateOramExternalRecoveryLease,
+) -> Result<(), StorageError> {
+    let same_recovery = expected.owner_peer_id == new.owner_peer_id
+        && expected.operation_id_hash == new.operation_id_hash
+        && expected.checkpoint_digest == new.checkpoint_digest
+        && expected.backup_generation == new.backup_generation;
+    let valid_renewal = same_recovery
+        && new.issued_at_unix >= expected.issued_at_unix
+        && new.expires_at_unix > expected.expires_at_unix;
+    let valid_takeover = !same_recovery && new.issued_at_unix >= expected.expires_at_unix;
+    if !valid_renewal && !valid_takeover {
+        return Err(invalid_private_oram_external_recovery_transition());
+    }
+    Ok(())
+}
+
+fn invalid_private_oram_external_recovery_state() -> StorageError {
+    StorageError::bad_request("private ORAM external recovery state is invalid")
+}
+
+fn invalid_private_oram_external_recovery_transition() -> StorageError {
+    StorageError::bad_request("private ORAM external recovery transition is invalid")
+}
+
+fn invalid_private_oram_external_recovery_operation() -> StorageError {
+    StorageError::bad_request("private ORAM external recovery operation is invalid")
 }
 
 fn validate_private_oram_layout_cas(
@@ -1299,6 +1658,52 @@ fn validate_private_oram_layout_snapshot(
     Ok(())
 }
 
+fn validate_private_oram_external_recovery_snapshot(
+    recoveries: &HashMap<String, PrivateOramExternalRecoveryState>,
+) -> Result<(), StorageError> {
+    if recoveries.len() > PRIVATE_ORAM_EPOCH_MAX_RECORDS {
+        return Err(StorageError::bad_request(
+            "private ORAM external recovery snapshot is invalid",
+        ));
+    }
+    for (key_digest, state) in recoveries {
+        validate_private_oram_consensus_digest(key_digest).map_err(|_| {
+            StorageError::bad_request("private ORAM external recovery snapshot is invalid")
+        })?;
+        validate_private_oram_external_recovery_state(state).map_err(|_| {
+            StorageError::bad_request("private ORAM external recovery snapshot is invalid")
+        })?;
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_private_oram_external_recovery_snapshot_transition(
+    current: &HashMap<String, PrivateOramExternalRecoveryState>,
+    incoming: &HashMap<String, PrivateOramExternalRecoveryState>,
+) -> Result<(), StorageError> {
+    for (key, current_state) in current {
+        let Some(incoming_state) = incoming.get(key) else {
+            if current_state.committed_backup_generation == 0 {
+                continue;
+            }
+            return Err(StorageError::bad_request(
+                "private ORAM external recovery snapshot would roll back committed state",
+            ));
+        };
+        if incoming_state.committed_backup_generation < current_state.committed_backup_generation
+            || incoming_state.committed_backup_generation
+                == current_state.committed_backup_generation
+                && incoming_state.committed_checkpoint_digest
+                    != current_state.committed_checkpoint_digest
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM external recovery snapshot would roll back committed state",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_private_oram_consensus_digest(digest: &str) -> Result<(), StorageError> {
     if digest.len() != PRIVATE_ORAM_SHA256_BASE64URL_LEN {
         return Err(StorageError::bad_request(
@@ -1399,6 +1804,7 @@ mod tests {
             private_oram_epochs,
             private_oram_session_leases: Default::default(),
             private_oram_layouts,
+            private_oram_external_recoveries: Default::default(),
             this_peer_id: 7,
             path: PathBuf::from("/tmp/qdrant-sec-persistent-state"),
             dirty: AtomicBool::new(false),
@@ -2439,6 +2845,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 HashMap::from([(invalid_key_sentinel.to_string(), initial.clone())]),
+                Default::default(),
             )
             .unwrap_err()
             .to_string();
@@ -2465,6 +2872,7 @@ mod tests {
                         ..initial.clone()
                     },
                 )]),
+                Default::default(),
             )
             .unwrap_err()
             .to_string();
@@ -2621,6 +3029,504 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_external_recovery_cas_commits_monotonically_and_replays() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = PrivateOramExternalRecoveryKey {
+            collection_id: "collection-uuid-1".to_string(),
+        };
+        let operation_id_hash = BASE64URL_NOPAD.encode(&[31; 32]);
+        let checkpoint_digest = BASE64URL_NOPAD.encode(&[32; 32]);
+        let lease = PrivateOramExternalRecoveryLease {
+            owner_peer_id: 7,
+            operation_id_hash: operation_id_hash.clone(),
+            checkpoint_digest: checkpoint_digest.clone(),
+            backup_generation: 7,
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        };
+        let acquired = PrivateOramExternalRecoveryState {
+            committed_backup_generation: 0,
+            committed_checkpoint_digest: None,
+            active_lease: Some(lease.clone()),
+        };
+        let committed = PrivateOramExternalRecoveryState {
+            committed_backup_generation: 7,
+            committed_checkpoint_digest: Some(checkpoint_digest.clone()),
+            active_lease: None,
+        };
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+
+        let acquire = CompareAndSwapPrivateOramExternalRecovery {
+            key: key.clone(),
+            expected: None,
+            new: Some(acquired.clone()),
+        };
+        persistent
+            .compare_and_swap_private_oram_external_recovery(&acquire)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_external_recovery(&acquire)
+            .unwrap();
+        assert_eq!(
+            persistent.private_oram_external_recovery(&key),
+            Some(acquired.clone())
+        );
+
+        let invalid_commit = persistent
+            .compare_and_swap_private_oram_external_recovery(
+                &CompareAndSwapPrivateOramExternalRecovery {
+                    key: key.clone(),
+                    expected: Some(acquired.clone()),
+                    new: Some(PrivateOramExternalRecoveryState {
+                        committed_checkpoint_digest: Some(BASE64URL_NOPAD.encode(&[33; 32])),
+                        ..committed.clone()
+                    }),
+                },
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(invalid_commit.contains("external recovery transition is invalid"));
+        assert_eq!(
+            persistent.private_oram_external_recovery(&key),
+            Some(acquired.clone())
+        );
+
+        let commit = CompareAndSwapPrivateOramExternalRecovery {
+            key: key.clone(),
+            expected: Some(acquired),
+            new: Some(committed.clone()),
+        };
+        persistent
+            .compare_and_swap_private_oram_external_recovery(&commit)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_external_recovery(&commit)
+            .unwrap();
+
+        let delete_committed = persistent
+            .compare_and_swap_private_oram_external_recovery(
+                &CompareAndSwapPrivateOramExternalRecovery {
+                    key: key.clone(),
+                    expected: Some(committed.clone()),
+                    new: None,
+                },
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(delete_committed.contains("external recovery transition is invalid"));
+
+        let next_lease = PrivateOramExternalRecoveryLease {
+            operation_id_hash: BASE64URL_NOPAD.encode(&[34; 32]),
+            checkpoint_digest: BASE64URL_NOPAD.encode(&[35; 32]),
+            backup_generation: 8,
+            issued_at_unix: 200,
+            expires_at_unix: 260,
+            ..lease
+        };
+        let next_acquired = PrivateOramExternalRecoveryState {
+            active_lease: Some(next_lease),
+            ..committed.clone()
+        };
+        persistent
+            .compare_and_swap_private_oram_external_recovery(
+                &CompareAndSwapPrivateOramExternalRecovery {
+                    key: key.clone(),
+                    expected: Some(committed.clone()),
+                    new: Some(next_acquired.clone()),
+                },
+            )
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_external_recovery(
+                &CompareAndSwapPrivateOramExternalRecovery {
+                    key: key.clone(),
+                    expected: Some(next_acquired),
+                    new: Some(committed.clone()),
+                },
+            )
+            .unwrap();
+
+        let rendered = format!(
+            "{:?}",
+            persistent.private_oram_external_recovery(&key).unwrap()
+        );
+        assert!(rendered.contains("committed_backup_generation: 7"));
+        assert!(!rendered.contains(&key.collection_id));
+        assert!(!rendered.contains(&operation_id_hash));
+        assert!(!rendered.contains(&checkpoint_digest));
+        drop(persistent);
+
+        let reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        assert_eq!(
+            reloaded.private_oram_external_recovery(&key),
+            Some(committed)
+        );
+    }
+
+    #[test]
+    fn private_oram_external_recovery_lease_requires_expiry_for_takeover() {
+        let key = PrivateOramExternalRecoveryKey {
+            collection_id: "collection-uuid-1".to_string(),
+        };
+        let lease = PrivateOramExternalRecoveryLease {
+            owner_peer_id: 7,
+            operation_id_hash: BASE64URL_NOPAD.encode(&[41; 32]),
+            checkpoint_digest: BASE64URL_NOPAD.encode(&[42; 32]),
+            backup_generation: 7,
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        };
+        let acquired = PrivateOramExternalRecoveryState {
+            committed_backup_generation: 0,
+            committed_checkpoint_digest: None,
+            active_lease: Some(lease.clone()),
+        };
+        let early_takeover = PrivateOramExternalRecoveryState {
+            active_lease: Some(PrivateOramExternalRecoveryLease {
+                owner_peer_id: 9,
+                operation_id_hash: BASE64URL_NOPAD.encode(&[43; 32]),
+                checkpoint_digest: BASE64URL_NOPAD.encode(&[44; 32]),
+                backup_generation: 8,
+                issued_at_unix: 159,
+                expires_at_unix: 219,
+            }),
+            ..acquired.clone()
+        };
+        let error = validate_private_oram_external_recovery_cas(
+            &CompareAndSwapPrivateOramExternalRecovery {
+                key: key.clone(),
+                expected: Some(acquired.clone()),
+                new: Some(early_takeover),
+            },
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("external recovery transition is invalid"));
+
+        let renewed = PrivateOramExternalRecoveryState {
+            active_lease: Some(PrivateOramExternalRecoveryLease {
+                issued_at_unix: 120,
+                expires_at_unix: 220,
+                ..lease.clone()
+            }),
+            ..acquired.clone()
+        };
+        validate_private_oram_external_recovery_cas(&CompareAndSwapPrivateOramExternalRecovery {
+            key: key.clone(),
+            expected: Some(acquired.clone()),
+            new: Some(renewed),
+        })
+        .unwrap();
+
+        let initial_abort = CompareAndSwapPrivateOramExternalRecovery {
+            key,
+            expected: Some(acquired),
+            new: None,
+        };
+        validate_private_oram_external_recovery_cas(&initial_abort).unwrap();
+
+        let malformed_hash_sentinel = "private-oram-recovery-hash-sentinel";
+        let malformed =
+            validate_private_oram_external_recovery_lease(&PrivateOramExternalRecoveryLease {
+                operation_id_hash: malformed_hash_sentinel.to_string(),
+                ..lease
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(malformed.contains("external recovery state is invalid"));
+        assert!(!malformed.contains(malformed_hash_sentinel));
+    }
+
+    #[test]
+    fn private_oram_external_recovery_initial_abort_replays_and_save_failure_rolls_back() {
+        let temp = tempfile::tempdir().unwrap();
+        let key = PrivateOramExternalRecoveryKey {
+            collection_id: "collection-uuid-1".to_string(),
+        };
+        let acquired = PrivateOramExternalRecoveryState {
+            committed_backup_generation: 0,
+            committed_checkpoint_digest: None,
+            active_lease: Some(PrivateOramExternalRecoveryLease {
+                owner_peer_id: 7,
+                operation_id_hash: BASE64URL_NOPAD.encode(&[45; 32]),
+                checkpoint_digest: BASE64URL_NOPAD.encode(&[46; 32]),
+                backup_generation: 1,
+                issued_at_unix: 100,
+                expires_at_unix: 160,
+            }),
+        };
+        let acquire = CompareAndSwapPrivateOramExternalRecovery {
+            key: key.clone(),
+            expected: None,
+            new: Some(acquired.clone()),
+        };
+        let abort = CompareAndSwapPrivateOramExternalRecovery {
+            key: key.clone(),
+            expected: Some(acquired),
+            new: None,
+        };
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+
+        persistent
+            .compare_and_swap_private_oram_external_recovery(&acquire)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_external_recovery(&abort)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_external_recovery(&abort)
+            .unwrap();
+        assert_eq!(persistent.private_oram_external_recovery(&key), None);
+        drop(persistent);
+
+        let mut reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        reloaded.path = temp.path().join("missing-parent").join("raft_state.json");
+        reloaded
+            .compare_and_swap_private_oram_external_recovery(&acquire)
+            .unwrap_err();
+        assert_eq!(reloaded.private_oram_external_recovery(&key), None);
+    }
+
+    #[test]
+    fn private_oram_external_recovery_operation_cross_fences_session_leases() {
+        let temp = tempfile::tempdir().unwrap();
+        let collection_id = "collection-uuid-1".to_string();
+        let recovery_key = PrivateOramExternalRecoveryKey {
+            collection_id: collection_id.clone(),
+        };
+        let epoch_key = PrivateOramEpochKey {
+            collection_id: collection_id.clone(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let epoch = PrivateOramConsensusEpoch {
+            index_epoch: 42,
+            root_hash: BASE64URL_NOPAD.encode(&[47; 32]),
+            writeback_digest: None,
+        };
+        let index_states = vec![PrivateOramLayoutIndexStateBinding {
+            key: epoch_key.clone(),
+            state: epoch.clone(),
+        }];
+        let layout = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7],
+            layout_digest: BASE64URL_NOPAD.encode(&[48; 32]),
+            index_state_digest: canonical_private_oram_index_state_digest(
+                &collection_id,
+                &[(epoch_key.clone(), epoch.clone())],
+            )
+            .unwrap(),
+        };
+        let session_lease = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: BASE64URL_NOPAD.encode(&[49; 32]),
+            issued_at_unix: 100,
+            expires_at_unix: 160,
+        };
+        let checkpoint_digest = BASE64URL_NOPAD.encode(&[50; 32]);
+        let acquired = PrivateOramExternalRecoveryState {
+            committed_backup_generation: 0,
+            committed_checkpoint_digest: None,
+            active_lease: Some(PrivateOramExternalRecoveryLease {
+                owner_peer_id: 7,
+                operation_id_hash: BASE64URL_NOPAD.encode(&[51; 32]),
+                checkpoint_digest: checkpoint_digest.clone(),
+                backup_generation: 7,
+                issued_at_unix: 100,
+                expires_at_unix: 160,
+            }),
+        };
+        let begin = PrivateOramExternalRecoveryOperation {
+            phase: PrivateOramExternalRecoveryPhase::Begin,
+            recovery: CompareAndSwapPrivateOramExternalRecovery {
+                key: recovery_key.clone(),
+                expected: None,
+                new: Some(acquired.clone()),
+            },
+            layout: layout.clone(),
+            index_states: index_states.clone(),
+        };
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: epoch_key.clone(),
+                expected: None,
+                new: epoch,
+            })
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: PrivateOramLayoutKey {
+                    collection_id: collection_id.clone(),
+                },
+                expected: None,
+                new: layout.clone(),
+            })
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: epoch_key.clone(),
+                expected: None,
+                new: Some(session_lease.clone()),
+            })
+            .unwrap();
+
+        let conflict = persistent
+            .apply_private_oram_external_recovery(&begin)
+            .unwrap_err()
+            .to_string();
+        assert!(conflict.contains("conflicts with active session lease"));
+        persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: epoch_key.clone(),
+                expected: Some(session_lease.clone()),
+                new: None,
+            })
+            .unwrap();
+
+        persistent
+            .apply_private_oram_external_recovery(&begin)
+            .unwrap();
+        persistent
+            .apply_private_oram_external_recovery(&begin)
+            .unwrap();
+        let blocked_session = persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: epoch_key.clone(),
+                expected: None,
+                new: Some(session_lease),
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(blocked_session.contains("conflicts with active external recovery"));
+        let blocked_epoch = persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: epoch_key,
+                expected: Some(index_states[0].state.clone()),
+                new: PrivateOramConsensusEpoch {
+                    index_epoch: 43,
+                    root_hash: BASE64URL_NOPAD.encode(&[52; 32]),
+                    writeback_digest: None,
+                },
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(blocked_epoch.contains("conflicts with active external recovery"));
+        let blocked_layout = persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: PrivateOramLayoutKey {
+                    collection_id: collection_id,
+                },
+                expected: Some(layout.clone()),
+                new: PrivateOramConsensusLayout {
+                    generation: 2,
+                    layout_digest: BASE64URL_NOPAD.encode(&[53; 32]),
+                    ..layout.clone()
+                },
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(blocked_layout.contains("conflicts with active external recovery"));
+
+        let committed = PrivateOramExternalRecoveryState {
+            committed_backup_generation: 7,
+            committed_checkpoint_digest: Some(checkpoint_digest),
+            active_lease: None,
+        };
+        persistent
+            .apply_private_oram_external_recovery(&PrivateOramExternalRecoveryOperation {
+                phase: PrivateOramExternalRecoveryPhase::Commit,
+                recovery: CompareAndSwapPrivateOramExternalRecovery {
+                    key: recovery_key.clone(),
+                    expected: Some(acquired),
+                    new: Some(committed.clone()),
+                },
+                layout,
+                index_states,
+            })
+            .unwrap();
+        assert_eq!(
+            persistent.private_oram_external_recovery(&recovery_key),
+            Some(committed)
+        );
+    }
+
+    #[test]
+    fn private_oram_external_recovery_snapshot_rejects_committed_rollback() {
+        let key = PrivateOramExternalRecoveryKey {
+            collection_id: "collection-uuid-1".to_string(),
+        };
+        let key_digest = private_oram_external_recovery_key_digest(&key);
+        let committed = PrivateOramExternalRecoveryState {
+            committed_backup_generation: 7,
+            committed_checkpoint_digest: Some(BASE64URL_NOPAD.encode(&[51; 32])),
+            active_lease: None,
+        };
+        let current = HashMap::from([(key_digest.clone(), committed.clone())]);
+
+        let missing =
+            validate_private_oram_external_recovery_snapshot_transition(&current, &HashMap::new())
+                .unwrap_err()
+                .to_string();
+        assert!(missing.contains("would roll back committed state"));
+
+        let lower = HashMap::from([(
+            key_digest.clone(),
+            PrivateOramExternalRecoveryState {
+                committed_backup_generation: 6,
+                committed_checkpoint_digest: Some(BASE64URL_NOPAD.encode(&[50; 32])),
+                active_lease: None,
+            },
+        )]);
+        assert!(
+            validate_private_oram_external_recovery_snapshot_transition(&current, &lower).is_err()
+        );
+
+        let conflicting = HashMap::from([(
+            key_digest.clone(),
+            PrivateOramExternalRecoveryState {
+                committed_checkpoint_digest: Some(BASE64URL_NOPAD.encode(&[52; 32])),
+                ..committed.clone()
+            },
+        )]);
+        assert!(
+            validate_private_oram_external_recovery_snapshot_transition(&current, &conflicting)
+                .is_err()
+        );
+
+        let later = HashMap::from([(
+            key_digest,
+            PrivateOramExternalRecoveryState {
+                committed_backup_generation: 8,
+                committed_checkpoint_digest: Some(BASE64URL_NOPAD.encode(&[53; 32])),
+                active_lease: None,
+            },
+        )]);
+        validate_private_oram_external_recovery_snapshot_transition(&current, &later).unwrap();
+
+        let active_only = HashMap::from([(
+            private_oram_external_recovery_key_digest(&PrivateOramExternalRecoveryKey {
+                collection_id: "collection-uuid-2".to_string(),
+            }),
+            PrivateOramExternalRecoveryState {
+                committed_backup_generation: 0,
+                committed_checkpoint_digest: None,
+                active_lease: Some(PrivateOramExternalRecoveryLease {
+                    owner_peer_id: 7,
+                    operation_id_hash: BASE64URL_NOPAD.encode(&[54; 32]),
+                    checkpoint_digest: BASE64URL_NOPAD.encode(&[55; 32]),
+                    backup_generation: 1,
+                    issued_at_unix: 100,
+                    expires_at_unix: 160,
+                }),
+            },
+        )]);
+        validate_private_oram_external_recovery_snapshot_transition(&active_only, &HashMap::new())
+            .unwrap();
+    }
+
+    #[test]
     fn private_oram_epoch_cas_rolls_back_memory_state_when_persist_fails() {
         let temp = tempfile::tempdir().unwrap();
         let key = PrivateOramEpochKey {
@@ -2686,6 +3592,7 @@ mod tests {
                 malformed_key_digest,
                 Default::default(),
                 Default::default(),
+                Default::default(),
             )
             .unwrap_err();
         assert!(
@@ -2719,6 +3626,7 @@ mod tests {
                 malformed_writeback_digest,
                 Default::default(),
                 Default::default(),
+                Default::default(),
             )
             .unwrap_err();
         assert!(
@@ -2749,6 +3657,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 malformed_root,
+                Default::default(),
                 Default::default(),
                 Default::default(),
             )
