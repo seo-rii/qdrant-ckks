@@ -15,8 +15,9 @@ use serde::Serialize;
 use storage::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramExternalRecovery, PrivateOramConsensusLayout,
     PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryLease,
-    PrivateOramExternalRecoveryOperation, PrivateOramExternalRecoveryPhase,
-    PrivateOramExternalRecoveryState, PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey,
+    PrivateOramExternalRecoveryLeasePhase, PrivateOramExternalRecoveryOperation,
+    PrivateOramExternalRecoveryPhase, PrivateOramExternalRecoveryState,
+    PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey,
     canonical_private_oram_index_state_digest, private_oram_index_keys_for_config,
 };
 use storage::content_manager::errors::{StorageError, StorageResult};
@@ -116,10 +117,10 @@ pub async fn do_begin_private_oram_external_recovery(
     let expected = dispatcher.private_oram_consensus_external_recovery(&key)?;
     if expected.as_ref().is_some_and(|state| {
         checkpoint_bundle.checkpoint.backup_generation <= state.committed_backup_generation
-            || state
-                .active_lease
-                .as_ref()
-                .is_some_and(|lease| lease.expires_at_unix > now_unix)
+            || state.active_lease.as_ref().is_some_and(|lease| {
+                lease.phase == PrivateOramExternalRecoveryLeasePhase::Installing
+                    || lease.expires_at_unix > now_unix
+            })
     }) {
         return Err(StorageError::bad_request(
             "private ORAM external recovery conflicts with current recovery state",
@@ -133,6 +134,7 @@ pub async fn do_begin_private_oram_external_recovery(
         backup_generation: checkpoint_bundle.checkpoint.backup_generation,
         issued_at_unix: now_unix,
         expires_at_unix: lease_expires_at_unix,
+        phase: PrivateOramExternalRecoveryLeasePhase::Staging,
     };
     let mut desired = expected
         .clone()
@@ -328,6 +330,9 @@ pub async fn do_abort_private_oram_external_recovery(
         return Ok(true);
     };
     validate_lease_owner_and_operation(lease, context.this_peer_id, &operation_id_hash)?;
+    if lease.phase != PrivateOramExternalRecoveryLeasePhase::Staging {
+        return Err(invalid_external_recovery_state());
+    }
 
     let new = if expected.committed_backup_generation == 0 {
         None
@@ -744,6 +749,7 @@ mod tests {
             backup_generation: 7,
             issued_at_unix: now,
             expires_at_unix: now + 10,
+            phase: PrivateOramExternalRecoveryLeasePhase::Staging,
         };
         let error = validate_active_lease(&lease, 11, &"C".repeat(43))
             .unwrap_err()
@@ -763,6 +769,7 @@ mod tests {
             backup_generation: 7,
             issued_at_unix: now.saturating_sub(20),
             expires_at_unix: now.saturating_sub(10),
+            phase: PrivateOramExternalRecoveryLeasePhase::Staging,
         };
 
         validate_lease_owner_and_operation(&lease, 11, &operation_id_hash).unwrap();

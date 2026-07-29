@@ -156,6 +156,14 @@ pub mod consensus_ops {
         }
     }
 
+    #[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash, Clone, Copy)]
+    #[serde(rename_all = "snake_case")]
+    pub enum PrivateOramExternalRecoveryLeasePhase {
+        #[default]
+        Staging,
+        Installing,
+    }
+
     #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
     pub struct PrivateOramExternalRecoveryLease {
         pub owner_peer_id: PeerId,
@@ -164,6 +172,8 @@ pub mod consensus_ops {
         pub backup_generation: u64,
         pub issued_at_unix: u64,
         pub expires_at_unix: u64,
+        #[serde(default)]
+        pub phase: PrivateOramExternalRecoveryLeasePhase,
     }
 
     impl fmt::Debug for PrivateOramExternalRecoveryLease {
@@ -175,6 +185,7 @@ pub mod consensus_ops {
                 .field("backup_generation", &self.backup_generation)
                 .field("issued_at_unix", &self.issued_at_unix)
                 .field("expires_at_unix", &self.expires_at_unix)
+                .field("phase", &self.phase)
                 .finish()
         }
     }
@@ -226,6 +237,7 @@ pub mod consensus_ops {
     pub enum PrivateOramExternalRecoveryPhase {
         Begin,
         Renew,
+        PrepareInstall,
         Commit,
         Abort,
     }
@@ -1754,13 +1766,13 @@ mod test {
         CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramSessionLease,
         ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
         PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramExternalRecoveryKey,
-        PrivateOramExternalRecoveryLease, PrivateOramExternalRecoveryOperation,
-        PrivateOramExternalRecoveryPhase, PrivateOramExternalRecoveryState, PrivateOramIndexKind,
-        PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding,
-        PrivateOramLayoutTransitionState, PrivateOramReshardingLayoutTransition,
-        PrivateOramSessionLease, PrivateOramShardKeyLayoutChange,
-        PrivateOramShardKeyLayoutChangeKind, PrivateOramShardLayoutEntry,
-        canonical_private_oram_index_state_digest,
+        PrivateOramExternalRecoveryLease, PrivateOramExternalRecoveryLeasePhase,
+        PrivateOramExternalRecoveryOperation, PrivateOramExternalRecoveryPhase,
+        PrivateOramExternalRecoveryState, PrivateOramIndexKind, PrivateOramLayoutIndexStateBinding,
+        PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding, PrivateOramLayoutTransitionState,
+        PrivateOramReshardingLayoutTransition, PrivateOramSessionLease,
+        PrivateOramShardKeyLayoutChange, PrivateOramShardKeyLayoutChangeKind,
+        PrivateOramShardLayoutEntry, canonical_private_oram_index_state_digest,
         canonical_private_oram_resharding_post_layout_digest,
         canonical_private_oram_shard_layout_digest,
         classify_private_oram_replica_removal_layout_transition,
@@ -2013,6 +2025,7 @@ mod test {
                             backup_generation: 7,
                             issued_at_unix: 100,
                             expires_at_unix: 160,
+                            phase: PrivateOramExternalRecoveryLeasePhase::Staging,
                         }),
                     }),
                 },

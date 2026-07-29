@@ -1495,12 +1495,13 @@ mod tests {
         CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramSessionLease,
         ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
         PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramExternalRecoveryKey,
-        PrivateOramExternalRecoveryLease, PrivateOramExternalRecoveryOperation,
-        PrivateOramExternalRecoveryPhase, PrivateOramExternalRecoveryState, PrivateOramIndexKind,
-        PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding,
-        PrivateOramLayoutTransitionState, PrivateOramReshardingLayoutTransition,
-        PrivateOramReshardingOperation, PrivateOramSessionLease, PrivateOramShardTransferFinish,
-        PrivateOramShardTransferStart, canonical_private_oram_index_state_digest,
+        PrivateOramExternalRecoveryLease, PrivateOramExternalRecoveryLeasePhase,
+        PrivateOramExternalRecoveryOperation, PrivateOramExternalRecoveryPhase,
+        PrivateOramExternalRecoveryState, PrivateOramIndexKind, PrivateOramLayoutIndexStateBinding,
+        PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding, PrivateOramLayoutTransitionState,
+        PrivateOramReshardingLayoutTransition, PrivateOramReshardingOperation,
+        PrivateOramSessionLease, PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
+        canonical_private_oram_index_state_digest,
     };
 
     #[test]
@@ -2750,7 +2751,18 @@ mod tests {
                 backup_generation: 7,
                 issued_at_unix: 100,
                 expires_at_unix: 160,
+                phase: PrivateOramExternalRecoveryLeasePhase::Staging,
             }),
+        };
+        let prepared = PrivateOramExternalRecoveryState {
+            active_lease: Some(PrivateOramExternalRecoveryLease {
+                phase: PrivateOramExternalRecoveryLeasePhase::Installing,
+                ..acquired
+                    .active_lease
+                    .clone()
+                    .expect("acquired recovery must have a lease")
+            }),
+            ..acquired.clone()
         };
         let committed = PrivateOramExternalRecoveryState {
             committed_backup_generation: 7,
@@ -2791,10 +2803,24 @@ mod tests {
         assert!(
             source
                 .apply_normal_entry(&private_oram_external_recovery_entry(
-                    PrivateOramExternalRecoveryPhase::Commit,
+                    PrivateOramExternalRecoveryPhase::PrepareInstall,
                     CompareAndSwapPrivateOramExternalRecovery {
                         key: key.clone(),
                         expected: Some(acquired),
+                        new: Some(prepared.clone()),
+                    },
+                    layout.clone(),
+                    index_states.clone(),
+                ))
+                .unwrap()
+        );
+        assert!(
+            source
+                .apply_normal_entry(&private_oram_external_recovery_entry(
+                    PrivateOramExternalRecoveryPhase::Commit,
+                    CompareAndSwapPrivateOramExternalRecovery {
+                        key: key.clone(),
+                        expected: Some(prepared),
                         new: Some(committed.clone()),
                     },
                     layout,
