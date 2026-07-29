@@ -119,10 +119,10 @@ impl fmt::Debug for PrivateOramExternalRecoveryStaging {
 }
 
 pub struct PrivateOramExternalRecoveryVerification {
-    pub checkpoint_bundle: PrivateOramExternalRecoveryCheckpointBundle,
-    pub snapshot_path: PathBuf,
-    pub verified_collection_path: PathBuf,
-    pub verify_temp_collection_path: PathBuf,
+    checkpoint_bundle: PrivateOramExternalRecoveryCheckpointBundle,
+    snapshot_path: PathBuf,
+    verified_collection_path: PathBuf,
+    verify_temp_collection_path: PathBuf,
     operation_id_hash: String,
     checkpoint_digest: String,
     archive_identity: FileIdentity,
@@ -153,6 +153,46 @@ struct FileIdentity {
 
 struct PrivateOramExternalRecoveryLock {
     _file: std::fs::File,
+}
+
+impl PrivateOramExternalRecoveryVerification {
+    pub fn checkpoint_bundle(&self) -> &PrivateOramExternalRecoveryCheckpointBundle {
+        &self.checkpoint_bundle
+    }
+
+    pub fn snapshot_path(&self) -> &Path {
+        &self.snapshot_path
+    }
+
+    pub fn verified_collection_path(&self) -> &Path {
+        &self.verified_collection_path
+    }
+
+    pub fn verify_temp_collection_path(&self) -> &Path {
+        &self.verify_temp_collection_path
+    }
+
+    pub fn reset_verification_output(&self) -> Result<(), StorageError> {
+        remove_secure_directory_if_exists(&self.verify_temp_collection_path)?;
+        remove_secure_directory_if_exists(&self.verified_collection_path)?;
+        ensure_secure_directory(&self.verify_temp_collection_path)
+    }
+
+    pub fn promote_verification_output(&self) -> Result<(), StorageError> {
+        validate_secure_directory(&self.verify_temp_collection_path)?;
+        match fs::symlink_metadata(&self.verified_collection_path) {
+            Ok(_) => return Err(invalid_staging_state()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(invalid_staging_state()),
+        }
+        fs::rename(
+            &self.verify_temp_collection_path,
+            &self.verified_collection_path,
+        )
+        .map_err(|_| invalid_staging_state())?;
+        common::fs::sync_parent_dir(&self.verified_collection_path)
+            .map_err(|_| invalid_staging_state())
+    }
 }
 
 impl PrivateOramExternalRecoveryStaging {
@@ -732,6 +772,18 @@ fn secure_directory_exists(path: &Path) -> Result<bool, StorageError> {
     }
 }
 
+fn remove_secure_directory_if_exists(path: &Path) -> Result<(), StorageError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            validate_secure_directory(path)?;
+            fs::remove_dir_all(path).map_err(|_| invalid_staging_state())?;
+            common::fs::sync_parent_dir(path).map_err(|_| invalid_staging_state())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(invalid_staging_state()),
+    }
+}
+
 fn validate_secure_directory(path: &Path) -> Result<(), StorageError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| invalid_staging_state())?;
     if !metadata.file_type().is_dir() {
@@ -1010,17 +1062,17 @@ mod tests {
         assert_eq!(complete.bytes_received, snapshot.len() as u64);
 
         let verification = staging.prepare_verification().unwrap();
-        fs::create_dir(&verification.verified_collection_path).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-
-            fs::set_permissions(
-                &verification.verified_collection_path,
-                std::fs::Permissions::from_mode(0o700),
-            )
-            .unwrap();
-        }
+        verification.reset_verification_output().unwrap();
+        fs::write(
+            verification.verify_temp_collection_path().join("marker"),
+            b"verified",
+        )
+        .unwrap();
+        verification.promote_verification_output().unwrap();
+        assert_eq!(
+            fs::read(verification.verified_collection_path().join("marker")).unwrap(),
+            b"verified"
+        );
         let verified = staging.mark_verified(verification).unwrap();
         assert_eq!(
             verified.phase,

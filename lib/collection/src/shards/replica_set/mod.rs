@@ -130,7 +130,7 @@ pub type AbortShardTransfer = Arc<dyn Fn(ShardTransfer, &str) + Send + Sync>;
 pub type ChangePeerState = Arc<dyn Fn(PeerId, ShardId) + Send + Sync>;
 pub type ChangePeerFromState = Arc<dyn Fn(PeerId, ShardId, Option<ReplicaState>) + Send + Sync>;
 
-const REPLICA_STATE_FILE: &str = "replica_state.json";
+pub(crate) const REPLICA_STATE_FILE: &str = "replica_state.json";
 
 impl ShardReplicaSet {
     /// Create a new fresh replica set, no previous state is expected.

@@ -24,6 +24,7 @@ use collection::shards::shard::{PeerId, ShardId};
 use common::save_on_disk::SaveOnDisk;
 use fs_err::tokio as tokio_fs;
 use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
+use shard::snapshots::snapshot_data::SnapshotData;
 use shard::snapshots::snapshot_manifest::RecoveryType;
 
 use crate::content_manager::collection_meta_ops::{
@@ -31,12 +32,96 @@ use crate::content_manager::collection_meta_ops::{
 };
 use crate::content_manager::snapshots::download::download_snapshot;
 use crate::content_manager::snapshots::download_result::DownloadResult;
+use crate::content_manager::snapshots::private_oram_external_recovery::PrivateOramExternalRecoveryVerification;
 use crate::dispatcher::Dispatcher;
 use crate::rbac::{AccessRequirements, Auth, CollectionPass};
 use crate::{StorageError, TableOfContent};
 
 pub type SnapshotConfigValidator =
     Arc<dyn Fn(&str, &CollectionConfigInternal, &Path) -> Result<(), StorageError> + Send + Sync>;
+
+pub fn verify_private_oram_external_recovery_snapshot(
+    collection_name: &str,
+    verification: &PrivateOramExternalRecoveryVerification,
+    this_peer_id: PeerId,
+    existing_config: &CollectionConfigInternal,
+    snapshot_config_validator: Option<&SnapshotConfigValidator>,
+) -> Result<(), StorageError> {
+    let checkpoint = &verification.checkpoint_bundle().checkpoint;
+    if checkpoint.source_peer_id != this_peer_id {
+        return Err(invalid_private_oram_external_recovery_snapshot());
+    }
+
+    verification.reset_verification_output()?;
+    Collection::restore_snapshot(
+        SnapshotData::new_packed_persistent(verification.snapshot_path()),
+        verification.verify_temp_collection_path(),
+        this_peer_id,
+        true,
+    )
+    .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
+
+    let restored_path = verification.verify_temp_collection_path();
+    let snapshot_config = CollectionConfigInternal::load(restored_path)
+        .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
+    snapshot_config.validate_and_warn();
+    let snapshot_collection_id = snapshot_config
+        .stable_crypto_id(collection_name)
+        .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
+    let existing_collection_id = existing_config
+        .stable_crypto_id(collection_name)
+        .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
+    if snapshot_collection_id != checkpoint.collection_id
+        || existing_collection_id != checkpoint.collection_id
+        || snapshot_config != *existing_config
+    {
+        return Err(invalid_private_oram_external_recovery_snapshot());
+    }
+
+    validate_private_oram_snapshot_restore_layouts(
+        collection_name,
+        &snapshot_config,
+        restored_path,
+    )
+    .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
+    if let Some(validate_snapshot_config) = snapshot_config_validator {
+        validate_snapshot_config(collection_name, &snapshot_config, restored_path)
+            .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
+    }
+
+    let payload_index_file = restored_path.join(PAYLOAD_INDEX_CONFIG_FILE);
+    if !payload_index_file.is_file() {
+        return Err(invalid_private_oram_external_recovery_snapshot());
+    }
+    let payload_schema: SaveOnDisk<PayloadIndexSchema> =
+        SaveOnDisk::load_or_init_default(&payload_index_file)
+            .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
+    validate_payload_index_paths_for_encrypted_paths(
+        payload_schema.read().schema.keys(),
+        &snapshot_config.params,
+        "private ORAM external recovery",
+    )
+    .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
+
+    let local_shard_ids = Collection::private_oram_restored_snapshot_local_shard_ids(
+        &snapshot_config,
+        restored_path,
+        this_peer_id,
+    )
+    .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
+    if local_shard_ids != checkpoint.source_shard_ids {
+        return Err(invalid_private_oram_external_recovery_snapshot());
+    }
+
+    common::fs::bulk_sync_dir(restored_path)
+        .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
+    verification.promote_verification_output()?;
+    Ok(())
+}
+
+fn invalid_private_oram_external_recovery_snapshot() -> StorageError {
+    StorageError::bad_input("private ORAM external recovery snapshot preflight failed")
+}
 
 pub async fn activate_shard(
     toc: &TableOfContent,

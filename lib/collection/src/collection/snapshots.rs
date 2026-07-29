@@ -47,7 +47,8 @@ use crate::private_hnsw_oram_store::{
 use crate::private_result_oram_store::{PRIVATE_RESULT_ORAM_DIR, PrivateResultOramStore};
 use crate::shards::local_shard::LocalShard;
 use crate::shards::remote_shard::RemoteShard;
-use crate::shards::replica_set::ShardReplicaSet;
+use crate::shards::replica_set::replica_set_state::ReplicaSetState;
+use crate::shards::replica_set::{REPLICA_STATE_FILE, ShardReplicaSet};
 use crate::shards::shard::{PeerId, ShardId};
 use crate::shards::shard_config::{self, ShardConfig};
 use crate::shards::shard_holder::shard_mapping::ShardKeyMapping;
@@ -292,32 +293,7 @@ impl Collection {
             target_dir,
         )
         .map_err(|err| sanitize_private_hnsw_snapshot_layout_error(target_dir, err))?;
-        let configured_shards = config.params.shard_number.get();
-
-        let shard_ids_list: Vec<_> = match config.params.sharding_method.unwrap_or_default() {
-            ShardingMethod::Auto => (0..configured_shards).collect(),
-            ShardingMethod::Custom => {
-                // Load shard mapping from disk
-                let mapping_path = target_dir.join(SHARD_KEY_MAPPING_FILE);
-                debug_assert!(
-                    mapping_path.exists(),
-                    "Shard mapping file must exist once custom sharding is used"
-                );
-                if !mapping_path.exists() {
-                    Vec::new()
-                } else {
-                    let shard_key_mapping: ShardKeyMapping = read_json(&mapping_path)?;
-                    shard_key_mapping.shard_ids()
-                }
-            }
-        };
-
-        // Check that all shard ids are unique
-        debug_assert_eq!(
-            shard_ids_list.len(),
-            shard_ids_list.iter().collect::<HashSet<_>>().len(),
-            "Shard mapping must contain all shards",
-        );
+        let shard_ids_list = snapshot_shard_ids(&config, target_dir)?;
 
         for shard_id in shard_ids_list {
             let shard_path = shard_path(target_dir, shard_id);
@@ -344,6 +320,40 @@ impl Collection {
         }
 
         Ok(())
+    }
+
+    pub fn private_oram_restored_snapshot_local_shard_ids(
+        config: &CollectionConfigInternal,
+        collection_dir: &Path,
+        this_peer_id: PeerId,
+    ) -> CollectionResult<Vec<ShardId>> {
+        let mut local_shard_ids = Vec::new();
+        for shard_id in snapshot_shard_ids(config, collection_dir)? {
+            let shard_dir = shard_path(collection_dir, shard_id);
+            let Some(shard_config) = ShardConfig::load(&shard_dir)? else {
+                return Err(CollectionError::service_error(
+                    "private ORAM recovery snapshot shard configuration is missing",
+                ));
+            };
+            if shard_config.r#type != shard_config::ShardType::ReplicaSet {
+                return Err(CollectionError::service_error(
+                    "private ORAM recovery snapshot requires replica-set shards",
+                ));
+            }
+            let replica_state: ReplicaSetState = read_json(&shard_dir.join(REPLICA_STATE_FILE))?;
+            if replica_state.this_peer_id != this_peer_id
+                || replica_state.is_local && replica_state.get_peer_state(this_peer_id).is_none()
+            {
+                return Err(CollectionError::service_error(
+                    "private ORAM recovery snapshot replica ownership is invalid",
+                ));
+            }
+            if replica_state.is_local {
+                local_shard_ids.push(shard_id);
+            }
+        }
+        local_shard_ids.sort_unstable();
+        Ok(local_shard_ids)
     }
 
     pub fn validate_private_hnsw_oram_snapshot_restore_layout(
@@ -694,6 +704,31 @@ impl Collection {
         let params = self.collection_config.read().await.params.clone();
         validate_private_oram_shard_snapshot_operation(self.name(), &params, operation_name)
     }
+}
+
+fn snapshot_shard_ids(
+    config: &CollectionConfigInternal,
+    collection_dir: &Path,
+) -> CollectionResult<Vec<ShardId>> {
+    let shard_ids: Vec<_> = match config.params.sharding_method.unwrap_or_default() {
+        ShardingMethod::Auto => (0..config.params.shard_number.get()).collect(),
+        ShardingMethod::Custom => {
+            let mapping_path = collection_dir.join(SHARD_KEY_MAPPING_FILE);
+            if !mapping_path.is_file() {
+                return Err(CollectionError::service_error(
+                    "custom-sharded snapshot is missing its shard mapping",
+                ));
+            }
+            let shard_key_mapping: ShardKeyMapping = read_json(&mapping_path)?;
+            shard_key_mapping.shard_ids()
+        }
+    };
+    if shard_ids.len() != shard_ids.iter().collect::<HashSet<_>>().len() {
+        return Err(CollectionError::service_error(
+            "snapshot shard mapping contains duplicate shard ids",
+        ));
+    }
+    Ok(shard_ids)
 }
 
 fn private_oram_snapshot_source_dir(
@@ -2264,6 +2299,56 @@ mod tests {
             uuid: Some(uuid),
             metadata: None,
         }
+    }
+
+    #[test]
+    fn restored_private_oram_snapshot_reports_exact_local_replica_shards() {
+        use crate::shards::replica_set::replica_set_state::{ReplicaSetState, ReplicaState};
+
+        let temp = tempfile::tempdir().unwrap();
+        let config = private_hnsw_config(Uuid::from_u128(7));
+        let shard_dir = shard_path(temp.path(), 0);
+        fs::create_dir_all(&shard_dir).unwrap();
+        ShardConfig::new_replica_set().save(&shard_dir).unwrap();
+
+        let mut replica_state = ReplicaSetState::default();
+        replica_state.is_local = true;
+        replica_state.this_peer_id = 11;
+        replica_state.set_peer_state(11, ReplicaState::Active);
+        fs::write(
+            shard_dir.join(REPLICA_STATE_FILE),
+            serde_json::to_vec(&replica_state).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            Collection::private_oram_restored_snapshot_local_shard_ids(&config, temp.path(), 11,)
+                .unwrap(),
+            vec![0]
+        );
+
+        replica_state.is_local = false;
+        fs::write(
+            shard_dir.join(REPLICA_STATE_FILE),
+            serde_json::to_vec(&replica_state).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            Collection::private_oram_restored_snapshot_local_shard_ids(&config, temp.path(), 11,)
+                .unwrap()
+                .is_empty()
+        );
+
+        replica_state.this_peer_id = 12;
+        fs::write(
+            shard_dir.join(REPLICA_STATE_FILE),
+            serde_json::to_vec(&replica_state).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            Collection::private_oram_restored_snapshot_local_shard_ids(&config, temp.path(), 11,)
+                .is_err()
+        );
     }
 
     fn private_hnsw_with_result_config(uuid: Uuid) -> CollectionConfigInternal {
