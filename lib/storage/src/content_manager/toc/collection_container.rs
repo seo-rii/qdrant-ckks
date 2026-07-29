@@ -310,7 +310,7 @@ fn validate_private_oram_snapshot_recovery_complete(
 }
 
 impl TableOfContent {
-    pub(crate) fn require_private_oram_snapshot_recovery_complete(
+    pub fn require_private_oram_snapshot_recovery_complete(
         &self,
         collection: &Collection,
     ) -> Result<(), StorageError> {

@@ -35,6 +35,7 @@ use crate::actix::api::discover_api::config_discover_api;
 use crate::actix::api::issues_api::config_issues_api;
 use crate::actix::api::local_shard_api::config_local_shard_api;
 use crate::actix::api::private_hnsw_api::config_private_hnsw_api;
+use crate::actix::api::private_oram_recovery_api::config_private_oram_recovery_api;
 use crate::actix::api::private_result_oram_api::config_private_result_oram_api;
 use crate::actix::api::profiler_api::config_profiler_api;
 use crate::actix::api::query_api::config_query_api;
@@ -108,6 +109,11 @@ fn redact_private_oram_path(path: &str) -> String {
 
     let segments = path.split('/').collect::<Vec<_>>();
     let endpoint_idx = match segments.as_slice() {
+        ["", "collections", _, "private-oram", "recovery", action, ..]
+            if is_private_oram_recovery_action(action) =>
+        {
+            Some(5)
+        }
         ["", "collections", _, "private-hnsw", _, "buckets", ..] => Some(5),
         ["", "collections", _, "private-hnsw", _, "manifest", ..] => Some(5),
         [
@@ -313,6 +319,7 @@ pub fn init(
                 .configure(config_query_api)
                 .configure(config_facet_api)
                 .configure(config_private_hnsw_api)
+                .configure(config_private_oram_recovery_api)
                 .configure(config_private_result_oram_api)
                 .configure(config_shards_api)
                 .configure(config_issues_api)
@@ -465,11 +472,19 @@ fn is_private_oram_request_path(path: &str) -> bool {
 
 fn path_has_private_oram_marker(path: &str) -> bool {
     let segments = path.split('/').collect::<Vec<_>>();
-    segments.get(1) == Some(&"collections")
+    matches!(
+        segments.as_slice(),
+        ["", "collections", _, "private-oram", "recovery", action, ..]
+            if is_private_oram_recovery_action(action)
+    ) || (segments.get(1) == Some(&"collections")
         && matches!(
             segments.get(3).copied(),
             Some("private-hnsw" | "private-result-oram")
-        )
+        ))
+}
+
+fn is_private_oram_recovery_action(action: &str) -> bool {
+    matches!(action, "begin" | "upload" | "status" | "verify" | "abort")
 }
 
 #[cfg(test)]
@@ -1447,6 +1462,35 @@ mod tests {
             ),
             "/collections/private-result-oram/points/search?token=query-sentinel"
         );
+    }
+
+    #[test]
+    fn private_oram_recovery_access_paths_redact_queries_and_unknown_suffixes() {
+        for action in ["begin", "upload", "status", "verify", "abort"] {
+            let endpoint = format!("/collections/docs/private-oram/recovery/{action}");
+            assert_eq!(redact_private_oram_access_path(&endpoint), endpoint);
+            assert_eq!(
+                redact_private_oram_access_path(&format!(
+                    "{endpoint}?operation_id=operation-token-sentinel"
+                )),
+                format!("{endpoint}?[redacted]")
+            );
+            assert_eq!(
+                redact_private_oram_access_path(&format!(
+                    "{endpoint}/operation-token-sentinel?chunk=chunk-sentinel"
+                )),
+                format!("{endpoint}/[redacted]?[redacted]")
+            );
+        }
+
+        for lookalike in [
+            "/collections/docs/private-oram/recovery/commit?operation_id=operation-token-sentinel",
+            "/collections/docs/private-oramish/recovery/begin?operation_id=operation-token-sentinel",
+            "/collections/docs/private-oram/recover/begin?operation_id=operation-token-sentinel",
+            "/collections/private-oram/points/search?operation_id=operation-token-sentinel",
+        ] {
+            assert_eq!(redact_private_oram_access_path(lookalike), lookalike);
+        }
     }
 
     #[test]

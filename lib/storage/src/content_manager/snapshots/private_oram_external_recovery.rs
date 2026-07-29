@@ -279,6 +279,31 @@ impl PrivateOramExternalRecoveryStaging {
         Ok(state.status())
     }
 
+    pub fn status_for_consensus_lease(
+        &self,
+        checkpoint_digest: &str,
+        backup_generation: u64,
+        lease_expires_at_unix: u64,
+    ) -> Result<PrivateOramExternalRecoveryStagingStatus, StorageError> {
+        validate_base64url_sha256(checkpoint_digest)?;
+        let _collection_lock = self.acquire_collection_lock(false)?;
+        let mut state = self
+            .read_state()?
+            .ok_or_else(|| StorageError::not_found("private ORAM external recovery not found"))?;
+        self.reconcile_snapshot_file(&state)?;
+        if state.checkpoint_digest != checkpoint_digest
+            || state.checkpoint_bundle.checkpoint.backup_generation != backup_generation
+            || lease_expires_at_unix < state.lease_expires_at_unix
+        {
+            return Err(invalid_staging_state());
+        }
+        if lease_expires_at_unix > state.lease_expires_at_unix {
+            state.lease_expires_at_unix = lease_expires_at_unix;
+            self.write_state(&state)?;
+        }
+        Ok(state.status())
+    }
+
     pub fn append_chunk(
         &self,
         chunk_index: u64,
@@ -1032,6 +1057,18 @@ mod tests {
             .unwrap();
         assert_eq!(initial.bytes_received, 0);
         assert_eq!(initial.next_chunk_index, 0);
+        assert_eq!(
+            staging
+                .status_for_consensus_lease(&checkpoint_digest, 7, 1_100)
+                .unwrap()
+                .lease_expires_at_unix,
+            1_100
+        );
+        assert!(
+            staging
+                .status_for_consensus_lease(&checkpoint_digest, 7, 1_000)
+                .is_err()
+        );
 
         let first_path = temp.path().join("first.chunk");
         let first_hash = chunk_file(

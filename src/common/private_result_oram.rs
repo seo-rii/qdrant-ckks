@@ -2337,6 +2337,15 @@ fn private_result_oram_instance<'a>(
     Ok(instance)
 }
 
+pub(crate) fn resolve_private_result_oram_external_recovery_owner_public_key(
+    settings: &Settings,
+    rule: &EncryptionRuleRef,
+    signing_key_id: &str,
+) -> StorageResult<Vec<u8>> {
+    let instance = private_result_oram_instance(settings, rule)?;
+    signature_public_key(instance, signing_key_id)
+}
+
 fn manifest_context_from_runtime(
     collection_crypto_id: &str,
     instance: &CryptoInstanceConfig,
@@ -3388,6 +3397,73 @@ mod private_result_oram_tests {
         );
         assert!(!rendered.contains(rule_id), "{rendered}");
         assert!(!rendered.contains(instance_id), "{rendered}");
+    }
+
+    #[test]
+    fn external_recovery_owner_key_resolution_validates_instance_provider_and_key() {
+        let instance_id = "docs_private_result_oram";
+        let rule = EncryptionRuleRef {
+            id: "docs_private_result_oram".to_string(),
+            selector: EncryptionSelector::PayloadPaths {
+                paths: vec!["body".to_string()],
+            },
+            instance: instance_id.to_string(),
+            binding: Some(PRIVATE_RESULT_ORAM_BINDING.to_string()),
+        };
+
+        let missing_settings = Settings::new(None).unwrap();
+        let rendered = resolve_private_result_oram_external_recovery_owner_public_key(
+            &missing_settings,
+            &rule,
+            SIGNING_KEY_ID,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(rendered.contains("missing runtime instance"), "{rendered}");
+
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto.instances.insert(
+            instance_id.to_string(),
+            CryptoInstanceConfig {
+                provider: qdrant_sec::VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                materials: HashMap::new(),
+                backend_ref: None,
+                options: json!({}),
+            },
+        );
+        let rendered = resolve_private_result_oram_external_recovery_owner_public_key(
+            &settings,
+            &rule,
+            SIGNING_KEY_ID,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            rendered.contains(PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER),
+            "{rendered}"
+        );
+
+        settings.crypto.instances.insert(
+            instance_id.to_string(),
+            instance_with_signature_public_key(&BASE64URL_NOPAD.encode(&[9; 32])),
+        );
+        let rendered = resolve_private_result_oram_external_recovery_owner_public_key(
+            &settings,
+            &rule,
+            "tenant-a/missing-private-result-signing-key",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(rendered.contains("signature key id is not configured"));
+        assert_eq!(
+            resolve_private_result_oram_external_recovery_owner_public_key(
+                &settings,
+                &rule,
+                SIGNING_KEY_ID,
+            )
+            .unwrap(),
+            [9; 32]
+        );
     }
 
     #[test]

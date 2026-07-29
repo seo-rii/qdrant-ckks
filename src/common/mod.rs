@@ -12,6 +12,7 @@ pub mod metrics;
 pub mod private_hnsw;
 #[cfg(test)]
 pub(crate) mod private_hnsw_wire_fixture;
+pub mod private_oram_recovery;
 pub mod private_result_oram;
 pub mod pyroscope_state;
 pub mod query;

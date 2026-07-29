@@ -2661,6 +2661,15 @@ fn private_hnsw_instance<'a>(
     Ok(instance)
 }
 
+pub(crate) fn resolve_private_hnsw_external_recovery_owner_public_key(
+    settings: &Settings,
+    rule: &EncryptionRuleRef,
+    signing_key_id: &str,
+) -> StorageResult<Vec<u8>> {
+    let instance = private_hnsw_instance(settings, rule)?;
+    signature_public_key(instance, signing_key_id)
+}
+
 fn has_private_result_oram_binding(
     settings: &Settings,
     encryption: &CollectionEncryptionConfig,
@@ -4258,6 +4267,83 @@ mod private_hnsw_tests {
         );
         assert!(!rendered.contains(rule_id), "{rendered}");
         assert!(!rendered.contains(instance_id), "{rendered}");
+    }
+
+    #[test]
+    fn external_recovery_owner_key_resolution_validates_instance_provider_and_key() {
+        let instance_id = "docs_text_private_hnsw";
+        let signing_key_id = "tenant-a/private-hnsw-signing-v1";
+        let rule = EncryptionRuleRef {
+            id: "docs_text_private_hnsw".to_string(),
+            selector: EncryptionSelector::VectorNames {
+                names: vec!["text".to_string()],
+            },
+            instance: instance_id.to_string(),
+            binding: Some(PRIVATE_HNSW_ORAM_BINDING.to_string()),
+        };
+
+        let missing_settings = Settings::new(None).unwrap();
+        let rendered = resolve_private_hnsw_external_recovery_owner_public_key(
+            &missing_settings,
+            &rule,
+            signing_key_id,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(rendered.contains("missing runtime instance"), "{rendered}");
+
+        let mut settings = Settings::new(None).unwrap();
+        settings.crypto.instances.insert(
+            instance_id.to_string(),
+            CryptoInstanceConfig {
+                provider: PAYLOAD_PRIVATE_RESULT_ORAM_PROVIDER.to_string(),
+                materials: HashMap::new(),
+                backend_ref: None,
+                options: serde_json::json!({}),
+            },
+        );
+        let rendered = resolve_private_hnsw_external_recovery_owner_public_key(
+            &settings,
+            &rule,
+            signing_key_id,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            rendered.contains(VECTOR_PRIVATE_HNSW_ORAM_PROVIDER),
+            "{rendered}"
+        );
+
+        settings.crypto.instances.insert(
+            instance_id.to_string(),
+            CryptoInstanceConfig {
+                provider: VECTOR_PRIVATE_HNSW_ORAM_PROVIDER.to_string(),
+                materials: HashMap::new(),
+                backend_ref: None,
+                options: serde_json::json!({
+                    SIGNATURE_PUBLIC_KEYS_OPTION: {
+                        signing_key_id: BASE64URL_NOPAD.encode(&[7; 32]),
+                    },
+                }),
+            },
+        );
+        let rendered = resolve_private_hnsw_external_recovery_owner_public_key(
+            &settings,
+            &rule,
+            "tenant-a/missing-private-hnsw-signing-key",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(rendered.contains("signature key id is not configured"));
+        assert_eq!(
+            resolve_private_hnsw_external_recovery_owner_public_key(
+                &settings,
+                &rule,
+                signing_key_id,
+            )
+            .unwrap(),
+            [7; 32]
+        );
     }
 
     #[test]
