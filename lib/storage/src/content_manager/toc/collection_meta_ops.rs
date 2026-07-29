@@ -56,6 +56,8 @@ impl TableOfContent {
         &self,
         operation: CollectionMetaOperations,
     ) -> Result<bool, StorageError> {
+        self.require_private_oram_external_recovery_meta_allowed(&operation)
+            .await?;
         match operation {
             CollectionMetaOperations::CreateCollection(mut operation) => {
                 log::info!("Creating collection {}", operation.collection_name);
@@ -189,6 +191,76 @@ impl TableOfContent {
                 Ok(true)
             }
         }
+    }
+
+    pub(crate) async fn require_private_oram_external_recovery_meta_allowed(
+        &self,
+        operation: &CollectionMetaOperations,
+    ) -> Result<(), StorageError> {
+        let collection_names = match operation {
+            CollectionMetaOperations::CreateCollection(operation) => {
+                vec![operation.collection_name.clone()]
+            }
+            CollectionMetaOperations::UpdateCollection(operation) => {
+                vec![operation.collection_name.clone()]
+            }
+            CollectionMetaOperations::ApplyCryptoMigration(operation) => {
+                vec![operation.collection_name.clone()]
+            }
+            CollectionMetaOperations::DeleteCollection(operation) => vec![operation.0.clone()],
+            CollectionMetaOperations::ChangeAliases(operation) => {
+                let aliases = self.alias_persistence.read().await;
+                operation
+                    .actions
+                    .iter()
+                    .filter_map(|action| match action {
+                        AliasOperations::CreateAlias(operation) => {
+                            Some(operation.create_alias.collection_name.clone())
+                        }
+                        AliasOperations::DeleteAlias(operation) => {
+                            aliases.get(&operation.delete_alias.alias_name)
+                        }
+                        AliasOperations::RenameAlias(operation) => {
+                            aliases.get(&operation.rename_alias.old_alias_name)
+                        }
+                    })
+                    .collect()
+            }
+            CollectionMetaOperations::Resharding(collection_name, _)
+            | CollectionMetaOperations::TransferShard(collection_name, _) => {
+                vec![collection_name.clone()]
+            }
+            CollectionMetaOperations::SetShardReplicaState(operation) => {
+                vec![operation.collection_name.clone()]
+            }
+            CollectionMetaOperations::CreateShardKey(operation) => {
+                vec![operation.collection_name.clone()]
+            }
+            CollectionMetaOperations::DropShardKey(operation) => {
+                vec![operation.collection_name.clone()]
+            }
+            CollectionMetaOperations::CreatePayloadIndex(operation) => {
+                vec![operation.collection_name.clone()]
+            }
+            CollectionMetaOperations::DropPayloadIndex(operation) => {
+                vec![operation.collection_name.clone()]
+            }
+            CollectionMetaOperations::Nop { .. } => Vec::new(),
+            #[cfg(feature = "staging")]
+            CollectionMetaOperations::TestSlowDown(_) => Vec::new(),
+        };
+
+        for collection_name in collection_names {
+            match self.get_collection_unfenced(&collection_name).await {
+                Ok((_, collection)) => {
+                    self.require_private_oram_external_recovery_write_allowed(&collection)
+                        .await?;
+                }
+                Err(StorageError::NotFound { .. }) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
     }
 
     async fn update_collection(

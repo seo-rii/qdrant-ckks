@@ -511,6 +511,8 @@ impl TableOfContent {
         // so this method is cancel safe.
 
         let collection = self.get_collection(&collection_pass).await?;
+        self.require_private_oram_external_recovery_write_allowed(&collection)
+            .await?;
 
         // Ordered operation flow:
         //

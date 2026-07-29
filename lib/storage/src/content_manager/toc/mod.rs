@@ -47,6 +47,10 @@ use crate::content_manager::alias_mapping::AliasPersistence;
 use crate::content_manager::collection_meta_ops::CreateCollectionOperation;
 use crate::content_manager::collections_ops::{Checker, Collections};
 use crate::content_manager::consensus::operation_sender::OperationSender;
+use crate::content_manager::consensus_ops::{
+    PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryLeasePhase,
+    PrivateOramExternalRecoveryState, private_oram_index_keys_for_config,
+};
 use crate::content_manager::errors::StorageError;
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
 use crate::content_manager::toc::telemetry::TocTelemetryCollector;
@@ -58,10 +62,20 @@ pub const COLLECTIONS_DIR: &str = "collections";
 pub const FULL_SNAPSHOT_FILE_NAME: &str = "full-snapshot";
 const CLIENT_PAYLOAD_NONCE_REPLAY_CACHE_CAPACITY: usize = 1_000_000;
 const CLIENT_PAYLOAD_NONCE_REPLAY_ERROR: &str = "client encrypted payload nonce was already used in this collection; regenerate the client-side envelope with a fresh nonce before retrying";
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_WRITE_FENCE_ERROR: &str =
+    "collection writes are locked by private ORAM external recovery";
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_FENCE_ERROR: &str =
+    "collection is locked by private ORAM external recovery installation";
 
 /// How long to wait till deleted collection is released from previous operations
 pub const COLLECTION_DELETE_WAIT_TIMEOUT: Duration = Duration::from_secs(60 * 10); // 10 mins
 pub const COLLECTION_DELETE_SPIN_INTERVAL: Duration = Duration::from_millis(200);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivateOramExternalRecoveryFence {
+    Writes,
+    All,
+}
 
 /// The main object of the service. It holds all objects, required for proper functioning.
 ///
@@ -427,6 +441,16 @@ impl TableOfContent {
         &self,
         collection_name: &str,
     ) -> Result<Arc<Collection>, StorageError> {
+        let (_, collection) = self.get_collection_unfenced(collection_name).await?;
+        self.require_private_oram_external_recovery_read_allowed(&collection)
+            .await?;
+        Ok(collection)
+    }
+
+    async fn get_collection_unfenced(
+        &self,
+        collection_name: &str,
+    ) -> Result<(String, Arc<Collection>), StorageError> {
         let read_collection = self.collections.read().await;
 
         let real_collection_name = {
@@ -434,14 +458,71 @@ impl TableOfContent {
             Self::resolve_name(collection_name, &read_collection, &alias_persistence)?
         };
 
-        read_collection
+        let collection = read_collection
             .get(&real_collection_name)
             .cloned()
             .ok_or_else(|| {
                 StorageError::service_error(format!(
                     "Resolved collection '{real_collection_name}' is missing from the collection registry",
                 ))
-            })
+            })?;
+        Ok((real_collection_name, collection))
+    }
+
+    async fn private_oram_external_recovery_fence(
+        &self,
+        collection: &Collection,
+    ) -> Result<Option<PrivateOramExternalRecoveryFence>, StorageError> {
+        let Some(dispatcher) = self.toc_dispatcher.lock().clone() else {
+            return Ok(None);
+        };
+        let config = collection.config_snapshot().await;
+        if private_oram_index_keys_for_config(&config, collection.name())?.is_empty() {
+            return Ok(None);
+        }
+        let key = PrivateOramExternalRecoveryKey {
+            collection_id: config.stable_crypto_id(collection.name())?,
+        };
+        Ok(private_oram_external_recovery_fence(
+            dispatcher
+                .consensus_state()
+                .private_oram_external_recovery(&key)
+                .as_ref(),
+        ))
+    }
+
+    async fn require_private_oram_external_recovery_read_allowed(
+        &self,
+        collection: &Collection,
+    ) -> Result<(), StorageError> {
+        if self
+            .private_oram_external_recovery_fence(collection)
+            .await?
+            == Some(PrivateOramExternalRecoveryFence::All)
+        {
+            return Err(StorageError::Locked {
+                description: PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_FENCE_ERROR.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    async fn require_private_oram_external_recovery_write_allowed(
+        &self,
+        collection: &Collection,
+    ) -> Result<(), StorageError> {
+        match self
+            .private_oram_external_recovery_fence(collection)
+            .await?
+        {
+            Some(PrivateOramExternalRecoveryFence::Writes) => Err(StorageError::Locked {
+                description: PRIVATE_ORAM_EXTERNAL_RECOVERY_WRITE_FENCE_ERROR.to_string(),
+            }),
+            Some(PrivateOramExternalRecoveryFence::All) => Err(StorageError::Locked {
+                description: PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_FENCE_ERROR.to_string(),
+            }),
+            None => Ok(()),
+        }
     }
 
     pub async fn get_collection(
@@ -911,6 +992,20 @@ impl TableOfContent {
     }
 }
 
+fn private_oram_external_recovery_fence(
+    state: Option<&PrivateOramExternalRecoveryState>,
+) -> Option<PrivateOramExternalRecoveryFence> {
+    match state.and_then(|state| state.active_lease.as_ref()) {
+        Some(lease) if lease.phase == PrivateOramExternalRecoveryLeasePhase::Staging => {
+            Some(PrivateOramExternalRecoveryFence::Writes)
+        }
+        Some(lease) if lease.phase == PrivateOramExternalRecoveryLeasePhase::Installing => {
+            Some(PrivateOramExternalRecoveryFence::All)
+        }
+        Some(_) | None => None,
+    }
+}
+
 fn reject_private_oram_receiving_shard_until_supported(
     _collection_name: &str,
     private_oram_bucket_store_collection: bool,
@@ -935,6 +1030,43 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn private_oram_external_recovery_fence_tracks_install_phase() {
+        let state = |phase| PrivateOramExternalRecoveryState {
+            committed_backup_generation: 0,
+            committed_checkpoint_digest: None,
+            committed_install_intent_digest: None,
+            active_lease: Some(
+                crate::content_manager::consensus_ops::PrivateOramExternalRecoveryLease {
+                    owner_peer_id: 7,
+                    operation_id_hash: "A".repeat(43),
+                    checkpoint_digest: "B".repeat(43),
+                    backup_generation: 1,
+                    issued_at_unix: 100,
+                    expires_at_unix: 160,
+                    install_intent_digest: (phase
+                        == PrivateOramExternalRecoveryLeasePhase::Installing)
+                        .then(|| "C".repeat(43)),
+                    phase,
+                },
+            ),
+        };
+
+        assert_eq!(private_oram_external_recovery_fence(None), None);
+        assert_eq!(
+            private_oram_external_recovery_fence(Some(&state(
+                PrivateOramExternalRecoveryLeasePhase::Staging,
+            ))),
+            Some(PrivateOramExternalRecoveryFence::Writes),
+        );
+        assert_eq!(
+            private_oram_external_recovery_fence(Some(&state(
+                PrivateOramExternalRecoveryLeasePhase::Installing,
+            ))),
+            Some(PrivateOramExternalRecoveryFence::All),
+        );
+    }
 
     const PRIVATE_ORAM_RECEIVING_SHARD_COLLECTION_NAMES: &[&str] = &[
         "clientState.json",

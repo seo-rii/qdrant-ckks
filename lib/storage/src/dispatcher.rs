@@ -146,6 +146,9 @@ impl Dispatcher {
         wait_timeout: Option<Duration>,
     ) -> Result<bool, StorageError> {
         auth.check_collection_meta_operation(&operation)?;
+        self.toc
+            .require_private_oram_external_recovery_meta_allowed(&operation)
+            .await?;
 
         // if distributed deployment is enabled
         if let Some(state) = self.consensus_state.as_ref() {
@@ -446,6 +449,9 @@ impl Dispatcher {
         wait_timeout: Option<Duration>,
     ) -> Result<bool, StorageError> {
         auth.check_collection_meta_operation(&transition.collection_meta)?;
+        self.toc
+            .require_private_oram_external_recovery_meta_allowed(&transition.collection_meta)
+            .await?;
         let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
             StorageError::service_error(
                 "private ORAM collection layout transition requires distributed mode",
@@ -466,6 +472,9 @@ impl Dispatcher {
         wait_timeout: Option<Duration>,
     ) -> Result<bool, StorageError> {
         auth.check_collection_meta_operation(&operation.collection_meta)?;
+        self.toc
+            .require_private_oram_external_recovery_meta_allowed(&operation.collection_meta)
+            .await?;
         let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
             StorageError::service_error(
                 "private ORAM shard transfer layout transition requires distributed mode",
@@ -486,6 +495,9 @@ impl Dispatcher {
         wait_timeout: Option<Duration>,
     ) -> Result<bool, StorageError> {
         auth.check_collection_meta_operation(&operation.collection_meta)?;
+        self.toc
+            .require_private_oram_external_recovery_meta_allowed(&operation.collection_meta)
+            .await?;
         let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
             StorageError::service_error(
                 "private ORAM resharding layout transition requires distributed mode",
@@ -506,6 +518,9 @@ impl Dispatcher {
         wait_timeout: Option<Duration>,
     ) -> Result<bool, StorageError> {
         auth.check_collection_meta_operation(&operation.collection_meta)?;
+        self.toc
+            .require_private_oram_external_recovery_meta_allowed(&operation.collection_meta)
+            .await?;
         let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
             StorageError::service_error(
                 "private ORAM resharding layout transition requires distributed mode",
