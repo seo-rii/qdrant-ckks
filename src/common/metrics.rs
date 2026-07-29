@@ -58,6 +58,11 @@ const REST_ENDPOINT_WHITELIST: &[&str] = &[
     "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
     "/collections/{collection_name}/private-hnsw/{vector_name}/session",
     "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+    "/collections/{collection_name}/private-oram/recovery/abort",
+    "/collections/{collection_name}/private-oram/recovery/begin",
+    "/collections/{collection_name}/private-oram/recovery/status",
+    "/collections/{collection_name}/private-oram/recovery/upload",
+    "/collections/{collection_name}/private-oram/recovery/verify",
     "/collections/{collection_name}/private-result-oram/buckets",
     "/collections/{collection_name}/private-result-oram/manifest",
     "/collections/{collection_name}/private-result-oram/oram/commit",
@@ -144,6 +149,21 @@ fn canonical_rest_endpoint_label(endpoint: &str) -> Option<&str> {
         ),
         ["collections", _, "private-hnsw", _, "session"] => {
             Some("/collections/{collection_name}/private-hnsw/{vector_name}/session")
+        }
+        ["collections", _, "private-oram", "recovery", "abort"] => {
+            Some("/collections/{collection_name}/private-oram/recovery/abort")
+        }
+        ["collections", _, "private-oram", "recovery", "begin"] => {
+            Some("/collections/{collection_name}/private-oram/recovery/begin")
+        }
+        ["collections", _, "private-oram", "recovery", "status"] => {
+            Some("/collections/{collection_name}/private-oram/recovery/status")
+        }
+        ["collections", _, "private-oram", "recovery", "upload"] => {
+            Some("/collections/{collection_name}/private-oram/recovery/upload")
+        }
+        ["collections", _, "private-oram", "recovery", "verify"] => {
+            Some("/collections/{collection_name}/private-oram/recovery/verify")
         }
         ["collections", _, "private-result-oram", "buckets"] => {
             Some("/collections/{collection_name}/private-result-oram/buckets")
@@ -1495,6 +1515,11 @@ mod tests {
             "/collections/{collection_name}/private-hnsw/{vector_name}/oram/read_paths",
             "/collections/{collection_name}/private-hnsw/{vector_name}/session",
             "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
+            "/collections/{collection_name}/private-oram/recovery/abort",
+            "/collections/{collection_name}/private-oram/recovery/begin",
+            "/collections/{collection_name}/private-oram/recovery/status",
+            "/collections/{collection_name}/private-oram/recovery/upload",
+            "/collections/{collection_name}/private-oram/recovery/verify",
             "/collections/{collection_name}/private-result-oram/buckets",
             "/collections/{collection_name}/private-result-oram/manifest",
             "/collections/{collection_name}/private-result-oram/oram/commit",
@@ -1529,6 +1554,37 @@ mod tests {
             assert!(
                 GRPC_ENDPOINT_WHITELIST.binary_search(&endpoint).is_ok(),
                 "gRPC private ORAM endpoint `{endpoint}` must be whitelisted for metrics",
+            );
+        }
+    }
+
+    #[test]
+    fn test_private_oram_recovery_metrics_normalizes_only_fixed_route_shapes() {
+        use super::canonical_rest_endpoint_label;
+
+        for action in ["begin", "upload", "status", "verify", "abort"] {
+            let raw =
+                format!("/collections/docs/private-oram/recovery/{action}?operation_id=sentinel");
+            let canonical =
+                format!("/collections/{{collection_name}}/private-oram/recovery/{action}");
+            assert_eq!(
+                canonical_rest_endpoint_label(&raw),
+                Some(canonical.as_str()),
+                "{raw} must normalize without collection or query values"
+            );
+        }
+
+        for raw in [
+            "/collections/docs/private-oram/recovery/commit",
+            "/collections/docs/private-oram/recovery/begin/operation-token-sentinel",
+            "/collections/docs/private-oram/recover/begin",
+            "/collections/docs/private-oramish/recovery/begin",
+            "/collections/private-oram/points/search",
+        ] {
+            assert_eq!(
+                canonical_rest_endpoint_label(raw),
+                None,
+                "lookalike or malformed recovery path must not become a fixed metrics label: {raw}"
             );
         }
     }
