@@ -62,9 +62,11 @@ collection = { path = "../collection" }
 shard = { path = "../shard" }
 api = { path = "../api" }
 wal = { path = "../wal" }
+qdrant-sec = { path = "../crypto" }
 futures = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
+fs4 = { workspace = true }
 url = { workspace = true }
 reqwest = { workspace = true }
 tempfile = { workspace = true }

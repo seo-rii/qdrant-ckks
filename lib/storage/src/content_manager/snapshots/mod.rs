@@ -1,6 +1,7 @@
 pub mod download;
 pub mod download_result;
 pub mod download_tar;
+pub mod private_oram_external_recovery;
 pub mod recover;
 
 use std::collections::HashMap;
