@@ -34,6 +34,7 @@ use startup::setup_panic_hook;
 use storage::content_manager::consensus::operation_sender::OperationSender;
 use storage::content_manager::consensus::persistent::Persistent;
 use storage::content_manager::consensus_manager::{ConsensusManager, ConsensusStateRef};
+use storage::content_manager::snapshots::private_oram_external_recovery::reconcile_private_oram_external_recovery_installs;
 use storage::content_manager::toc::TableOfContent;
 use storage::content_manager::toc::dispatcher::TocDispatcher;
 use storage::dispatcher::Dispatcher;
@@ -301,6 +302,12 @@ fn main() -> anyhow::Result<()> {
         args.reinit,
         settings.cluster.peer_id,
     )?;
+    reconcile_private_oram_external_recovery_installs(&settings.storage.storage_path, |key| {
+        persistent_consensus_state.private_oram_external_recovery(key)
+    })
+    .map_err(|err| {
+        anyhow::anyhow!("Failed to reconcile private ORAM recovery installation: {err}")
+    })?;
 
     let is_distributed_deployment = settings.cluster.enabled;
 
@@ -332,6 +339,12 @@ fn main() -> anyhow::Result<()> {
     } else {
         vec![]
     };
+    reconcile_private_oram_external_recovery_installs(&settings.storage.storage_path, |key| {
+        persistent_consensus_state.private_oram_external_recovery(key)
+    })
+    .map_err(|err| {
+        anyhow::anyhow!("Failed to reconcile private ORAM recovery installation: {err}")
+    })?;
 
     // Create and own search runtime out of the scope of async context to ensure correct
     // destruction of it
