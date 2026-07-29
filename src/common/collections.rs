@@ -7,6 +7,7 @@ use api::grpc::qdrant::CollectionExists;
 use api::rest::models::{
     CollectionDescription, CollectionsResponse, ShardKeyDescription, ShardKeysResponse,
 };
+use collection::collection::Collection;
 use collection::config::{CollectionConfigInternal, ShardingMethod};
 #[cfg(feature = "staging")]
 use collection::operations::cluster_ops::TestSlowDownOperation;
@@ -783,6 +784,7 @@ pub async fn do_update_collection_cluster(
             submit_restart_transfer_with_private_oram_preinstall(
                 dispatcher,
                 settings,
+                &collection,
                 &collection_state.config,
                 collection_name,
                 ShardTransferRestart {
@@ -791,8 +793,10 @@ pub async fn do_update_collection_cluster(
                     to: to_peer_id,
                     from: from_peer_id,
                     method,
+                    expected_private_oram_transfer: None,
                 },
                 private_oram_transfer,
+                None,
                 auth,
                 wait_timeout,
             )
@@ -1393,13 +1397,15 @@ async fn submit_private_oram_resharding_finish_with_reservation(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn submit_restart_transfer_with_private_oram_preinstall(
+pub(crate) async fn submit_restart_transfer_with_private_oram_preinstall(
     dispatcher: &Dispatcher,
     settings: &Settings,
+    collection: &Collection,
     config: &CollectionConfigInternal,
     collection_name: String,
-    transfer_restart: ShardTransferRestart,
+    mut transfer_restart: ShardTransferRestart,
     private_oram_transfer: bool,
+    expected_private_oram_transfer: Option<ShardTransfer>,
     auth: Auth,
     wait_timeout: Option<Duration>,
 ) -> Result<bool, StorageError> {
@@ -1420,7 +1426,44 @@ async fn submit_restart_transfer_with_private_oram_preinstall(
             "private ORAM restart transfer must be coordinated by its current source peer",
         ));
     }
-    let reservation = prepare_private_oram_shard_transfer(
+    let transfer_key = transfer_restart.key();
+    let active_transfers = collection.state().await.transfers;
+    let active_transfer = match expected_private_oram_transfer {
+        Some(expected) if active_transfers.len() == 1 && active_transfers.contains(&expected) => {
+            expected
+        }
+        Some(_) => {
+            return Err(StorageError::bad_request(
+                "private ORAM restart requires the exact expected active transfer",
+            ));
+        }
+        None => active_transfers
+            .into_iter()
+            .find(|transfer| transfer.key() == transfer_key)
+            .ok_or_else(|| {
+                StorageError::bad_request(
+                    "private ORAM restart requires the exact active transfer task",
+                )
+            })?,
+    };
+    transfer_restart.expected_private_oram_transfer = Some(Box::new(active_transfer.clone()));
+    let owns_fixed_restart_intent = !active_transfer.is_resharding()
+        && collection
+            .mark_private_oram_fixed_transfer_resume(&active_transfer)
+            .await;
+    if let Err(error) = collection
+        .stop_shard_transfer_task_for_restart(&active_transfer)
+        .await
+    {
+        if owns_fixed_restart_intent {
+            collection
+                .clear_private_oram_fixed_transfer_resume(&active_transfer)
+                .await;
+        }
+        return Err(error.into());
+    }
+
+    let reservation = match prepare_private_oram_shard_transfer(
         dispatcher,
         &auth,
         settings,
@@ -1428,7 +1471,18 @@ async fn submit_restart_transfer_with_private_oram_preinstall(
         config,
         transfer_restart.to,
     )
-    .await?;
+    .await
+    {
+        Ok(reservation) => reservation,
+        Err(error) => {
+            if owns_fixed_restart_intent {
+                collection
+                    .clear_private_oram_fixed_transfer_resume(&active_transfer)
+                    .await;
+            }
+            return Err(error);
+        }
+    };
     let result = dispatcher
         .submit_collection_meta_op(
             CollectionMetaOperations::TransferShard(
@@ -1450,6 +1504,11 @@ async fn submit_restart_transfer_with_private_oram_preinstall(
         log::warn!(
             "retaining private ORAM restart transfer reservation after uncertain consensus submission"
         );
+    }
+    if !matches!(result, Ok(true)) && owns_fixed_restart_intent {
+        collection
+            .clear_private_oram_fixed_transfer_resume(&active_transfer)
+            .await;
     }
     result
 }

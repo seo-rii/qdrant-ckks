@@ -1761,12 +1761,12 @@ def test_private_oram_restart_repreinstalls_and_completes(
 
 
 @pytest.mark.parametrize("wipe_mode", ["collection", "stores"])
-def test_private_oram_active_transfer_snapshot_rejects_wiped_target(
+def test_private_oram_active_transfer_snapshot_fresh_preinstalls_wiped_target(
     tmp_path: pathlib.Path, wipe_mode: str,
 ):
     extra_env = {
         "QDRANT__CLUSTER__CONSENSUS__COMPACT_WAL_ENTRIES": "1",
-        "QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "180",
+        "QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "20",
     }
     peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(
         tmp_path,
@@ -1857,11 +1857,62 @@ def test_private_oram_active_transfer_snapshot_rejects_wiped_target(
     target_log_path = pathlib.Path(init_pytest_log_folder()) / target_log
     wait_for(
         lambda: target_log_path.exists()
-        and "private ORAM active shard transfer Raft snapshot state is invalid"
+        and "Requesting fresh-preinstall resume for a private ORAM active fixed-layout transfer"
         in target_log_path.read_text(),
         wait_for_timeout=60,
     )
-    target_log_text = target_log_path.read_text()
+    blocked_hnsw = requests.post(
+        f"{restarted_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session",
+        json={
+            "client_id": "tenant-a/snapshot-marker-blocked-hnsw-sdk",
+            "desired_epoch": NEXT_EPOCH,
+            "fixed_budget": True,
+            "result_privacy": fixture["hnsw"]["manifest"]["result_privacy"],
+        },
+        timeout=30,
+    )
+    assert 400 <= blocked_hnsw.status_code < 600
+    assert "snapshot recovery is pending" in blocked_hnsw.text
+    assert fixture["hnsw"]["commit"]["new_root_hash"] not in blocked_hnsw.text
+
+    blocked_result = requests.post(
+        f"{restarted_url}/collections/{COLLECTION}/private-result-oram/session",
+        json={
+            "client_id": "tenant-a/snapshot-marker-blocked-result-sdk",
+            "desired_epoch": NEXT_EPOCH,
+            "fixed_budget": True,
+        },
+        timeout=30,
+    )
+    assert 400 <= blocked_result.status_code < 600
+    assert "snapshot recovery is pending" in blocked_result.text
+    assert fixture["result"]["commit"]["new_root_hash"] not in blocked_result.text
+
+    wait_for(
+        lambda: (target_collection_path / "private_hnsw_oram" / VECTOR / "buckets").is_dir()
+        and (target_collection_path / "private_result_oram" / "buckets").is_dir(),
+        wait_for_timeout=60,
+    )
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_for_collection_shard_transfers_count(restarted_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _wait_for_private_oram_layout(
+        peer_dirs,
+        2,
+        [source_info["peer_id"], target_info["peer_id"]],
+    )
+    wait_for(
+        lambda: not (
+            target_collection_path / "private_oram_snapshot_recovery.json"
+        ).exists(),
+        wait_for_timeout=60,
+    )
+    _assert_replica_can_open_current_sessions(restarted_url)
+
+    all_peer_log_text = "\n".join(
+        path.read_text()
+        for path in pathlib.Path(init_pytest_log_folder()).glob("*.log")
+    )
     for secret in [
         fixture["hnsw"]["manifest"]["root_hash"],
         fixture["hnsw"]["commit"]["new_root_hash"],
@@ -1872,10 +1923,7 @@ def test_private_oram_active_transfer_snapshot_rejects_wiped_target(
         fixture["result"]["manifest_signature"]["sig"],
         fixture["result"]["buckets"][0]["ciphertext"],
     ]:
-        assert secret not in target_log_text
-    assert target_collection_path.exists() == (wipe_mode == "stores")
-    assert not list(peer_dirs[target_index].rglob("private_hnsw_oram"))
-    assert not list(peer_dirs[target_index].rglob("private_result_oram"))
+        assert secret not in all_peer_log_text
 
 
 def test_private_oram_active_transfer_snapshot_recovers_wiped_redundant_owner(

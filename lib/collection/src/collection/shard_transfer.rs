@@ -16,7 +16,9 @@ use crate::shards::replica_set::replica_set_state::ReplicaState;
 use crate::shards::resharding::ReshardState;
 use crate::shards::shard::{PeerId, ShardId};
 use crate::shards::shard_holder::ShardHolder;
-use crate::shards::transfer::transfer_tasks_pool::{TransferTaskItem, TransferTaskProgress};
+use crate::shards::transfer::transfer_tasks_pool::{
+    TaskResult, TransferTaskItem, TransferTaskProgress,
+};
 use crate::shards::transfer::{
     ShardTransfer, ShardTransferConsensus, ShardTransferKey, ShardTransferMethod,
 };
@@ -75,6 +77,48 @@ impl Collection {
             .await
             .get_task_status(transfer_key)
             .is_none()
+    }
+
+    pub async fn shard_transfer_task_requires_restart(
+        &self,
+        transfer_key: &ShardTransferKey,
+    ) -> bool {
+        self.transfer_tasks
+            .lock()
+            .await
+            .get_task_status(transfer_key)
+            .is_none_or(|status| status.result == TaskResult::Failed)
+    }
+
+    pub async fn mark_private_oram_fixed_transfer_resume(&self, transfer: &ShardTransfer) -> bool {
+        self.private_oram_fixed_transfer_resume_intents
+            .lock()
+            .await
+            .insert(transfer.clone())
+    }
+
+    pub async fn clear_private_oram_fixed_transfer_resume(&self, transfer: &ShardTransfer) {
+        self.private_oram_fixed_transfer_resume_intents
+            .lock()
+            .await
+            .remove(transfer);
+    }
+
+    pub async fn stop_shard_transfer_task_for_restart(
+        &self,
+        transfer: &ShardTransfer,
+    ) -> CollectionResult<()> {
+        self.transfer_tasks
+            .lock()
+            .await
+            .stop_task_if_exact(transfer)
+            .await
+            .map_err(|()| {
+                CollectionError::bad_input(
+                    "private ORAM restart transfer task identity changed before fencing",
+                )
+            })?;
+        Ok(())
     }
 
     async fn is_prevent_unoptimized(&self) -> bool {
@@ -215,8 +259,86 @@ impl Collection {
             from_is_local && is_sender
         };
         if do_transfer {
-            self.send_shard(shard_transfer, consensus, temp_dir, on_finish, on_error)
-                .await;
+            self.send_shard(
+                shard_transfer,
+                consensus,
+                temp_dir,
+                on_finish,
+                on_error,
+                false,
+            )
+            .await?;
+        }
+        Ok(do_transfer)
+    }
+
+    /// Replaces only the source task for an exact fixed-layout private ORAM transfer.
+    ///
+    /// The registered transfer and the target's `Partial` replica state remain unchanged. This
+    /// avoids an abort/start metadata gap while a freshly restored target resumes an active
+    /// transfer whose original source task no longer exists.
+    pub async fn restart_private_oram_fixed_shard_transfer_task<T, F>(
+        &self,
+        shard_transfer: ShardTransfer,
+        consensus: Box<dyn ShardTransferConsensus>,
+        temp_dir: PathBuf,
+        on_finish: T,
+        on_error: F,
+    ) -> CollectionResult<bool>
+    where
+        T: Future<Output = ()> + Send + 'static,
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let private_oram_bucket_store_collection = {
+            let config = self.collection_config.read().await;
+            config
+                .params
+                .effective_encryption()
+                .as_ref()
+                .is_some_and(collection_encryption_uses_private_oram_bucket_store)
+        };
+        let resharding = self.resharding_state().await;
+        if !private_oram_bucket_store_collection
+            || resharding.is_some()
+            || !shard_transfer.is_private_oram_preinstalled_transfer_for(None)
+        {
+            return Err(CollectionError::bad_input(
+                "can only replace the source task for an exact preinstalled fixed-layout private ORAM transfer",
+            ));
+        }
+
+        let do_transfer = {
+            let shards_holder = self.shards_holder.read().await;
+            let active_transfers = shards_holder.get_transfers(|_| true);
+            if active_transfers.as_slice() != [shard_transfer.clone()] {
+                return Err(CollectionError::bad_input(
+                    "private ORAM source task replacement requires the exact sole active transfer",
+                ));
+            }
+
+            let source_replica_set = shards_holder
+                .get_shard(shard_transfer.shard_id)
+                .ok_or_else(|| {
+                    CollectionError::service_error(format!(
+                        "Shard {} doesn't exist",
+                        shard_transfer.shard_id,
+                    ))
+                })?;
+            // An active source is already proxified by the original transfer. It still owns the
+            // local shard and must be eligible to spawn the replacement task.
+            consensus.this_peer_id() == shard_transfer.from
+                && source_replica_set.has_local_shard().await
+        };
+        if do_transfer {
+            self.send_shard(
+                shard_transfer,
+                consensus,
+                temp_dir,
+                on_finish,
+                on_error,
+                true,
+            )
+            .await?;
         }
         Ok(do_transfer)
     }
@@ -228,14 +350,29 @@ impl Collection {
         temp_dir: PathBuf,
         on_finish: OF,
         on_error: OE,
-    ) where
+        replace_existing: bool,
+    ) -> CollectionResult<()>
+    where
         OF: Future<Output = ()> + Send + 'static,
         OE: Future<Output = ()> + Send + 'static,
     {
         let mut active_transfer_tasks = self.transfer_tasks.lock().await;
-        let task_result = active_transfer_tasks.stop_task(&transfer.key()).await;
+        let task_result = if replace_existing {
+            active_transfer_tasks
+                .stop_task_if_exact(&transfer)
+                .await
+                .map_err(|()| {
+                    CollectionError::bad_input(
+                        "private ORAM replacement transfer task identity changed before apply",
+                    )
+                })?
+        } else {
+            active_transfer_tasks.stop_task(&transfer.key()).await
+        };
 
-        debug_assert!(task_result.is_none(), "Transfer task already exists");
+        if !replace_existing {
+            debug_assert!(task_result.is_none(), "Transfer task already exists");
+        }
         debug_assert!(
             transfer.method.is_some(),
             "When sending shard, a transfer method must have been selected",
@@ -272,11 +409,13 @@ impl Collection {
         active_transfer_tasks.add_task(
             &transfer,
             TransferTaskItem {
+                transfer: transfer.clone(),
                 task: transfer_task,
                 started_at: chrono::Utc::now(),
                 progress,
             },
         );
+        Ok(())
     }
 
     /// Handles finishing of the shard transfer.

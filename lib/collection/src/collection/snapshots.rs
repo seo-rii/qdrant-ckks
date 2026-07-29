@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
+use api::grpc::private_oram_chunking::PRIVATE_ORAM_INSTALL_MAX_ENCODED_BYTES;
 use common::fs::read_json;
 use common::storage_version::StorageVersion as _;
 use common::tar_ext::BuilderExt;
@@ -374,6 +375,76 @@ impl Collection {
         Ok(())
     }
 
+    pub fn validate_private_hnsw_oram_live_replica_layout(
+        collection_name: &str,
+        config: &CollectionConfigInternal,
+        collection_dir: &Path,
+    ) -> CollectionResult<()> {
+        let configured_vectors = private_hnsw_oram_configured_vectors(&config.params)?;
+        validate_private_hnsw_oram_snapshot_store_matches_config(
+            collection_dir,
+            &configured_vectors,
+        )?;
+        if configured_vectors.is_empty() {
+            return Ok(());
+        }
+
+        let stable_crypto_id = config.stable_crypto_id(collection_name)?;
+        for vector_name in configured_vectors {
+            let vector_params =
+                config
+                    .params
+                    .vectors
+                    .get_params(&vector_name)
+                    .ok_or_else(|| {
+                        CollectionError::bad_request(
+                            "private HNSW ORAM live replica vector is not configured",
+                        )
+                    })?;
+            let expected_dim = u32::try_from(vector_params.size.get()).map_err(|_| {
+                CollectionError::bad_request(
+                    "private HNSW ORAM live replica vector dimension exceeds u32",
+                )
+            })?;
+            let expected_distance = private_hnsw_distance_kind(vector_params.distance);
+            let store = PrivateHnswOramStore::new(collection_dir, &vector_name)?;
+            let (manifest, signature) = store.read_manifest()?;
+            let private_result_oram_path_batch_size =
+                private_result_oram_snapshot_path_batch_size_for_hnsw_restore(
+                    collection_dir,
+                    &stable_crypto_id,
+                    &config.params,
+                    manifest.result_privacy,
+                )?;
+            validate_private_hnsw_oram_restore_manifest(
+                &manifest,
+                &signature,
+                &stable_crypto_id,
+                &config.params,
+                &vector_name,
+                expected_dim,
+                expected_distance,
+                private_result_oram_path_batch_size,
+            )?;
+            validate_private_oram_snapshot_store_layout(
+                store.root_path(),
+                manifest.bucket_count,
+                "private HNSW ORAM",
+            )?;
+            let bundle = store.read_live_replication_bundle(
+                private_hnsw_restore_expected_bucket_ciphertext_bytes(&manifest)?,
+                PRIVATE_ORAM_INSTALL_MAX_ENCODED_BYTES,
+            )?;
+            if bundle.manifest != manifest || bundle.manifest_signature != signature {
+                return Err(CollectionError::bad_request(
+                    "private HNSW ORAM live replica bundle does not match validated manifest",
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     pub fn validate_private_result_oram_snapshot_restore_layout(
         collection_name: &str,
         config: &CollectionConfigInternal,
@@ -388,6 +459,44 @@ impl Collection {
 
         let stable_crypto_id = config.stable_crypto_id(collection_name)?;
         validate_private_result_oram_snapshot(collection_dir, &stable_crypto_id, &config.params)
+    }
+
+    pub fn validate_private_result_oram_live_replica_layout(
+        collection_name: &str,
+        config: &CollectionConfigInternal,
+        collection_dir: &Path,
+    ) -> CollectionResult<()> {
+        let configured = private_result_oram_configured(&config.params)?;
+        validate_private_result_oram_snapshot_store_matches_config(collection_dir, configured)?;
+        if !configured {
+            return Ok(());
+        }
+
+        let stable_crypto_id = config.stable_crypto_id(collection_name)?;
+        let store = PrivateResultOramStore::new(collection_dir);
+        let (manifest, signature) = store.read_manifest()?;
+        validate_private_result_oram_restore_manifest(
+            &manifest,
+            &signature,
+            &stable_crypto_id,
+            &config.params,
+        )?;
+        validate_private_oram_snapshot_store_layout(
+            store.root_path(),
+            manifest.bucket_count,
+            "private result ORAM",
+        )?;
+        let bundle = store.read_live_replication_bundle(
+            private_result_restore_max_bucket_ciphertext_bytes(&manifest)?,
+            PRIVATE_ORAM_INSTALL_MAX_ENCODED_BYTES,
+        )?;
+        if bundle.manifest != manifest || bundle.manifest_signature != signature {
+            return Err(CollectionError::bad_request(
+                "private result ORAM live replica bundle does not match validated manifest",
+            ));
+        }
+
+        Ok(())
     }
 
     /// # Cancel safety
@@ -4525,20 +4634,39 @@ mod tests {
         let config = private_result_config(uuid);
         let manifest = private_result_manifest(uuid.to_string());
         write_private_result_snapshot_fixture(temp_dir.path(), &manifest);
+        let commit_path = temp_dir
+            .path()
+            .join(PRIVATE_RESULT_ORAM_DIR)
+            .join("epochs")
+            .join("00000042.commit");
         fs::write(
-            temp_dir
-                .path()
-                .join(PRIVATE_RESULT_ORAM_DIR)
-                .join("epochs")
-                .join("00000042.commit"),
+            &commit_path,
             format!(
                 r#"{{"index_epoch":{},"root_hash":"{}","writeback_digest":"{}"}}"#,
                 manifest.index_epoch, manifest.root_hash, manifest.root_hash
             ),
         )
         .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            fs::set_permissions(&commit_path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
 
         Collection::validate_private_result_oram_snapshot_restore_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
+        Collection::validate_private_hnsw_oram_live_replica_layout(
+            "docs",
+            &config,
+            temp_dir.path(),
+        )
+        .unwrap();
+        Collection::validate_private_result_oram_live_replica_layout(
             "docs",
             &config,
             temp_dir.path(),

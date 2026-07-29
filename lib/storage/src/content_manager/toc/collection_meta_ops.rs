@@ -724,25 +724,8 @@ impl TableOfContent {
                     &transfer_restart,
                 )?;
 
-                // An exact private ORAM resharding restart replaces only the transfer task. A
-                // normal resharding abort would also roll back the active reshard operation.
-                if collection_params_use_private_oram_bucket_store(&collection_config.params)
-                    && old_transfer.is_resharding()
-                {
-                    collection
-                        .abort_shard_transfer_for_restart(old_transfer.clone())
-                        .await?;
-                } else {
-                    Box::pin(self.handle_transfer(
-                        collection_id.clone(),
-                        ShardTransferOperations::Abort {
-                            transfer: transfer_restart.key(),
-                            reason: "restart transfer".into(),
-                        },
-                    ))
-                    .await?;
-                }
-
+                let private_oram_restart =
+                    collection_params_use_private_oram_bucket_store(&collection_config.params);
                 let new_transfer = ShardTransfer {
                     shard_id: transfer_restart.shard_id,
                     to_shard_id: transfer_restart.to_shard_id,
@@ -757,13 +740,87 @@ impl TableOfContent {
                     filter: None,
                 };
 
-                Box::pin(
-                    self.handle_transfer(
+                if private_oram_restart && !old_transfer.is_resharding() {
+                    if collection_params_require_crypto_runtime_transfer_parity(
+                        &collection_config.params,
+                    ) {
+                        validate_encrypted_transfer_crypto_runtime_parity(
+                            &collection_id,
+                            self.this_peer_id,
+                            new_transfer.from,
+                            new_transfer.to,
+                            &self.channel_service.id_to_metadata.read(),
+                        )?;
+                    }
+
+                    let on_finish = {
+                        let collection_id = collection_id.clone();
+                        let transfer = new_transfer.clone();
+                        let proposal_sender = proposal_sender.clone();
+                        async move {
+                            let operation =
+                                ConsensusOperations::finish_transfer(collection_id, transfer);
+
+                            if let Err(error) = proposal_sender.send(operation) {
+                                log::error!("Can't report transfer progress to consensus: {error}");
+                            };
+                        }
+                    };
+                    let on_failure = {
+                        let collection_id = collection_id.clone();
+                        let transfer = new_transfer.clone();
+                        async move {
+                            if let Err(error) =
+                                proposal_sender.send(ConsensusOperations::abort_transfer(
+                                    collection_id,
+                                    transfer,
+                                    "transmission failed",
+                                ))
+                            {
+                                log::error!("Can't report transfer progress to consensus: {error}");
+                            };
+                        }
+                    };
+                    let shard_consensus = match self.toc_dispatcher.lock().as_ref() {
+                        Some(consensus) => Box::new(consensus.clone()),
+                        None => {
+                            return Err(StorageError::service_error(
+                                "Can't handle transfer, this is a single node deployment",
+                            ));
+                        }
+                    };
+                    let temp_dir = self.optional_temp_or_storage_temp_path()?;
+                    collection
+                        .restart_private_oram_fixed_shard_transfer_task(
+                            new_transfer,
+                            shard_consensus,
+                            temp_dir,
+                            on_finish,
+                            on_failure,
+                        )
+                        .await?;
+                } else {
+                    if private_oram_restart {
+                        collection
+                            .abort_shard_transfer_for_restart(old_transfer)
+                            .await?;
+                    } else {
+                        Box::pin(self.handle_transfer(
+                            collection_id.clone(),
+                            ShardTransferOperations::Abort {
+                                transfer: transfer_restart.key(),
+                                reason: "restart transfer".into(),
+                            },
+                        ))
+                        .await?;
+                    }
+
+                    Box::pin(self.handle_transfer(
                         collection_id,
                         ShardTransferOperations::Start(new_transfer),
-                    ),
-                )
-                .await?;
+                    ))
+                    .await?;
+                }
             }
             ShardTransferOperations::Finish(transfer) => {
                 // Validate transfer exists to prevent double handling
@@ -1036,6 +1093,11 @@ fn validate_private_oram_restart_apply(
     restart: &ShardTransferRestart,
 ) -> Result<(), StorageError> {
     if !collection_params_use_private_oram_bucket_store(params) {
+        if restart.expected_private_oram_transfer.is_some() {
+            return Err(StorageError::bad_request(
+                "private ORAM restart identity is not valid for an ordinary collection",
+            ));
+        }
         if old_transfer.method == Some(restart.method) {
             return Err(StorageError::bad_request(format!(
                 "Cannot restart transfer for shard {} from {} to {}, its configuration did not change",
@@ -1052,7 +1114,11 @@ fn validate_private_oram_restart_apply(
             .is_some_and(|transfer| transfer == old_transfer)
         && old_transfer.key() == restart.key()
         && old_transfer.is_private_oram_preinstalled_transfer_for(resharding)
-        && old_transfer.method == Some(restart.method);
+        && old_transfer.method == Some(restart.method)
+        && restart
+            .expected_private_oram_transfer
+            .as_deref()
+            .is_some_and(|expected| expected == old_transfer);
     if valid {
         return Ok(());
     }
@@ -1691,6 +1757,7 @@ mod tests {
                 from: 2,
                 to: 3,
                 method: ShardTransferMethod::StreamRecords,
+                expected_private_oram_transfer: None,
             }),
             None,
         )
@@ -1732,6 +1799,7 @@ mod tests {
                 from: resharding_transfer.from,
                 to: resharding_transfer.to,
                 method: ShardTransferMethod::ReshardingStreamRecords,
+                expected_private_oram_transfer: None,
             }),
             Some(&resharding),
         )
@@ -1773,6 +1841,7 @@ mod tests {
             from: 2,
             to: 3,
             method: ShardTransferMethod::StreamRecords,
+            expected_private_oram_transfer: None,
         };
         let transfer = ShardTransfer {
             shard_id: 1,
@@ -1792,7 +1861,31 @@ mod tests {
             &transfer,
             &restart,
         )
+        .expect_err("identity-free private ORAM restart must fail closed");
+        let mut exact_restart = restart.clone();
+        exact_restart.expected_private_oram_transfer = Some(Box::new(transfer.clone()));
+        validate_private_oram_restart_apply(
+            &private_params,
+            &HashSet::from([transfer.clone()]),
+            None,
+            &transfer,
+            &exact_restart,
+        )
         .unwrap();
+        let mut stale_restart = exact_restart.clone();
+        stale_restart
+            .expected_private_oram_transfer
+            .as_mut()
+            .unwrap()
+            .sync = false;
+        validate_private_oram_restart_apply(
+            &private_params,
+            &HashSet::from([transfer.clone()]),
+            None,
+            &transfer,
+            &stale_restart,
+        )
+        .expect_err("stale same-key private ORAM restart identity must fail closed");
         let active_resharding =
             ReshardState::new(Uuid::from_u128(82), ReshardingDirection::Up, 3, 2, None);
         validate_private_oram_restart_apply(
@@ -1800,7 +1893,7 @@ mod tests {
             &HashSet::from([transfer.clone()]),
             Some(&active_resharding),
             &transfer,
-            &restart,
+            &exact_restart,
         )
         .expect_err("fixed-layout private ORAM restart must fail during active resharding");
 
@@ -1821,6 +1914,7 @@ mod tests {
             from: resharding_transfer.from,
             to: resharding_transfer.to,
             method: ShardTransferMethod::ReshardingStreamRecords,
+            expected_private_oram_transfer: Some(Box::new(resharding_transfer.clone())),
         };
         validate_private_oram_restart_apply(
             &private_params,
@@ -1846,13 +1940,20 @@ mod tests {
         unmarked.private_oram_preinstalled = false;
         let mut old_wrong_method = transfer.clone();
         old_wrong_method.method = Some(ShardTransferMethod::Snapshot);
-        let mut wrong_key = restart.clone();
+        let mut wrong_method_restart = restart.clone();
+        wrong_method_restart.expected_private_oram_transfer =
+            Some(Box::new(old_wrong_method.clone()));
+        let mut wrong_key = exact_restart.clone();
         wrong_key.to = 4;
         for (candidate, request, active) in [
-            (unmarked, restart.clone(), HashSet::from([transfer.clone()])),
+            (
+                unmarked,
+                exact_restart.clone(),
+                HashSet::from([transfer.clone()]),
+            ),
             (
                 old_wrong_method.clone(),
-                restart.clone(),
+                wrong_method_restart,
                 HashSet::from([old_wrong_method]),
             ),
             (
@@ -1862,7 +1963,7 @@ mod tests {
             ),
             (
                 transfer.clone(),
-                restart.clone(),
+                exact_restart.clone(),
                 HashSet::from([
                     transfer.clone(),
                     ShardTransfer {
@@ -1983,6 +2084,7 @@ mod tests {
                 from: 2,
                 to: 3,
                 method: ShardTransferMethod::Snapshot,
+                expected_private_oram_transfer: None,
             }),
             ShardTransferOperations::Finish(transfer),
             ShardTransferOperations::RecoveryToPartial(transfer_key),
@@ -2061,6 +2163,7 @@ mod tests {
                 from: 2,
                 to: 3,
                 method: ShardTransferMethod::Snapshot,
+                expected_private_oram_transfer: None,
             }),
             ShardTransferOperations::Finish(transfer.clone()),
             ShardTransferOperations::RecoveryToPartial(transfer_key),

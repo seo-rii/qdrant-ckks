@@ -563,6 +563,8 @@ pub struct ShardTransferRestart {
     pub from: PeerId,
     pub to: PeerId,
     pub method: ShardTransferMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_private_oram_transfer: Option<Box<ShardTransfer>>,
 }
 
 impl fmt::Debug for ShardTransferRestart {
@@ -580,15 +582,16 @@ impl From<&ShardTransferRestart> for ShardTransfer {
             from,
             to,
             method,
-        } = *restart;
+            expected_private_oram_transfer: _,
+        } = restart;
 
         Self {
-            shard_id,
-            to_shard_id,
-            from,
-            to,
+            shard_id: *shard_id,
+            to_shard_id: *to_shard_id,
+            from: *from,
+            to: *to,
             sync: false,
-            method: Some(method),
+            method: Some(*method),
             private_oram_preinstalled: false,
             private_oram_layout_transition: None,
             filter: None,
@@ -604,6 +607,7 @@ impl ShardTransferRestart {
             from,
             to,
             method: _,
+            expected_private_oram_transfer: _,
         } = self;
 
         ShardTransferKey {
@@ -633,6 +637,7 @@ impl ShardTransferRestart {
             from,
             to,
             method: method.unwrap_or(default_method),
+            expected_private_oram_transfer: None,
         }
     }
 }

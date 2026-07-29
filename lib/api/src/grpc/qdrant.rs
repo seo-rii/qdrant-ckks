@@ -16028,6 +16028,28 @@ pub struct RequestPrivateOramShardRecoveryRequest {
     pub source_peer_id: u64,
     #[prost(uint64, tag = "4")]
     pub target_peer_id: u64,
+    /// Present only to restart an exact active fixed-layout transfer with fresh preinstall.
+    #[prost(message, optional, tag = "5")]
+    pub active_transfer_resume: ::core::option::Option<
+        PrivateOramActiveTransferResumeContext,
+    >,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PrivateOramActiveTransferResumeContext {
+    #[prost(bool, tag = "1")]
+    pub sync: bool,
+    #[prost(uint64, tag = "2")]
+    pub expected_layout_generation: u64,
+    #[prost(string, tag = "3")]
+    pub expected_layout_digest: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "4")]
+    pub new_layout_generation: u64,
+    #[prost(string, tag = "5")]
+    pub new_layout_digest: ::prost::alloc::string::String,
+    #[prost(string, tag = "6")]
+    pub index_state_digest: ::prost::alloc::string::String,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]

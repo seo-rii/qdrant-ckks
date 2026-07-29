@@ -239,6 +239,17 @@ message RequestPrivateOramShardRecoveryRequest {
   uint32 shard_id = 2;
   uint64 source_peer_id = 3;
   uint64 target_peer_id = 4;
+  // Present only to restart an exact active fixed-layout transfer with fresh preinstall.
+  PrivateOramActiveTransferResumeContext active_transfer_resume = 5;
+}
+
+message PrivateOramActiveTransferResumeContext {
+  bool sync = 1;
+  uint64 expected_layout_generation = 2;
+  string expected_layout_digest = 3;
+  uint64 new_layout_generation = 4;
+  string new_layout_digest = 5;
+  string index_state_digest = 6;
 }
 
 message RequestPrivateOramShardRecoveryResponse {

@@ -605,6 +605,7 @@ mod tests {
             shard_id: 3,
             source_peer_id: 13,
             target_peer_id: 17,
+            active_transfer_resume: None,
         };
         let error = service
             .request_private_oram_shard_recovery(13, recovery)

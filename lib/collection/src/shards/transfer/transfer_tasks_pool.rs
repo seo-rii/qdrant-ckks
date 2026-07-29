@@ -17,6 +17,7 @@ pub struct TransferTasksPool {
 }
 
 pub struct TransferTaskItem {
+    pub transfer: ShardTransfer,
     pub task: CancellableAsyncTaskHandle<bool>,
     pub started_at: chrono::DateTime<chrono::Utc>,
     pub progress: Arc<Mutex<TransferTaskProgress>>,
@@ -233,6 +234,20 @@ impl TransferTasksPool {
         })
     }
 
+    pub async fn stop_task_if_exact(
+        &mut self,
+        transfer: &ShardTransfer,
+    ) -> Result<Option<TaskResult>, ()> {
+        if self
+            .tasks
+            .get(&transfer.key())
+            .is_some_and(|task| task.transfer != *transfer)
+        {
+            return Err(());
+        }
+        Ok(self.stop_task(&transfer.key()).await)
+    }
+
     pub fn add_task(&mut self, shard_transfer: &ShardTransfer, item: TransferTaskItem) {
         self.tasks.insert(shard_transfer.key(), item);
     }
@@ -244,6 +259,42 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::common::stoppable_task_async::spawn_async_cancellable;
+
+    #[tokio::test]
+    async fn exact_stop_does_not_cancel_a_same_key_replacement() {
+        let transfer = ShardTransfer {
+            shard_id: 1,
+            to_shard_id: None,
+            from: 7,
+            to: 11,
+            sync: true,
+            method: Some(crate::shards::transfer::ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: None,
+            filter: None,
+        };
+        let task = spawn_async_cancellable(|cancel| async move {
+            cancel.cancelled().await;
+            false
+        });
+        let mut pool = TransferTasksPool::new("docs".to_string());
+        pool.add_task(
+            &transfer,
+            TransferTaskItem {
+                transfer: transfer.clone(),
+                task,
+                started_at: chrono::Utc::now(),
+                progress: Arc::new(Mutex::new(TransferTaskProgress::new())),
+            },
+        );
+
+        let mut stale = transfer.clone();
+        stale.sync = false;
+        assert!(pool.stop_task_if_exact(&stale).await.is_err());
+        assert!(pool.get_task_status(&transfer.key()).is_some());
+        assert!(pool.stop_task_if_exact(&transfer).await.unwrap().is_some());
+    }
 
     #[test]
     fn test_transfer_stage_as_str() {

@@ -21,7 +21,7 @@ use api::grpc::{
     install_private_oram_index_request, install_private_oram_live_replica_request,
 };
 use chrono::DateTime;
-use collection::config::CollectionConfigInternal;
+use collection::config::{CollectionConfigInternal, ShardingMethod};
 use collection::operations::cluster_ops::{
     ClusterOperations, ReplicateShard, ReplicateShardOperation, ReshardingDirection,
     RestartTransfer, RestartTransferOperation,
@@ -40,7 +40,7 @@ use collection::shards::resharding::{ReshardKey, ReshardState};
 use collection::shards::shard::{PeerId, ShardId};
 use collection::shards::transfer::{
     PrivateOramTransferIndexKind, PrivateOramTransferIndexState, PrivateOramTransferLayoutState,
-    PrivateOramTransferLayoutTransition, ShardTransfer, ShardTransferMethod,
+    PrivateOramTransferLayoutTransition, ShardTransfer, ShardTransferMethod, ShardTransferRestart,
 };
 use common::types::{DetailsLevel, TelemetryDetail};
 use data_encoding::BASE64URL_NOPAD;
@@ -77,7 +77,9 @@ use tokio::time::timeout;
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
 
-use crate::common::collections::do_update_collection_cluster;
+use crate::common::collections::{
+    do_update_collection_cluster, submit_restart_transfer_with_private_oram_preinstall,
+};
 use crate::common::telemetry::TelemetryCollector;
 use crate::common::{private_hnsw, private_result_oram};
 use crate::settings::Settings;
@@ -2558,7 +2560,40 @@ fn validate_private_oram_shard_recovery_request_shape(
             "private ORAM shard recovery must be coordinated by the source peer",
         ));
     }
+    if let Some(context) = request.active_transfer_resume.as_ref()
+        && (context.expected_layout_digest.is_empty()
+            || context.expected_layout_digest.len() > 128
+            || context.new_layout_digest.is_empty()
+            || context.new_layout_digest.len() > 128
+            || context.index_state_digest.is_empty()
+            || context.index_state_digest.len() > 128
+            || context
+                .expected_layout_generation
+                .checked_add(1)
+                .is_none_or(|generation| generation != context.new_layout_generation))
+    {
+        return Err(Status::invalid_argument(
+            "private ORAM active transfer resume identity is invalid",
+        ));
+    }
     Ok(())
+}
+
+fn private_oram_shard_recovery_layout_is_stable(
+    sharding_method: ShardingMethod,
+    configured_shard_number: usize,
+    shard_ids: &BTreeSet<ShardId>,
+    mapped_shard_ids: &[ShardId],
+) -> bool {
+    match sharding_method {
+        ShardingMethod::Auto => {
+            mapped_shard_ids.is_empty() && configured_shard_number == shard_ids.len()
+        }
+        ShardingMethod::Custom => {
+            mapped_shard_ids.len() == shard_ids.len()
+                && mapped_shard_ids.iter().copied().collect::<BTreeSet<_>>() == *shard_ids
+        }
+    }
 }
 
 fn private_oram_shard_recovery_matches_transfer(
@@ -2573,6 +2608,32 @@ fn private_oram_shard_recovery_matches_transfer(
         && transfer.method == Some(ShardTransferMethod::StreamRecords)
         && transfer.private_oram_preinstalled
         && transfer.filter.is_none()
+}
+
+fn private_oram_active_transfer_resume_matches_transfer(
+    request: &RequestPrivateOramShardRecoveryRequest,
+    transfer: &ShardTransfer,
+) -> bool {
+    let Some(context) = request.active_transfer_resume.as_ref() else {
+        return false;
+    };
+    let Some(transition) = transfer.private_oram_layout_transition.as_ref() else {
+        return false;
+    };
+    transfer.shard_id == request.shard_id
+        && transfer.from == request.source_peer_id
+        && transfer.to == request.target_peer_id
+        && transfer.to_shard_id.is_none()
+        && transfer.method == Some(ShardTransferMethod::StreamRecords)
+        && transfer.private_oram_preinstalled
+        && transfer.filter.is_none()
+        && transfer.sync == context.sync
+        && transition.expected.generation == context.expected_layout_generation
+        && transition.expected.layout_digest == context.expected_layout_digest
+        && transition.new.generation == context.new_layout_generation
+        && transition.new.layout_digest == context.new_layout_digest
+        && transition.expected.index_state_digest == context.index_state_digest
+        && transition.new.index_state_digest == context.index_state_digest
 }
 
 fn validate_private_oram_resharding_resume_request_shape(
@@ -3285,13 +3346,109 @@ impl QdrantInternal for QdrantInternalService {
                     "private ORAM automatic shard recovery configuration is invalid",
                 )
             })?;
+        let shard_ids = state.shards.keys().copied().collect::<BTreeSet<_>>();
+        let mapped_shard_ids = state
+            .shards_key_mapping
+            .iter_shard_ids()
+            .collect::<Vec<_>>();
         if index_keys.is_empty()
-            || state.config.params.shard_number.get() as usize != state.shards.len()
+            || !private_oram_shard_recovery_layout_is_stable(
+                state.config.params.sharding_method.unwrap_or_default(),
+                state.config.params.shard_number.get() as usize,
+                &shard_ids,
+                &mapped_shard_ids,
+            )
             || state.resharding.is_some()
         {
             return Err(Status::failed_precondition(
                 "private ORAM automatic shard recovery requires a stable configured shard layout",
             ));
+        }
+        if request.active_transfer_resume.is_some() {
+            let matching_transfers = state
+                .transfers
+                .iter()
+                .filter(|transfer| {
+                    private_oram_active_transfer_resume_matches_transfer(&request, transfer)
+                })
+                .collect::<Vec<_>>();
+            if state.transfers.len() != 1 || matching_transfers.len() != 1 {
+                return Err(Status::failed_precondition(
+                    "private ORAM active transfer resume state is invalid",
+                ));
+            }
+            let transfer = (*matching_transfers[0]).clone();
+            let config = state.config.clone();
+            let shard = state.shards.get(&request.shard_id).ok_or_else(|| {
+                Status::failed_precondition("private ORAM active transfer shard is unavailable")
+            })?;
+            if shard.replicas.get(&request.source_peer_id) != Some(&ReplicaState::Active)
+                || shard.replicas.get(&request.target_peer_id) != Some(&ReplicaState::Partial)
+            {
+                return Err(Status::failed_precondition(
+                    "private ORAM active transfer replica state is invalid",
+                ));
+            }
+            let transfer_key = transfer.key();
+            let transfer_task_requires_restart = collection
+                .shard_transfer_task_requires_restart(&transfer_key)
+                .await;
+            let first_resume_request = collection
+                .mark_private_oram_fixed_transfer_resume(&transfer)
+                .await;
+            if !first_resume_request && !transfer_task_requires_restart {
+                return Ok(Response::new(RequestPrivateOramShardRecoveryResponse {
+                    accepted: true,
+                }));
+            }
+            drop(state);
+
+            log::info!(
+                "Automatically restarting an active private ORAM fixed-layout transfer with fresh encrypted-store preinstall"
+            );
+            let dispatcher = Dispatcher::new(self.toc.clone()).with_consensus(
+                self.consensus_state.clone(),
+                self.settings.cluster.resharding_enabled,
+            );
+            let accepted = match submit_restart_transfer_with_private_oram_preinstall(
+                &dispatcher,
+                &self.settings,
+                &collection,
+                &config,
+                request.collection_name.clone(),
+                ShardTransferRestart {
+                    shard_id: request.shard_id,
+                    to_shard_id: None,
+                    from: request.source_peer_id,
+                    to: request.target_peer_id,
+                    method: ShardTransferMethod::StreamRecords,
+                    expected_private_oram_transfer: None,
+                },
+                true,
+                Some(transfer.clone()),
+                auth,
+                None,
+            )
+            .await
+            {
+                Ok(accepted) => accepted,
+                Err(error) => {
+                    if first_resume_request {
+                        collection
+                            .clear_private_oram_fixed_transfer_resume(&transfer)
+                            .await;
+                    }
+                    return Err(error.into());
+                }
+            };
+            if !accepted && first_resume_request {
+                collection
+                    .clear_private_oram_fixed_transfer_resume(&transfer)
+                    .await;
+            }
+            return Ok(Response::new(RequestPrivateOramShardRecoveryResponse {
+                accepted,
+            }));
         }
         if state
             .transfers
@@ -3431,6 +3588,8 @@ impl QdrantInternal for QdrantInternalService {
 
 #[cfg(test)]
 mod tests {
+    use api::grpc::PrivateOramActiveTransferResumeContext;
+
     use super::*;
 
     fn automatic_recovery_request_fixture() -> RequestPrivateOramShardRecoveryRequest {
@@ -3439,6 +3598,7 @@ mod tests {
             shard_id: 3,
             source_peer_id: 7,
             target_peer_id: 11,
+            active_transfer_resume: None,
         }
     }
 
@@ -3504,6 +3664,109 @@ mod tests {
                 &conflicting
             ));
         }
+    }
+
+    #[test]
+    fn private_oram_active_fixed_transfer_resume_requires_exact_marked_transfer() {
+        let mut request = automatic_recovery_request_fixture();
+        request.active_transfer_resume = Some(PrivateOramActiveTransferResumeContext {
+            sync: true,
+            expected_layout_generation: 7,
+            expected_layout_digest: "private-oram-old-layout-digest-sentinel".to_string(),
+            new_layout_generation: 8,
+            new_layout_digest: "private-oram-new-layout-digest-sentinel".to_string(),
+            index_state_digest: "private-oram-index-state-digest-sentinel".to_string(),
+        });
+        validate_private_oram_shard_recovery_request_shape(&request, 7).unwrap();
+        let context = request.active_transfer_resume.as_ref().unwrap();
+        let transfer = ShardTransfer {
+            from: request.source_peer_id,
+            to: request.target_peer_id,
+            shard_id: request.shard_id,
+            to_shard_id: None,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: Some(PrivateOramTransferLayoutTransition {
+                collection_id: "private-oram-collection-id-sentinel".to_string(),
+                expected: PrivateOramTransferLayoutState {
+                    generation: context.expected_layout_generation,
+                    owner_peer_ids: vec![request.source_peer_id],
+                    layout_digest: context.expected_layout_digest.clone(),
+                    index_state_digest: context.index_state_digest.clone(),
+                },
+                new: PrivateOramTransferLayoutState {
+                    generation: context.new_layout_generation,
+                    owner_peer_ids: vec![request.source_peer_id, request.target_peer_id],
+                    layout_digest: context.new_layout_digest.clone(),
+                    index_state_digest: context.index_state_digest.clone(),
+                },
+                index_states: Vec::new(),
+            }),
+            filter: None,
+        };
+        assert!(private_oram_active_transfer_resume_matches_transfer(
+            &request, &transfer
+        ));
+
+        let mut move_transfer = transfer.clone();
+        move_transfer.sync = false;
+        let mut move_request = request.clone();
+        move_request.active_transfer_resume.as_mut().unwrap().sync = false;
+        assert!(private_oram_active_transfer_resume_matches_transfer(
+            &move_request,
+            &move_transfer
+        ));
+
+        let mut unmarked = transfer.clone();
+        unmarked.private_oram_preinstalled = false;
+        let mut wrong_method = transfer.clone();
+        wrong_method.method = Some(ShardTransferMethod::WalDelta);
+        let mut wrong_target = transfer.clone();
+        wrong_target.to = 13;
+        let mut filtered = transfer;
+        filtered.filter = Some(Default::default());
+        for conflicting in [unmarked, wrong_method, wrong_target, filtered] {
+            assert!(!private_oram_active_transfer_resume_matches_transfer(
+                &request,
+                &conflicting
+            ));
+        }
+
+        let mut stale_identity = move_request;
+        stale_identity
+            .active_transfer_resume
+            .as_mut()
+            .unwrap()
+            .expected_layout_digest = "private-oram-stale-layout-digest".to_string();
+        assert!(!private_oram_active_transfer_resume_matches_transfer(
+            &stale_identity,
+            &move_transfer
+        ));
+    }
+
+    #[test]
+    fn private_oram_shard_recovery_accepts_exact_custom_multi_key_layout() {
+        let shard_ids = BTreeSet::from([1, 2, 3, 4]);
+        let mapped_shard_ids = vec![1, 2, 3, 4];
+        assert!(private_oram_shard_recovery_layout_is_stable(
+            ShardingMethod::Custom,
+            2,
+            &shard_ids,
+            &mapped_shard_ids,
+        ));
+        assert!(!private_oram_shard_recovery_layout_is_stable(
+            ShardingMethod::Auto,
+            2,
+            &shard_ids,
+            &[],
+        ));
+        assert!(!private_oram_shard_recovery_layout_is_stable(
+            ShardingMethod::Custom,
+            2,
+            &shard_ids,
+            &[1, 2, 2, 4],
+        ));
     }
 
     #[test]

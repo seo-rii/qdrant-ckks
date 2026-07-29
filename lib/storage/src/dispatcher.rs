@@ -701,6 +701,8 @@ impl Dispatcher {
             .toc
             .get_collection(&CollectionMultipass.issue_pass(collection_name))
             .await?;
+        self.toc
+            .require_private_oram_snapshot_recovery_complete(&collection)?;
         let shard_holder = collection.shards_holder().read_owned().await;
         let shard_peer_states = shard_holder
             .all_shards()
@@ -1646,6 +1648,8 @@ impl Dispatcher {
             .toc
             .get_collection(&CollectionMultipass.issue_pass(collection_name))
             .await?;
+        self.toc
+            .require_private_oram_snapshot_recovery_complete(&collection)?;
         let shard_holder = collection.shards_holder().read_owned().await;
         let shard_peer_states = shard_holder
             .all_shards()

@@ -96,6 +96,7 @@ pub struct TableOfContent {
     collection_hw_metrics: DashMap<CollectionId, Arc<HwSharedDrain>>,
     client_payload_nonce_replay_cache: Mutex<ClientPayloadNonceReplayCache>,
     private_oram_snapshot_recovery_abort_requests: Mutex<HashMap<CollectionId, Instant>>,
+    private_oram_snapshot_recovery_resume_requests: Arc<Mutex<HashSet<CollectionId>>>,
     /// Collector for various telemetry/metrics.
     telemetry: TocTelemetryCollector,
 }
@@ -331,6 +332,7 @@ impl TableOfContent {
             collection_hw_metrics: DashMap::new(),
             client_payload_nonce_replay_cache: Mutex::new(ClientPayloadNonceReplayCache::default()),
             private_oram_snapshot_recovery_abort_requests: Default::default(),
+            private_oram_snapshot_recovery_resume_requests: Default::default(),
             telemetry,
         })
     }
@@ -617,6 +619,10 @@ impl TableOfContent {
             private_oram_bucket_store_collection,
             consensus_authorized_preinstall,
         )?;
+        if consensus_authorized_preinstall {
+            self.validate_private_oram_transfer_snapshot_resume(&collection)
+                .await?;
+        }
         let initiate_shard_transfer_future =
             collection.initiate_shard_transfer(shard_id, consensus_authorized_preinstall);
         initiate_shard_transfer_future.await?;
@@ -687,7 +693,7 @@ impl TableOfContent {
                         .await
                     {
                         log::warn!(
-                            "Preserving an active private ORAM resharding transfer after its source peer restarted; the target will request an exact automatic restart",
+                            "Preserving an active private ORAM transfer after a peer restarted; the target will request an exact automatic restart",
                         );
                         continue;
                     }
