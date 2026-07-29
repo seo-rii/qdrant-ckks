@@ -690,7 +690,7 @@ impl TableOfContent {
                             &transfer,
                             self.this_peer_id,
                         )
-                        .await
+                        .await?
                     {
                         log::warn!(
                             "Preserving an active private ORAM transfer after a peer restarted; the target will request an exact automatic restart",

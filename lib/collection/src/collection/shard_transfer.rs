@@ -1,11 +1,14 @@
 use std::future::Future;
-use std::path::PathBuf;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use common::defaults;
-use fs_err::tokio as tokio_fs;
+use data_encoding::BASE64URL_NOPAD;
+use fs_err::{OpenOptions, tokio as tokio_fs};
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use tokio_util::task::AbortOnDropHandle;
 
 use super::{Collection, collection_encryption_uses_private_oram_bucket_store};
@@ -23,6 +26,196 @@ use crate::shards::transfer::{
     ShardTransfer, ShardTransferConsensus, ShardTransferKey, ShardTransferMethod,
 };
 use crate::shards::{shard_initializing_flag_path, transfer};
+
+const PRIVATE_ORAM_FIXED_TRANSFER_PREINSTALL_INTENT_FILE: &str =
+    "private_oram_source_preinstall.json";
+const PRIVATE_ORAM_FIXED_TRANSFER_PREINSTALL_INTENT_VERSION: u16 = 1;
+const PRIVATE_ORAM_FIXED_TRANSFER_PREINSTALL_INTENT_MAX_BYTES: u64 = 16 * 1024;
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateOramFixedTransferPreinstallIntent {
+    version: u16,
+    transfer: ShardTransfer,
+    reservation_lease_id_hash: String,
+}
+
+fn invalid_private_oram_fixed_transfer_preinstall_intent() -> CollectionError {
+    CollectionError::service_error("private ORAM source preinstall intent is invalid")
+}
+
+fn private_oram_fixed_transfer_preinstall_intent_path(collection_path: &Path) -> PathBuf {
+    collection_path.join(PRIVATE_ORAM_FIXED_TRANSFER_PREINSTALL_INTENT_FILE)
+}
+
+fn validate_private_oram_fixed_transfer_preinstall_intent(
+    intent: &PrivateOramFixedTransferPreinstallIntent,
+) -> CollectionResult<()> {
+    if intent.version != PRIVATE_ORAM_FIXED_TRANSFER_PREINSTALL_INTENT_VERSION
+        || !intent
+            .transfer
+            .is_private_oram_preinstalled_transfer_for(None)
+        || intent.transfer.private_oram_layout_transition.is_none()
+    {
+        return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
+    }
+    let reservation_lease_id_hash = BASE64URL_NOPAD
+        .decode(intent.reservation_lease_id_hash.as_bytes())
+        .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())?;
+    if reservation_lease_id_hash.len() != 32
+        || BASE64URL_NOPAD.encode(&reservation_lease_id_hash) != intent.reservation_lease_id_hash
+    {
+        return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
+    }
+    Ok(())
+}
+
+fn read_private_oram_fixed_transfer_preinstall_intent(
+    collection_path: &Path,
+) -> CollectionResult<Option<PrivateOramFixedTransferPreinstallIntent>> {
+    let intent_path = private_oram_fixed_transfer_preinstall_intent_path(collection_path);
+    let metadata = match fs_err::symlink_metadata(&intent_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(invalid_private_oram_fixed_transfer_preinstall_intent()),
+    };
+    if !metadata.file_type().is_file()
+        || metadata.len() == 0
+        || metadata.len() > PRIVATE_ORAM_FIXED_TRANSFER_PREINSTALL_INTENT_MAX_BYTES
+    {
+        return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        if metadata.uid() != nix::unistd::Uid::effective().as_raw()
+            || metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
+        }
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use fs_err::os::unix::fs::OpenOptionsExt as _;
+
+        options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(&intent_path)
+        .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())?;
+    if !opened_metadata.file_type().is_file()
+        || opened_metadata.len() != metadata.len()
+        || opened_metadata.len() == 0
+        || opened_metadata.len() > PRIVATE_ORAM_FIXED_TRANSFER_PREINSTALL_INTENT_MAX_BYTES
+    {
+        return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        if opened_metadata.dev() != metadata.dev()
+            || opened_metadata.ino() != metadata.ino()
+            || opened_metadata.uid() != nix::unistd::Uid::effective().as_raw()
+            || opened_metadata.permissions().mode() & 0o077 != 0
+        {
+            return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
+        }
+    }
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    file.take(PRIVATE_ORAM_FIXED_TRANSFER_PREINSTALL_INTENT_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())?;
+    if bytes.len() as u64 != opened_metadata.len()
+        || bytes.len() as u64 > PRIVATE_ORAM_FIXED_TRANSFER_PREINSTALL_INTENT_MAX_BYTES
+    {
+        return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
+    }
+    let intent = serde_json::from_slice(&bytes)
+        .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())?;
+    validate_private_oram_fixed_transfer_preinstall_intent(&intent)?;
+    Ok(Some(intent))
+}
+
+fn write_private_oram_fixed_transfer_preinstall_intent(
+    collection_path: &Path,
+    transfer: &ShardTransfer,
+    reservation_lease_id_hash: &str,
+) -> CollectionResult<()> {
+    let intent = PrivateOramFixedTransferPreinstallIntent {
+        version: PRIVATE_ORAM_FIXED_TRANSFER_PREINSTALL_INTENT_VERSION,
+        transfer: transfer.clone(),
+        reservation_lease_id_hash: reservation_lease_id_hash.to_string(),
+    };
+    validate_private_oram_fixed_transfer_preinstall_intent(&intent)?;
+    if let Some(existing) = read_private_oram_fixed_transfer_preinstall_intent(collection_path)? {
+        if existing.transfer != *transfer {
+            return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
+        }
+        if existing.reservation_lease_id_hash == intent.reservation_lease_id_hash {
+            let intent_path = private_oram_fixed_transfer_preinstall_intent_path(collection_path);
+            OpenOptions::new()
+                .read(true)
+                .open(&intent_path)
+                .and_then(|file| file.sync_all())
+                .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())?;
+            return common::fs::sync_parent_dir(&intent_path)
+                .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent());
+        }
+    }
+    let bytes = serde_json::to_vec(&intent)
+        .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())?;
+    if bytes.is_empty()
+        || bytes.len() as u64 > PRIVATE_ORAM_FIXED_TRANSFER_PREINSTALL_INTENT_MAX_BYTES
+    {
+        return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
+    }
+
+    let intent_path = private_oram_fixed_transfer_preinstall_intent_path(collection_path);
+    common::fs::atomic_save(&intent_path, |writer| writer.write_all(&bytes))
+        .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs_err::set_permissions(&intent_path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())?;
+    }
+    OpenOptions::new()
+        .read(true)
+        .open(&intent_path)
+        .and_then(|file| file.sync_all())
+        .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())?;
+    common::fs::sync_parent_dir(&intent_path)
+        .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())
+}
+
+fn remove_private_oram_fixed_transfer_preinstall_intent(
+    collection_path: &Path,
+    transfer: &ShardTransfer,
+) -> CollectionResult<()> {
+    let Some(existing) = read_private_oram_fixed_transfer_preinstall_intent(collection_path)?
+    else {
+        let intent_path = private_oram_fixed_transfer_preinstall_intent_path(collection_path);
+        return common::fs::sync_parent_dir(&intent_path)
+            .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent());
+    };
+    if existing.transfer != *transfer {
+        return Err(invalid_private_oram_fixed_transfer_preinstall_intent());
+    }
+    let intent_path = private_oram_fixed_transfer_preinstall_intent_path(collection_path);
+    fs_err::remove_file(&intent_path)
+        .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())?;
+    common::fs::sync_parent_dir(&intent_path)
+        .map_err(|_| invalid_private_oram_fixed_transfer_preinstall_intent())
+}
 
 fn validate_private_oram_transfer_task_start_until_supported(
     _collection_name: &str,
@@ -102,6 +295,73 @@ impl Collection {
             .lock()
             .await
             .remove(transfer);
+    }
+
+    pub fn private_oram_fixed_transfer_preinstall_intent(
+        &self,
+    ) -> CollectionResult<Option<ShardTransfer>> {
+        Ok(
+            read_private_oram_fixed_transfer_preinstall_intent(&self.path)?
+                .map(|intent| intent.transfer),
+        )
+    }
+
+    pub fn persist_private_oram_fixed_transfer_preinstall_intent(
+        &self,
+        transfer: &ShardTransfer,
+        reservation_lease_id_hash: &str,
+    ) -> CollectionResult<()> {
+        write_private_oram_fixed_transfer_preinstall_intent(
+            &self.path,
+            transfer,
+            reservation_lease_id_hash,
+        )
+    }
+
+    pub fn clear_private_oram_fixed_transfer_preinstall_intent(
+        &self,
+        transfer: &ShardTransfer,
+    ) -> CollectionResult<()> {
+        remove_private_oram_fixed_transfer_preinstall_intent(&self.path, transfer)
+    }
+
+    pub fn private_oram_fixed_transfer_preinstall_intent_matches(
+        &self,
+        transfer: &ShardTransfer,
+    ) -> CollectionResult<bool> {
+        match self.private_oram_fixed_transfer_preinstall_intent()? {
+            None => Ok(false),
+            Some(existing) if existing == *transfer => Ok(true),
+            Some(_) => Err(invalid_private_oram_fixed_transfer_preinstall_intent()),
+        }
+    }
+
+    pub fn private_oram_fixed_transfer_preinstall_reservation_lease_id_hash(
+        &self,
+        transfer: &ShardTransfer,
+    ) -> CollectionResult<Option<String>> {
+        match read_private_oram_fixed_transfer_preinstall_intent(&self.path)? {
+            None => Ok(None),
+            Some(intent) if intent.transfer == *transfer => {
+                Ok(Some(intent.reservation_lease_id_hash))
+            }
+            Some(_) => Err(invalid_private_oram_fixed_transfer_preinstall_intent()),
+        }
+    }
+
+    async fn clear_terminal_private_oram_fixed_transfer_resume(
+        &self,
+        transfer: &ShardTransfer,
+    ) -> CollectionResult<()> {
+        if !transfer.is_private_oram_preinstalled_transfer_for(None)
+            || transfer.private_oram_layout_transition.is_none()
+        {
+            return Ok(());
+        }
+        self.clear_private_oram_fixed_transfer_preinstall_intent(transfer)?;
+        self.clear_private_oram_fixed_transfer_resume(transfer)
+            .await;
+        Ok(())
     }
 
     pub async fn stop_shard_transfer_task_for_restart(
@@ -524,6 +784,8 @@ impl Collection {
 
         let is_finish_registered = shard_holder.register_finish_transfer(&transfer.key())?;
         log::debug!("Transfer finish registered: {is_finish_registered}");
+        self.clear_terminal_private_oram_fixed_transfer_resume(&transfer)
+            .await?;
 
         Ok(())
     }
@@ -622,11 +884,20 @@ impl Collection {
         };
 
         let Some(transfer) = shard_holder.get_transfer(&transfer_key) else {
+            if let Some(intent_transfer) = self.private_oram_fixed_transfer_preinstall_intent()?
+                && intent_transfer.key() == transfer_key
+            {
+                self.clear_terminal_private_oram_fixed_transfer_resume(&intent_transfer)
+                    .await?;
+            }
             return Ok(());
         };
 
         let is_resharding_transfer = transfer.is_resharding();
-        self.abort_shard_transfer(transfer, shard_holder).await?;
+        self.abort_shard_transfer(transfer.clone(), shard_holder)
+            .await?;
+        self.clear_terminal_private_oram_fixed_transfer_resume(&transfer)
+            .await?;
 
         if is_resharding_transfer {
             let resharding_state = shard_holder.resharding_state.read().clone();
@@ -802,6 +1073,180 @@ impl Collection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shards::transfer::{
+        PrivateOramTransferLayoutState, PrivateOramTransferLayoutTransition,
+    };
+
+    fn private_oram_fixed_transfer() -> ShardTransfer {
+        ShardTransfer {
+            shard_id: 7,
+            to_shard_id: None,
+            from: 11,
+            to: 22,
+            sync: true,
+            method: Some(ShardTransferMethod::StreamRecords),
+            private_oram_preinstalled: true,
+            private_oram_layout_transition: Some(PrivateOramTransferLayoutTransition {
+                collection_id: "private-source-intent-collection".to_string(),
+                expected: PrivateOramTransferLayoutState {
+                    generation: 7,
+                    owner_peer_ids: vec![11],
+                    layout_digest: "private-source-intent-old-layout".to_string(),
+                    index_state_digest: "private-source-intent-index-state".to_string(),
+                },
+                new: PrivateOramTransferLayoutState {
+                    generation: 8,
+                    owner_peer_ids: vec![11, 22],
+                    layout_digest: "private-source-intent-new-layout".to_string(),
+                    index_state_digest: "private-source-intent-index-state".to_string(),
+                },
+                index_states: Vec::new(),
+            }),
+            filter: None,
+        }
+    }
+
+    #[test]
+    fn private_oram_fixed_transfer_preinstall_intent_is_exact_and_durable() {
+        let dir = tempfile::tempdir().unwrap();
+        let transfer = private_oram_fixed_transfer();
+        let first_lease_id_hash = BASE64URL_NOPAD.encode(&[23; 32]);
+        let second_lease_id_hash = BASE64URL_NOPAD.encode(&[24; 32]);
+        write_private_oram_fixed_transfer_preinstall_intent(
+            dir.path(),
+            &transfer,
+            &first_lease_id_hash,
+        )
+        .unwrap();
+        write_private_oram_fixed_transfer_preinstall_intent(
+            dir.path(),
+            &transfer,
+            &first_lease_id_hash,
+        )
+        .unwrap();
+        let intent = read_private_oram_fixed_transfer_preinstall_intent(dir.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(intent.transfer, transfer);
+        assert_eq!(intent.reservation_lease_id_hash, first_lease_id_hash);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            let mode = fs_err::metadata(private_oram_fixed_transfer_preinstall_intent_path(
+                dir.path(),
+            ))
+            .unwrap()
+            .permissions()
+            .mode();
+            assert_eq!(mode & 0o077, 0);
+        }
+
+        let different = ShardTransfer {
+            to: 33,
+            ..transfer.clone()
+        };
+        let error = write_private_oram_fixed_transfer_preinstall_intent(
+            dir.path(),
+            &different,
+            &second_lease_id_hash,
+        )
+        .unwrap_err();
+        let rendered = format!("{error:?}");
+        assert!(rendered.contains("source preinstall intent is invalid"));
+        assert!(!rendered.contains("private-source-intent"));
+        remove_private_oram_fixed_transfer_preinstall_intent(dir.path(), &different).unwrap_err();
+        let intent = read_private_oram_fixed_transfer_preinstall_intent(dir.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(intent.transfer, transfer);
+        assert_eq!(intent.reservation_lease_id_hash, first_lease_id_hash);
+
+        write_private_oram_fixed_transfer_preinstall_intent(
+            dir.path(),
+            &transfer,
+            &second_lease_id_hash,
+        )
+        .unwrap();
+        let intent = read_private_oram_fixed_transfer_preinstall_intent(dir.path())
+            .unwrap()
+            .unwrap();
+        assert_eq!(intent.transfer, transfer);
+        assert_eq!(intent.reservation_lease_id_hash, second_lease_id_hash);
+
+        remove_private_oram_fixed_transfer_preinstall_intent(dir.path(), &transfer).unwrap();
+        assert!(
+            read_private_oram_fixed_transfer_preinstall_intent(dir.path())
+                .unwrap()
+                .is_none()
+        );
+        remove_private_oram_fixed_transfer_preinstall_intent(dir.path(), &transfer).unwrap();
+    }
+
+    #[test]
+    fn private_oram_fixed_transfer_preinstall_intent_rejects_malformed_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let intent_path = private_oram_fixed_transfer_preinstall_intent_path(dir.path());
+        fs_err::write(
+            &intent_path,
+            br#"{"version":1,"transfer":{},"unexpected":true}"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs_err::set_permissions(&intent_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let error = read_private_oram_fixed_transfer_preinstall_intent(dir.path()).unwrap_err();
+        let rendered = format!("{error:?}");
+        assert!(rendered.contains("source preinstall intent is invalid"));
+        assert!(!rendered.contains(dir.path().to_string_lossy().as_ref()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_oram_fixed_transfer_preinstall_intent_rejects_unsafe_file() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let dir = tempfile::tempdir().unwrap();
+        let transfer = private_oram_fixed_transfer();
+        let intent_path = private_oram_fixed_transfer_preinstall_intent_path(dir.path());
+        write_private_oram_fixed_transfer_preinstall_intent(
+            dir.path(),
+            &transfer,
+            &BASE64URL_NOPAD.encode(&[23; 32]),
+        )
+        .unwrap();
+        fs_err::set_permissions(&intent_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        read_private_oram_fixed_transfer_preinstall_intent(dir.path()).unwrap_err();
+
+        fs_err::remove_file(&intent_path).unwrap();
+        let outside = dir.path().join("outside-private-intent-sentinel");
+        fs_err::write(&outside, b"private intent sentinel").unwrap();
+        symlink(&outside, &intent_path).unwrap();
+        let error = read_private_oram_fixed_transfer_preinstall_intent(dir.path()).unwrap_err();
+        let rendered = format!("{error:?}");
+        assert!(rendered.contains("source preinstall intent is invalid"));
+        assert!(!rendered.contains("outside-private-intent-sentinel"));
+    }
+
+    #[test]
+    fn private_oram_fixed_transfer_preinstall_intent_rejects_invalid_lease_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let error = write_private_oram_fixed_transfer_preinstall_intent(
+            dir.path(),
+            &private_oram_fixed_transfer(),
+            "not-a-private-oram-lease-hash",
+        )
+        .unwrap_err();
+        assert!(format!("{error:?}").contains("source preinstall intent is invalid"));
+        assert!(
+            read_private_oram_fixed_transfer_preinstall_intent(dir.path())
+                .unwrap()
+                .is_none()
+        );
+    }
 
     const PRIVATE_ORAM_TRANSFER_COLLECTION_NAMES: &[&str] = &[
         "clientStateCiphertext.json",

@@ -51,12 +51,14 @@ use super::auth::Auth;
 use super::private_hnsw::begin_private_hnsw_collection_snapshot;
 use super::private_result_oram::begin_private_result_oram_collection_snapshot;
 use crate::settings::Settings;
+#[cfg(feature = "staging")]
+use crate::tonic::api::qdrant_internal_api::apply_private_oram_preinstall_restart_pause;
 use crate::tonic::api::qdrant_internal_api::{
     prepare_private_oram_replica_removal, prepare_private_oram_resharding_finish,
     prepare_private_oram_shard_key_layout_change, prepare_private_oram_shard_transfer,
     private_oram_replica_removal_layout_transition, private_oram_resharding_finish_operation,
-    private_oram_resharding_start_operation, private_oram_shard_transfer_start_operation,
-    release_private_oram_transfer_reservation,
+    private_oram_resharding_start_operation, private_oram_session_lease_hash,
+    private_oram_shard_transfer_start_operation, release_private_oram_transfer_reservation,
 };
 pub async fn do_collection_exists(
     toc: &TableOfContent,
@@ -1199,6 +1201,8 @@ async fn submit_shard_transfer_with_private_oram_preinstall(
         &collection_name,
         config,
         transfer.to,
+        None,
+        false,
     )
     .await?;
     transfer.private_oram_preinstalled = true;
@@ -1283,6 +1287,8 @@ async fn submit_private_oram_resharding_start_with_preinstall(
                 &collection_name,
                 config,
                 resharding_key.peer_id,
+                None,
+                false,
             )
             .await?
         }
@@ -1426,6 +1432,7 @@ pub(crate) async fn submit_restart_transfer_with_private_oram_preinstall(
             "private ORAM restart transfer must be coordinated by its current source peer",
         ));
     }
+    let automatic_fixed_resume = expected_private_oram_transfer.is_some();
     let transfer_key = transfer_restart.key();
     let active_transfers = collection.state().await.transfers;
     let active_transfer = match expected_private_oram_transfer {
@@ -1447,14 +1454,58 @@ pub(crate) async fn submit_restart_transfer_with_private_oram_preinstall(
             })?,
     };
     transfer_restart.expected_private_oram_transfer = Some(Box::new(active_transfer.clone()));
+    let reservation_session_id = automatic_fixed_resume.then(|| Uuid::new_v4().to_string());
+    let reservation_lease_id_hash = reservation_session_id
+        .as_deref()
+        .map(private_oram_session_lease_hash)
+        .transpose()?;
     let owns_fixed_restart_intent = !active_transfer.is_resharding()
         && collection
             .mark_private_oram_fixed_transfer_resume(&active_transfer)
             .await;
+    if automatic_fixed_resume {
+        if active_transfer.is_resharding() {
+            if owns_fixed_restart_intent {
+                collection
+                    .clear_private_oram_fixed_transfer_resume(&active_transfer)
+                    .await;
+            }
+            return Err(StorageError::bad_request(
+                "private ORAM fixed-layout resume cannot target a resharding transfer",
+            ));
+        }
+        let reservation_lease_id_hash = reservation_lease_id_hash.as_deref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM fixed-layout resume reservation identity is missing",
+            )
+        })?;
+        if let Err(error) = collection.persist_private_oram_fixed_transfer_preinstall_intent(
+            &active_transfer,
+            reservation_lease_id_hash,
+        ) {
+            if owns_fixed_restart_intent {
+                collection
+                    .clear_private_oram_fixed_transfer_resume(&active_transfer)
+                    .await;
+            }
+            return Err(error.into());
+        }
+    }
     if let Err(error) = collection
         .stop_shard_transfer_task_for_restart(&active_transfer)
         .await
     {
+        if automatic_fixed_resume
+            && let Err(cleanup_error) =
+                collection.clear_private_oram_fixed_transfer_preinstall_intent(&active_transfer)
+        {
+            if owns_fixed_restart_intent {
+                collection
+                    .clear_private_oram_fixed_transfer_resume(&active_transfer)
+                    .await;
+            }
+            return Err(cleanup_error.into());
+        }
         if owns_fixed_restart_intent {
             collection
                 .clear_private_oram_fixed_transfer_resume(&active_transfer)
@@ -1470,6 +1521,8 @@ pub(crate) async fn submit_restart_transfer_with_private_oram_preinstall(
         &collection_name,
         config,
         transfer_restart.to,
+        reservation_session_id,
+        automatic_fixed_resume,
     )
     .await
     {
@@ -1493,12 +1546,18 @@ pub(crate) async fn submit_restart_transfer_with_private_oram_preinstall(
             wait_timeout,
         )
         .await;
+    #[cfg(feature = "staging")]
+    if automatic_fixed_resume && matches!(&result, Ok(true)) {
+        apply_private_oram_preinstall_restart_pause().await;
+    }
     if result.is_ok() {
-        if release_private_oram_transfer_reservation(dispatcher, &reservation)
-            .await
-            .is_err()
+        if let Err(error) =
+            release_private_oram_transfer_reservation(dispatcher, &reservation).await
         {
             log::warn!("failed to release private ORAM restart transfer reservation");
+            if automatic_fixed_resume {
+                return Err(error);
+            }
         }
     } else {
         log::warn!(

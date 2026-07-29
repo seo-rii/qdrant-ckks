@@ -99,6 +99,166 @@ const PRIVATE_ORAM_INSTALL_STREAM_CONCURRENCY: usize = 1;
 const PRIVATE_ORAM_INSTALL_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const PRIVATE_ORAM_INSTALL_STREAM_TOTAL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
+#[cfg(feature = "staging")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivateOramPreinstallFault {
+    PauseAfterReservation,
+    PauseAfterFirstIndex,
+    PauseAfterInstall,
+    PauseAfterRestartApply,
+    StaleRoot,
+    StaleSignature,
+}
+
+#[cfg(feature = "staging")]
+impl PrivateOramPreinstallFault {
+    fn from_env() -> Option<Self> {
+        match std::env::var("QDRANT_STAGING_PRIVATE_ORAM_PREINSTALL_FAULT")
+            .ok()?
+            .as_str()
+        {
+            "pause_after_reservation" => Some(Self::PauseAfterReservation),
+            "pause_after_first_index" => Some(Self::PauseAfterFirstIndex),
+            "pause_after_install" => Some(Self::PauseAfterInstall),
+            "pause_after_restart_apply" => Some(Self::PauseAfterRestartApply),
+            "stale_root" => Some(Self::StaleRoot),
+            "stale_signature" => Some(Self::StaleSignature),
+            _ => {
+                log::warn!("Ignoring invalid private ORAM staging preinstall fault");
+                None
+            }
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::PauseAfterReservation => "pause_after_reservation",
+            Self::PauseAfterFirstIndex => "pause_after_first_index",
+            Self::PauseAfterInstall => "pause_after_install",
+            Self::PauseAfterRestartApply => "pause_after_restart_apply",
+            Self::StaleRoot => "stale_root",
+            Self::StaleSignature => "stale_signature",
+        }
+    }
+}
+
+#[cfg(feature = "staging")]
+async fn apply_private_oram_preinstall_pause(fault: PrivateOramPreinstallFault) {
+    if PrivateOramPreinstallFault::from_env() == Some(fault) {
+        log::warn!(
+            "Private ORAM staging preinstall pause reached: {}",
+            fault.name()
+        );
+        tokio::time::sleep(Duration::from_secs(5 * 60)).await;
+    }
+}
+
+#[cfg(feature = "staging")]
+pub(crate) async fn apply_private_oram_preinstall_restart_pause() {
+    apply_private_oram_preinstall_pause(PrivateOramPreinstallFault::PauseAfterRestartApply).await;
+}
+
+#[cfg(feature = "staging")]
+fn make_private_oram_preinstall_value_stale(
+    value: &mut String,
+    expected_bytes: usize,
+) -> Result<(), StorageError> {
+    let mut decoded = BASE64URL_NOPAD.decode(value.as_bytes()).map_err(|_| {
+        StorageError::service_error("private ORAM staging preinstall value is invalid")
+    })?;
+    if decoded.len() != expected_bytes {
+        return Err(StorageError::service_error(
+            "private ORAM staging preinstall value is invalid",
+        ));
+    }
+    decoded[0] ^= 1;
+    *value = BASE64URL_NOPAD.encode(&decoded);
+    Ok(())
+}
+
+#[cfg(feature = "staging")]
+fn apply_private_oram_preinstall_wire_fault(
+    request: &mut InstallPrivateOramLiveReplicaRequest,
+) -> Result<(), StorageError> {
+    let Some(
+        fault
+        @ (PrivateOramPreinstallFault::StaleRoot | PrivateOramPreinstallFault::StaleSignature),
+    ) = PrivateOramPreinstallFault::from_env()
+    else {
+        return Ok(());
+    };
+    apply_private_oram_preinstall_wire_fault_for(request, fault)
+}
+
+#[cfg(feature = "staging")]
+fn apply_private_oram_preinstall_wire_fault_for(
+    request: &mut InstallPrivateOramLiveReplicaRequest,
+    fault: PrivateOramPreinstallFault,
+) -> Result<(), StorageError> {
+    match (&mut request.bundle, fault) {
+        (
+            Some(install_private_oram_live_replica_request::Bundle::Hnsw(bundle)),
+            PrivateOramPreinstallFault::StaleRoot,
+        ) => make_private_oram_preinstall_value_stale(
+            &mut bundle
+                .current
+                .as_mut()
+                .ok_or_else(|| {
+                    StorageError::service_error(
+                        "private ORAM staging preinstall current state is missing",
+                    )
+                })?
+                .root_hash,
+            32,
+        )?,
+        (
+            Some(install_private_oram_live_replica_request::Bundle::Result(bundle)),
+            PrivateOramPreinstallFault::StaleRoot,
+        ) => make_private_oram_preinstall_value_stale(
+            &mut bundle
+                .current
+                .as_mut()
+                .ok_or_else(|| {
+                    StorageError::service_error(
+                        "private ORAM staging preinstall current state is missing",
+                    )
+                })?
+                .root_hash,
+            32,
+        )?,
+        (
+            Some(install_private_oram_live_replica_request::Bundle::Hnsw(_)),
+            PrivateOramPreinstallFault::StaleSignature,
+        ) => return Ok(()),
+        (
+            Some(install_private_oram_live_replica_request::Bundle::Result(bundle)),
+            PrivateOramPreinstallFault::StaleSignature,
+        ) => make_private_oram_preinstall_value_stale(
+            &mut bundle
+                .manifest_signature
+                .as_mut()
+                .ok_or_else(|| {
+                    StorageError::service_error(
+                        "private ORAM staging preinstall signature is missing",
+                    )
+                })?
+                .sig,
+            64,
+        )?,
+        (None, _) => {
+            return Err(StorageError::service_error(
+                "private ORAM staging preinstall bundle is missing",
+            ));
+        }
+        _ => unreachable!("staging wire fault is restricted to stale proof modes"),
+    }
+    log::warn!(
+        "Private ORAM staging preinstall wire fault injected: {}",
+        fault.name()
+    );
+    Ok(())
+}
+
 async fn decode_private_oram_install_stream<M, S>(
     mut stream: S,
     idle_timeout: Duration,
@@ -620,8 +780,8 @@ async fn release_private_oram_transfer_reservation_keys(
 async fn acquire_private_oram_collection_reservation(
     dispatcher: &Dispatcher,
     keys: Vec<PrivateOramEpochKey>,
+    session_id: String,
 ) -> Result<PrivateOramTransferReservation, StorageError> {
-    let session_id = Uuid::new_v4().to_string();
     let issued_at_unix = current_private_oram_unix_secs()?;
     let expires_at_unix = issued_at_unix
         .checked_add(PRIVATE_ORAM_TRANSFER_RESERVATION_SECS)
@@ -1104,6 +1264,8 @@ pub(crate) async fn prepare_private_oram_shard_transfer(
     collection_name: &str,
     config: &CollectionConfigInternal,
     target_peer: PeerId,
+    reservation_session_id: Option<String>,
+    staging_faults_enabled: bool,
 ) -> Result<PrivateOramTransferReservation, StorageError> {
     let keys = private_oram_transfer_index_keys(config, collection_name)?;
     if keys.is_empty() {
@@ -1121,8 +1283,18 @@ pub(crate) async fn prepare_private_oram_shard_transfer(
         )
         .await?;
     }
-    let reservation = acquire_private_oram_collection_reservation(dispatcher, keys).await?;
+    let reservation = acquire_private_oram_collection_reservation(
+        dispatcher,
+        keys,
+        reservation_session_id.unwrap_or_else(|| Uuid::new_v4().to_string()),
+    )
+    .await?;
     let lease_id_hash = private_oram_session_lease_hash(&reservation.session_id)?;
+    #[cfg(feature = "staging")]
+    if staging_faults_enabled {
+        apply_private_oram_preinstall_pause(PrivateOramPreinstallFault::PauseAfterReservation)
+            .await;
+    }
 
     if target_peer == dispatcher.this_peer_id() {
         return Ok(reservation);
@@ -1136,6 +1308,7 @@ pub(crate) async fn prepare_private_oram_shard_transfer(
         &reservation,
         target_peer,
         &lease_id_hash,
+        staging_faults_enabled,
     )
     .await
     {
@@ -1148,6 +1321,10 @@ pub(crate) async fn prepare_private_oram_shard_transfer(
             );
         }
         return Err(error);
+    }
+    #[cfg(feature = "staging")]
+    if staging_faults_enabled {
+        apply_private_oram_preinstall_pause(PrivateOramPreinstallFault::PauseAfterInstall).await;
     }
 
     Ok(reservation)
@@ -1169,6 +1346,8 @@ pub(crate) async fn prepare_private_oram_resharding_finish(
             collection_name,
             config,
             resharding_key.peer_id,
+            None,
+            false,
         )
         .await;
     }
@@ -1181,7 +1360,7 @@ pub(crate) async fn prepare_private_oram_resharding_finish(
     }
     recover_private_oram_collection_replication(dispatcher, auth, settings, collection_name, &keys)
         .await?;
-    acquire_private_oram_collection_reservation(dispatcher, keys).await
+    acquire_private_oram_collection_reservation(dispatcher, keys, Uuid::new_v4().to_string()).await
 }
 
 pub(crate) async fn prepare_private_oram_collection_layout_change(
@@ -1204,7 +1383,9 @@ pub(crate) async fn prepare_private_oram_collection_layout_change(
     recover_private_oram_collection_replication(dispatcher, auth, settings, collection_name, &keys)
         .await?;
 
-    let reservation = acquire_private_oram_collection_reservation(dispatcher, keys).await?;
+    let reservation =
+        acquire_private_oram_collection_reservation(dispatcher, keys, Uuid::new_v4().to_string())
+            .await?;
     if let Err(error) = private_oram_current_layout_candidate_for_reservation(
         dispatcher,
         collection_name,
@@ -1303,6 +1484,7 @@ pub(crate) async fn prepare_private_oram_shard_key_layout_change(
                 &reservation,
                 *target_peer,
                 &lease_id_hash,
+                false,
             )
             .await?;
         }
@@ -1386,6 +1568,78 @@ pub(crate) async fn release_private_oram_transfer_reservation(
         &reservation.session_id,
     )
     .await
+}
+
+async fn release_orphaned_private_oram_active_transfer_reservation(
+    dispatcher: &Dispatcher,
+    keys: &[PrivateOramEpochKey],
+    expected_lease_id_hash: &str,
+) -> Result<(), StorageError> {
+    let mut reservation_lease = None;
+    let mut leases = Vec::new();
+    for key in keys {
+        let has_local_session = match key.index_kind {
+            PrivateOramIndexKind::Hnsw => {
+                private_hnsw::private_hnsw_has_active_session(&key.collection_id, &key.index_name)?
+            }
+            PrivateOramIndexKind::ResultPayload => {
+                private_result_oram::private_result_oram_has_active_session(&key.collection_id)?
+            }
+        };
+        if has_local_session {
+            return Err(StorageError::bad_request(
+                "private ORAM active transfer reservation conflicts with a local session",
+            ));
+        }
+
+        let Some(lease) = dispatcher.private_oram_consensus_session_lease(key)? else {
+            continue;
+        };
+        if !private_oram_orphaned_transfer_lease_matches(
+            expected_lease_id_hash,
+            reservation_lease.as_ref(),
+            &lease,
+            dispatcher.this_peer_id(),
+        ) {
+            return Err(StorageError::bad_request(
+                "private ORAM active transfer reservation is not an exact source-local lease",
+            ));
+        }
+        reservation_lease.get_or_insert_with(|| lease.clone());
+        leases.push((key.clone(), lease));
+    }
+
+    for (key, lease) in leases.into_iter().rev() {
+        let result = dispatcher
+            .submit_private_oram_session_lease_cas(
+                CompareAndSwapPrivateOramSessionLease {
+                    key: key.clone(),
+                    expected: Some(lease),
+                    new: None,
+                },
+                None,
+            )
+            .await;
+        if result.is_err()
+            && dispatcher
+                .private_oram_consensus_session_lease(&key)?
+                .is_some()
+        {
+            return result;
+        }
+    }
+    Ok(())
+}
+
+fn private_oram_orphaned_transfer_lease_matches(
+    expected_lease_id_hash: &str,
+    expected: Option<&PrivateOramSessionLease>,
+    candidate: &PrivateOramSessionLease,
+    local_peer_id: PeerId,
+) -> bool {
+    candidate.owner_peer_id == local_peer_id
+        && candidate.lease_id_hash == expected_lease_id_hash
+        && expected.is_none_or(|expected| expected == candidate)
 }
 
 async fn release_orphaned_private_oram_session_lease(
@@ -1603,8 +1857,11 @@ async fn install_private_oram_live_replica_set_on_peer(
     reservation: &PrivateOramTransferReservation,
     target_peer: PeerId,
     lease_id_hash: &str,
+    staging_faults_enabled: bool,
 ) -> Result<(), StorageError> {
-    for key in &reservation.keys {
+    for (index, key) in reservation.keys.iter().enumerate() {
+        #[cfg(not(feature = "staging"))]
+        let _ = index;
         match key.index_kind {
             PrivateOramIndexKind::Hnsw => {
                 install_private_hnsw_live_replica_on_peer(
@@ -1615,6 +1872,7 @@ async fn install_private_oram_live_replica_set_on_peer(
                     &key.index_name,
                     target_peer,
                     lease_id_hash,
+                    staging_faults_enabled,
                 )
                 .await?;
             }
@@ -1626,9 +1884,15 @@ async fn install_private_oram_live_replica_set_on_peer(
                     collection_name,
                     target_peer,
                     lease_id_hash,
+                    staging_faults_enabled,
                 )
                 .await?;
             }
+        }
+        #[cfg(feature = "staging")]
+        if staging_faults_enabled && index == 0 {
+            apply_private_oram_preinstall_pause(PrivateOramPreinstallFault::PauseAfterFirstIndex)
+                .await;
         }
     }
     Ok(())
@@ -1642,7 +1906,10 @@ pub(crate) async fn install_private_hnsw_live_replica_on_peer(
     vector_name: &str,
     target_peer: PeerId,
     transfer_lease_id_hash: &str,
+    staging_faults_enabled: bool,
 ) -> Result<(), StorageError> {
+    #[cfg(not(feature = "staging"))]
+    let _ = staging_faults_enabled;
     let pass = new_unchecked_verification_pass();
     let max_bundle_bytes = PRIVATE_ORAM_INSTALL_MAX_ENCODED_BYTES;
     let bundle = private_hnsw::do_export_private_hnsw_live_replication_bundle(
@@ -1670,7 +1937,8 @@ pub(crate) async fn install_private_hnsw_live_replica_on_peer(
             "private HNSW ORAM live replica export does not match consensus",
         ));
     }
-    let request = InstallPrivateOramLiveReplicaRequest {
+    #[cfg_attr(not(feature = "staging"), allow(unused_mut))]
+    let mut request = InstallPrivateOramLiveReplicaRequest {
         collection_name: collection_name.to_string(),
         collection_id,
         index_kind: PrivateOramReplicationIndexKind::Hnsw as i32,
@@ -1695,6 +1963,10 @@ pub(crate) async fn install_private_hnsw_live_replica_on_peer(
         )),
         transfer_lease_id_hash: transfer_lease_id_hash.to_string(),
     };
+    #[cfg(feature = "staging")]
+    if staging_faults_enabled {
+        apply_private_oram_preinstall_wire_fault(&mut request)?;
+    }
     let response = dispatcher
         .toc(auth, &pass)
         .get_channel_service()
@@ -1710,7 +1982,10 @@ pub(crate) async fn install_private_result_oram_live_replica_on_peer(
     collection_name: &str,
     target_peer: PeerId,
     transfer_lease_id_hash: &str,
+    staging_faults_enabled: bool,
 ) -> Result<(), StorageError> {
+    #[cfg(not(feature = "staging"))]
+    let _ = staging_faults_enabled;
     let pass = new_unchecked_verification_pass();
     let max_bundle_bytes = PRIVATE_ORAM_INSTALL_MAX_ENCODED_BYTES;
     let bundle = private_result_oram::do_export_private_result_oram_live_replication_bundle(
@@ -1737,7 +2012,8 @@ pub(crate) async fn install_private_result_oram_live_replica_on_peer(
             "private result ORAM live replica export does not match consensus",
         ));
     }
-    let request = InstallPrivateOramLiveReplicaRequest {
+    #[cfg_attr(not(feature = "staging"), allow(unused_mut))]
+    let mut request = InstallPrivateOramLiveReplicaRequest {
         collection_name: collection_name.to_string(),
         collection_id,
         index_kind: PrivateOramReplicationIndexKind::Result as i32,
@@ -1762,6 +2038,10 @@ pub(crate) async fn install_private_result_oram_live_replica_on_peer(
         )),
         transfer_lease_id_hash: transfer_lease_id_hash.to_string(),
     };
+    #[cfg(feature = "staging")]
+    if staging_faults_enabled {
+        apply_private_oram_preinstall_wire_fault(&mut request)?;
+    }
     let response = dispatcher
         .toc(auth, &pass)
         .get_channel_service()
@@ -3396,19 +3676,39 @@ impl QdrantInternal for QdrantInternalService {
             let first_resume_request = collection
                 .mark_private_oram_fixed_transfer_resume(&transfer)
                 .await;
+            let durable_preinstall_reservation_lease_id_hash = collection
+                .private_oram_fixed_transfer_preinstall_reservation_lease_id_hash(&transfer)
+                .map_err(StorageError::from)?;
+            drop(state);
+
+            let dispatcher = Dispatcher::new(self.toc.clone()).with_consensus(
+                self.consensus_state.clone(),
+                self.settings.cluster.resharding_enabled,
+            );
+            if let Some(expected_lease_id_hash) =
+                durable_preinstall_reservation_lease_id_hash.as_deref()
+                && let Err(error) = release_orphaned_private_oram_active_transfer_reservation(
+                    &dispatcher,
+                    &index_keys,
+                    expected_lease_id_hash,
+                )
+                .await
+            {
+                if first_resume_request {
+                    collection
+                        .clear_private_oram_fixed_transfer_resume(&transfer)
+                        .await;
+                }
+                return Err(error.into());
+            }
             if !first_resume_request && !transfer_task_requires_restart {
                 return Ok(Response::new(RequestPrivateOramShardRecoveryResponse {
                     accepted: true,
                 }));
             }
-            drop(state);
 
             log::info!(
                 "Automatically restarting an active private ORAM fixed-layout transfer with fresh encrypted-store preinstall"
-            );
-            let dispatcher = Dispatcher::new(self.toc.clone()).with_consensus(
-                self.consensus_state.clone(),
-                self.settings.cluster.resharding_enabled,
             );
             let accepted = match submit_restart_transfer_with_private_oram_preinstall(
                 &dispatcher,
@@ -3903,6 +4203,53 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_active_transfer_orphan_cleanup_requires_one_exact_source_lease() {
+        let lease = PrivateOramSessionLease {
+            owner_peer_id: 7,
+            lease_id_hash: BASE64URL_NOPAD.encode(&[15; 32]),
+            issued_at_unix: 100,
+            expires_at_unix: 3_700,
+        };
+        assert!(private_oram_orphaned_transfer_lease_matches(
+            &lease.lease_id_hash,
+            None,
+            &lease,
+            7
+        ));
+        assert!(private_oram_orphaned_transfer_lease_matches(
+            &lease.lease_id_hash,
+            Some(&lease),
+            &lease,
+            7,
+        ));
+
+        let mut wrong_owner = lease.clone();
+        wrong_owner.owner_peer_id = 8;
+        let mut wrong_hash = lease.clone();
+        wrong_hash.lease_id_hash = BASE64URL_NOPAD.encode(&[16; 32]);
+        let mut wrong_expiry = lease.clone();
+        wrong_expiry.expires_at_unix += 1;
+        for candidate in [wrong_owner, wrong_hash, wrong_expiry] {
+            assert!(!private_oram_orphaned_transfer_lease_matches(
+                &lease.lease_id_hash,
+                Some(&lease),
+                &candidate,
+                7,
+            ));
+        }
+        let newer_reservation_hash = BASE64URL_NOPAD.encode(&[17; 32]);
+        assert!(!private_oram_orphaned_transfer_lease_matches(
+            &lease.lease_id_hash,
+            None,
+            &PrivateOramSessionLease {
+                lease_id_hash: newer_reservation_hash,
+                ..lease
+            },
+            7,
+        ));
+    }
+
+    #[test]
     fn failed_owner_writeback_recovery_requires_exact_consensus_state() {
         let old = PrivateOramConsensusEpoch {
             index_epoch: 42,
@@ -4299,5 +4646,99 @@ mod tests {
             assert!(!rendered.contains(&root_hash));
             assert!(!rendered.contains(&digest));
         }
+    }
+
+    #[cfg(feature = "staging")]
+    #[test]
+    fn private_oram_staging_preinstall_faults_preserve_proof_shape() {
+        let root_hash = BASE64URL_NOPAD.encode(&[17; 32]);
+        let signature = BASE64URL_NOPAD.encode(&[18; 64]);
+        let request = InstallPrivateOramLiveReplicaRequest {
+            collection_name: "docs".to_string(),
+            collection_id: "collection-id".to_string(),
+            index_kind: PrivateOramReplicationIndexKind::Hnsw as i32,
+            vector_name: "text".to_string(),
+            bundle: Some(install_private_oram_live_replica_request::Bundle::Hnsw(
+                api::grpc::PrivateHnswLiveReplicationBundle {
+                    manifest: None,
+                    manifest_signature: Some(api::grpc::PrivateHnswSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: "owner-key".to_string(),
+                        sig: signature.clone(),
+                    }),
+                    current: Some(PrivateOramReplicationEpochState {
+                        index_epoch: 43,
+                        root_hash: root_hash.clone(),
+                    }),
+                    writeback_digest: Some(BASE64URL_NOPAD.encode(&[19; 32])),
+                    buckets: Vec::new(),
+                },
+            )),
+            transfer_lease_id_hash: BASE64URL_NOPAD.encode(&[20; 32]),
+        };
+
+        let mut stale_root = request.clone();
+        apply_private_oram_preinstall_wire_fault_for(
+            &mut stale_root,
+            PrivateOramPreinstallFault::StaleRoot,
+        )
+        .unwrap();
+        let install_private_oram_live_replica_request::Bundle::Hnsw(bundle) =
+            stale_root.bundle.unwrap()
+        else {
+            panic!("staging fixture must contain an HNSW bundle");
+        };
+        let mutated_root = bundle.current.unwrap().root_hash;
+        assert_ne!(mutated_root, root_hash);
+        assert_eq!(
+            BASE64URL_NOPAD
+                .decode(mutated_root.as_bytes())
+                .unwrap()
+                .len(),
+            32
+        );
+        assert_eq!(bundle.manifest_signature.unwrap().sig, signature);
+
+        let mut stale_signature = InstallPrivateOramLiveReplicaRequest {
+            index_kind: PrivateOramReplicationIndexKind::Result as i32,
+            vector_name: String::new(),
+            bundle: Some(install_private_oram_live_replica_request::Bundle::Result(
+                api::grpc::PrivateResultOramLiveReplicationBundle {
+                    manifest: None,
+                    manifest_signature: Some(api::grpc::PrivateResultOramSignature {
+                        alg: "ed25519".to_string(),
+                        key_id: "owner-key".to_string(),
+                        sig: signature.clone(),
+                    }),
+                    current: Some(PrivateOramReplicationEpochState {
+                        index_epoch: 43,
+                        root_hash: root_hash.clone(),
+                    }),
+                    writeback_digest: Some(BASE64URL_NOPAD.encode(&[19; 32])),
+                    buckets: Vec::new(),
+                },
+            )),
+            ..request
+        };
+        apply_private_oram_preinstall_wire_fault_for(
+            &mut stale_signature,
+            PrivateOramPreinstallFault::StaleSignature,
+        )
+        .unwrap();
+        let install_private_oram_live_replica_request::Bundle::Result(bundle) =
+            stale_signature.bundle.unwrap()
+        else {
+            panic!("staging fixture must contain a result ORAM bundle");
+        };
+        let mutated_signature = bundle.manifest_signature.unwrap().sig;
+        assert_ne!(mutated_signature, signature);
+        assert_eq!(
+            BASE64URL_NOPAD
+                .decode(mutated_signature.as_bytes())
+                .unwrap()
+                .len(),
+            64
+        );
+        assert_eq!(bundle.current.unwrap().root_hash, root_hash);
     }
 }

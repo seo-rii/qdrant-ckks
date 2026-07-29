@@ -991,9 +991,38 @@ impl Collection {
             .into_iter()
             .collect::<HashSet<_>>();
         let active_transfer_count = active_transfers.len();
+        let mut durable_fixed_transfer_resume_intent =
+            self.private_oram_fixed_transfer_preinstall_intent()?;
+        if let Some(transfer) = durable_fixed_transfer_resume_intent.as_ref() {
+            if !active_transfers.contains(transfer) {
+                self.clear_private_oram_fixed_transfer_preinstall_intent(transfer)?;
+                durable_fixed_transfer_resume_intent = None;
+            } else if transfer.from != self.this_peer_id
+                || !shard_holder
+                    .get_shard(transfer.shard_id)
+                    .is_some_and(|replica_set| {
+                        private_oram_fixed_transfer_requires_exact_restart(
+                            private_oram_bucket_store_collection,
+                            transfer,
+                            shard_holder.resharding_state().as_ref(),
+                            transfer.to,
+                            active_transfer_count,
+                            replica_set.peer_state(transfer.from),
+                            replica_set.peer_state(transfer.to),
+                        )
+                    })
+            {
+                return Err(CollectionError::service_error(
+                    "private ORAM source preinstall intent does not match the active transfer",
+                ));
+            }
+        }
         let fixed_transfer_resume_intents = {
             let mut intents = self.private_oram_fixed_transfer_resume_intents.lock().await;
             intents.retain(|transfer| active_transfers.contains(transfer));
+            if let Some(transfer) = durable_fixed_transfer_resume_intent {
+                intents.insert(transfer);
+            }
             intents.clone()
         };
         let resharding_state = shard_holder.resharding_state();
@@ -1321,12 +1350,14 @@ impl Collection {
     }
 
     /// Whether a peer restart must preserve an active private ORAM transfer until the target
-    /// requests the exact automatic restart that re-preinstalls the encrypted stores.
+    /// requests the exact automatic restart that re-preinstalls the encrypted stores. A fixed
+    /// transfer source is preserved only while an exact durable or in-process resume intent
+    /// exists.
     pub async fn should_preserve_private_oram_transfer_on_peer_restart(
         &self,
         transfer: &ShardTransfer,
         restarted_peer_id: PeerId,
-    ) -> bool {
+    ) -> CollectionResult<bool> {
         let private_oram_bucket_store_collection = {
             let config = self.collection_config.read().await;
             config
@@ -1342,22 +1373,39 @@ impl Collection {
             state.resharding.as_ref(),
             restarted_peer_id,
         ) {
-            return true;
+            return Ok(true);
         }
 
         let Some(shard) = state.shards.get(&transfer.shard_id) else {
-            return false;
+            return Ok(false);
         };
-        state.transfers.contains(transfer)
+        let fixed_transfer_requires_exact_restart = state.transfers.contains(transfer)
             && private_oram_fixed_transfer_requires_exact_restart(
                 private_oram_bucket_store_collection,
                 transfer,
                 state.resharding.as_ref(),
-                restarted_peer_id,
+                transfer.to,
                 state.transfers.len(),
                 shard.replicas.get(&transfer.from).copied(),
                 shard.replicas.get(&transfer.to).copied(),
-            )
+            );
+        if !fixed_transfer_requires_exact_restart {
+            return Ok(false);
+        }
+        if restarted_peer_id == transfer.to {
+            return Ok(true);
+        }
+        if restarted_peer_id == transfer.from {
+            return Ok(
+                self.private_oram_fixed_transfer_preinstall_intent_matches(transfer)?
+                    || self
+                        .private_oram_fixed_transfer_resume_intents
+                        .lock()
+                        .await
+                        .contains(transfer),
+            );
+        }
+        Ok(false)
     }
 
     pub async fn get_aggregated_telemetry_data(

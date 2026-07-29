@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import pathlib
@@ -1760,14 +1761,11 @@ def test_private_oram_restart_repreinstalls_and_completes(
     )
 
 
-@pytest.mark.parametrize("wipe_mode", ["collection", "stores"])
-def test_private_oram_active_transfer_snapshot_fresh_preinstalls_wiped_target(
-    tmp_path: pathlib.Path, wipe_mode: str,
-):
-    extra_env = {
-        "QDRANT__CLUSTER__CONSENSUS__COMPACT_WAL_ENTRIES": "1",
-        "QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "20",
-    }
+def _prepare_private_oram_active_transfer_snapshot_wiped_target(
+    tmp_path: pathlib.Path,
+    wipe_mode: str,
+    extra_env: dict[str, str],
+) -> dict:
     peer_urls, peer_dirs, fixture, _, _ = _start_private_oram_cluster(
         tmp_path,
         3,
@@ -1802,6 +1800,7 @@ def test_private_oram_active_transfer_snapshot_fresh_preinstalls_wiped_target(
     wait_for_collection_shard_transfers_count(target_url, COLLECTION, 1)
 
     target_process = processes[target_index]
+    source_process = processes[source_index]
     remaining_process = processes[remaining_index]
     target_port = target_process.p2p_port
     restart_bootstrap_uri = get_uri(remaining_process.p2p_port)
@@ -1843,6 +1842,50 @@ def test_private_oram_active_transfer_snapshot_fresh_preinstalls_wiped_target(
     else:
         shutil.rmtree(target_collection_path / "private_hnsw_oram")
         shutil.rmtree(target_collection_path / "private_result_oram")
+
+    return {
+        "peer_urls": peer_urls,
+        "peer_dirs": peer_dirs,
+        "fixture": fixture,
+        "source_index": source_index,
+        "target_index": target_index,
+        "remaining_index": remaining_index,
+        "source_url": source_url,
+        "source_info": source_info,
+        "target_info": target_info,
+        "source_process": source_process,
+        "remaining_process": remaining_process,
+        "target_port": target_port,
+        "restart_bootstrap_uri": restart_bootstrap_uri,
+        "target_collection_path": target_collection_path,
+    }
+
+
+@pytest.mark.parametrize("wipe_mode", ["collection", "stores"])
+def test_private_oram_active_transfer_snapshot_fresh_preinstalls_wiped_target(
+    tmp_path: pathlib.Path, wipe_mode: str,
+):
+    extra_env = {
+        "QDRANT__CLUSTER__CONSENSUS__COMPACT_WAL_ENTRIES": "1",
+        "QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "20",
+    }
+    context = _prepare_private_oram_active_transfer_snapshot_wiped_target(
+        tmp_path,
+        wipe_mode,
+        extra_env,
+    )
+    peer_urls = context["peer_urls"]
+    peer_dirs = context["peer_dirs"]
+    fixture = context["fixture"]
+    source_index = context["source_index"]
+    target_index = context["target_index"]
+    source_url = context["source_url"]
+    source_info = context["source_info"]
+    target_info = context["target_info"]
+    target_port = context["target_port"]
+    restart_bootstrap_uri = context["restart_bootstrap_uri"]
+    target_collection_path = context["target_collection_path"]
+
     target_log = f"private_oram_fixed_transfer_snapshot_wiped_target_{wipe_mode}.log"
     restarted_url = start_peer(
         peer_dirs[target_index],
@@ -1924,6 +1967,293 @@ def test_private_oram_active_transfer_snapshot_fresh_preinstalls_wiped_target(
         fixture["result"]["buckets"][0]["ciphertext"],
     ]:
         assert secret not in all_peer_log_text
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "pause_after_reservation",
+        "pause_after_first_index",
+        "pause_after_install",
+        "pause_after_restart_apply",
+        "stale_root",
+        "stale_signature",
+    ],
+)
+def test_private_oram_active_transfer_snapshot_source_preinstall_fault_matrix(
+    tmp_path: pathlib.Path,
+    fault: str,
+):
+    extra_env = {
+        "QDRANT__CLUSTER__CONSENSUS__COMPACT_WAL_ENTRIES": "1",
+        "QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "20",
+    }
+    fault_env = {
+        **extra_env,
+        "QDRANT_STAGING_PRIVATE_ORAM_PREINSTALL_FAULT": fault,
+    }
+    context = _prepare_private_oram_active_transfer_snapshot_wiped_target(
+        tmp_path,
+        "stores",
+        fault_env,
+    )
+    peer_urls = context["peer_urls"]
+    peer_dirs = context["peer_dirs"]
+    fixture = context["fixture"]
+    source_index = context["source_index"]
+    target_index = context["target_index"]
+    remaining_index = context["remaining_index"]
+    source_info = context["source_info"]
+    target_info = context["target_info"]
+    source_process = context["source_process"]
+    remaining_process = context["remaining_process"]
+    source_port = source_process.p2p_port
+    target_port = context["target_port"]
+    restart_bootstrap_uri = context["restart_bootstrap_uri"]
+    target_collection_path = context["target_collection_path"]
+    source_collection_path = (
+        peer_dirs[source_index] / "storage" / "collections" / COLLECTION
+    )
+    source_intent = source_collection_path / "private_oram_source_preinstall.json"
+    source_log = f"private_oram_peer_{source_index}.log"
+    faulted_source_url = context["source_url"]
+    faulted_source_process = source_process
+
+    target_log = f"private_oram_preinstall_fault_target_{fault}.log"
+    restarted_target_url = start_peer(
+        peer_dirs[target_index],
+        target_log,
+        restart_bootstrap_uri,
+        port=target_port,
+        extra_env=fault_env,
+    )
+    peer_urls[target_index] = restarted_target_url
+    wait_for_peer_online(restarted_target_url, path="/cluster")
+
+    log_folder = pathlib.Path(init_pytest_log_folder())
+    source_log_path = log_folder / source_log
+    target_log_path = log_folder / target_log
+    if fault.startswith("pause_"):
+        wait_for(
+            lambda: source_log_path.exists()
+            and f"Private ORAM staging preinstall pause reached: {fault}"
+            in source_log_path.read_text(),
+            wait_for_timeout=60,
+        )
+    else:
+        wait_for(
+            lambda: source_log_path.exists()
+            and f"Private ORAM staging preinstall wire fault injected: {fault}"
+            in source_log_path.read_text()
+            and target_log_path.exists()
+            and "Failed to request private ORAM active fixed-layout transfer resume"
+            in target_log_path.read_text(),
+            wait_for_timeout=60,
+        )
+
+    hnsw_current = (
+        target_collection_path
+        / "private_hnsw_oram"
+        / VECTOR
+        / "epochs"
+        / "current.json"
+    )
+    result_current = (
+        target_collection_path / "private_result_oram" / "epochs" / "current.json"
+    )
+    expected_installed = {
+        "pause_after_reservation": (False, False),
+        "pause_after_first_index": (True, False),
+        "pause_after_install": (True, True),
+        "pause_after_restart_apply": (True, True),
+        "stale_root": (False, False),
+        "stale_signature": (True, False),
+    }[fault]
+    assert hnsw_current.exists() is expected_installed[0]
+    assert result_current.exists() is expected_installed[1]
+    wait_for_collection_shard_transfers_count(
+        faulted_source_url,
+        COLLECTION,
+        1,
+    )
+    wait_for_collection_shard_transfers_count(
+        restarted_target_url,
+        COLLECTION,
+        1,
+    )
+    _wait_for_private_oram_layout(
+        peer_dirs,
+        1,
+        [source_info["peer_id"]],
+    )
+    recovery_marker = target_collection_path / "private_oram_snapshot_recovery.json"
+    assert recovery_marker.is_file()
+    assert source_intent.is_file()
+    if os.name != "nt":
+        assert stat.S_IMODE(source_intent.stat().st_mode) == 0o600
+    source_intent_data = json.loads(source_intent.read_text())
+    assert source_intent_data["version"] == 1
+    reservation_lease_id_hash = source_intent_data["reservation_lease_id_hash"]
+    decoded_reservation_lease_id_hash = base64.urlsafe_b64decode(
+        reservation_lease_id_hash + "=" * (-len(reservation_lease_id_hash) % 4)
+    )
+    assert len(decoded_reservation_lease_id_hash) == 32
+    assert (
+        base64.urlsafe_b64encode(decoded_reservation_lease_id_hash)
+        .decode()
+        .rstrip("=")
+        == reservation_lease_id_hash
+    )
+
+    blocked_hnsw = requests.post(
+        f"{restarted_target_url}/collections/{COLLECTION}/private-hnsw/{VECTOR}/session",
+        json={
+            "client_id": f"tenant-a/{fault}-blocked-hnsw-sdk",
+            "desired_epoch": NEXT_EPOCH,
+            "fixed_budget": True,
+            "result_privacy": fixture["hnsw"]["manifest"]["result_privacy"],
+        },
+        timeout=30,
+    )
+    assert 400 <= blocked_hnsw.status_code < 600
+    assert "snapshot recovery is pending" in blocked_hnsw.text
+    blocked_result = requests.post(
+        f"{restarted_target_url}/collections/{COLLECTION}/private-result-oram/session",
+        json={
+            "client_id": f"tenant-a/{fault}-blocked-result-sdk",
+            "desired_epoch": NEXT_EPOCH,
+            "fixed_budget": True,
+        },
+        timeout=30,
+    )
+    assert 400 <= blocked_result.status_code < 600
+    assert "snapshot recovery is pending" in blocked_result.text
+
+    faulted_source_process.kill()
+    processes.remove(faulted_source_process)
+    clean_source_log = f"private_oram_preinstall_recovered_source_{fault}.log"
+    clean_source_url = start_peer(
+        peer_dirs[source_index],
+        clean_source_log,
+        get_uri(remaining_process.p2p_port),
+        port=source_port,
+        extra_env=extra_env,
+    )
+    peer_urls[source_index] = clean_source_url
+    wait_for_peer_online(clean_source_url, path="/cluster")
+
+    wait_for(
+        lambda: hnsw_current.is_file() and result_current.is_file(),
+        wait_for_timeout=60,
+    )
+    wait_for_collection_shard_transfers_count(clean_source_url, COLLECTION, 0)
+    wait_for_collection_shard_transfers_count(restarted_target_url, COLLECTION, 0)
+    wait_collection_exists_and_active_on_all_peers(COLLECTION, peer_urls)
+    _wait_for_private_oram_layout(
+        peer_dirs,
+        2,
+        [source_info["peer_id"], target_info["peer_id"]],
+    )
+    wait_for(lambda: not recovery_marker.exists(), wait_for_timeout=60)
+    wait_for(lambda: not source_intent.exists(), wait_for_timeout=60)
+    _assert_replica_can_open_current_sessions(restarted_target_url)
+
+    all_peer_log_text = "\n".join(path.read_text() for path in log_folder.glob("*.log"))
+    sensitive_values = [
+        fixture["hnsw"]["manifest"]["root_hash"],
+        fixture["hnsw"]["commit"]["new_root_hash"],
+        fixture["hnsw"]["manifest_signature"]["sig"],
+        fixture["hnsw"]["buckets"][0]["ciphertext"],
+        fixture["result"]["manifest"]["root_hash"],
+        fixture["result"]["commit"]["new_root_hash"],
+        fixture["result"]["manifest_signature"]["sig"],
+        fixture["result"]["buckets"][0]["ciphertext"],
+    ]
+    for encoded in [
+        fixture["hnsw"]["manifest"]["root_hash"],
+        fixture["hnsw"]["commit"]["new_root_hash"],
+        fixture["hnsw"]["manifest_signature"]["sig"],
+        fixture["result"]["manifest"]["root_hash"],
+        fixture["result"]["commit"]["new_root_hash"],
+        fixture["result"]["manifest_signature"]["sig"],
+    ]:
+        decoded = bytearray(
+            base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        )
+        decoded[0] ^= 1
+        sensitive_values.append(
+            base64.urlsafe_b64encode(decoded).decode().rstrip("=")
+        )
+    for secret in sensitive_values:
+        assert secret not in all_peer_log_text
+        assert secret not in blocked_hnsw.text
+        assert secret not in blocked_result.text
+
+
+def test_private_oram_source_preinstall_intent_clears_on_terminal_abort(
+    tmp_path: pathlib.Path,
+):
+    extra_env = {
+        "QDRANT__CLUSTER__CONSENSUS__COMPACT_WAL_ENTRIES": "1",
+        "QDRANT_STAGING_SHARD_TRANSFER_DELAY_SEC": "20",
+        "QDRANT_STAGING_PRIVATE_ORAM_PREINSTALL_FAULT": "stale_root",
+    }
+    context = _prepare_private_oram_active_transfer_snapshot_wiped_target(
+        tmp_path,
+        "stores",
+        extra_env,
+    )
+    peer_urls = context["peer_urls"]
+    peer_dirs = context["peer_dirs"]
+    source_index = context["source_index"]
+    target_index = context["target_index"]
+    source_info = context["source_info"]
+    target_info = context["target_info"]
+    source_url = context["source_url"]
+    target_log = "private_oram_source_preinstall_terminal_abort_target.log"
+    target_url = start_peer(
+        peer_dirs[target_index],
+        target_log,
+        context["restart_bootstrap_uri"],
+        port=context["target_port"],
+        extra_env=extra_env,
+    )
+    peer_urls[target_index] = target_url
+    wait_for_peer_online(target_url, path="/cluster")
+
+    source_intent = (
+        peer_dirs[source_index]
+        / "storage"
+        / "collections"
+        / COLLECTION
+        / "private_oram_source_preinstall.json"
+    )
+    target_log_path = pathlib.Path(init_pytest_log_folder()) / target_log
+    wait_for(
+        lambda: source_intent.is_file()
+        and target_log_path.is_file()
+        and "Failed to request private ORAM active fixed-layout transfer resume"
+        in target_log_path.read_text(),
+        wait_for_timeout=60,
+    )
+
+    shard_id = source_info["local_shards"][0]["shard_id"]
+    aborted = requests.post(
+        f"{source_url}/collections/{COLLECTION}/cluster",
+        json={
+            "abort_transfer": {
+                "shard_id": shard_id,
+                "from_peer_id": source_info["peer_id"],
+                "to_peer_id": target_info["peer_id"],
+            }
+        },
+        timeout=30,
+    )
+    assert_http_ok(aborted)
+    wait_for_collection_shard_transfers_count(source_url, COLLECTION, 0)
+    wait_for_collection_shard_transfers_count(target_url, COLLECTION, 0)
+    wait_for(lambda: not source_intent.exists(), wait_for_timeout=60)
+    _wait_for_private_oram_layout(peer_dirs, 1, [source_info["peer_id"]])
 
 
 def test_private_oram_active_transfer_snapshot_recovers_wiped_redundant_owner(
