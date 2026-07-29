@@ -1,8 +1,9 @@
 use std::fmt;
 use std::fs::DirBuilder;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
+use collection::config::CollectionConfigInternal;
 use data_encoding::{BASE64URL_NOPAD, HEXLOWER};
 use fs_err as fs;
 use fs_err::{File, OpenOptions};
@@ -18,6 +19,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::StorageError;
+use crate::content_manager::consensus_ops::{
+    PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryLease,
+    PrivateOramExternalRecoveryLeasePhase, PrivateOramExternalRecoveryState,
+};
+use crate::content_manager::toc::COLLECTIONS_DIR;
 
 pub const PRIVATE_ORAM_EXTERNAL_RECOVERY_CHUNK_SIZE_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -27,9 +33,15 @@ const PRIVATE_ORAM_EXTERNAL_RECOVERY_SNAPSHOT_FILE: &str = "snapshot.upload";
 const PRIVATE_ORAM_EXTERNAL_RECOVERY_LOCK_FILE: &str = "recovery.lock";
 const PRIVATE_ORAM_EXTERNAL_RECOVERY_VERIFIED_DIR: &str = "verified_collection";
 const PRIVATE_ORAM_EXTERNAL_RECOVERY_VERIFY_TEMP_DIR: &str = "verified_collection.pending";
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MARKER_FILE: &str = "install.json";
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_BACKUP_DIR: &str = "live_collection.backup";
 const PRIVATE_ORAM_EXTERNAL_RECOVERY_STATE_VERSION: u16 = 1;
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_VERSION: u16 = 1;
 const PRIVATE_ORAM_EXTERNAL_RECOVERY_STATE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MAX_BYTES: u64 = 64 * 1024;
 const PRIVATE_ORAM_EXTERNAL_RECOVERY_MAX_SNAPSHOT_BYTES: u64 = 1 << 40;
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MAX_TREE_DEPTH: usize = 64;
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MAX_TREE_ENTRIES: u64 = 10_000_000;
 const PRIVATE_ORAM_SHA256_BASE64URL_LEN: usize = 43;
 const PRIVATE_ORAM_SHA256_HEX_LEN: usize = 64;
 const PRIVATE_ORAM_OPERATION_TOKEN_BYTES: usize = 32;
@@ -40,6 +52,10 @@ const PRIVATE_ORAM_EXTERNAL_RECOVERY_OPERATION_ID_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-external-recovery-operation-id/v1";
 const PRIVATE_ORAM_EXTERNAL_RECOVERY_CHECKPOINT_DIGEST_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-external-recovery-checkpoint-digest/v1";
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_TREE_DIGEST_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-external-recovery-tree-digest/v1";
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_INTENT_DIGEST_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-external-recovery-install-intent-digest/v1";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,6 +73,69 @@ pub struct PrivateOramExternalRecoveryStagingStatus {
     pub next_chunk_index: u64,
     pub chunk_size_bytes: u64,
     pub lease_expires_at_unix: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivateOramExternalRecoveryInstallPhase {
+    Prepared,
+    OldMoved,
+    NewPromoted,
+    Loaded,
+    ConsensusCommitted,
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PrivateOramExternalRecoveryInstallMarker {
+    version: u16,
+    phase: PrivateOramExternalRecoveryInstallPhase,
+    collection_name: String,
+    collection_id: String,
+    operation_id_hash: String,
+    checkpoint_digest: String,
+    backup_generation: u64,
+    owner_peer_id: u64,
+    layout_generation: u64,
+    layout_digest: String,
+    index_state_digest: String,
+    old_tree_digest: String,
+    new_tree_digest: String,
+}
+
+impl fmt::Debug for PrivateOramExternalRecoveryInstallMarker {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramExternalRecoveryInstallMarker")
+            .field("version", &self.version)
+            .field("phase", &self.phase)
+            .field("collection_name", &"[redacted]")
+            .field("collection_id", &"[redacted]")
+            .field("operation_id_hash", &"[redacted]")
+            .field("checkpoint_digest", &"[redacted]")
+            .field("backup_generation", &"[redacted]")
+            .field("owner_peer_id", &"[redacted]")
+            .field("layout_generation", &"[redacted]")
+            .field("layout_digest", &"[redacted]")
+            .field("index_state_digest", &"[redacted]")
+            .field("old_tree_digest", &"[redacted]")
+            .field("new_tree_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivateOramExternalRecoveryInstallTreeState {
+    OldReady,
+    OldMoved,
+    NewPromoted,
+    Finalized,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrivateOramExternalRecoveryConsensusInstallState {
+    Staging,
+    Installing,
+    Committed,
 }
 
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -153,6 +232,21 @@ struct FileIdentity {
 
 struct PrivateOramExternalRecoveryLock {
     _file: std::fs::File,
+}
+
+pub struct PrivateOramExternalRecoveryInstallTransaction {
+    staging: PrivateOramExternalRecoveryStaging,
+    marker: PrivateOramExternalRecoveryInstallMarker,
+    _collection_lock: PrivateOramExternalRecoveryLock,
+}
+
+impl fmt::Debug for PrivateOramExternalRecoveryInstallTransaction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramExternalRecoveryInstallTransaction")
+            .field("staging", &self.staging)
+            .field("phase", &self.marker.phase)
+            .finish()
+    }
 }
 
 impl PrivateOramExternalRecoveryVerification {
@@ -481,6 +575,81 @@ impl PrivateOramExternalRecoveryStaging {
         Ok(())
     }
 
+    pub fn prepare_install(
+        &self,
+        collection_name: &str,
+        lease: &PrivateOramExternalRecoveryLease,
+    ) -> Result<PrivateOramExternalRecoveryInstallTransaction, StorageError> {
+        validate_install_collection_name(collection_name)?;
+        let collection_lock = self.acquire_collection_lock(false)?;
+        if let Some(marker) = read_install_marker(&self.install_marker_path())? {
+            validate_install_marker_for_staging(&marker, self, collection_name, lease)?;
+            return Ok(PrivateOramExternalRecoveryInstallTransaction {
+                staging: self.clone(),
+                marker,
+                _collection_lock: collection_lock,
+            });
+        }
+        if lease.phase != PrivateOramExternalRecoveryLeasePhase::Staging {
+            return Err(invalid_install_state());
+        }
+
+        let state = self.read_state()?.ok_or_else(invalid_install_state)?;
+        self.reconcile_snapshot_file(&state)?;
+        let checkpoint = state.checkpoint_bundle.checkpoint.clone();
+        if state.phase != PrivateOramExternalRecoveryStagingPhase::Verified
+            || state.operation_id_hash != lease.operation_id_hash
+            || state.checkpoint_digest != lease.checkpoint_digest
+            || checkpoint.collection_id != self.collection_id
+            || checkpoint.backup_generation != lease.backup_generation
+        {
+            return Err(invalid_install_state());
+        }
+
+        let verified_path = self.verified_collection_path();
+        let live_path = self.live_collection_path(collection_name);
+        let backup_path = self.install_backup_path();
+        validate_owned_directory(&verified_path, true)?;
+        validate_owned_directory(&live_path, false)?;
+        validate_install_tree_collection_identity(
+            &verified_path,
+            collection_name,
+            &self.collection_id,
+        )?;
+        validate_install_tree_collection_identity(
+            &live_path,
+            collection_name,
+            &self.collection_id,
+        )?;
+        validate_missing_path(&backup_path)?;
+        common::fs::bulk_sync_dir(&verified_path).map_err(|_| invalid_install_state())?;
+        common::fs::bulk_sync_dir(&live_path).map_err(|_| invalid_install_state())?;
+
+        let marker = PrivateOramExternalRecoveryInstallMarker {
+            version: PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_VERSION,
+            phase: PrivateOramExternalRecoveryInstallPhase::Prepared,
+            collection_name: collection_name.to_string(),
+            collection_id: self.collection_id.clone(),
+            operation_id_hash: self.operation_id_hash.clone(),
+            checkpoint_digest: state.checkpoint_digest,
+            backup_generation: checkpoint.backup_generation,
+            owner_peer_id: lease.owner_peer_id,
+            layout_generation: checkpoint.layout_generation,
+            layout_digest: checkpoint.layout_digest.clone(),
+            index_state_digest: checkpoint.index_state_digest.clone(),
+            old_tree_digest: private_oram_external_recovery_tree_digest(&live_path)?,
+            new_tree_digest: private_oram_external_recovery_tree_digest(&verified_path)?,
+        };
+        validate_install_marker(&marker)?;
+        write_install_marker(&self.install_marker_path(), None, &marker)?;
+
+        Ok(PrivateOramExternalRecoveryInstallTransaction {
+            staging: self.clone(),
+            marker,
+            _collection_lock: collection_lock,
+        })
+    }
+
     fn ensure_collection_directories(&self) -> Result<(), StorageError> {
         if !self.storage_path.is_dir() {
             return Err(invalid_staging_state());
@@ -690,6 +859,294 @@ impl PrivateOramExternalRecoveryStaging {
         self.operation_path()
             .join(PRIVATE_ORAM_EXTERNAL_RECOVERY_SNAPSHOT_FILE)
     }
+
+    fn verified_collection_path(&self) -> PathBuf {
+        self.operation_path()
+            .join(PRIVATE_ORAM_EXTERNAL_RECOVERY_VERIFIED_DIR)
+    }
+
+    fn install_backup_path(&self) -> PathBuf {
+        self.operation_path()
+            .join(PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_BACKUP_DIR)
+    }
+
+    fn install_marker_path(&self) -> PathBuf {
+        self.collection_path()
+            .join(PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MARKER_FILE)
+    }
+
+    fn live_collection_path(&self, collection_name: &str) -> PathBuf {
+        self.storage_path
+            .join(COLLECTIONS_DIR)
+            .join(collection_name)
+    }
+}
+
+impl PrivateOramExternalRecoveryInstallTransaction {
+    pub fn phase(&self) -> PrivateOramExternalRecoveryInstallPhase {
+        self.marker.phase
+    }
+
+    pub fn install_intent_digest(&self) -> String {
+        private_oram_external_recovery_install_intent_digest(&self.marker)
+    }
+
+    pub fn move_live_to_backup(&mut self) -> Result<(), StorageError> {
+        self.require_phase(PrivateOramExternalRecoveryInstallPhase::Prepared)?;
+        if self.classify_tree_state()? != PrivateOramExternalRecoveryInstallTreeState::OldReady {
+            return Err(invalid_install_state());
+        }
+        rename_install_tree(
+            &self.live_path(),
+            &self.backup_path(),
+            &self.marker.old_tree_digest,
+            false,
+        )?;
+        self.set_phase(PrivateOramExternalRecoveryInstallPhase::OldMoved)
+    }
+
+    pub fn promote_verified_collection(&mut self) -> Result<(), StorageError> {
+        self.require_phase(PrivateOramExternalRecoveryInstallPhase::OldMoved)?;
+        if self.classify_tree_state()? != PrivateOramExternalRecoveryInstallTreeState::OldMoved {
+            return Err(invalid_install_state());
+        }
+        rename_install_tree(
+            &self.verified_path(),
+            &self.live_path(),
+            &self.marker.new_tree_digest,
+            true,
+        )?;
+        self.set_phase(PrivateOramExternalRecoveryInstallPhase::NewPromoted)
+    }
+
+    pub fn mark_loaded(&mut self) -> Result<(), StorageError> {
+        self.require_phase(PrivateOramExternalRecoveryInstallPhase::NewPromoted)?;
+        if self.classify_tree_state()? != PrivateOramExternalRecoveryInstallTreeState::NewPromoted {
+            return Err(invalid_install_state());
+        }
+        self.set_phase(PrivateOramExternalRecoveryInstallPhase::Loaded)
+    }
+
+    pub fn mark_consensus_committed(&mut self) -> Result<(), StorageError> {
+        self.require_phase(PrivateOramExternalRecoveryInstallPhase::Loaded)?;
+        if self.classify_tree_state()? != PrivateOramExternalRecoveryInstallTreeState::NewPromoted {
+            return Err(invalid_install_state());
+        }
+        self.set_phase(PrivateOramExternalRecoveryInstallPhase::ConsensusCommitted)
+    }
+
+    pub fn finalize_committed(mut self) -> Result<(), StorageError> {
+        self.require_phase(PrivateOramExternalRecoveryInstallPhase::ConsensusCommitted)?;
+        self.finalize_committed_files()
+    }
+
+    fn require_phase(
+        &self,
+        expected: PrivateOramExternalRecoveryInstallPhase,
+    ) -> Result<(), StorageError> {
+        let current = read_install_marker(&self.staging.install_marker_path())?
+            .ok_or_else(invalid_install_state)?;
+        if self.marker.phase != expected || current != self.marker {
+            return Err(invalid_install_state());
+        }
+        Ok(())
+    }
+
+    fn set_phase(
+        &mut self,
+        phase: PrivateOramExternalRecoveryInstallPhase,
+    ) -> Result<(), StorageError> {
+        let mut next = self.marker.clone();
+        next.phase = phase;
+        write_install_marker(
+            &self.staging.install_marker_path(),
+            Some(&self.marker),
+            &next,
+        )?;
+        self.marker = next;
+        Ok(())
+    }
+
+    fn live_path(&self) -> PathBuf {
+        self.staging
+            .live_collection_path(&self.marker.collection_name)
+    }
+
+    fn verified_path(&self) -> PathBuf {
+        self.staging.verified_collection_path()
+    }
+
+    fn backup_path(&self) -> PathBuf {
+        self.staging.install_backup_path()
+    }
+
+    fn classify_tree_state(
+        &self,
+    ) -> Result<PrivateOramExternalRecoveryInstallTreeState, StorageError> {
+        for path in [self.live_path(), self.verified_path(), self.backup_path()] {
+            if path_exists(&path)? {
+                validate_install_tree_collection_identity(
+                    &path,
+                    &self.marker.collection_name,
+                    &self.marker.collection_id,
+                )?;
+            }
+        }
+        let live = install_tree_digest_if_exists(&self.live_path(), false)?;
+        let verified = install_tree_digest_if_exists(&self.verified_path(), true)?;
+        let backup = install_tree_digest_if_exists(&self.backup_path(), false)?;
+        match (live.as_deref(), verified.as_deref(), backup.as_deref()) {
+            (Some(live), Some(verified), None)
+                if live == self.marker.old_tree_digest
+                    && verified == self.marker.new_tree_digest =>
+            {
+                Ok(PrivateOramExternalRecoveryInstallTreeState::OldReady)
+            }
+            (None, Some(verified), Some(backup))
+                if verified == self.marker.new_tree_digest
+                    && backup == self.marker.old_tree_digest =>
+            {
+                Ok(PrivateOramExternalRecoveryInstallTreeState::OldMoved)
+            }
+            (Some(live), None, Some(backup))
+                if live == self.marker.new_tree_digest && backup == self.marker.old_tree_digest =>
+            {
+                Ok(PrivateOramExternalRecoveryInstallTreeState::NewPromoted)
+            }
+            (Some(live), None, None) if live == self.marker.new_tree_digest => {
+                Ok(PrivateOramExternalRecoveryInstallTreeState::Finalized)
+            }
+            _ => Err(invalid_install_state()),
+        }
+    }
+
+    fn rollback_old_moved(&mut self) -> Result<(), StorageError> {
+        rename_install_tree(
+            &self.backup_path(),
+            &self.live_path(),
+            &self.marker.old_tree_digest,
+            false,
+        )?;
+        self.set_phase(PrivateOramExternalRecoveryInstallPhase::Prepared)
+    }
+
+    fn rollback_new_promoted(&mut self) -> Result<(), StorageError> {
+        rename_install_tree(
+            &self.live_path(),
+            &self.verified_path(),
+            &self.marker.new_tree_digest,
+            true,
+        )?;
+        rename_install_tree(
+            &self.backup_path(),
+            &self.live_path(),
+            &self.marker.old_tree_digest,
+            false,
+        )?;
+        self.set_phase(PrivateOramExternalRecoveryInstallPhase::Prepared)
+    }
+
+    fn finalize_committed_files(&mut self) -> Result<(), StorageError> {
+        match self.classify_tree_state()? {
+            PrivateOramExternalRecoveryInstallTreeState::NewPromoted => {
+                remove_owned_directory_if_exists(&self.backup_path(), false)?;
+            }
+            PrivateOramExternalRecoveryInstallTreeState::Finalized => {}
+            PrivateOramExternalRecoveryInstallTreeState::OldReady
+            | PrivateOramExternalRecoveryInstallTreeState::OldMoved => {
+                return Err(invalid_install_state());
+            }
+        }
+        remove_owned_directory_if_exists(&self.staging.operation_path(), true)?;
+        remove_install_marker(&self.staging.install_marker_path(), &self.marker)
+    }
+}
+
+pub fn reconcile_private_oram_external_recovery_installs(
+    storage_path: &Path,
+    mut consensus_state_for: impl FnMut(
+        &PrivateOramExternalRecoveryKey,
+    ) -> Option<PrivateOramExternalRecoveryState>,
+) -> Result<(), StorageError> {
+    let base_path = storage_path.join(PRIVATE_ORAM_EXTERNAL_RECOVERY_DIR);
+    let metadata = match fs::symlink_metadata(&base_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(invalid_install_state()),
+    };
+    validate_secure_directory_metadata(&metadata)?;
+
+    let mut collection_paths = fs::read_dir(&base_path)
+        .map_err(|_| invalid_install_state())?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| invalid_install_state())?;
+    collection_paths.sort();
+
+    for collection_path in collection_paths {
+        validate_secure_directory(&collection_path)?;
+        let marker_path = collection_path.join(PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MARKER_FILE);
+        let Some(marker) = read_install_marker(&marker_path)? else {
+            continue;
+        };
+        let staging = PrivateOramExternalRecoveryStaging::new(
+            storage_path,
+            &marker.collection_id,
+            &marker.operation_id_hash,
+        )?;
+        if staging.collection_path() != collection_path
+            || staging.install_marker_path() != marker_path
+        {
+            return Err(invalid_install_state());
+        }
+
+        let collection_lock = staging.acquire_collection_lock(false)?;
+        let locked_marker = read_install_marker(&marker_path)?.ok_or_else(invalid_install_state)?;
+        if locked_marker != marker {
+            return Err(invalid_install_state());
+        }
+        let key = PrivateOramExternalRecoveryKey {
+            collection_id: marker.collection_id.clone(),
+        };
+        let consensus = consensus_install_state(&marker, consensus_state_for(&key).as_ref())?;
+        let mut transaction = PrivateOramExternalRecoveryInstallTransaction {
+            staging,
+            marker,
+            _collection_lock: collection_lock,
+        };
+        reconcile_install_transaction(&mut transaction, consensus)?;
+    }
+    Ok(())
+}
+
+fn reconcile_install_transaction(
+    transaction: &mut PrivateOramExternalRecoveryInstallTransaction,
+    consensus: PrivateOramExternalRecoveryConsensusInstallState,
+) -> Result<(), StorageError> {
+    match (transaction.classify_tree_state()?, consensus) {
+        (
+            PrivateOramExternalRecoveryInstallTreeState::OldReady,
+            PrivateOramExternalRecoveryConsensusInstallState::Staging
+            | PrivateOramExternalRecoveryConsensusInstallState::Installing,
+        ) => transaction.set_phase(PrivateOramExternalRecoveryInstallPhase::Prepared),
+        (
+            PrivateOramExternalRecoveryInstallTreeState::OldMoved,
+            PrivateOramExternalRecoveryConsensusInstallState::Installing,
+        ) => transaction.rollback_old_moved(),
+        (
+            PrivateOramExternalRecoveryInstallTreeState::NewPromoted,
+            PrivateOramExternalRecoveryConsensusInstallState::Installing,
+        ) => transaction.rollback_new_promoted(),
+        (
+            PrivateOramExternalRecoveryInstallTreeState::NewPromoted
+            | PrivateOramExternalRecoveryInstallTreeState::Finalized,
+            PrivateOramExternalRecoveryConsensusInstallState::Committed,
+        ) => {
+            transaction.set_phase(PrivateOramExternalRecoveryInstallPhase::ConsensusCommitted)?;
+            transaction.finalize_committed_files()
+        }
+        _ => Err(invalid_install_state()),
+    }
 }
 
 pub fn new_private_oram_external_recovery_operation_token() -> String {
@@ -732,6 +1189,440 @@ pub fn private_oram_external_recovery_checkpoint_digest(
     update_length_prefixed(&mut hasher, bundle.signature.key_id.as_bytes());
     update_length_prefixed(&mut hasher, bundle.signature.sig.as_bytes());
     Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn validate_install_marker(
+    marker: &PrivateOramExternalRecoveryInstallMarker,
+) -> Result<(), StorageError> {
+    validate_install_collection_name(&marker.collection_name)?;
+    if marker.version != PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_VERSION
+        || marker.collection_id.is_empty()
+        || marker.collection_id.len() > 1024
+        || marker.backup_generation == 0
+        || marker.layout_generation == 0
+        || validate_base64url_sha256(&marker.operation_id_hash).is_err()
+        || validate_base64url_sha256(&marker.checkpoint_digest).is_err()
+        || validate_base64url_sha256(&marker.layout_digest).is_err()
+        || validate_base64url_sha256(&marker.index_state_digest).is_err()
+        || validate_base64url_sha256(&marker.old_tree_digest).is_err()
+        || validate_base64url_sha256(&marker.new_tree_digest).is_err()
+    {
+        return Err(invalid_install_state());
+    }
+    Ok(())
+}
+
+fn private_oram_external_recovery_install_intent_digest(
+    marker: &PrivateOramExternalRecoveryInstallMarker,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_INTENT_DIGEST_DOMAIN);
+    hasher.update(marker.version.to_be_bytes());
+    update_length_prefixed(&mut hasher, marker.collection_name.as_bytes());
+    update_length_prefixed(&mut hasher, marker.collection_id.as_bytes());
+    update_length_prefixed(&mut hasher, marker.operation_id_hash.as_bytes());
+    update_length_prefixed(&mut hasher, marker.checkpoint_digest.as_bytes());
+    hasher.update(marker.backup_generation.to_be_bytes());
+    hasher.update(marker.owner_peer_id.to_be_bytes());
+    hasher.update(marker.layout_generation.to_be_bytes());
+    update_length_prefixed(&mut hasher, marker.layout_digest.as_bytes());
+    update_length_prefixed(&mut hasher, marker.index_state_digest.as_bytes());
+    update_length_prefixed(&mut hasher, marker.old_tree_digest.as_bytes());
+    update_length_prefixed(&mut hasher, marker.new_tree_digest.as_bytes());
+    BASE64URL_NOPAD.encode(&hasher.finalize())
+}
+
+fn validate_install_marker_for_staging(
+    marker: &PrivateOramExternalRecoveryInstallMarker,
+    staging: &PrivateOramExternalRecoveryStaging,
+    collection_name: &str,
+    lease: &PrivateOramExternalRecoveryLease,
+) -> Result<(), StorageError> {
+    validate_install_marker(marker)?;
+    let install_intent_digest = private_oram_external_recovery_install_intent_digest(marker);
+    let lease_matches_phase = match lease.phase {
+        PrivateOramExternalRecoveryLeasePhase::Staging => lease.install_intent_digest.is_none(),
+        PrivateOramExternalRecoveryLeasePhase::Installing => {
+            lease.install_intent_digest.as_deref() == Some(install_intent_digest.as_str())
+        }
+    };
+    if marker.collection_name != collection_name
+        || marker.collection_id != staging.collection_id
+        || marker.operation_id_hash != staging.operation_id_hash
+        || marker.owner_peer_id != lease.owner_peer_id
+        || marker.operation_id_hash != lease.operation_id_hash
+        || marker.checkpoint_digest != lease.checkpoint_digest
+        || marker.backup_generation != lease.backup_generation
+        || !lease_matches_phase
+    {
+        return Err(invalid_install_state());
+    }
+    let state = staging.read_state()?.ok_or_else(invalid_install_state)?;
+    let checkpoint = &state.checkpoint_bundle.checkpoint;
+    if state.phase != PrivateOramExternalRecoveryStagingPhase::Verified
+        || state.checkpoint_digest != marker.checkpoint_digest
+        || checkpoint.collection_id != marker.collection_id
+        || checkpoint.backup_generation != marker.backup_generation
+        || checkpoint.layout_generation != marker.layout_generation
+        || checkpoint.layout_digest != marker.layout_digest
+        || checkpoint.index_state_digest != marker.index_state_digest
+    {
+        return Err(invalid_install_state());
+    }
+    Ok(())
+}
+
+fn validate_install_collection_name(collection_name: &str) -> Result<(), StorageError> {
+    if collection_name.is_empty()
+        || collection_name.len() > 255
+        || common::validation::validate_collection_name(collection_name).is_err()
+    {
+        return Err(invalid_install_state());
+    }
+    let mut components = Path::new(collection_name).components();
+    match (components.next(), components.next()) {
+        (Some(Component::Normal(component)), None) if component == collection_name => Ok(()),
+        _ => Err(invalid_install_state()),
+    }
+}
+
+fn read_install_marker(
+    marker_path: &Path,
+) -> Result<Option<PrivateOramExternalRecoveryInstallMarker>, StorageError> {
+    let metadata = match fs::symlink_metadata(marker_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(invalid_install_state()),
+    };
+    validate_secure_file_metadata(&metadata, PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MAX_BYTES)
+        .map_err(|_| invalid_install_state())?;
+    if metadata.len() == 0 {
+        return Err(invalid_install_state());
+    }
+    let file = open_regular_file(
+        marker_path,
+        true,
+        Some(PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MAX_BYTES),
+    )
+    .map_err(|_| invalid_install_state())?;
+    let opened = file.metadata().map_err(|_| invalid_install_state())?;
+    ensure_same_file(&metadata, &opened).map_err(|_| invalid_install_state())?;
+    let mut bytes = Vec::with_capacity(opened.len() as usize);
+    file.take(PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| invalid_install_state())?;
+    if bytes.len() as u64 != opened.len() {
+        return Err(invalid_install_state());
+    }
+    let marker = serde_json::from_slice(&bytes).map_err(|_| invalid_install_state())?;
+    validate_install_marker(&marker)?;
+    Ok(Some(marker))
+}
+
+fn write_install_marker(
+    marker_path: &Path,
+    expected: Option<&PrivateOramExternalRecoveryInstallMarker>,
+    marker: &PrivateOramExternalRecoveryInstallMarker,
+) -> Result<(), StorageError> {
+    validate_install_marker(marker)?;
+    validate_secure_directory(marker_path.parent().ok_or_else(invalid_install_state)?)?;
+    if read_install_marker(marker_path)?.as_ref() != expected {
+        return Err(invalid_install_state());
+    }
+    let bytes = serde_json::to_vec(marker).map_err(|_| invalid_install_state())?;
+    if bytes.is_empty() || bytes.len() as u64 > PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MAX_BYTES {
+        return Err(invalid_install_state());
+    }
+    let temp_path = marker_path
+        .parent()
+        .ok_or_else(invalid_install_state)?
+        .join(format!(".install-{}.tmp", uuid::Uuid::new_v4()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    secure_open_options(&mut options, true);
+    let result = (|| {
+        let mut file = options
+            .open(&temp_path)
+            .map_err(|_| invalid_install_state())?;
+        file.write_all(&bytes)
+            .map_err(|_| invalid_install_state())?;
+        file.sync_all().map_err(|_| invalid_install_state())?;
+        fs::rename(&temp_path, marker_path).map_err(|_| invalid_install_state())?;
+        common::fs::sync_parent_dir(marker_path).map_err(|_| invalid_install_state())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp_path);
+    }
+    result
+}
+
+fn remove_install_marker(
+    marker_path: &Path,
+    expected: &PrivateOramExternalRecoveryInstallMarker,
+) -> Result<(), StorageError> {
+    match read_install_marker(marker_path)? {
+        Some(marker) if marker == *expected => {}
+        None => return Ok(()),
+        Some(_) => return Err(invalid_install_state()),
+    }
+    fs::remove_file(marker_path).map_err(|_| invalid_install_state())?;
+    common::fs::sync_parent_dir(marker_path).map_err(|_| invalid_install_state())
+}
+
+fn consensus_install_state(
+    marker: &PrivateOramExternalRecoveryInstallMarker,
+    state: Option<&PrivateOramExternalRecoveryState>,
+) -> Result<PrivateOramExternalRecoveryConsensusInstallState, StorageError> {
+    let state = state.ok_or_else(invalid_install_state)?;
+    let install_intent_digest = private_oram_external_recovery_install_intent_digest(marker);
+    if state.committed_backup_generation == marker.backup_generation
+        && state.committed_checkpoint_digest.as_deref() == Some(&marker.checkpoint_digest)
+        && state.committed_install_intent_digest.as_deref() == Some(install_intent_digest.as_str())
+    {
+        return Ok(PrivateOramExternalRecoveryConsensusInstallState::Committed);
+    }
+    let lease = state
+        .active_lease
+        .as_ref()
+        .ok_or_else(invalid_install_state)?;
+    if lease.owner_peer_id != marker.owner_peer_id
+        || lease.operation_id_hash != marker.operation_id_hash
+        || lease.checkpoint_digest != marker.checkpoint_digest
+        || lease.backup_generation != marker.backup_generation
+    {
+        return Err(invalid_install_state());
+    }
+    match lease.phase {
+        PrivateOramExternalRecoveryLeasePhase::Staging if lease.install_intent_digest.is_none() => {
+            Ok(PrivateOramExternalRecoveryConsensusInstallState::Staging)
+        }
+        PrivateOramExternalRecoveryLeasePhase::Installing
+            if lease.install_intent_digest.as_deref() == Some(install_intent_digest.as_str()) =>
+        {
+            Ok(PrivateOramExternalRecoveryConsensusInstallState::Installing)
+        }
+        _ => Err(invalid_install_state()),
+    }
+}
+
+fn rename_install_tree(
+    source: &Path,
+    destination: &Path,
+    expected_digest: &str,
+    require_private: bool,
+) -> Result<(), StorageError> {
+    validate_base64url_sha256(expected_digest).map_err(|_| invalid_install_state())?;
+    let source_digest = private_oram_external_recovery_tree_digest(source)?;
+    validate_owned_directory(source, require_private)?;
+    if source_digest != expected_digest {
+        return Err(invalid_install_state());
+    }
+    validate_missing_path(destination)?;
+    fs::rename(source, destination).map_err(|_| invalid_install_state())?;
+    common::fs::sync_parent_dir(source).map_err(|_| invalid_install_state())?;
+    common::fs::sync_parent_dir(destination).map_err(|_| invalid_install_state())?;
+    validate_owned_directory(destination, require_private)?;
+    if private_oram_external_recovery_tree_digest(destination)? != expected_digest {
+        return Err(invalid_install_state());
+    }
+    Ok(())
+}
+
+fn install_tree_digest_if_exists(
+    path: &Path,
+    require_private: bool,
+) -> Result<Option<String>, StorageError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            validate_owned_directory(path, require_private)?;
+            private_oram_external_recovery_tree_digest(path).map(Some)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(_) => Err(invalid_install_state()),
+    }
+}
+
+fn private_oram_external_recovery_tree_digest(path: &Path) -> Result<String, StorageError> {
+    validate_owned_directory(path, false)?;
+    let mut hasher = Sha256::new();
+    hasher.update(PRIVATE_ORAM_EXTERNAL_RECOVERY_TREE_DIGEST_DOMAIN);
+    let mut entry_count = 0;
+    update_install_tree_digest(path, Path::new(""), &mut hasher, &mut entry_count, 0)?;
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn update_install_tree_digest(
+    directory: &Path,
+    relative: &Path,
+    hasher: &mut Sha256,
+    entry_count: &mut u64,
+    depth: usize,
+) -> Result<(), StorageError> {
+    if depth > PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MAX_TREE_DEPTH {
+        return Err(invalid_install_state());
+    }
+    let before = fs::symlink_metadata(directory).map_err(|_| invalid_install_state())?;
+    validate_owned_directory_metadata(&before, false)?;
+    let mut entries = fs::read_dir(directory)
+        .map_err(|_| invalid_install_state())?
+        .map(|entry| {
+            let entry = entry.map_err(|_| invalid_install_state())?;
+            let name = entry
+                .file_name()
+                .into_string()
+                .map_err(|_| invalid_install_state())?;
+            if name.is_empty() || name == "." || name == ".." || name.contains('/') {
+                return Err(invalid_install_state());
+            }
+            Ok((name, entry.path()))
+        })
+        .collect::<Result<Vec<_>, StorageError>>()?;
+    entries.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+
+    for (name, path) in entries {
+        *entry_count = entry_count
+            .checked_add(1)
+            .ok_or_else(invalid_install_state)?;
+        if *entry_count > PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_MAX_TREE_ENTRIES {
+            return Err(invalid_install_state());
+        }
+        let relative_path = relative.join(&name);
+        let relative_bytes = relative_path
+            .to_str()
+            .ok_or_else(invalid_install_state)?
+            .as_bytes();
+        let metadata = fs::symlink_metadata(&path).map_err(|_| invalid_install_state())?;
+        if metadata.file_type().is_dir() {
+            validate_owned_directory_metadata(&metadata, false)?;
+            hasher.update(b"d");
+            update_length_prefixed(hasher, relative_bytes);
+            update_install_tree_digest(&path, &relative_path, hasher, entry_count, depth + 1)?;
+        } else if metadata.file_type().is_file() {
+            validate_owned_file_metadata(&metadata)?;
+            hasher.update(b"f");
+            update_length_prefixed(hasher, relative_bytes);
+            hasher.update(metadata.len().to_be_bytes());
+            let mut file =
+                open_regular_file(&path, false, None).map_err(|_| invalid_install_state())?;
+            let opened = file.metadata().map_err(|_| invalid_install_state())?;
+            ensure_same_file(&metadata, &opened).map_err(|_| invalid_install_state())?;
+            let mut remaining = metadata.len();
+            let mut buffer = [0_u8; 64 * 1024];
+            while remaining > 0 {
+                let limit = usize::try_from(remaining.min(buffer.len() as u64))
+                    .map_err(|_| invalid_install_state())?;
+                let read = file
+                    .read(&mut buffer[..limit])
+                    .map_err(|_| invalid_install_state())?;
+                if read == 0 {
+                    return Err(invalid_install_state());
+                }
+                hasher.update(&buffer[..read]);
+                remaining -= read as u64;
+            }
+            let after = file.metadata().map_err(|_| invalid_install_state())?;
+            ensure_same_file(&opened, &after).map_err(|_| invalid_install_state())?;
+            if after.len() != metadata.len() {
+                return Err(invalid_install_state());
+            }
+        } else {
+            return Err(invalid_install_state());
+        }
+    }
+    let after = fs::symlink_metadata(directory).map_err(|_| invalid_install_state())?;
+    ensure_same_file(&before, &after).map_err(|_| invalid_install_state())
+}
+
+fn validate_owned_directory(path: &Path, require_private: bool) -> Result<(), StorageError> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| invalid_install_state())?;
+    validate_owned_directory_metadata(&metadata, require_private)
+}
+
+fn validate_secure_directory_metadata(metadata: &std::fs::Metadata) -> Result<(), StorageError> {
+    validate_owned_directory_metadata(metadata, true)
+}
+
+fn validate_owned_directory_metadata(
+    metadata: &std::fs::Metadata,
+    require_private: bool,
+) -> Result<(), StorageError> {
+    if !metadata.file_type().is_dir() {
+        return Err(invalid_install_state());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        let forbidden_mode = if require_private { 0o077 } else { 0o022 };
+        if metadata.uid() != nix::unistd::Uid::effective().as_raw()
+            || metadata.permissions().mode() & forbidden_mode != 0
+        {
+            return Err(invalid_install_state());
+        }
+    }
+    Ok(())
+}
+
+fn validate_owned_file_metadata(metadata: &std::fs::Metadata) -> Result<(), StorageError> {
+    if !metadata.file_type().is_file() {
+        return Err(invalid_install_state());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+        if metadata.uid() != nix::unistd::Uid::effective().as_raw()
+            || metadata.permissions().mode() & 0o022 != 0
+        {
+            return Err(invalid_install_state());
+        }
+    }
+    Ok(())
+}
+
+fn validate_install_tree_collection_identity(
+    path: &Path,
+    collection_name: &str,
+    collection_id: &str,
+) -> Result<(), StorageError> {
+    let config = CollectionConfigInternal::load(path).map_err(|_| invalid_install_state())?;
+    let stable_id = config
+        .stable_crypto_id(collection_name)
+        .map_err(|_| invalid_install_state())?;
+    if stable_id != collection_id {
+        return Err(invalid_install_state());
+    }
+    Ok(())
+}
+
+fn path_exists(path: &Path) -> Result<bool, StorageError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(_) => Err(invalid_install_state()),
+    }
+}
+
+fn validate_missing_path(path: &Path) -> Result<(), StorageError> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) | Err(_) => Err(invalid_install_state()),
+    }
+}
+
+fn remove_owned_directory_if_exists(
+    path: &Path,
+    require_private: bool,
+) -> Result<(), StorageError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {
+            validate_owned_directory(path, require_private)?;
+            fs::remove_dir_all(path).map_err(|_| invalid_install_state())?;
+            common::fs::sync_parent_dir(path).map_err(|_| invalid_install_state())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(invalid_install_state()),
+    }
 }
 
 fn validate_state(state: &PrivateOramExternalRecoveryStagingState) -> Result<(), StorageError> {
@@ -992,14 +1883,24 @@ fn invalid_staging_state() -> StorageError {
     StorageError::service_error("private ORAM external recovery staging state is invalid")
 }
 
+fn invalid_install_state() -> StorageError {
+    StorageError::service_error("private ORAM external recovery install state is invalid")
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write as _;
 
+    use collection::config::{
+        CollectionEncryptionConfig, CollectionParams, CryptoMigrationState, EncryptionRuleRef,
+        EncryptionSelector, WalConfig,
+    };
+    use collection::optimizers_builder::OptimizersConfig;
     use qdrant_sec::{
         PRIVATE_ORAM_EXTERNAL_RECOVERY_CHECKPOINT_VERSION, PrivateOramExternalRecoveryCheckpoint,
         PrivateOramRecoverySignature,
     };
+    use segment::types::HnswConfig;
 
     use super::*;
 
@@ -1007,7 +1908,7 @@ mod tests {
         PrivateOramExternalRecoveryCheckpointBundle {
             checkpoint: PrivateOramExternalRecoveryCheckpoint {
                 version: PRIVATE_ORAM_EXTERNAL_RECOVERY_CHECKPOINT_VERSION,
-                collection_id: "collection-uuid-1".to_string(),
+                collection_id: "12345678-90ab-cdef-1234-567890abcdef".to_string(),
                 backup_generation: 7,
                 source_peer_id: 11,
                 source_shard_ids: vec![1],
@@ -1034,6 +1935,174 @@ mod tests {
         file.write_all(bytes).unwrap();
         file.sync_all().unwrap();
         HEXLOWER.encode(&Sha256::digest(bytes))
+    }
+
+    fn install_collection_config() -> CollectionConfigInternal {
+        CollectionConfigInternal {
+            params: CollectionParams {
+                encryption: Some(CollectionEncryptionConfig {
+                    version: 1,
+                    key_id: Some("tenant-a:docs".to_string()),
+                    crypto_schema_version: 1,
+                    encryption_epoch: 7,
+                    migration_state: CryptoMigrationState::Active,
+                    rules: vec![EncryptionRuleRef {
+                        id: "body_conf".to_string(),
+                        selector: EncryptionSelector::PayloadPaths {
+                            paths: vec!["body".to_string()],
+                        },
+                        instance: "docs_payload_v1".to_string(),
+                        binding: Some("payload-field/v1".to_string()),
+                    }],
+                }),
+                ..CollectionParams::empty()
+            },
+            hnsw_config: HnswConfig::default(),
+            optimizer_config: OptimizersConfig {
+                deleted_threshold: 0.1,
+                vacuum_min_vector_number: 1_000,
+                default_segment_number: 0,
+                max_segment_size: None,
+                #[expect(deprecated)]
+                memmap_threshold: None,
+                indexing_threshold: Some(100_000),
+                flush_interval_sec: 60,
+                max_optimization_threads: Some(0),
+                prevent_unoptimized: None,
+            },
+            wal_config: WalConfig::default(),
+            quantization_config: None,
+            strict_mode_config: None,
+            uuid: Some(uuid::Uuid::parse_str("12345678-90ab-cdef-1234-567890abcdef").unwrap()),
+            metadata: None,
+        }
+    }
+
+    fn install_fixture(
+        temp: &tempfile::TempDir,
+    ) -> (
+        PrivateOramExternalRecoveryStaging,
+        PrivateOramExternalRecoveryLease,
+    ) {
+        let snapshot = b"snapshot".to_vec();
+        let bundle = bundle(&snapshot);
+        let checkpoint_digest = private_oram_external_recovery_checkpoint_digest(&bundle).unwrap();
+        let operation_hash = private_oram_external_recovery_operation_id_hash(
+            &new_private_oram_external_recovery_operation_token(),
+        )
+        .unwrap();
+        let staging = PrivateOramExternalRecoveryStaging::new(
+            temp.path(),
+            &bundle.checkpoint.collection_id,
+            &operation_hash,
+        )
+        .unwrap();
+        staging
+            .begin(&checkpoint_digest, bundle.clone(), 1_000)
+            .unwrap();
+        let chunk_path = temp.path().join("snapshot.chunk");
+        let chunk_hash = chunk_file(&chunk_path, &snapshot);
+        staging.append_chunk(0, &chunk_path, &chunk_hash).unwrap();
+        let verification = staging.prepare_verification().unwrap();
+        verification.reset_verification_output().unwrap();
+        install_collection_config()
+            .save(verification.verify_temp_collection_path())
+            .unwrap();
+        fs::create_dir(verification.verify_temp_collection_path().join("nested")).unwrap();
+        fs::write(
+            verification
+                .verify_temp_collection_path()
+                .join("nested/new"),
+            b"new-tree",
+        )
+        .unwrap();
+        verification.promote_verification_output().unwrap();
+        staging.mark_verified(verification).unwrap();
+
+        let live_path = temp.path().join(COLLECTIONS_DIR).join("docs");
+        fs::create_dir_all(live_path.join("nested")).unwrap();
+        install_collection_config().save(&live_path).unwrap();
+        fs::write(live_path.join("nested/old"), b"old-tree").unwrap();
+
+        let lease = PrivateOramExternalRecoveryLease {
+            owner_peer_id: 11,
+            operation_id_hash: operation_hash,
+            checkpoint_digest,
+            backup_generation: bundle.checkpoint.backup_generation,
+            issued_at_unix: 100,
+            expires_at_unix: 1_000,
+            install_intent_digest: None,
+            phase: PrivateOramExternalRecoveryLeasePhase::Staging,
+        };
+        (staging, lease)
+    }
+
+    fn recovery_state(
+        staging: &PrivateOramExternalRecoveryStaging,
+        lease: &PrivateOramExternalRecoveryLease,
+        phase: PrivateOramExternalRecoveryLeasePhase,
+    ) -> PrivateOramExternalRecoveryState {
+        let install_intent_digest = (phase == PrivateOramExternalRecoveryLeasePhase::Installing)
+            .then(|| {
+                private_oram_external_recovery_install_intent_digest(
+                    &read_install_marker(&staging.install_marker_path())
+                        .unwrap()
+                        .unwrap(),
+                )
+            });
+        PrivateOramExternalRecoveryState {
+            committed_backup_generation: 0,
+            committed_checkpoint_digest: None,
+            committed_install_intent_digest: None,
+            active_lease: Some(PrivateOramExternalRecoveryLease {
+                phase,
+                install_intent_digest,
+                ..lease.clone()
+            }),
+        }
+    }
+
+    fn committed_recovery_state(
+        staging: &PrivateOramExternalRecoveryStaging,
+        lease: &PrivateOramExternalRecoveryLease,
+    ) -> PrivateOramExternalRecoveryState {
+        let install_intent_digest = private_oram_external_recovery_install_intent_digest(
+            &read_install_marker(&staging.install_marker_path())
+                .unwrap()
+                .unwrap(),
+        );
+        PrivateOramExternalRecoveryState {
+            committed_backup_generation: lease.backup_generation,
+            committed_checkpoint_digest: Some(lease.checkpoint_digest.clone()),
+            committed_install_intent_digest: Some(install_intent_digest),
+            active_lease: None,
+        }
+    }
+
+    fn reconcile_fixture(
+        temp: &tempfile::TempDir,
+        state: PrivateOramExternalRecoveryState,
+    ) -> Result<(), StorageError> {
+        reconcile_private_oram_external_recovery_installs(temp.path(), |_| Some(state.clone()))
+    }
+
+    fn assert_old_tree_ready(staging: &PrivateOramExternalRecoveryStaging) {
+        assert_eq!(
+            fs::read(staging.live_collection_path("docs").join("nested/old"),).unwrap(),
+            b"old-tree",
+        );
+        assert_eq!(
+            fs::read(staging.verified_collection_path().join("nested/new")).unwrap(),
+            b"new-tree",
+        );
+        assert!(!staging.install_backup_path().exists());
+        assert_eq!(
+            read_install_marker(&staging.install_marker_path())
+                .unwrap()
+                .unwrap()
+                .phase,
+            PrivateOramExternalRecoveryInstallPhase::Prepared,
+        );
     }
 
     #[test]
@@ -1249,6 +2318,234 @@ mod tests {
         verification.verified_collection_path = substituted;
 
         assert!(staging.mark_verified(verification).is_err());
+    }
+
+    #[test]
+    fn durable_install_reconciles_every_persisted_phase() {
+        for phase in [
+            PrivateOramExternalRecoveryInstallPhase::Prepared,
+            PrivateOramExternalRecoveryInstallPhase::OldMoved,
+            PrivateOramExternalRecoveryInstallPhase::NewPromoted,
+            PrivateOramExternalRecoveryInstallPhase::Loaded,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let (staging, lease) = install_fixture(&temp);
+            let mut transaction = staging.prepare_install("docs", &lease).unwrap();
+            if phase != PrivateOramExternalRecoveryInstallPhase::Prepared {
+                transaction.move_live_to_backup().unwrap();
+            }
+            if matches!(
+                phase,
+                PrivateOramExternalRecoveryInstallPhase::NewPromoted
+                    | PrivateOramExternalRecoveryInstallPhase::Loaded
+            ) {
+                transaction.promote_verified_collection().unwrap();
+            }
+            if phase == PrivateOramExternalRecoveryInstallPhase::Loaded {
+                transaction.mark_loaded().unwrap();
+            }
+            assert_eq!(transaction.phase(), phase);
+            drop(transaction);
+
+            reconcile_fixture(
+                &temp,
+                recovery_state(
+                    &staging,
+                    &lease,
+                    PrivateOramExternalRecoveryLeasePhase::Installing,
+                ),
+            )
+            .unwrap();
+            assert_old_tree_ready(&staging);
+        }
+    }
+
+    #[test]
+    fn durable_install_reconciles_rename_ahead_of_marker() {
+        let temp = tempfile::tempdir().unwrap();
+        let (staging, lease) = install_fixture(&temp);
+        let transaction = staging.prepare_install("docs", &lease).unwrap();
+        rename_install_tree(
+            &transaction.live_path(),
+            &transaction.backup_path(),
+            &transaction.marker.old_tree_digest,
+            false,
+        )
+        .unwrap();
+        drop(transaction);
+        reconcile_fixture(
+            &temp,
+            recovery_state(
+                &staging,
+                &lease,
+                PrivateOramExternalRecoveryLeasePhase::Installing,
+            ),
+        )
+        .unwrap();
+        assert_old_tree_ready(&staging);
+
+        let temp = tempfile::tempdir().unwrap();
+        let (staging, lease) = install_fixture(&temp);
+        let mut transaction = staging.prepare_install("docs", &lease).unwrap();
+        transaction.move_live_to_backup().unwrap();
+        rename_install_tree(
+            &transaction.verified_path(),
+            &transaction.live_path(),
+            &transaction.marker.new_tree_digest,
+            true,
+        )
+        .unwrap();
+        drop(transaction);
+        reconcile_fixture(
+            &temp,
+            recovery_state(
+                &staging,
+                &lease,
+                PrivateOramExternalRecoveryLeasePhase::Installing,
+            ),
+        )
+        .unwrap();
+        assert_old_tree_ready(&staging);
+    }
+
+    #[test]
+    fn committed_install_cleanup_is_idempotent() {
+        for phase in [
+            PrivateOramExternalRecoveryInstallPhase::NewPromoted,
+            PrivateOramExternalRecoveryInstallPhase::Loaded,
+            PrivateOramExternalRecoveryInstallPhase::ConsensusCommitted,
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let (staging, lease) = install_fixture(&temp);
+            let mut transaction = staging.prepare_install("docs", &lease).unwrap();
+            transaction.move_live_to_backup().unwrap();
+            transaction.promote_verified_collection().unwrap();
+            if matches!(
+                phase,
+                PrivateOramExternalRecoveryInstallPhase::Loaded
+                    | PrivateOramExternalRecoveryInstallPhase::ConsensusCommitted
+            ) {
+                transaction.mark_loaded().unwrap();
+            }
+            if phase == PrivateOramExternalRecoveryInstallPhase::ConsensusCommitted {
+                transaction.mark_consensus_committed().unwrap();
+            }
+            drop(transaction);
+
+            let committed = committed_recovery_state(&staging, &lease);
+            reconcile_fixture(&temp, committed.clone()).unwrap();
+            reconcile_fixture(&temp, committed).unwrap();
+            assert_eq!(
+                fs::read(staging.live_collection_path("docs").join("nested/new"),).unwrap(),
+                b"new-tree",
+            );
+            assert!(!staging.operation_path().exists());
+            assert!(!staging.install_marker_path().exists());
+        }
+    }
+
+    #[test]
+    fn durable_install_rejects_substituted_artifacts() {
+        let temp = tempfile::tempdir().unwrap();
+        let (staging, lease) = install_fixture(&temp);
+        let mut transaction = staging.prepare_install("docs", &lease).unwrap();
+        fs::write(
+            staging.verified_collection_path().join("nested/new"),
+            b"substituted",
+        )
+        .unwrap();
+        assert!(transaction.move_live_to_backup().is_err());
+        assert_eq!(
+            fs::read(staging.live_collection_path("docs").join("nested/old"),).unwrap(),
+            b"old-tree",
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        let (staging, lease) = install_fixture(&temp);
+        let mut transaction = staging.prepare_install("docs", &lease).unwrap();
+        transaction.move_live_to_backup().unwrap();
+        fs::write(
+            staging.install_backup_path().join("nested/old"),
+            b"substituted",
+        )
+        .unwrap();
+        drop(transaction);
+        assert!(
+            reconcile_fixture(
+                &temp,
+                recovery_state(
+                    &staging,
+                    &lease,
+                    PrivateOramExternalRecoveryLeasePhase::Installing,
+                ),
+            )
+            .is_err()
+        );
+        assert!(!staging.live_collection_path("docs").exists());
+    }
+
+    #[test]
+    fn durable_install_binds_marker_to_consensus_intent() {
+        let temp = tempfile::tempdir().unwrap();
+        let (staging, lease) = install_fixture(&temp);
+        let transaction = staging.prepare_install("docs", &lease).unwrap();
+        let installing_state = recovery_state(
+            &staging,
+            &lease,
+            PrivateOramExternalRecoveryLeasePhase::Installing,
+        );
+        let original_marker = transaction.marker.clone();
+        drop(transaction);
+        let mut wrong_installing_lease = installing_state
+            .active_lease
+            .clone()
+            .expect("installing recovery must have a lease");
+        wrong_installing_lease.install_intent_digest = Some(BASE64URL_NOPAD.encode(&[62; 32]));
+        assert!(
+            staging
+                .prepare_install("docs", &wrong_installing_lease)
+                .is_err()
+        );
+
+        let marker_path = staging.install_marker_path();
+        let mut tampered_marker = original_marker.clone();
+        tampered_marker.layout_digest = BASE64URL_NOPAD.encode(&[63; 32]);
+        write_install_marker(&marker_path, Some(&original_marker), &tampered_marker).unwrap();
+
+        assert!(reconcile_fixture(&temp, installing_state).is_err());
+        assert_eq!(
+            fs::read(staging.live_collection_path("docs").join("nested/old")).unwrap(),
+            b"old-tree",
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_marker_rejects_symlink_and_malformed_state() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let (staging, lease) = install_fixture(&temp);
+        drop(staging.prepare_install("docs", &lease).unwrap());
+        let installing_state = recovery_state(
+            &staging,
+            &lease,
+            PrivateOramExternalRecoveryLeasePhase::Installing,
+        );
+        fs::remove_file(staging.install_marker_path()).unwrap();
+        let target = temp.path().join("install-target");
+        fs::write(&target, b"{}").unwrap();
+        symlink(&target, staging.install_marker_path()).unwrap();
+        assert!(reconcile_fixture(&temp, installing_state.clone()).is_err());
+
+        fs::remove_file(staging.install_marker_path()).unwrap();
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        secure_open_options(&mut options, true);
+        let mut marker = options.open(staging.install_marker_path()).unwrap();
+        marker.write_all(b"{}").unwrap();
+        marker.sync_all().unwrap();
+        assert!(reconcile_fixture(&temp, installing_state).is_err());
     }
 
     #[test]

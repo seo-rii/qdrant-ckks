@@ -134,6 +134,7 @@ pub async fn do_begin_private_oram_external_recovery(
         backup_generation: checkpoint_bundle.checkpoint.backup_generation,
         issued_at_unix: now_unix,
         expires_at_unix: lease_expires_at_unix,
+        install_intent_digest: None,
         phase: PrivateOramExternalRecoveryLeasePhase::Staging,
     };
     let mut desired = expected
@@ -141,6 +142,7 @@ pub async fn do_begin_private_oram_external_recovery(
         .unwrap_or(PrivateOramExternalRecoveryState {
             committed_backup_generation: 0,
             committed_checkpoint_digest: None,
+            committed_install_intent_digest: None,
             active_lease: None,
         });
     desired.active_lease = Some(lease);
@@ -340,6 +342,7 @@ pub async fn do_abort_private_oram_external_recovery(
         Some(PrivateOramExternalRecoveryState {
             committed_backup_generation: expected.committed_backup_generation,
             committed_checkpoint_digest: expected.committed_checkpoint_digest.clone(),
+            committed_install_intent_digest: expected.committed_install_intent_digest.clone(),
             active_lease: None,
         })
     };
@@ -749,6 +752,7 @@ mod tests {
             backup_generation: 7,
             issued_at_unix: now,
             expires_at_unix: now + 10,
+            install_intent_digest: None,
             phase: PrivateOramExternalRecoveryLeasePhase::Staging,
         };
         let error = validate_active_lease(&lease, 11, &"C".repeat(43))
@@ -769,6 +773,7 @@ mod tests {
             backup_generation: 7,
             issued_at_unix: now.saturating_sub(20),
             expires_at_unix: now.saturating_sub(10),
+            install_intent_digest: None,
             phase: PrivateOramExternalRecoveryLeasePhase::Staging,
         };
 

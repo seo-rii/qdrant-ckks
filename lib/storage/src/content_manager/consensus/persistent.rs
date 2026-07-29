@@ -655,13 +655,18 @@ impl Persistent {
                         .is_some_and(|(expected, new)| {
                             expected.phase == PrivateOramExternalRecoveryLeasePhase::Staging
                                 && new.phase == PrivateOramExternalRecoveryLeasePhase::Installing
+                                && expected.install_intent_digest.is_none()
+                                && new.install_intent_digest.is_some()
                         })
             }
             PrivateOramExternalRecoveryPhase::Commit => {
                 expected_lease.is_some_and(|lease| {
                     lease.phase == PrivateOramExternalRecoveryLeasePhase::Installing
+                        && lease.install_intent_digest.is_some()
                 }) && new.is_some_and(|state| {
                     state.active_lease.is_none()
+                        && state.committed_install_intent_digest
+                            == expected_lease.and_then(|lease| lease.install_intent_digest.clone())
                         && state.committed_backup_generation
                             > expected
                                 .expect("commit phase requires expected recovery state")
@@ -1260,6 +1265,7 @@ fn validate_private_oram_external_recovery_cas(
         (None, Some(new)) => {
             if new.committed_backup_generation != 0
                 || new.committed_checkpoint_digest.is_some()
+                || new.committed_install_intent_digest.is_some()
                 || !new.active_lease.as_ref().is_some_and(|lease| {
                     lease.phase == PrivateOramExternalRecoveryLeasePhase::Staging
                 })
@@ -1279,7 +1285,9 @@ fn validate_private_oram_external_recovery_cas(
         (Some(expected), Some(new))
             if new.committed_backup_generation == expected.committed_backup_generation =>
         {
-            if new.committed_checkpoint_digest != expected.committed_checkpoint_digest {
+            if new.committed_checkpoint_digest != expected.committed_checkpoint_digest
+                || new.committed_install_intent_digest != expected.committed_install_intent_digest
+            {
                 return Err(invalid_private_oram_external_recovery_transition());
             }
             match (&expected.active_lease, &new.active_lease) {
@@ -1306,6 +1314,9 @@ fn validate_private_oram_external_recovery_cas(
             if new.committed_backup_generation != active_lease.backup_generation
                 || new.committed_checkpoint_digest.as_deref()
                     != Some(active_lease.checkpoint_digest.as_str())
+                || new.committed_install_intent_digest.as_deref()
+                    != active_lease.install_intent_digest.as_deref()
+                || active_lease.install_intent_digest.is_none()
                 || new.active_lease.is_some()
                 || active_lease.phase != PrivateOramExternalRecoveryLeasePhase::Installing
             {
@@ -1334,10 +1345,17 @@ fn validate_private_oram_external_recovery_state(
     let committed_digest_is_valid = match (
         state.committed_backup_generation,
         state.committed_checkpoint_digest.as_deref(),
+        state.committed_install_intent_digest.as_deref(),
     ) {
-        (0, None) => true,
-        (0, Some(_)) | (_, None) => false,
-        (_, Some(digest)) => validate_private_oram_consensus_digest(digest).is_ok(),
+        (0, None, None) => true,
+        (0, _, _) | (_, None, _) => false,
+        (_, Some(checkpoint_digest), install_intent_digest) => {
+            validate_private_oram_consensus_digest(checkpoint_digest).is_ok()
+                && install_intent_digest
+                    .map(validate_private_oram_consensus_digest)
+                    .transpose()
+                    .is_ok()
+        }
     };
     if !committed_digest_is_valid {
         return Err(invalid_private_oram_external_recovery_state());
@@ -1354,9 +1372,17 @@ fn validate_private_oram_external_recovery_state(
 fn validate_private_oram_external_recovery_lease(
     lease: &PrivateOramExternalRecoveryLease,
 ) -> Result<(), StorageError> {
+    let install_intent_is_valid = match (lease.phase, lease.install_intent_digest.as_deref()) {
+        (PrivateOramExternalRecoveryLeasePhase::Staging, None) => true,
+        (PrivateOramExternalRecoveryLeasePhase::Installing, Some(digest)) => {
+            validate_private_oram_consensus_digest(digest).is_ok()
+        }
+        _ => false,
+    };
     let valid = lease.backup_generation > 0
         && validate_private_oram_consensus_digest(&lease.operation_id_hash).is_ok()
         && validate_private_oram_consensus_digest(&lease.checkpoint_digest).is_ok()
+        && install_intent_is_valid
         && lease.expires_at_unix > lease.issued_at_unix
         && lease.expires_at_unix - lease.issued_at_unix
             <= PRIVATE_ORAM_EXTERNAL_RECOVERY_LEASE_MAX_SECS;
@@ -1376,11 +1402,14 @@ fn validate_private_oram_external_recovery_lease_transition(
         && expected.backup_generation == new.backup_generation;
     let valid_renewal = same_recovery
         && new.phase == expected.phase
+        && new.install_intent_digest == expected.install_intent_digest
         && new.issued_at_unix >= expected.issued_at_unix
         && new.expires_at_unix > expected.expires_at_unix;
     let valid_prepare = same_recovery
         && expected.phase == PrivateOramExternalRecoveryLeasePhase::Staging
         && new.phase == PrivateOramExternalRecoveryLeasePhase::Installing
+        && expected.install_intent_digest.is_none()
+        && new.install_intent_digest.is_some()
         && new.issued_at_unix == expected.issued_at_unix
         && new.expires_at_unix == expected.expires_at_unix;
     let valid_takeover = !same_recovery
@@ -1736,8 +1765,10 @@ pub(crate) fn validate_private_oram_external_recovery_snapshot_transition(
         if incoming_state.committed_backup_generation < current_state.committed_backup_generation
             || incoming_state.committed_backup_generation
                 == current_state.committed_backup_generation
-                && incoming_state.committed_checkpoint_digest
+                && (incoming_state.committed_checkpoint_digest
                     != current_state.committed_checkpoint_digest
+                    || incoming_state.committed_install_intent_digest
+                        != current_state.committed_install_intent_digest)
         {
             return Err(StorageError::bad_request(
                 "private ORAM external recovery snapshot would roll back committed state",
@@ -1757,6 +1788,8 @@ pub(crate) fn validate_private_oram_external_recovery_snapshot_transition(
                             == current_state.committed_backup_generation
                             && incoming_state.committed_checkpoint_digest
                                 == current_state.committed_checkpoint_digest
+                            && incoming_state.committed_install_intent_digest
+                                == current_state.committed_install_intent_digest
                             && incoming_lease.phase
                                 == PrivateOramExternalRecoveryLeasePhase::Installing
                             && incoming_lease.owner_peer_id == installing_lease.owner_peer_id
@@ -1766,13 +1799,18 @@ pub(crate) fn validate_private_oram_external_recovery_snapshot_transition(
                                 == installing_lease.checkpoint_digest
                             && incoming_lease.backup_generation
                                 == installing_lease.backup_generation
+                            && incoming_lease.install_intent_digest
+                                == installing_lease.install_intent_digest
                             && incoming_lease.issued_at_unix >= installing_lease.issued_at_unix
                             && incoming_lease.expires_at_unix >= installing_lease.expires_at_unix
                     });
             let commits_install = incoming_state.committed_backup_generation
                 == installing_lease.backup_generation
                 && incoming_state.committed_checkpoint_digest.as_deref()
-                    == Some(installing_lease.checkpoint_digest.as_str());
+                    == Some(installing_lease.checkpoint_digest.as_str())
+                && incoming_state.committed_install_intent_digest
+                    == installing_lease.install_intent_digest
+                && installing_lease.install_intent_digest.is_some();
             if !preserves_install && !commits_install {
                 return Err(StorageError::bad_request(
                     "private ORAM external recovery snapshot would roll back installing state",
@@ -3115,6 +3153,7 @@ mod tests {
         };
         let operation_id_hash = BASE64URL_NOPAD.encode(&[31; 32]);
         let checkpoint_digest = BASE64URL_NOPAD.encode(&[32; 32]);
+        let install_intent_digest = BASE64URL_NOPAD.encode(&[30; 32]);
         let lease = PrivateOramExternalRecoveryLease {
             owner_peer_id: 7,
             operation_id_hash: operation_id_hash.clone(),
@@ -3122,16 +3161,19 @@ mod tests {
             backup_generation: 7,
             issued_at_unix: 100,
             expires_at_unix: 160,
+            install_intent_digest: None,
             phase: PrivateOramExternalRecoveryLeasePhase::Staging,
         };
         let acquired = PrivateOramExternalRecoveryState {
             committed_backup_generation: 0,
             committed_checkpoint_digest: None,
+            committed_install_intent_digest: None,
             active_lease: Some(lease.clone()),
         };
         let prepared = PrivateOramExternalRecoveryState {
             active_lease: Some(PrivateOramExternalRecoveryLease {
                 phase: PrivateOramExternalRecoveryLeasePhase::Installing,
+                install_intent_digest: Some(install_intent_digest.clone()),
                 ..lease.clone()
             }),
             ..acquired.clone()
@@ -3139,6 +3181,7 @@ mod tests {
         let committed = PrivateOramExternalRecoveryState {
             committed_backup_generation: 7,
             committed_checkpoint_digest: Some(checkpoint_digest.clone()),
+            committed_install_intent_digest: Some(install_intent_digest.clone()),
             active_lease: None,
         };
         let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
@@ -3197,6 +3240,25 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(invalid_commit.contains("external recovery transition is invalid"));
+        assert_eq!(
+            persistent.private_oram_external_recovery(&key),
+            Some(prepared.clone())
+        );
+
+        let invalid_install_intent = persistent
+            .compare_and_swap_private_oram_external_recovery(
+                &CompareAndSwapPrivateOramExternalRecovery {
+                    key: key.clone(),
+                    expected: Some(prepared.clone()),
+                    new: Some(PrivateOramExternalRecoveryState {
+                        committed_install_intent_digest: Some(BASE64URL_NOPAD.encode(&[29; 32])),
+                        ..committed.clone()
+                    }),
+                },
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(invalid_install_intent.contains("external recovery transition is invalid"));
         assert_eq!(
             persistent.private_oram_external_recovery(&key),
             Some(prepared.clone())
@@ -3293,6 +3355,7 @@ mod tests {
             legacy_lease.phase,
             PrivateOramExternalRecoveryLeasePhase::Staging
         );
+        assert_eq!(legacy_lease.install_intent_digest, None);
 
         let lease = PrivateOramExternalRecoveryLease {
             owner_peer_id: 7,
@@ -3301,11 +3364,13 @@ mod tests {
             backup_generation: 7,
             issued_at_unix: 100,
             expires_at_unix: 160,
+            install_intent_digest: None,
             phase: PrivateOramExternalRecoveryLeasePhase::Staging,
         };
         let acquired = PrivateOramExternalRecoveryState {
             committed_backup_generation: 0,
             committed_checkpoint_digest: None,
+            committed_install_intent_digest: None,
             active_lease: Some(lease.clone()),
         };
         let early_takeover = PrivateOramExternalRecoveryState {
@@ -3316,6 +3381,7 @@ mod tests {
                 backup_generation: 8,
                 issued_at_unix: 159,
                 expires_at_unix: 219,
+                install_intent_digest: None,
                 phase: PrivateOramExternalRecoveryLeasePhase::Staging,
             }),
             ..acquired.clone()
@@ -3349,6 +3415,7 @@ mod tests {
         let installing = PrivateOramExternalRecoveryState {
             active_lease: Some(PrivateOramExternalRecoveryLease {
                 phase: PrivateOramExternalRecoveryLeasePhase::Installing,
+                install_intent_digest: Some(BASE64URL_NOPAD.encode(&[45; 32])),
                 ..lease.clone()
             }),
             ..acquired.clone()
@@ -3379,6 +3446,7 @@ mod tests {
                 backup_generation: 8,
                 issued_at_unix: 160,
                 expires_at_unix: 220,
+                install_intent_digest: None,
                 phase: PrivateOramExternalRecoveryLeasePhase::Staging,
             }),
             ..installing.clone()
@@ -3422,6 +3490,7 @@ mod tests {
         let acquired = PrivateOramExternalRecoveryState {
             committed_backup_generation: 0,
             committed_checkpoint_digest: None,
+            committed_install_intent_digest: None,
             active_lease: Some(PrivateOramExternalRecoveryLease {
                 owner_peer_id: 7,
                 operation_id_hash: BASE64URL_NOPAD.encode(&[45; 32]),
@@ -3429,6 +3498,7 @@ mod tests {
                 backup_generation: 1,
                 issued_at_unix: 100,
                 expires_at_unix: 160,
+                install_intent_digest: None,
                 phase: PrivateOramExternalRecoveryLeasePhase::Staging,
             }),
         };
@@ -3502,9 +3572,11 @@ mod tests {
             expires_at_unix: 160,
         };
         let checkpoint_digest = BASE64URL_NOPAD.encode(&[50; 32]);
+        let install_intent_digest = BASE64URL_NOPAD.encode(&[54; 32]);
         let acquired = PrivateOramExternalRecoveryState {
             committed_backup_generation: 0,
             committed_checkpoint_digest: None,
+            committed_install_intent_digest: None,
             active_lease: Some(PrivateOramExternalRecoveryLease {
                 owner_peer_id: 7,
                 operation_id_hash: BASE64URL_NOPAD.encode(&[51; 32]),
@@ -3512,6 +3584,7 @@ mod tests {
                 backup_generation: 7,
                 issued_at_unix: 100,
                 expires_at_unix: 160,
+                install_intent_digest: None,
                 phase: PrivateOramExternalRecoveryLeasePhase::Staging,
             }),
         };
@@ -3610,6 +3683,7 @@ mod tests {
         let prepared = PrivateOramExternalRecoveryState {
             active_lease: Some(PrivateOramExternalRecoveryLease {
                 phase: PrivateOramExternalRecoveryLeasePhase::Installing,
+                install_intent_digest: Some(install_intent_digest.clone()),
                 ..acquired
                     .active_lease
                     .clone()
@@ -3620,6 +3694,7 @@ mod tests {
         let committed = PrivateOramExternalRecoveryState {
             committed_backup_generation: 7,
             committed_checkpoint_digest: Some(checkpoint_digest),
+            committed_install_intent_digest: Some(install_intent_digest),
             active_lease: None,
         };
         let direct_commit = persistent
@@ -3696,6 +3771,7 @@ mod tests {
         let committed = PrivateOramExternalRecoveryState {
             committed_backup_generation: 7,
             committed_checkpoint_digest: Some(BASE64URL_NOPAD.encode(&[51; 32])),
+            committed_install_intent_digest: None,
             active_lease: None,
         };
         let current = HashMap::from([(key_digest.clone(), committed.clone())]);
@@ -3711,6 +3787,7 @@ mod tests {
             PrivateOramExternalRecoveryState {
                 committed_backup_generation: 6,
                 committed_checkpoint_digest: Some(BASE64URL_NOPAD.encode(&[50; 32])),
+                committed_install_intent_digest: None,
                 active_lease: None,
             },
         )]);
@@ -3735,6 +3812,7 @@ mod tests {
             PrivateOramExternalRecoveryState {
                 committed_backup_generation: 8,
                 committed_checkpoint_digest: Some(BASE64URL_NOPAD.encode(&[53; 32])),
+                committed_install_intent_digest: None,
                 active_lease: None,
             },
         )]);
@@ -3747,6 +3825,7 @@ mod tests {
             PrivateOramExternalRecoveryState {
                 committed_backup_generation: 0,
                 committed_checkpoint_digest: None,
+                committed_install_intent_digest: None,
                 active_lease: Some(PrivateOramExternalRecoveryLease {
                     owner_peer_id: 7,
                     operation_id_hash: BASE64URL_NOPAD.encode(&[54; 32]),
@@ -3754,6 +3833,7 @@ mod tests {
                     backup_generation: 1,
                     issued_at_unix: 100,
                     expires_at_unix: 160,
+                    install_intent_digest: None,
                     phase: PrivateOramExternalRecoveryLeasePhase::Staging,
                 }),
             },
@@ -3772,11 +3852,13 @@ mod tests {
             backup_generation: 9,
             issued_at_unix: 200,
             expires_at_unix: 260,
+            install_intent_digest: Some(BASE64URL_NOPAD.encode(&[60; 32])),
             phase: PrivateOramExternalRecoveryLeasePhase::Installing,
         };
         let installing_state = PrivateOramExternalRecoveryState {
             committed_backup_generation: 7,
             committed_checkpoint_digest: Some(BASE64URL_NOPAD.encode(&[51; 32])),
+            committed_install_intent_digest: None,
             active_lease: Some(installing_lease.clone()),
         };
         let installing = HashMap::from([(installing_key_digest.clone(), installing_state.clone())]);
@@ -3811,6 +3893,7 @@ mod tests {
             PrivateOramExternalRecoveryState {
                 committed_backup_generation: 8,
                 committed_checkpoint_digest: Some(BASE64URL_NOPAD.encode(&[58; 32])),
+                committed_install_intent_digest: None,
                 active_lease: Some(installing_lease.clone()),
             },
         )]);
@@ -3827,6 +3910,7 @@ mod tests {
             PrivateOramExternalRecoveryState {
                 committed_backup_generation: installing_lease.backup_generation,
                 committed_checkpoint_digest: Some(installing_lease.checkpoint_digest.clone()),
+                committed_install_intent_digest: installing_lease.install_intent_digest.clone(),
                 active_lease: None,
             },
         )]);
@@ -3841,6 +3925,7 @@ mod tests {
             PrivateOramExternalRecoveryState {
                 committed_backup_generation: installing_lease.backup_generation + 1,
                 committed_checkpoint_digest: Some(BASE64URL_NOPAD.encode(&[59; 32])),
+                committed_install_intent_digest: Some(BASE64URL_NOPAD.encode(&[61; 32])),
                 active_lease: None,
             },
         )]);

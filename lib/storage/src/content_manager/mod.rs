@@ -172,6 +172,8 @@ pub mod consensus_ops {
         pub backup_generation: u64,
         pub issued_at_unix: u64,
         pub expires_at_unix: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub install_intent_digest: Option<String>,
         #[serde(default)]
         pub phase: PrivateOramExternalRecoveryLeasePhase,
     }
@@ -185,6 +187,10 @@ pub mod consensus_ops {
                 .field("backup_generation", &self.backup_generation)
                 .field("issued_at_unix", &self.issued_at_unix)
                 .field("expires_at_unix", &self.expires_at_unix)
+                .field(
+                    "has_install_intent_digest",
+                    &self.install_intent_digest.is_some(),
+                )
                 .field("phase", &self.phase)
                 .finish()
         }
@@ -195,6 +201,8 @@ pub mod consensus_ops {
         pub committed_backup_generation: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub committed_checkpoint_digest: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub committed_install_intent_digest: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub active_lease: Option<PrivateOramExternalRecoveryLease>,
     }
@@ -209,6 +217,10 @@ pub mod consensus_ops {
                 .field(
                     "has_committed_checkpoint_digest",
                     &self.committed_checkpoint_digest.is_some(),
+                )
+                .field(
+                    "has_committed_install_intent_digest",
+                    &self.committed_install_intent_digest.is_some(),
                 )
                 .field("active_lease", &self.active_lease)
                 .finish()
@@ -2018,6 +2030,7 @@ mod test {
                     new: Some(PrivateOramExternalRecoveryState {
                         committed_backup_generation: 0,
                         committed_checkpoint_digest: None,
+                        committed_install_intent_digest: None,
                         active_lease: Some(PrivateOramExternalRecoveryLease {
                             owner_peer_id: 7,
                             operation_id_hash: operation_hash_sentinel.to_string(),
@@ -2025,6 +2038,7 @@ mod test {
                             backup_generation: 7,
                             issued_at_unix: 100,
                             expires_at_unix: 160,
+                            install_intent_digest: None,
                             phase: PrivateOramExternalRecoveryLeasePhase::Staging,
                         }),
                     }),

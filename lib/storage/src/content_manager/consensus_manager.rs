@@ -2741,22 +2741,26 @@ mod tests {
             .unwrap(),
         };
         let checkpoint_digest = BASE64URL_NOPAD.encode(&[41; 32]);
+        let install_intent_digest = BASE64URL_NOPAD.encode(&[42; 32]);
         let acquired = PrivateOramExternalRecoveryState {
             committed_backup_generation: 0,
             committed_checkpoint_digest: None,
+            committed_install_intent_digest: None,
             active_lease: Some(PrivateOramExternalRecoveryLease {
                 owner_peer_id: 7,
-                operation_id_hash: BASE64URL_NOPAD.encode(&[42; 32]),
+                operation_id_hash: BASE64URL_NOPAD.encode(&[43; 32]),
                 checkpoint_digest: checkpoint_digest.clone(),
                 backup_generation: 7,
                 issued_at_unix: 100,
                 expires_at_unix: 160,
+                install_intent_digest: None,
                 phase: PrivateOramExternalRecoveryLeasePhase::Staging,
             }),
         };
         let prepared = PrivateOramExternalRecoveryState {
             active_lease: Some(PrivateOramExternalRecoveryLease {
                 phase: PrivateOramExternalRecoveryLeasePhase::Installing,
+                install_intent_digest: Some(install_intent_digest.clone()),
                 ..acquired
                     .active_lease
                     .clone()
@@ -2767,6 +2771,7 @@ mod tests {
         let committed = PrivateOramExternalRecoveryState {
             committed_backup_generation: 7,
             committed_checkpoint_digest: Some(checkpoint_digest),
+            committed_install_intent_digest: Some(install_intent_digest),
             active_lease: None,
         };
 
@@ -2910,6 +2915,7 @@ mod tests {
         let recovery = PrivateOramExternalRecoveryState {
             committed_backup_generation: 1,
             committed_checkpoint_digest: Some(valid_digest),
+            committed_install_intent_digest: None,
             active_lease: None,
         };
         let malformed_snapshots = [
