@@ -190,10 +190,10 @@ entry nodes, token maps, and encrypted client-state bodies must never be
 uploaded into Qdrant's collection-local ORAM store or included in a Qdrant
 snapshot. Only the complete encrypted set digest is checkpointed.
 
-Server rollout proceeds in dependency order. First, a wiped fixed-layout
-transfer target with a live source will request source-side fresh full-store
-preinstall before restarting the exact marked transfer. Next, external restore
-will admit an owner-signed checkpoint only under an expiring consensus
+Server rollout proceeds in dependency order. A wiped fixed-layout transfer
+target with a live source now requests source-side fresh full-store preinstall
+before restarting the exact marked transfer. Next, external restore will admit
+an owner-signed checkpoint only under an expiring consensus
 recovery lease, exact current layout/index-state match, no conflicting
 session/transfer/reshard, full point/private-store preflight, and exact commit
 CAS. Initial external restore is restricted to the same peer identity still
@@ -1978,14 +1978,32 @@ peer-restart hook preserves only the sole exact marked transfer with an
 bounded background resume request so consensus can apply the new reservation
 without waiting on the request itself. The source rechecks the method,
 endpoints, sync mode, pre/post layout generations and digests, and index-state
-digest, then stops the old transfer task before installing every configured
-encrypted store under a fresh reservation and invoking the same-key
+digest. Before stopping the old task or acquiring a reservation, the source
+atomically persists the exact full transfer and the domain-separated
+reservation lease-id hash in
+`private_oram_source_preinstall.json`, fsyncs the file and collection directory,
+and restricts the file to mode `0600`. A source restart preserves the fixed
+transfer only when this intent still exactly matches the sole active transfer,
+the `Active` source, the `Partial` target, and the consensus-bound transition.
+The restart handler may then release only source-owned leases whose lease-id
+hash and complete lease fields match that recorded reservation and for which no
+process-local session exists. Missing index leases are accepted so a crash
+during multi-index reservation acquisition can be reconciled, but a newer
+reservation is never removed. Before each retry, the source atomically replaces
+the recorded hash with the fresh reservation identity. Malformed, insecure, or
+mismatched intent files fail closed. The source stops the old transfer task
+before installing every configured encrypted store under the fresh reservation
+and invoking the same-key
 `RestartTransfer(StreamRecords)` path. The task pool and Raft restart operation
 both bind the complete expected transfer identity, so a later transfer that
 reuses the same shard/source/target key cannot be stopped or restarted by a
 stale request. Missing or failed source tasks remain preserved only for this
 exact recovery state. Auto sharding requires the configured shard count, while
-custom sharding requires the shard-key mapping to cover the exact shard set.
+custom sharding requires the shard-key mapping to cover the exact shard set. The
+source intent remains durable for the replacement transfer's full active
+lifetime and is removed only by its exact finish or terminal abort. Startup
+also removes an idempotent leftover when the exact transfer is already absent;
+an intent that conflicts with an active transfer still fails closed.
 
 The replacement source task waits for the target's transfer-initiation
 acknowledgement. Before acknowledging, the target requires the exact active
@@ -1998,6 +2016,17 @@ the marker. A three-peer process test covers both complete collection loss and
 complete HNSW/result store-only loss after a compacted Raft snapshot, then
 verifies marker-based session rejection, fresh preinstall, transfer completion,
 layout generation 2, session reopen, marker cleanup, and all-peer log redaction.
+A staging-only six-case process matrix hard-crashes the source immediately
+after reservation, after the first store acknowledgement, after all store
+acknowledgements, and after restart Raft apply. It also injects a valid-shaped
+stale root and a stale result-manifest signature. The matrix pins the expected
+per-store durable boundary at each stage, source and target intent retention,
+session blocking, exact generation-`+1` recovery after a clean source restart,
+both marker removals, and log/error redaction of roots, signatures, and
+ciphertexts, including the valid-shaped stale proof values. A separate
+three-peer regression leaves the source intent behind through a stale-root
+failure and verifies that an exact terminal transfer abort durably removes it
+while retaining the pre-layout generation and owner.
 A wiped pre-layout owner or source may recover only when every local shard has
 another `Active` replica. Snapshot apply writes a durable marker without
 starting the captured transfer task, then requests an exact transfer abort.

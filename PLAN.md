@@ -45,7 +45,7 @@
 - Encrypted payload read policy: raw envelope 반환은 기본값이고, REST/gRPC redacted/decrypted modes와 collection-scoped `payload_decrypt` capability는 연결되어 있다. 남은 범위는 export/read dump 정책과 SDK-side client envelope decrypt flow다.
 - KMS/Vault key providers: local/env/file/fd/`unix_socket`/`vault_kv2`/wrapped material 기반은 있지만 external KMS lifecycle은 future work다.
 - Broader distributed integration: current unit/integration coverage는 많지만 multi-node parity/restore/replay ledger e2e는 남아 있다.
-- Private HNSW ORAM productionization: read-only bulk-built consensus-backed single-writer MVP, result ORAM fetch path, fixed multi-shard owner-union replication, per-shard manual/automatic `stream_records` preinstall, ReplicateShard/MoveShard/automatic recovery process E2E, partial live-preinstall failure/retry, active transfer abort/retry, exact active marked fixed-layout 및 reshard transfer restart/repreinstall, active reshard source hard-crash 상태 보존과 target-triggered automatic fresh-preinstall resume, existing-peer active-reshard Raft snapshot topology recovery, topology-only non-owner, exact scale-up target, 그리고 `MigratingPoints`의 redundant non-endpoint pre-layout owner와 transfer-complete single-shard scale-down endpoint snapshot bootstrap, durable exact-reshard rollback marker, precommitted recovery layout CAS, chunked internal full-store transport, 63-bucket large-bundle process benchmark, durable collection-level layout CAS, typed scale-up/scale-down reshard start/progress/finish, exact active `resharding_stream_records` preinstall, existing/new-owner custom shard-key create와 non-final drop, HNSW-only 및 HNSW+result process E2E 기반은 들어갔다. Phase 12의 남은 v2 범위는 fixed-target resume crash/stale fault matrix, non-redundant owner external restore, 새 provider의 fixed-capacity append-only insertion이며 true multi-writer는 v3로 분리한다.
+- Private HNSW ORAM productionization: read-only bulk-built consensus-backed single-writer MVP, result ORAM fetch path, fixed multi-shard owner-union replication, per-shard manual/automatic `stream_records` preinstall, ReplicateShard/MoveShard/automatic recovery process E2E, partial live-preinstall failure/retry, active transfer abort/retry, exact active marked fixed-layout 및 reshard transfer restart/repreinstall, active reshard source hard-crash 상태 보존과 target-triggered automatic fresh-preinstall resume, existing-peer active-reshard Raft snapshot topology recovery, topology-only non-owner, exact scale-up target, 그리고 `MigratingPoints`의 redundant non-endpoint pre-layout owner와 transfer-complete single-shard scale-down endpoint snapshot bootstrap, durable exact-reshard rollback marker, precommitted recovery layout CAS, chunked internal full-store transport, 63-bucket large-bundle process benchmark, durable collection-level layout CAS, typed scale-up/scale-down reshard start/progress/finish, exact active `resharding_stream_records` preinstall, existing/new-owner custom shard-key create와 non-final drop, HNSW-only 및 HNSW+result process E2E 기반은 들어갔다. Fixed-target resume의 source-side durable preinstall intent, crash-point, stale root/signature process fault matrix도 닫혔다. Phase 12의 남은 v2 범위는 non-redundant owner external restore와 새 provider의 fixed-capacity append-only insertion이며 true multi-writer는 v3로 분리한다.
 - 2026-07-29 snapshot 상태 교정: fixed-layout active transfer는 ordered index checkpoint와 consensus-bound pre/post layout을 검증한다. 모든 로컬 shard에 다른 `Active` replica가 있는 wiped fixed-transfer source/owner와 transfer-complete scale-down endpoint는 durable exact-abort marker 뒤 stable automatic recovery를 수행하며, multi-shard endpoint는 shard별 generation-`+1` CAS로 복구한다. Pre-layout owner가 아니고 다른 pre-layout shard도 소유하지 않는 fresh `Partial` target은 collection 전체 또는 모든 configured ORAM store가 사라졌을 때 durable exact-resume marker 뒤 source의 새 reservation/full-store preinstall과 same-key restart로 복구한다. Partial store loss, stale existing store, already-active target, RF=1 비중복 owner/source는 계속 fail closed 한다. Phase 12 A1의 signed external recovery checkpoint는 crypto contract만 완료됐고 server restore admission은 아직 없으므로 RF=1 owner/source의 경계는 유지된다.
 
 ## Phase 0: 기준선 고정
@@ -748,8 +748,26 @@ Signed fields:
   삭제를 각각 compacted Raft snapshot으로 복원하고, fresh preinstall, same-key
   restart, marker 기반 HNSW/result session 차단, layout generation 2, session 재개방,
   marker cleanup, all-peer log redaction을 검증한다.
-- Source preinstall crash-point와 stale signature/root의 process fault matrix는 남아
-  있다. Exact method/endpoint/transition drift는 unit contract로 우선 고정했다.
+- Automatic fixed resume source는 기존 task를 정지하거나 reservation을 잡기 전에
+  mode `0600`의 exact full-transfer와 domain-separated reservation lease-id hash를
+  preinstall intent로 atomic save/fsync한다. Source restart는 이 intent가 sole active
+  transfer, `Active` source, `Partial` target, consensus-bound transition과 모두
+  일치할 때만 startup abort를 억제한다. 재기동 handler는 process-local session이
+  없고 기록된 hash 및 full lease가 모두 일치하는 source reservation만 CAS
+  release한다. Partial multi-index acquisition의 missing lease는 허용하되 더 새
+  reservation은 삭제하지 않고, 재시도 전 fresh reservation hash로 intent를
+  atomically 교체한다. Intent는 replacement transfer의 exact finish/terminal abort
+  때까지 유지하며 startup은 이미 transfer가 없는 terminal leftover만 idempotently
+  삭제한다. Malformed/insecure/active-transfer-mismatched intent는 fail closed 한다.
+- Staging-only process matrix는 reservation 직후, 첫 HNSW store ACK 직후, 모든
+  HNSW/result store ACK 직후, restart Raft apply 직후의 hard crash와 valid-shaped
+  stale root, stale result signature를 검증한다. 각 단계의 target store durability,
+  target/source marker 유지, session 차단, exact generation-`+1` recovery,
+  marker cleanup, 원본 및 valid-shaped stale root/signature/ciphertext 로그 비노출을
+  3-peer E2E로 고정했다. Exact method/endpoint/transition drift와 newer reservation
+  identity 보존은 unit contract로 함께 유지한다. 별도 3-peer regression은 stale-root
+  실패 뒤 남은 source intent가 exact terminal abort에서 제거되고 pre-layout
+  generation/owner가 유지되는지 검증한다.
 
 완료 조건:
 
