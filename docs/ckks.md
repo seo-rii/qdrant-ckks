@@ -134,10 +134,12 @@ rate-bounded internal resume request to the source. The source accepts it only
 for the exact current marked transfer whose local task is missing, then reuses
 `RestartTransfer` to acquire fresh reservations, reinstall every signed
 encrypted store, and restart point migration. A non-redundant pre-layout
-owner or transfer source, active transfer target, scale-down endpoint before
-transfer completion, already-active target, or target with a missing or
-ambiguous transfer continues to fail closed because a Raft snapshot carries
-neither encrypted ORAM buckets nor point shard data. A redundant fixed-layout
+owner or transfer source, scale-down endpoint before transfer completion,
+already-active target, or target with a missing or ambiguous transfer continues
+to fail closed because a Raft snapshot carries neither encrypted ORAM buckets
+nor point shard data. A fresh fixed-layout `Partial` target that was not a
+pre-layout owner may use the exact full-store resume protocol described below.
+A redundant fixed-layout
 transfer source or owner can instead force an exact transfer abort before
 stable recovery when every local shard has another `Active` replica. Another
 reshard key, committed stage, unsupported transfer, or unrelated topology
@@ -289,7 +291,7 @@ contract:
 | Normal Qdrant reads/writes | Dense vector upsert/update, point/vector delete, collection peer `SyncPoints`, `with_vector` reads, ordinary search/query/recommend/discover, grouped paths, search matrix, and `lookup_from`/point-id reference-vector resolution fail closed for the private vector; clients must use the private HNSW session APIs. | Point create/replace/delete, full payload replacement/clear, protected-path payload writes, indexes, filters, ordering, grouping, facets, formulas, and raw payload reads fail closed for the private result path; public non-overlapping payload merges remain ordinary. |
 | Dedicated APIs | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_paths`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. | Manifest upload/read, encrypted bucket upload, session open/close, signed `read_buckets`, and signed writeback commit are open. Qdrant validates shape, signatures, Merkle proofs, and epoch/root CAS only. |
 | Snapshot/restore | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and paired result ORAM policy before accepting a restored store. | Collection, storage, REST, and CLI/startup recovery preflight validate manifest signatures, current epoch/root, every bucket, Merkle metadata, and configured binding/runtime policy before accepting a restored store. |
-| Cluster mode | Initial upload installs the exact signed encrypted bundle on the union of all fully-active shard replica owners before the initial Raft ownership CAS. Session open acquires a hashed Raft lease after recovery; `read_paths` requires that exact live lease; commit renews it, durably prepares every owner peer, applies the digest-bound epoch/root CAS, then finalizes remote replicas before the owner. Close releases the exact lease. Fixed-layout movement/recovery/restart/removal, custom shard-key mutation, and typed scale-up/down resharding use collection-wide reservations; movement and new-owner shard-key create paths also use signed full-store preinstall. Exact point migration and its exact same-method active restart require a marked `resharding_stream_records` transfer matching the active reshard state. A source crash preserves that exact transfer; the target requests automatic resume and the source performs fresh full-store preinstall before same-key restart. Sessions remain blocked throughout active transfer or resharding. Existing-peer active-reshard Raft snapshot topology recovery is accepted only under the consensus-bound pre-layout contract above; restored transfer metadata uses the same target-triggered resume protocol. A genuinely new non-owner may bootstrap remote topology when absent from every owner, replica, and transfer endpoint. A wiped/new exact scale-up target may also bootstrap at `MigratingPoints` only as the sole `Resharding` target of the sole marked incoming transfer; it remains blocked until target-triggered resume reinstalls every configured store and restarts migration. A wiped redundant pre-layout owner or fixed-layout transfer source may bootstrap only when every affected shard has another active owner. A designated scale-down endpoint additionally requires zero transfers, all-active replica state, ownership of the removed shard, and another active owner for every local shard. Durable markers force exact transfer or reshard rollback before stable-layout automatic store and shard recovery. Non-redundant owners and sources, active transfer targets, already-active targets, transitional removals, and batch removals remain blocked. | Initial upload, session lease, `read_buckets`, replicated writeback, recovery, and close use the same coordinator contract as HNSW. Result ORAM movement and typed resharding follow the same collection-wide ownership and shard-key reservation policy. Paired HNSW/result scale-up/down and custom shard-key process tests verify both encrypted stores, roots, and sessions on every final owner, including preinstalled new shard-key owners. |
+| Cluster mode | Initial upload installs the exact signed encrypted bundle on the union of all fully-active shard replica owners before the initial Raft ownership CAS. Session open acquires a hashed Raft lease after recovery; `read_paths` requires that exact live lease; commit renews it, durably prepares every owner peer, applies the digest-bound epoch/root CAS, then finalizes remote replicas before the owner. Close releases the exact lease. Fixed-layout movement/recovery/restart/removal, custom shard-key mutation, and typed scale-up/down resharding use collection-wide reservations; movement and new-owner shard-key create paths also use signed full-store preinstall. Exact point migration and its exact same-method active restart require a marked `resharding_stream_records` transfer matching the active reshard state. A source crash preserves that exact transfer; the target requests automatic resume and the source performs fresh full-store preinstall before same-key restart. Sessions remain blocked throughout active transfer or resharding. Existing-peer active-reshard Raft snapshot topology recovery is accepted only under the consensus-bound pre-layout contract above; restored transfer metadata uses the same target-triggered resume protocol. A genuinely new non-owner may bootstrap remote topology when absent from every owner, replica, and transfer endpoint. A wiped/new exact scale-up target may also bootstrap at `MigratingPoints` only as the sole `Resharding` target of the sole marked incoming transfer; it remains blocked until target-triggered resume reinstalls every configured store and restarts migration. A fresh fixed-layout `Partial` transfer target that was not a pre-layout owner may likewise recover complete collection or complete configured-store loss through a durable exact resume marker and source fresh preinstall; partial store loss remains blocked. A wiped redundant pre-layout owner or fixed-layout transfer source may bootstrap only when every affected shard has another active owner. A designated scale-down endpoint additionally requires zero transfers, all-active replica state, ownership of the removed shard, and another active owner for every local shard. Durable markers force exact transfer or reshard rollback before stable-layout automatic store and shard recovery. Non-redundant owners and sources, already-active targets, transitional removals, and batch removals remain blocked. | Initial upload, session lease, `read_buckets`, replicated writeback, recovery, and close use the same coordinator contract as HNSW. Result ORAM movement and typed resharding follow the same collection-wide ownership and shard-key reservation policy. Paired HNSW/result scale-up/down and custom shard-key process tests verify both encrypted stores, roots, and sessions on every final owner, including preinstalled new shard-key owners. |
 
 The internal Dispatcher writeback coordinator enforces durable local prepare,
 awaited Raft epoch/root CAS, then idempotent local finalize. A writeback epoch
@@ -1959,10 +1961,43 @@ Fixed-layout active transfer snapshots have a separate preflight for a locally
 missing collection. It requires one exact marked `stream_records` transfer,
 `Active` source and pre-layout owners, a `Partial` target, ordered configured
 index checkpoints, the exact consensus-bound transition, and the pre-layout
-with a generation-`+1` post-layout. Only a topology-only peer outside every
-owner, replica, source, and target set may bootstrap this state. A wiped
-target is rejected before the collection directory is created; the historical
-preinstall marker is not treated as proof that its encrypted stores survived.
+with a generation-`+1` post-layout. A topology-only peer outside every owner,
+replica, source, and target set may bootstrap topology without local stores. An
+exact transfer target may also bootstrap when it is absent from the pre-layout
+owner union, owns no other pre-layout shard, and its collection is absent or
+every configured HNSW/result ORAM store is absent. Partial store loss, a
+non-directory or symlinked store, and stale existing store state fail before
+mutation. The historical transfer preinstall marker is not treated as proof
+that encrypted stores survived; it only authorizes a new source preinstall.
+
+Target recovery writes a durable version-3 recovery marker with an explicit
+`resume` action before applying snapshot state. Version-1 and version-2 markers
+remain abort-only for compatibility. The fresh target stays `Partial`, and the
+peer-restart hook preserves only the sole exact marked transfer with an
+`Active` source and its consensus-bound layout transition. The target sends a
+bounded background resume request so consensus can apply the new reservation
+without waiting on the request itself. The source rechecks the method,
+endpoints, sync mode, pre/post layout generations and digests, and index-state
+digest, then stops the old transfer task before installing every configured
+encrypted store under a fresh reservation and invoking the same-key
+`RestartTransfer(StreamRecords)` path. The task pool and Raft restart operation
+both bind the complete expected transfer identity, so a later transfer that
+reuses the same shard/source/target key cannot be stopped or restarted by a
+stale request. Missing or failed source tasks remain preserved only for this
+exact recovery state. Auto sharding requires the configured shard count, while
+custom sharding requires the shard-key mapping to cover the exact shard set.
+
+The replacement source task waits for the target's transfer-initiation
+acknowledgement. Before acknowledging, the target requires the exact active
+transfer and validates every configured local store against the transition
+epoch/root but keeps the resume marker. The local marker blocks both private
+session types on the target, while the still-active transfer blocks private
+sessions on every owner. Only after the transfer disappears and the target is
+`Active` does the marker consumer apply the same validation and durably remove
+the marker. A three-peer process test covers both complete collection loss and
+complete HNSW/result store-only loss after a compacted Raft snapshot, then
+verifies marker-based session rejection, fresh preinstall, transfer completion,
+layout generation 2, session reopen, marker cleanup, and all-peer log redaction.
 A wiped pre-layout owner or source may recover only when every local shard has
 another `Active` replica. Snapshot apply writes a durable marker without
 starting the captured transfer task, then requests an exact transfer abort.
