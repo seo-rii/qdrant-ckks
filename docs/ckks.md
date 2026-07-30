@@ -186,13 +186,15 @@ external recovery admission protocol:
 - `POST /collections/{collection}/private-oram/recovery/upload`
 - `GET /collections/{collection}/private-oram/recovery/status`
 - `POST /collections/{collection}/private-oram/recovery/verify`
+- `POST /collections/{collection}/private-oram/recovery/commit`
 - `POST /collections/{collection}/private-oram/recovery/abort`
 
-There is deliberately no `commit` endpoint yet. `verify` restores the archive
-into an isolated pending directory, validates it, fsyncs it, and promotes it
-only to an operation-local `verified_collection` directory. It never replaces
-the live collection, installs a private ORAM store, changes a replica state, or
-advances the committed backup generation.
+`verify` restores the archive into an isolated pending directory, validates it,
+fsyncs it, and promotes it only to an operation-local `verified_collection`
+directory. `commit` is the only operation that may replace the live collection
+and advance the committed backup generation. It drains and stops the old
+collection before hashing it, records an exact old/new durable install marker,
+and moves the recovery lease from `Staging` to `Installing` before any rename.
 
 `begin` is accepted only on the same peer identity named as the signed source.
 It requires the current stable collection UUID and crypto config, the exact
@@ -216,19 +218,86 @@ chunks are idempotent only when their stored bytes hash identically.
 
 Status accepts the operation token only in
 `x-qdrant-private-oram-recovery-token`; query-string tokens are ignored.
-Recovery responses carry `Cache-Control: no-store`, access logs redact query
-and unexpected suffix values, and metrics accept only the five fixed route
-shapes. Abort requires the same owner peer and operation token, but remains
-available after lease expiry so an expired operation can be cleared. A later
-valid begin may take over an expired lease and best-effort removes superseded
-local staging.
+Handler-generated recovery responses carry `Cache-Control: no-store`, access
+logs redact query and unexpected suffix values throughout the recovery
+namespace, and metrics accept only the six fixed route shapes. Abort requires
+the same owner peer and operation token, but remains available after lease
+expiry so an expired operation can be cleared. A later valid begin may take
+over an expired lease and best-effort removes superseded local staging.
 
 Verification rechecks the checkpoint signature and current consensus binding,
 then restores the closed snapshot in isolation. It requires byte-for-byte
 collection config equality and stable identity, the exact source-local shard
 set, valid point-shard and payload-index structure, and complete signed HNSW
-and result ORAM stores at the checkpointed epochs and roots. A stale layout,
-index state, archive, signature, bucket set, or lease fails closed.
+and result ORAM stores at the checkpointed epochs and roots. A read-only
+candidate inspector additionally rejects version migration, runtime recovery
+mode, initializing or non-replica shards, missing replica state, non-`Active`
+owners, missing local WAL/segment directories, and any shard-directory drift.
+It reconstructs the full canonical owner topology and requires the signed
+layout digest exactly. The inspector does not replay WAL, repair segments,
+write defaults, or start workers. A stale layout, index state, archive,
+signature, bucket set, or lease fails closed.
+
+Commit uses a collection-registry tombstone while the live `Collection` is
+detached. Ordinary reads return a recovery-install lock instead of `NotFound`;
+point/meta writes, collection and shard snapshot recovery, create/delete,
+aliases, peer shard changes, and conflicting Raft collection snapshots fail
+closed. Cross-collection recommend, discover, group, and query lookup paths
+hold the collection lifecycle lock while any install tombstone or live
+`Installing` fence exists. Raft snapshot generation merges the cached tombstone
+state so a detached collection is never serialized as deleted. Snapshot apply
+preserves live `Staging` or restart-loaded `Installing` collections exactly. It
+accepts `Installing -> Staging` only when the incoming lease is the exact
+rollback image of the same install; a changed lease or dropped install still
+fails closed. On the install owner, durable local marker reconciliation must
+independently prove the old-tree rollback before the fence can be cleared. A
+lagging non-owner has no local install tree and can apply the authoritative
+transition directly.
+
+Every prepare writes a fresh 256-bit install-attempt nonce into the durable
+marker and install-intent digest. A delayed Prepare or rollback from an earlier
+attempt therefore cannot match a later attempt even when both old and new tree
+digests are identical. Rollback checks the current on-disk marker before any
+rename. Returning to `Staging` discards a leftover `Prepared` marker, so a
+later prepare must use a fresh nonce. The marker also pins semantic collection
+config and canonical layout digests in addition to exact old/new tree and
+private-store digests. Marker version 4 adds `RollbackInProgress` and
+`RollbackComplete`, plus old-tree semantic config and private-store digests. It
+can therefore resume safely whether a crash left the promoted tree present,
+removed it, or already restored the backup. The rollback marker is removed only
+after the exact consensus rollback is observed.
+
+After the new tree is promoted and its exact digest is rechecked, Qdrant records
+`LoadInProgress` and performs a normal `Collection::load` while consensus still
+holds the `Installing` all-operation fence and the old backup remains. It then
+requires the stable identity, byte-exact config, exact metadata-derived and
+actually loaded local shard sets, semantic config digest, no transfer or
+resharding, all-active replica owners and shard keys, canonical layout digest,
+and private-store digest before recording `Loaded`. A load or validation
+failure in `LoadInProgress` discards the mutated candidate through the durable
+rollback phases, restores the exact old tree, and submits the exact
+`Installing -> Staging` rollback CAS.
+
+The durable `Loaded` marker is the point of no return because Qdrant submits the
+Raft Commit only after it exists. Qdrant never automatically rolls a `Loaded`
+tree back: a submitted Commit may still apply after a timeout or process crash.
+Restart rolls pre-load install phases forward to `LoadInProgress`, loads the
+candidate under the same fence, and preserves a `Loaded` tree for exact Commit
+retry. The same operation token can continue from either the live registry or
+the matching tombstone, and a delayed Commit that already applied can be
+finalized from the durable marker.
+
+Only an exactly observed committed generation allows cleanup. Qdrant first
+marks the durable install committed, removes the backup and marker in
+crash-reconcilable order, and publishes the already loaded collection. Startup
+follows the same load-before-cleanup order and verifies the stable identity and
+canonical layout digest before deleting recovery files. Any active
+`Staging`/`Installing` consensus recovery or local install marker disables
+tolerant collection-load handling and blocks explicit startup snapshot restore.
+This prevents load failure from silently removing a recovery fence and prevents
+a forced snapshot from replacing either staged authority or a promoted tree.
+External verification restores replica snapshots without rewriting archived
+peer identity; an archive bound to another peer is rejected unchanged.
 
 A complete external recovery set still consists of the Qdrant collection
 snapshot and signed checkpoint plus encrypted client recovery state retained
@@ -241,17 +310,18 @@ store or included in a Qdrant snapshot. Only the complete encrypted set digest
 is checkpointed.
 
 Server rollout proceeds in dependency order. A wiped fixed-layout transfer
-target with a live source now requests source-side fresh full-store preinstall
-before restarting the exact marked transfer. External restore now has signed
-checkpoint admission, an expiring consensus recovery lease, bounded encrypted
-archive staging, and full isolated preflight on the same peer identity still
-named by consensus. The next recovery step is a durable install marker,
-all-shard/all-index local install, activation barrier, and exact consensus
-commit CAS with crash recovery. Only after that step lands may a commit route
-be exposed. Finally, the v2 mutable provider will use an immutable capacity
-manifest plus a monotonic owner-signed state record and one collection-wide
-HNSW/result mutation CAS. Until each phase lands and its multi-process crash
-tests pass, the corresponding v1 fail-closed behavior remains authoritative.
+target with a live source requests source-side fresh full-store preinstall
+before restarting the exact marked transfer. External restore now includes the
+durable install marker, activation fence, exact Commit and rollback CAS, and
+restart reconciliation described above. Unit coverage pins marker-fsync
+ambiguity, stale-attempt rollback rejection, private-store substitution,
+delayed committed-marker resume, and load-before-cleanup ordering. The
+remaining release gate is the hard-crash/RF=1 single- and multi-shard process
+matrix plus the first proof-verified private read/writeback after restore.
+Finally, the v2 mutable provider will use an immutable capacity manifest plus a
+monotonic owner-signed state record and one collection-wide HNSW/result
+mutation CAS. Until those process gates pass, operators should treat external
+commit as an experimental same-peer recovery path.
 
 Raft persists a separate collection-level private ORAM layout record consumed
 by fixed-layout transfer/removal and typed scale-up/down resharding. The record

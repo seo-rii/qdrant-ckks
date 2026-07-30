@@ -45,8 +45,8 @@
 - Encrypted payload read policy: raw envelope 반환은 기본값이고, REST/gRPC redacted/decrypted modes와 collection-scoped `payload_decrypt` capability는 연결되어 있다. 남은 범위는 export/read dump 정책과 SDK-side client envelope decrypt flow다.
 - KMS/Vault key providers: local/env/file/fd/`unix_socket`/`vault_kv2`/wrapped material 기반은 있지만 external KMS lifecycle은 future work다.
 - Broader distributed integration: current unit/integration coverage는 많지만 multi-node parity/restore/replay ledger e2e는 남아 있다.
-- Private HNSW ORAM productionization: read-only bulk-built consensus-backed single-writer MVP, result ORAM fetch path, fixed multi-shard owner-union replication, per-shard manual/automatic `stream_records` preinstall, ReplicateShard/MoveShard/automatic recovery process E2E, partial live-preinstall failure/retry, active transfer abort/retry, exact active marked fixed-layout 및 reshard transfer restart/repreinstall, active reshard source hard-crash 상태 보존과 target-triggered automatic fresh-preinstall resume, existing-peer active-reshard Raft snapshot topology recovery, topology-only non-owner, exact scale-up target, 그리고 `MigratingPoints`의 redundant non-endpoint pre-layout owner와 transfer-complete single-shard scale-down endpoint snapshot bootstrap, durable exact-reshard rollback marker, precommitted recovery layout CAS, chunked internal full-store transport, 63-bucket large-bundle process benchmark, durable collection-level layout CAS, typed scale-up/scale-down reshard start/progress/finish, exact active `resharding_stream_records` preinstall, existing/new-owner custom shard-key create와 non-final drop, HNSW-only 및 HNSW+result process E2E 기반은 들어갔다. Fixed-target resume의 source-side durable preinstall intent, crash-point, stale root/signature process fault matrix도 닫혔다. Non-redundant owner external restore는 signed checkpoint, consensus lease, bounded staging, isolated full preflight, abort까지 들어갔고 durable live install/activation/commit은 아직 닫히지 않았다. 그 다음 남은 v2 범위는 이 commit 경계와 새 provider의 fixed-capacity append-only insertion이며 true multi-writer는 v3로 분리한다.
-- 2026-07-29 snapshot 상태 교정: fixed-layout active transfer는 ordered index checkpoint와 consensus-bound pre/post layout을 검증한다. 모든 로컬 shard에 다른 `Active` replica가 있는 wiped fixed-transfer source/owner와 transfer-complete scale-down endpoint는 durable exact-abort marker 뒤 stable automatic recovery를 수행하며, multi-shard endpoint는 shard별 generation-`+1` CAS로 복구한다. Pre-layout owner가 아니고 다른 pre-layout shard도 소유하지 않는 fresh `Partial` target은 collection 전체 또는 모든 configured ORAM store가 사라졌을 때 durable exact-resume marker 뒤 source의 새 reservation/full-store preinstall과 same-key restart로 복구한다. Partial store loss, stale existing store, already-active target은 계속 fail closed 한다. RF=1 비중복 owner/source는 동일 peer identity에서 external recovery archive를 staging하고 검증할 수 있지만, live install/consensus commit endpoint가 없으므로 실제 복구 완료 경계는 계속 fail closed 한다.
+- Private HNSW ORAM productionization: read-only bulk-built consensus-backed single-writer MVP, result ORAM fetch path, fixed multi-shard owner-union replication, per-shard manual/automatic `stream_records` preinstall, ReplicateShard/MoveShard/automatic recovery process E2E, partial live-preinstall failure/retry, active transfer abort/retry, exact active marked fixed-layout 및 reshard transfer restart/repreinstall, active reshard source hard-crash 상태 보존과 target-triggered automatic fresh-preinstall resume, existing-peer active-reshard Raft snapshot topology recovery, topology-only non-owner, exact scale-up target, 그리고 `MigratingPoints`의 redundant non-endpoint pre-layout owner와 transfer-complete single-shard scale-down endpoint snapshot bootstrap, durable exact-reshard rollback marker, precommitted recovery layout CAS, chunked internal full-store transport, 63-bucket large-bundle process benchmark, durable collection-level layout CAS, typed scale-up/scale-down reshard start/progress/finish, exact active `resharding_stream_records` preinstall, existing/new-owner custom shard-key create와 non-final drop, HNSW-only 및 HNSW+result process E2E 기반은 들어갔다. Fixed-target resume의 source-side durable preinstall intent, crash-point, stale root/signature process fault matrix도 닫혔다. Non-redundant owner external restore에는 signed checkpoint, consensus lease, bounded staging, read-only full-topology preflight, durable install marker, lifecycle tombstone, rollback/commit CAS와 REST commit route까지 들어갔다. 남은 release gate는 RF=1 single/multi-shard hard-crash process E2E와 첫 proof-verified read/writeback이며, 그 다음 v2 범위는 새 provider의 fixed-capacity append-only insertion이다. True multi-writer는 v3로 분리한다.
+- 2026-07-29 snapshot 상태 교정: fixed-layout active transfer는 ordered index checkpoint와 consensus-bound pre/post layout을 검증한다. 모든 로컬 shard에 다른 `Active` replica가 있는 wiped fixed-transfer source/owner와 transfer-complete scale-down endpoint는 durable exact-abort marker 뒤 stable automatic recovery를 수행하며, multi-shard endpoint는 shard별 generation-`+1` CAS로 복구한다. Pre-layout owner가 아니고 다른 pre-layout shard도 소유하지 않는 fresh `Partial` target은 collection 전체 또는 모든 configured ORAM store가 사라졌을 때 durable exact-resume marker 뒤 source의 새 reservation/full-store preinstall과 same-key restart로 복구한다. Partial store loss, stale existing store, already-active target은 계속 fail closed 한다. RF=1 비중복 owner/source의 same-peer external recovery install/commit primitive는 구현됐지만 process-level restore/restart/readback gate가 끝날 때까지 experimental fail-closed 경계로 유지한다.
 
 ## Phase 0: 기준선 고정
 
@@ -692,9 +692,9 @@ Signed fields:
 
 - Recovery checkpoint DTO와 canonical package/sign/verify, exact context validator,
   deterministic known-answer 및 malformed/tamper/redaction unit test를 추가했다.
-- Server restore admission과 isolated preflight는 V2-C에 연결됐지만 export,
-  complete client recovery-state DTO, durable live install/commit은 아직
-  구현하지 않았으므로 RF=1 restore 완료는 지원되지 않는다.
+- Server restore admission, isolated read-only preflight, durable live
+  install/commit은 V2-C에 연결됐다. Export와 complete client recovery-state DTO,
+  RF=1 hard-crash/readback process gate는 아직 남아 있다.
 
 완료 조건:
 
@@ -809,25 +809,68 @@ Signed fields:
   truncation recovery를 강제한다.
 - Verify는 archive를 operation-local pending directory에 복원하고 stable UUID와
   byte-exact config, source-local shard set, payload schema, 모든 HNSW/result
-  manifest/signature/bucket/root를 재검증한 뒤 verified staging으로만 승격한다.
+  manifest/signature/bucket/root를 재검증한다. 추가 read-only inspector는 current
+  version, no recovery/initializing/dummy state, complete replica state, all-Active
+  owner topology, local WAL/segment 구조를 쓰기 없이 검사하고 canonical layout
+  digest를 checkpoint와 대조한 뒤에만 verified staging으로 승격한다.
 - Lease가 만료돼도 동일 owner/token은 abort할 수 있고, 유효한 takeover는 이전
   local staging을 best-effort 정리한다.
-- `commit` route는 의도적으로 열지 않았다. 현재 `verified` 상태는 live collection,
-  replica state, consensus epoch/root, committed backup generation을 바꾸지 않는다.
+- Durable install marker는 stopped old tree와 verified new tree digest, stable
+  identity, semantic config digest, operation/checkpoint/layout/index-state
+  binding, fresh 256-bit install-attempt nonce를 fsync한다. Nonce가 install-intent
+  digest에 들어가므로 rollback 뒤 같은 tree를 다시 prepare해도 이전
+  Prepare/Rollback CAS와 같아지지 않는다. `Staging` reconcile은 남은
+  `Prepared` marker를 폐기해 다음 prepare가 nonce를 재사용하지 못하게 한다.
+  Marker v4의 `RollbackInProgress`/`RollbackComplete`와 old config/private-state
+  digest는 candidate 삭제 전, 삭제 후, backup restore 후 crash를 모두 old tree로
+  reconcile하고 consensus rollback 관찰 전에는 marker를 보존한다.
+  `PrepareInstall`은 exact `Staging -> Installing` CAS로 session과 일반 collection
+  접근을 막고, local rename 전후 crash를 old 전체 또는 new 전체로 reconcile한다.
+- Registry detach tombstone은 read/meta/create/delete/alias와 Raft snapshot apply를
+  fence하고 collection snapshot에는 cached state를 합쳐 detached collection이
+  삭제된 것으로 직렬화되지 않게 한다. 일반 collection/shard snapshot recovery,
+  cross-collection lookup API, live Staging/restart-Installing snapshot apply, peer
+  removal도 동일 fence를 적용하고 snapshot generation의 collection/alias lock
+  order를 고정했다. Cross-collection lookup은 precheck 뒤 lifecycle lock을 결과
+  callback까지 유지한다. Raft snapshot의 `Installing -> Staging`은 동일 lease의
+  exact rollback image만 owner/non-owner 모두 적용하고, owner에서는 local durable
+  marker reconciliation이 tree 복구를 독립적으로 증명해야 fence를 제거한다.
+  Changed/dropped install snapshot은 계속 거부한다.
+- Promoted tree는 `LoadInProgress` marker 아래 consensus가 아직 `Installing`인 동안
+  실제 `Collection::load`를 거친다. Stable identity, byte-exact config,
+  metadata-derived 및 실제 loaded local shard set, no transfer/resharding,
+  all-Active replica state, shard key, owner union, semantic config/canonical
+  layout/private-store digest가 모두 일치한 뒤에만 `Loaded`를 기록하고 Raft Commit을
+  제출한다. Load/validation 실패는 durable rollback phase로 mutated candidate를
+  폐기하고 exact old tree와 `Staging` consensus를 복원한다. `Loaded` marker부터는
+  delayed Raft Commit과 충돌하지 않도록 point-of-no-return로 취급한다.
+- Global-manage 전용 `commit` REST route는 exact committed generation을 다시
+  관찰한 뒤에만 backup/marker를 finalize하고 이미 loaded collection을 publish한다.
+  Startup은 pre-load phase를 `LoadInProgress`로 roll-forward하고 normal load 뒤
+  post-load finalize를 수행한다. Active Staging/Installing state 또는 pending marker가
+  있으면 forced snapshot restore와 tolerant load-error mode를 차단한다. Post-load
+  finalize는 registry의 exact stable collection identity와 canonical layout digest를
+  확인해야 backup을 지운다. Timeout 또는 불명확한 submit 결과는 파일을 되돌리지
+  않고, exact marker/token retry가 tombstone 또는 live registry의
+  Installing/Committed 상태를 이어서 정리한다.
+- External verify는 archived replica peer identity를 rewrite하지 않고 source peer와
+  다르면 그대로 거부한다. Persistent snapshot apply save failure는 in-memory
+  recovery fence를 원상복구하고, exact rollback과 inexact transition을 분리한다.
+- Unit test는 marker fsync ambiguity, stale-attempt rollback, private-store
+  substitution, config substitution, destructive rollback crash points,
+  committed-marker resume, load-before-cleanup, exact/inexact rollback snapshot과 기존
+  signature/CAS matrix를 고정한다.
 
 다음 작업:
 
-- Operation-local verified tree를 live collection으로 옮기기 전에 durable exact
-  install marker와 old/new artifact identity를 기록한다.
-- Point shard와 모든 configured HNSW/result store를 하나의 recovery generation으로
-  설치하고, restart가 old 전체 또는 new 전체만 선택하도록 install journal과
-  rollback/finalize 경계를 구현한다.
-- Local install 완료 뒤 session을 계속 차단하는 activation barrier를 두고 exact
-  recovery lease/layout/index-state를 한 번 더 검증한 후에만 consensus `Commit`을
-  제출한다.
-- Consensus commit 전후와 marker cleanup의 hard-crash matrix, RF=1 single/multi
-  shard process E2E, 첫 proof-verified read/writeback을 통과한 뒤 commit API를
-  공개한다.
+- Consensus commit 전후, `LoadInProgress`/`Loaded` marker, marker cleanup,
+  pre-commit load 실패의
+  hard-crash process matrix를 추가한다.
+- RF=1 single/multi-shard same-peer restore E2E에서 archive upload부터 commit,
+  process restart, 첫 proof-verified read/writeback까지 검증한다.
+- Commit submit ambiguity와 delayed Raft apply, detached/live-fenced snapshot
+  generation/apply, lifecycle create/delete/alias/peer-removal race를 실제
+  process/concurrency fault test로 고정한다.
 
 완료 조건:
 
