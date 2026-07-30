@@ -10,6 +10,7 @@ pub mod openfhe;
 pub mod payload;
 pub mod private_hnsw_client;
 pub mod private_hnsw_oram;
+pub mod private_oram_mutation;
 pub mod private_oram_recovery;
 pub mod private_result_oram;
 pub mod vector;
@@ -139,6 +140,47 @@ pub use private_hnsw_oram::{
     validate_private_hnsw_oram_read_paths_signature,
     validate_private_hnsw_oram_upload_bundle as validate_server_private_hnsw_oram_upload_bundle,
     validate_private_hnsw_oram_upload_bundle_with_signature as validate_server_private_hnsw_oram_upload_bundle_with_signature,
+};
+pub use private_oram_mutation::{
+    PAYLOAD_PRIVATE_RESULT_ORAM_V2_PROVIDER, PRIVATE_HNSW_ORAM_V2_BINDING,
+    PRIVATE_ORAM_APPEND_MAX_INDEXES, PRIVATE_ORAM_APPEND_MAX_MUTATION_TTL_SECS,
+    PRIVATE_ORAM_APPEND_MAX_TOTAL_BUCKET_REFS, PRIVATE_ORAM_APPEND_MUTATION_V1_SIGNATURE_DOMAIN,
+    PRIVATE_ORAM_APPEND_MUTATION_V1_VERSION, PRIVATE_ORAM_APPEND_READ_TRANSCRIPT_V1_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_WRITEBACK_V1_DIGEST_DOMAIN,
+    PRIVATE_ORAM_IMMUTABLE_MANIFEST_V2_SIGNATURE_DOMAIN,
+    PRIVATE_ORAM_IMMUTABLE_MANIFEST_V2_VERSION,
+    PRIVATE_ORAM_NO_SERVER_POINT_RECORD_V1_DIGEST_DOMAIN,
+    PRIVATE_ORAM_SIGNED_STATE_V2_SIGNATURE_DOMAIN, PRIVATE_ORAM_SIGNED_STATE_V2_VERSION,
+    PRIVATE_ORAM_VISIBLE_POINT_RECORD_V1_DIGEST_DOMAIN, PRIVATE_RESULT_ORAM_V2_BINDING,
+    PrivateOramAppendBucketRefV1, PrivateOramAppendIndexWritebackV1,
+    PrivateOramAppendMutationBundleV1, PrivateOramAppendMutationV1,
+    PrivateOramAppendReadTranscriptDigestInput, PrivateOramAppendReadWindowV1,
+    PrivateOramAppendValidationContext, PrivateOramAppendWritebackDigestInput,
+    PrivateOramImmutableIndexParamsV2, PrivateOramImmutableIndexV2,
+    PrivateOramImmutableManifestBundleV2, PrivateOramImmutableManifestV2,
+    PrivateOramIndexCapacityV2, PrivateOramIndexKindV2, PrivateOramIndexStateV2,
+    PrivateOramMutationError, PrivateOramObservedReadTranscriptV1, PrivateOramPointOperationKindV1,
+    PrivateOramSignature, PrivateOramSignatureVerification, PrivateOramSignedStateBundleV2,
+    PrivateOramSignedStateV2, PrivateOramVisiblePointRecordV1,
+    VECTOR_PRIVATE_HNSW_ORAM_V2_PROVIDER, package_private_oram_append_mutation_v1,
+    package_private_oram_immutable_manifest_v2, package_private_oram_signed_state_v2,
+    private_oram_append_mutation_v1_digest, private_oram_append_read_transcript_v1,
+    private_oram_append_writeback_v1_digest, private_oram_immutable_manifest_v2_digest,
+    private_oram_no_server_point_record_v1_digest, private_oram_signed_state_v2_digest,
+    private_oram_visible_point_record_v1_digest, sign_private_oram_append_mutation_v1,
+    sign_private_oram_immutable_manifest_v2, sign_private_oram_signed_state_v2,
+    try_private_oram_append_mutation_v1_signature_message,
+    try_private_oram_append_read_transcript_v1_digest_message,
+    try_private_oram_append_writeback_v1_digest_message,
+    try_private_oram_immutable_manifest_v2_signature_message,
+    try_private_oram_no_server_point_record_v1_digest_message,
+    try_private_oram_signed_state_v2_signature_message,
+    try_private_oram_visible_point_record_v1_digest_message,
+    validate_private_oram_append_mutation_v1, validate_private_oram_append_mutation_v1_shape,
+    validate_private_oram_append_mutation_v1_signature,
+    validate_private_oram_immutable_manifest_v2_shape,
+    validate_private_oram_immutable_manifest_v2_signature, validate_private_oram_signature_shape,
+    validate_private_oram_signed_state_v2_shape, validate_private_oram_signed_state_v2_signature,
 };
 pub use private_oram_recovery::{
     PRIVATE_ORAM_EXTERNAL_RECOVERY_CHECKPOINT_SIGNATURE_DOMAIN,
