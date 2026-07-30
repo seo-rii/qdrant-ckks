@@ -912,8 +912,8 @@ Signed fields:
   signed state, `private-oram-mutation/v1` append bundle과 canonical Ed25519
   encoding을 추가한다.
 - Mutation은 mutation id/issued/expiry, writer lease digest/fence, exact old/new
-  signed state, point operation kind/digest와 canonical sorted fixed-size
-  HNSW/result bucket batches를 묶는다. Result privacy가
+  signed state, point operation kind/digest와 fixed-size ordered root-to-leaf
+  HNSW/result bucket-occurrence frame을 묶는다. Result privacy가
   `private_payload_oram_required`이면 manifest가 `no_server_point_record`를
   강제하고 validation caller가 이를 visible point operation으로 완화할 수 없다.
   각 new index state의 writeback digest는 index kind/name, old/new epoch/root,
@@ -927,10 +927,13 @@ Signed fields:
   frame SHA-256를 domain-separated digest로 묶는다. D3는 이 staged frame의
   canonical encoding을 route 활성화 전에 고정한다.
 - Shape/context/transition validation은 unknown field, malformed digest/signature,
-  unsorted/duplicate index와 bucket, stale/skip sequence, mixed epoch/root,
+  unsorted/duplicate index, 잘못된 bucket occurrence 수·frame 경계·root-to-leaf
+  순서·leaf transcript·bucket 범위, stale/skip sequence, mixed epoch/root,
   sequence/epoch overflow, immediate mutation-id reuse, future-signed new state,
   stale writer fence, unobserved 또는 manifest-geometry-mismatched read transcript,
   capacity exhaustion, wrong point digest, non-fixed batch 크기를 fail closed 한다.
+  Bucket id 중복은 정상이며 signed frame 순서대로 적용하고, 같은 bucket의 마지막
+  occurrence가 sparse Merkle patch와 durable write의 최종 commitment를 결정한다.
 - D1 HNSW manifest는 `f32_le` vector encoding만 허용한다. Canonical KAT는 full
   manifest/old+new state/mutation DTO, read transcript, writeback, private/visible
   point operation의 canonical message bytes, digest와 Ed25519 signature를 함께
@@ -939,14 +942,74 @@ Signed fields:
 
 #### V2-D1: Client append planner
 
-- v2 encrypted client checkpoint에는 immutable manifest/state digest, state sequence,
-  entry node, position map, stash와 node/point/payload-token duplicate ledger를
-  포함한다. 기존 `insert_position` overwrite helper를 append path에서 직접
-  사용하지 않고 duplicate-aware API를 추가한다.
-- 복제한 client state에서 bounded HNSW insertion과 optional result insertion을
-  계획하고, dummy path access와 bucket re-encryption으로 exact read/write budget을
-  채운 뒤 새 checkpoint와 signed mutation을 함께 생성한다.
-- Stash/capacity/neighbor rewrite 상한은 server prepare 전에 client에서 거부한다.
+##### V2-D1-A: Encrypted checkpoint and duplicate ledger
+
+- `PrivateOramAppendClientCheckpointV2`는 collection/manifest/layout/state sequence,
+  canonical point ledger와 exact private index set을 묶는다. Point ledger는
+  point token, optional visible point id, optional payload fetch token 관계를
+  보존하고, HNSW index별 node/point/level/generation ledger 및 result
+  payload/point/generation ledger와 position map/stash를 교차 검증한다.
+- `ids_visible`은 visible point id를 필수로 하고 payload fetch token을 금지한다.
+  `private_payload_oram_required`는 반대로 payload fetch token을 필수로 하고
+  visible point id를 금지한다. 모든 HNSW/result index는 같은 logical point
+  관계를 가져야 한다.
+- Signed state와 encrypted checkpoint의 순환 commitment를 피하기 위해 checkpoint
+  ciphertext와 public metadata digest를 먼저 `client_state_digest`로 확정하고
+  state를 서명한다. Full signed-state digest는 그 뒤 outer checkpoint binding에
+  붙이며 client-state digest에는 다시 넣지 않는다. Open은 두 digest와
+  collection/manifest/layout/sequence/index epoch/root를 모두 재검증한다.
+- 기존 overwrite 가능한 `insert_position`은 v1 호환용으로 유지한다. Append
+  경로는 `insert_position_if_absent`와 validated position+stash insertion을
+  사용하며, 전역 node/point/payload 중복은 encrypted checkpoint ledger에서
+  첫 server read 전에 거부한다.
+- Canonical checkpoint digest KAT는
+  `docs/qdrant-sec-private-oram-append-checkpoint-test-vector.json`에 고정한다.
+
+##### V2-D1-B: Ordered Path ORAM frame contract
+
+- D0 writeback은 exact ordered path frame을 사용한다. 여러 Path ORAM access에서
+  같은 bucket이 반복되어도 occurrence를 정렬하거나 합치지 않고 서명한다.
+- 총 frame 수는 `fixed_append_read_path_count`, frame당 bucket occurrence는
+  `tree_height + 1`로 고정한다. Root-to-leaf bucket id와 read transcript leaf
+  sequence가 정확히 일치해야 하며 duplicate bucket id는 frame order대로
+  보존한다.
+- Full leaf commitment vector를 client에 요구하지 않는다. Verified read
+  multiproof를 합치는 Merkle patch accumulator로 ordered final root를 계산하고,
+  같은 bucket은 마지막 occurrence를 최종 값으로 사용한다. Non-power-of-two와
+  single-bucket fixture에서 full recomputation과 일치시키며, unproven update,
+  conflicting overlapping proof와 stale epoch/root를 거부한다.
+
+##### V2-D1-C: Bounded HNSW append state machine
+
+- 순수 graph-delta planner는 전체 checkpoint/state를 먼저 검증하고 첫 구현을
+  level-0 append로 제한한다. Visited F32 candidates에서 distance와 node id로
+  deterministic bounded neighbor를 고르고 reverse edge를 계획한다. 수정 node
+  generation은 정확히 1 증가하며 node/point/payload identity, vector, level mask,
+  deleted flag와 upper-layer edge는 rewrite에서 바뀌지 않는다.
+- HNSW fixed path budget은 `candidate slots + max_neighbor_rewrites + insert slot`
+  으로 분리한다. Manifest는 최소 한 candidate slot을 남기도록
+  `fixed_append_read_path_count >= max_neighbor_rewrites + 2`를 강제하고, planner는
+  사용하지 않은 candidate/rewrite slot을 padding으로 계산한다.
+- Reciprocal rewrite가 모두 prune되면 새 node를 entry로 승격하고 이전 entry를
+  level-0 neighbor로 강제해 기존 graph 도달 가능성을 유지한다.
+- Append-safe path rewrite primitive는 target block을 stash에 올린 뒤 closure를
+  적용하고 writeback하며, targetless HNSW/result eviction은 padding과 empty-index
+  첫 삽입을 처리한다. 실패 시 cloned working state만 폐기되어 원본은 불변이다.
+- 남은 D1-C 작업은 이 primitive 위에 fixed read window, verified proof/decrypt,
+  ordered plaintext/ciphertext overlay와 attempt recovery marker를 소유하는
+  transaction state machine을 추가하는 것이다. Stash/capacity/exact frame 상한은
+  server prepare 전에 다시 검증한다.
+
+##### V2-D1-D: Paired result append and D0 finalizer
+
+- Optional result block insertion을 같은 point/payload ledger에 묶고 HNSW/result
+  checkpoint와 root를 함께 전진시킨다.
+- Finalizer는 새 encrypted checkpoint commitment, ordered transcripts/frames,
+  per-index root/writeback digest, 새 signed state와 D0 mutation signature를
+  생성한다. Authoritative observed transcript는 client DTO가 아니라 D4 server
+  session record에서 다시 생성한다.
+- 출력 전체가 `validate_private_oram_append_mutation_v1`을 통과해야 하며,
+  storage/consensus/public route는 D2-D4 전까지 dormant 상태를 유지한다.
 
 #### V2-D2: Dormant collection-wide consensus primitive
 

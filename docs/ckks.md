@@ -183,8 +183,10 @@ the next:
   server-observed ordered read-transcript digest; path multiplicity is
   preserved, duplicate paths are not collapsed, and every contiguous request
   window contains exactly the manifest ORAM `path_batch_size`
-- each index writeback contains the exact configured number of canonical,
-  strictly increasing bucket ids, including padded dummy re-encryption
+- each index writeback contains exactly
+  `fixed_append_read_path_count * (tree_height + 1)` bucket occurrences,
+  framed root-to-leaf in the server-observed leaf order; duplicate bucket ids
+  remain in signed frame order, including padded dummy re-encryption
 
 `private-oram-mutation/v1` signs the mutation id and expiry, exact old and new
 signed states, the consensus-issued writer lease digest and monotonic fencing
@@ -226,8 +228,13 @@ Canonical encoding is independent of JSON serialization:
 - vector encoding tags are f32-le=`1`, i8=`2`, PQ=`3`, binary=`4`; distance
   tags are cosine=`1`, dot=`2`, Euclid=`3`, Manhattan=`4`; Path ORAM is `1`
 - index-bearing vectors are strictly sorted by `(kind tag, raw UTF-8 index
-  name)` and bucket references are strictly sorted by `bucket_id`; read
-  windows and leaf labels retain submitted order and duplicate leaf labels
+  name)`; bucket references retain root-to-leaf frame order and duplicates,
+  while read windows and leaf labels retain submitted order and duplicate leaf
+  labels
+
+Bucket occurrences are applied in signed frame order. When a bucket id occurs
+more than once, its last occurrence supplies the final ciphertext and
+commitment used by the sparse Merkle patch and durable bucket write.
 
 The manifest message field order is domain, version, collection id, manifest
 nonce, index count and indexes, result privacy, owner signing key id, and
@@ -288,6 +295,82 @@ The append contract carries ciphertext hashes and commitments, not raw bucket
 bodies. When the route is activated, the transport layer must enforce a hard
 body and total-bucket limit before deserialization, hash each supplied
 ciphertext body, and match it to the signed reference before owner prepare.
+
+The first D1 client slice adds a dormant encrypted checkpoint contract.
+`PrivateOramAppendClientCheckpointV2` contains collection, immutable manifest,
+layout and state-sequence identity plus the complete canonical private index
+set. Each HNSW checkpoint carries its optional entry node, position map, stash,
+and canonical node-to-point level/generation records. The optional result
+checkpoint carries its position map, stash, and payload-to-point generation
+records. A collection-wide point ledger preserves point token, optional
+visible point id, and optional payload fetch token relationships.
+
+Checkpoint validation requires every HNSW position key to equal that index's
+node ledger, every index to cover exactly the collection point ledger, every
+result position key to equal the payload-token ledger, and every stash block
+to match its recorded node/point/payload identity, level, and generation.
+Ledger length must equal signed logical occupancy and stash length must remain
+within the immutable manifest bound. In `ids_visible` mode every point has a
+visible id and no payload-fetch token. In
+`private_payload_oram_required` mode every point has a payload-fetch token and
+no visible id, and the HNSW/result mappings must agree.
+
+The checkpoint avoids a circular state commitment with a two-step binding:
+
+1. Seal the checkpoint under the client-only checkpoint key. Its
+   domain-separated digest binds collection, manifest, layout generation,
+   state sequence, and ciphertext SHA-256.
+2. Put that digest in `PrivateOramSignedStateV2.client_state_digest` and sign
+   the state.
+3. Attach the resulting full signed-state digest as the outer checkpoint
+   `state_digest`.
+
+The outer `state_digest` is deliberately excluded from the client-state
+digest. Open recomputes both digests and then checks all checkpoint metadata,
+index epochs/roots, occupancy, and ledger relationships against the immutable
+manifest and signed state. The checkpoint ciphertext remains client-owned and
+is not included in Qdrant snapshots. The canonical non-circular digest bytes
+are fixed by
+`docs/qdrant-sec-private-oram-append-checkpoint-test-vector.json`.
+
+The legacy overwrite-capable position helpers remain for v1 compatibility.
+V2 append code uses `insert_position_if_absent` and validated atomic
+position-plus-stash insertion. These helpers prevent local key overwrite, but
+the encrypted collection-wide ledger remains authoritative for duplicate
+node, point, visible-id, and payload-token rejection before the first server
+read.
+
+The dormant D0 writeback shape now binds one root-to-leaf writeback frame per
+fixed read path, preserves duplicate bucket ids in frame order, and matches
+each frame to the server-observed ordered leaf sequence. Its canonical KAT
+freezes the ordered occurrence sequence. D1-B additionally converts verified
+HNSW or result read proofs into a common sparse proof, checks all overlapping
+old-tree nodes against the pinned epoch/root, applies the last occurrence for
+each changed bucket, and computes the new root without a full leaf commitment
+vector. Small non-power-of-two and single-bucket fixtures compare this result
+with full recomputation. The checkpoint and Merkle patch modules remain
+client-side dormant primitives: no append route or executable server mutation
+is exposed before D1-C through D4 are complete.
+
+D1-C now has a fail-closed level-0 graph-delta primitive. It validates the
+complete checkpoint and signed state before inspecting candidate blocks,
+rejects duplicate identities and stale candidate generations, selects
+neighbors deterministically from finite F32 vectors, and preserves immutable
+node fields and every upper-layer edge during reciprocal rewrites. The fixed
+HNSW append path budget is partitioned into candidate slots,
+`max_neighbor_rewrites` rewrite slots, and one insert slot; unused slots are
+padding. A valid HNSW v2 manifest therefore reserves at least
+`max_neighbor_rewrites + 2` paths. If every reciprocal edge is pruned, the new
+node becomes the entry and points to the previous entry so the old graph stays
+reachable.
+
+Append-specific HNSW access applies a checked rewrite before Path ORAM
+writeback and commits cloned client state only on success. Targetless HNSW and
+result eviction places a new stash block or re-encrypts a padding path without
+requiring an existing target, which covers empty-index first append. The next
+D1-C slice must compose these primitives into the owner of verified fixed read
+windows, ordered pending overlays, ciphertext resealing, and post-read
+recovery markers. The graph delta alone is not an executable append protocol.
 
 The external recovery primitive is
 `PrivateOramExternalRecoveryCheckpoint`, signed under
