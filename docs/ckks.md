@@ -348,9 +348,9 @@ HNSW or result read proofs into a common sparse proof, checks all overlapping
 old-tree nodes against the pinned epoch/root, applies the last occurrence for
 each changed bucket, and computes the new root without a full leaf commitment
 vector. Small non-power-of-two and single-bucket fixtures compare this result
-with full recomputation. The checkpoint and Merkle patch modules remain
-client-side dormant primitives: no append route or executable server mutation
-is exposed before D1-C through D4 are complete.
+with full recomputation. These remain client-side dormant primitives: no
+append route or executable server mutation is exposed before D1-D through D4
+are complete.
 
 D1-C now has a fail-closed level-0 graph-delta primitive. It validates the
 complete checkpoint and signed state before inspecting candidate blocks,
@@ -367,10 +367,44 @@ reachable.
 Append-specific HNSW access applies a checked rewrite before Path ORAM
 writeback and commits cloned client state only on success. Targetless HNSW and
 result eviction places a new stash block or re-encrypts a padding path without
-requiring an existing target, which covers empty-index first append. The next
-D1-C slice must compose these primitives into the owner of verified fixed read
-windows, ordered pending overlays, ciphertext resealing, and post-read
-recovery markers. The graph delta alone is not an executable append protocol.
+requiring an existing target, which covers empty-index first append.
+
+`PrivateOramAppendHnswTransactionV2` now composes these primitives for one
+HNSW index plus at most one paired result index. It owns the exact manifest
+window and path budget. Candidate evidence is obtained only from an accepted
+window after every response bucket and multiproof has been checked against the
+signed state's pinned old epoch, root, and bucket count. The response bucket
+sequence must equal the ordered concatenation of every requested root-to-leaf
+path, including identical repeated root and ancestor buckets.
+
+Each path starts from the verified old-root image and substitutes the latest
+local plaintext overlay for buckets changed by earlier paths. It then reseals
+the complete root-to-leaf frame at the new epoch. The transaction retains both
+the ordered ciphertext occurrences required by D0 and the last ciphertext per
+bucket used by the sparse Merkle patch and final storage image. Tests revisit
+the same leaf in a later window, preserve all repeated root occurrences, and
+compare the final root with a full commitment-vector recomputation.
+
+Path disclosure has an explicit durable recovery boundary. First,
+`prepare_next_read_window` returns only a path-free recovery marker. The SDK
+must persist that exact marker before passing it to
+`next_read_window(&persisted_marker)`, which then reveals the paths. Any
+post-read proof, sequence, planning, rewrite, or stash failure poisons the
+attempt. Its `attempt_digest` binds the exact opened checkpoint, append point,
+and candidate/remap/padding schedule, so a different plan cannot reuse a
+persisted marker with the same mutation metadata. Window changes are adopted
+only if the complete window succeeds.
+
+`finalize` returns a `prepared_commit` marker whose digest binds the attempt,
+old/new epochs and roots, read transcript, ordered writeback, and next client
+state. Re-encrypting the same logical attempt therefore produces a distinct
+marker when the ciphertext artifact changes. The marker remains durable until
+both the server CAS and the new encrypted checkpoint are confirmed.
+
+This D1-C output is not yet a complete D0 mutation. Paired result insertion,
+checkpoint ledger advancement and resealing, new signed-state construction,
+point-operation digest, mutation signature, and final self-validation remain
+in D1-D. Storage, consensus, and public routes remain dormant.
 
 The external recovery primitive is
 `PrivateOramExternalRecoveryCheckpoint`, signed under

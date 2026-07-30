@@ -995,15 +995,35 @@ Signed fields:
 - Append-safe path rewrite primitive는 target block을 stash에 올린 뒤 closure를
   적용하고 writeback하며, targetless HNSW/result eviction은 padding과 empty-index
   첫 삽입을 처리한다. 실패 시 cloned working state만 폐기되어 원본은 불변이다.
-- 남은 D1-C 작업은 이 primitive 위에 fixed read window, verified proof/decrypt,
-  ordered plaintext/ciphertext overlay와 attempt recovery marker를 소유하는
-  transaction state machine을 추가하는 것이다. Stash/capacity/exact frame 상한은
-  server prepare 전에 다시 검증한다.
+- `PrivateOramAppendHnswTransactionV2`는 HNSW 1개와 optional result 1개 topology,
+  exact manifest path/window 수, candidate/rewrite/insert/padding 순서를 소유한다.
+  Candidate block은 caller가 주입하지 않고 pinned old epoch/root multiproof를 검증한
+  accepted window에서만 수집한다.
+- 각 path는 server의 old-root bucket을 먼저 검증·복호화하고 이전 path의 최신
+  plaintext overlay를 우선 적용한다. 새 epoch ciphertext를 path occurrence 순서대로
+  보존하는 동시에 bucket별 last value를 sparse Merkle root와 최종 storage image에
+  사용한다. Read response도 요청한 root-to-leaf path 순서를 그대로 따르며 공유
+  root/ancestor 중복을 보존한다. 같은 leaf의 후속 window 재방문도 이 규칙을 따른다.
+- Path 공개 전 `prepare_next_read_window`가 path 없는 recovery marker만 반환한다.
+  SDK가 marker를 durable하게 저장하고 동일 값을
+  `next_read_window(&persisted_marker)`에 제출해야만 path가 공개된다. 첫 read 뒤
+  proof/window/stash/plan 오류는 transaction을 poisoned로 만들며 기존 checkpoint
+  재사용을 금지한다. Marker의 `attempt_digest`는 exact checkpoint, point,
+  candidate/remap/padding schedule을 바인딩하므로 같은 mutation metadata를 재사용한
+  다른 plan이 기존 marker로 path를 공개할 수 없다.
+- Window 적용은 cloned working set에서 원자적으로 수행하고, finalizer는 exact
+  frame 수, proof coverage, stash bound와 full-recompute-compatible root를 다시
+  확인한다. 출력의 `prepared_commit_digest`는 attempt, old/new epoch와 root,
+  read transcript, ordered writeback, next client state를 바인딩한다. 이 marker는
+  server CAS와 새 encrypted checkpoint 영속화 전에는 제거하지 않는다.
 
 ##### V2-D1-D: Paired result append and D0 finalizer
 
 - Optional result block insertion을 같은 point/payload ledger에 묶고 HNSW/result
   checkpoint와 root를 함께 전진시킨다.
+- D1-C 출력은 아직 HNSW prepared writeback과 다음 HNSW client-state snapshot만
+  만든다. D1-D에서 result ORAM fixed windows, point/result ledger update와 완전한
+  encrypted checkpoint 재봉인을 같은 transaction coordinator에 결합한다.
 - Finalizer는 새 encrypted checkpoint commitment, ordered transcripts/frames,
   per-index root/writeback digest, 새 signed state와 D0 mutation signature를
   생성한다. Authoritative observed transcript는 client DTO가 아니라 D4 server
