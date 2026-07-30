@@ -11,6 +11,7 @@ pub mod payload;
 pub mod private_hnsw_client;
 pub mod private_hnsw_oram;
 pub mod private_oram_append_client;
+pub mod private_oram_append_transaction;
 pub mod private_oram_mutation;
 pub mod private_oram_recovery;
 pub mod private_result_oram;
@@ -164,6 +165,17 @@ pub use private_oram_append_client::{
     try_private_oram_append_client_checkpoint_v2_digest_message,
     validate_private_oram_append_client_checkpoint_v2,
     validate_private_oram_append_client_checkpoint_v2_shape,
+};
+pub use private_oram_append_transaction::{
+    PRIVATE_ORAM_APPEND_HNSW_ATTEMPT_V2_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_HNSW_PREPARED_COMMIT_V2_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V2_VERSION, PrivateOramAppendHnswAttemptDigestInput,
+    PrivateOramAppendHnswPreparedCommitDigestInput, PrivateOramAppendHnswReadRequestV2,
+    PrivateOramAppendHnswTransactionOutputV2, PrivateOramAppendHnswTransactionPlanV2,
+    PrivateOramAppendHnswTransactionProgressV2, PrivateOramAppendHnswTransactionV2,
+    PrivateOramAppendRecoveryMarkerV2, PrivateOramAppendRecoveryPhaseV2,
+    PrivateOramAppendTransactionError, private_oram_append_hnsw_attempt_v2_digest,
+    private_oram_append_hnsw_prepared_commit_v2_digest,
 };
 pub use private_oram_mutation::{
     PAYLOAD_PRIVATE_RESULT_ORAM_V2_PROVIDER, PRIVATE_HNSW_ORAM_V2_BINDING,
