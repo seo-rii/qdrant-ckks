@@ -1,0 +1,21 @@
+{
+  "name": "qdrant-sec private ORAM append client checkpoint digest v2",
+  "domain": "qdrant-sec/private-oram-append-client-checkpoint-digest/v2",
+  "input": {
+    "version": 2,
+    "collection_id": "collection-uuid-1",
+    "manifest_digest": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+    "layout_generation": 5,
+    "state_sequence": 7,
+    "ciphertext": "AQABAgMEBQYHCAkKC6ChoqOkpaanqKmqq6ytrq8",
+    "ciphertext_sha256": "IqGhSWCfGI6vKjlQxpd_Uo6Dc1f2qc16groUNjWROes"
+  },
+  "digest_message_len": 207,
+  "digest_message_b64": "AAAAOnFkcmFudC1zZWMvcHJpdmF0ZS1vcmFtLWFwcGVuZC1jbGllbnQtY2hlY2twb2ludC1kaWdlc3QvdjIAAgAAAAAAAAARY29sbGVjdGlvbi11dWlkLTEAAAAAAAAAK0lpSWlJaUlpSWlJaUlpSWlJaUlpSWlJaUlpSWlJaUlpSWlJaUlpSWlJaUkAAAAAAAAABQAAAAAAAAAHAAAAAAAAACtJcUdoU1dDZkdJNnZLamxReHBkX1VvNkRjMWYycWMxNmdyb1VOaldST2Vz",
+  "digest_b64": "gk0q4a5HnWKA0F87-mvCNIeaVCTOM9tjcE32ksIQvcA",
+  "notes": [
+    "All binary values use unpadded base64url.",
+    "The digest binds ciphertext_sha256 and public checkpoint metadata, not ciphertext bytes directly.",
+    "state_digest is attached only after the signed state is created and is intentionally excluded from this digest to avoid a circular commitment."
+  ]
+}

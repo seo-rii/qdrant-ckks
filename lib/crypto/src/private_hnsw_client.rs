@@ -35,7 +35,8 @@ const PRIVATE_HNSW_CLIENT_KDF_CONTEXT_DOMAIN: &[u8] =
     b"qdrant-sec/private-hnsw-client-kdf-context/v1";
 
 const NODE_BLOCK_MAGIC: &[u8; 4] = b"QPHO";
-const NODE_BLOCK_VERSION: u16 = 1;
+pub const PRIVATE_HNSW_NODE_BLOCK_VERSION: u16 = 1;
+const NODE_BLOCK_VERSION: u16 = PRIVATE_HNSW_NODE_BLOCK_VERSION;
 const BUCKET_PLAINTEXT_MAGIC: &[u8; 4] = b"QPHB";
 const BUCKET_PLAINTEXT_VERSION: u16 = 1;
 const BUCKET_AEAD_VERSION: u8 = 1;
@@ -122,6 +123,8 @@ pub enum PrivateHnswClientError {
     MissingPosition,
     #[error("private HNSW ORAM path did not contain the requested node")]
     MissingBlock,
+    #[error("private HNSW ORAM append rewrite changed immutable block fields")]
+    InvalidAppendRewrite,
     #[error("private HNSW ORAM path contains duplicate node blocks")]
     DuplicateBlock,
     #[error("private HNSW ORAM path contains duplicate point tokens")]
@@ -712,6 +715,23 @@ impl Debug for PrivateHnswOramAccessResult {
             .field("new_leaf", &"[redacted]")
             .field("old_leaf_label", &"[redacted]")
             .field("block", &"[redacted]")
+            .field("writeback_bucket_count", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateHnswOramEvictionResult {
+    pub leaf: u64,
+    pub leaf_label: String,
+    pub writeback_buckets: Vec<PrivateHnswOramPlaintextBucket>,
+}
+
+impl Debug for PrivateHnswOramEvictionResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOramEvictionResult")
+            .field("leaf", &"[redacted]")
+            .field("leaf_label", &"[redacted]")
             .field("writeback_bucket_count", &"[redacted]")
             .finish()
     }
@@ -1493,6 +1513,60 @@ impl PrivateHnswOramClientState {
         Ok(())
     }
 
+    pub fn insert_position_if_absent(
+        &mut self,
+        node_id: [u8; 32],
+        leaf: u64,
+        tree_height: u32,
+    ) -> Result<(), PrivateHnswClientError> {
+        validate_private_hnsw_oram_leaf(leaf, tree_height)?;
+        if self.position_map.contains_key(&node_id) {
+            return Err(PrivateHnswClientError::DuplicateBlock);
+        }
+        self.position_map.insert(node_id, leaf);
+        Ok(())
+    }
+
+    pub fn insert_new_stash_block(
+        &mut self,
+        block: PrivateHnswNodeBlockPlaintext,
+        leaf: u64,
+        config: PrivateHnswOramClientConfig,
+    ) -> Result<(), PrivateHnswClientError> {
+        validate_oram_client_config(config)?;
+        validate_private_hnsw_oram_leaf(leaf, config.tree_height)?;
+        encode_private_hnsw_node_block(
+            &block,
+            config.block_size_bytes,
+            config.fixed_neighbor_slots,
+        )?;
+        if self.position_map.contains_key(&block.node_id) || self.stash.contains_key(&block.node_id)
+        {
+            return Err(PrivateHnswClientError::DuplicateBlock);
+        }
+        if self
+            .stash
+            .values()
+            .any(|existing| existing.point_token == block.point_token)
+        {
+            return Err(PrivateHnswClientError::DuplicatePointToken);
+        }
+        if block
+            .payload_fetch_token
+            .is_some_and(|payload_fetch_token| {
+                self.stash
+                    .values()
+                    .any(|existing| existing.payload_fetch_token == Some(payload_fetch_token))
+            })
+        {
+            return Err(PrivateHnswClientError::DuplicatePayloadFetchToken);
+        }
+
+        self.position_map.insert(block.node_id, leaf);
+        self.stash.insert(block.node_id, block);
+        Ok(())
+    }
+
     pub fn position(&self, node_id: &[u8; 32]) -> Option<u64> {
         self.position_map.get(node_id).copied()
     }
@@ -2101,7 +2175,7 @@ pub fn plan_private_hnsw_oram_directional_neighbor_filter(
         return Err(PrivateHnswClientError::NonFiniteDistance);
     }
 
-    let current_vector = decode_f32_le_vector(current_block)?;
+    let current_vector = decode_private_hnsw_f32_vector(current_block)?;
     if current_vector.len() != query.len() {
         return Err(PrivateHnswClientError::VectorDimensionMismatch);
     }
@@ -2124,7 +2198,7 @@ pub fn plan_private_hnsw_oram_directional_neighbor_filter(
             continue;
         }
 
-        let vector = decode_f32_le_vector(block)?;
+        let vector = decode_private_hnsw_f32_vector(block)?;
         if vector.len() != query.len() {
             return Err(PrivateHnswClientError::VectorDimensionMismatch);
         }
@@ -2132,7 +2206,7 @@ pub fn plan_private_hnsw_oram_directional_neighbor_filter(
         if direction_score <= 0.0 {
             continue;
         }
-        let query_distance = private_hnsw_distance(query, &vector, distance)?;
+        let query_distance = private_hnsw_f32_distance(query, &vector, distance)?;
         candidates.push((block.node_id, query_distance, direction_score));
     }
 
@@ -2362,7 +2436,7 @@ fn select_private_hnsw_layer_neighbors(
             continue;
         }
         candidates.push((
-            private_hnsw_distance(&source.vector, &candidate.vector, distance)?,
+            private_hnsw_f32_distance(&source.vector, &candidate.vector, distance)?,
             candidate.node_id,
             candidate_index,
         ));
@@ -2374,7 +2448,7 @@ fn select_private_hnsw_layer_neighbors(
     for (source_distance, node_id, candidate_index) in candidates {
         let mut redundant = false;
         for selected_index in &selected_indices {
-            let selected_distance = private_hnsw_distance(
+            let selected_distance = private_hnsw_f32_distance(
                 &points[candidate_index].vector,
                 &points[*selected_index].vector,
                 distance,
@@ -2846,10 +2920,114 @@ pub fn access_private_hnsw_oram_path(
         .ok_or(PrivateHnswClientError::MissingPosition)?;
     validate_private_hnsw_oram_leaf(remap_leaf, config.tree_height)?;
     let expected_bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(old_leaf, config.tree_height)?;
+    load_private_hnsw_oram_path_into_stash(state, config, &expected_bucket_ids, path_buckets)?;
+
+    let block = state
+        .stash
+        .get(&target_node_id)
+        .cloned()
+        .ok_or(PrivateHnswClientError::MissingBlock)?;
+    state.position_map.insert(target_node_id, remap_leaf);
+    let writeback_buckets = evict_private_hnsw_loaded_path(state, config, &expected_bucket_ids)?;
+
+    Ok(PrivateHnswOramAccessResult {
+        old_leaf,
+        new_leaf: remap_leaf,
+        old_leaf_label: encode_private_hnsw_oram_leaf_label(old_leaf, config.tree_height)?,
+        block,
+        writeback_buckets,
+    })
+}
+
+pub fn access_private_hnsw_oram_path_with_append_rewrite<Rewrite>(
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    target_node_id: [u8; 32],
+    path_buckets: &[PrivateHnswOramPlaintextBucket],
+    remap_leaf: u64,
+    rewrite: Rewrite,
+) -> Result<PrivateHnswOramAccessResult, PrivateHnswClientError>
+where
+    Rewrite: FnOnce(
+        &PrivateHnswNodeBlockPlaintext,
+    ) -> Result<PrivateHnswNodeBlockPlaintext, PrivateHnswClientError>,
+{
+    validate_oram_client_config(config)?;
+    let mut working_state = state.clone();
+    let old_leaf = working_state
+        .position(&target_node_id)
+        .ok_or(PrivateHnswClientError::MissingPosition)?;
+    validate_private_hnsw_oram_leaf(remap_leaf, config.tree_height)?;
+    let expected_bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(old_leaf, config.tree_height)?;
+    load_private_hnsw_oram_path_into_stash(
+        &mut working_state,
+        config,
+        &expected_bucket_ids,
+        path_buckets,
+    )?;
+
+    let previous = working_state
+        .stash
+        .get(&target_node_id)
+        .cloned()
+        .ok_or(PrivateHnswClientError::MissingBlock)?;
+    let replacement = rewrite(&previous)?;
+    validate_private_hnsw_append_rewrite(&previous, &replacement, config)?;
+    working_state
+        .stash
+        .insert(target_node_id, replacement.clone());
+    working_state
+        .position_map
+        .insert(target_node_id, remap_leaf);
+    let writeback_buckets =
+        evict_private_hnsw_loaded_path(&mut working_state, config, &expected_bucket_ids)?;
+
+    *state = working_state;
+    Ok(PrivateHnswOramAccessResult {
+        old_leaf,
+        new_leaf: remap_leaf,
+        old_leaf_label: encode_private_hnsw_oram_leaf_label(old_leaf, config.tree_height)?,
+        block: replacement,
+        writeback_buckets,
+    })
+}
+
+pub fn evict_private_hnsw_oram_path(
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    leaf: u64,
+    path_buckets: &[PrivateHnswOramPlaintextBucket],
+) -> Result<PrivateHnswOramEvictionResult, PrivateHnswClientError> {
+    validate_oram_client_config(config)?;
+    validate_private_hnsw_oram_leaf(leaf, config.tree_height)?;
+    let mut working_state = state.clone();
+    let expected_bucket_ids = private_hnsw_oram_bucket_ids_for_leaf(leaf, config.tree_height)?;
+    load_private_hnsw_oram_path_into_stash(
+        &mut working_state,
+        config,
+        &expected_bucket_ids,
+        path_buckets,
+    )?;
+    let writeback_buckets =
+        evict_private_hnsw_loaded_path(&mut working_state, config, &expected_bucket_ids)?;
+    *state = working_state;
+    Ok(PrivateHnswOramEvictionResult {
+        leaf,
+        leaf_label: encode_private_hnsw_oram_leaf_label(leaf, config.tree_height)?,
+        writeback_buckets,
+    })
+}
+
+fn load_private_hnsw_oram_path_into_stash(
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    expected_bucket_ids: &[u64],
+    path_buckets: &[PrivateHnswOramPlaintextBucket],
+) -> Result<(), PrivateHnswClientError> {
     if path_buckets.len() != expected_bucket_ids.len()
         || path_buckets
             .iter()
-            .zip(&expected_bucket_ids)
+            .zip(expected_bucket_ids)
             .any(|(bucket, expected_id)| bucket.bucket_id != *expected_id)
     {
         return Err(PrivateHnswClientError::PathBucketMismatch);
@@ -2877,10 +3055,10 @@ pub fn access_private_hnsw_oram_path(
             if !path_point_tokens.insert(block.point_token) {
                 return Err(PrivateHnswClientError::DuplicatePointToken);
             }
-            if let Some(payload_fetch_token) = block.payload_fetch_token {
-                if !path_payload_fetch_tokens.insert(payload_fetch_token) {
-                    return Err(PrivateHnswClientError::DuplicatePayloadFetchToken);
-                }
+            if let Some(payload_fetch_token) = block.payload_fetch_token
+                && !path_payload_fetch_tokens.insert(payload_fetch_token)
+            {
+                return Err(PrivateHnswClientError::DuplicatePayloadFetchToken);
             }
         }
     }
@@ -2890,14 +3068,14 @@ pub fn access_private_hnsw_oram_path(
     {
         state.stash.insert(block.node_id, block.clone());
     }
+    Ok(())
+}
 
-    let block = state
-        .stash
-        .get(&target_node_id)
-        .cloned()
-        .ok_or(PrivateHnswClientError::MissingBlock)?;
-    state.position_map.insert(target_node_id, remap_leaf);
-
+fn evict_private_hnsw_loaded_path(
+    state: &mut PrivateHnswOramClientState,
+    config: PrivateHnswOramClientConfig,
+    expected_bucket_ids: &[u64],
+) -> Result<Vec<PrivateHnswOramPlaintextBucket>, PrivateHnswClientError> {
     let mut writeback_by_bucket = BTreeMap::new();
     for bucket_id in expected_bucket_ids.iter().rev() {
         let mut blocks = Vec::with_capacity(config.bucket_size);
@@ -2929,22 +3107,55 @@ pub fn access_private_hnsw_oram_path(
         );
     }
 
-    let writeback_buckets = expected_bucket_ids
+    expected_bucket_ids
         .iter()
         .map(|bucket_id| {
             writeback_by_bucket
                 .remove(bucket_id)
                 .ok_or(PrivateHnswClientError::PathBucketMismatch)
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect()
+}
 
-    Ok(PrivateHnswOramAccessResult {
-        old_leaf,
-        new_leaf: remap_leaf,
-        old_leaf_label: encode_private_hnsw_oram_leaf_label(old_leaf, config.tree_height)?,
-        block,
-        writeback_buckets,
-    })
+fn validate_private_hnsw_append_rewrite(
+    previous: &PrivateHnswNodeBlockPlaintext,
+    replacement: &PrivateHnswNodeBlockPlaintext,
+    config: PrivateHnswOramClientConfig,
+) -> Result<(), PrivateHnswClientError> {
+    let expected_generation = previous
+        .generation
+        .checked_add(1)
+        .ok_or(PrivateHnswClientError::InvalidAppendRewrite)?;
+    let previous_upper_neighbors = previous
+        .neighbors
+        .iter()
+        .zip(&previous.neighbor_levels)
+        .filter(|(_, level)| **level > 0)
+        .collect::<Vec<_>>();
+    let replacement_upper_neighbors = replacement
+        .neighbors
+        .iter()
+        .zip(&replacement.neighbor_levels)
+        .filter(|(_, level)| **level > 0)
+        .collect::<Vec<_>>();
+    if replacement.node_id != previous.node_id
+        || replacement.point_token != previous.point_token
+        || replacement.level_mask != previous.level_mask
+        || replacement.vector_encoding != previous.vector_encoding
+        || replacement.vector != previous.vector
+        || replacement.deleted != previous.deleted
+        || replacement.payload_fetch_token != previous.payload_fetch_token
+        || replacement.generation != expected_generation
+        || replacement_upper_neighbors != previous_upper_neighbors
+    {
+        return Err(PrivateHnswClientError::InvalidAppendRewrite);
+    }
+    encode_private_hnsw_node_block(
+        replacement,
+        config.block_size_bytes,
+        config.fixed_neighbor_slots,
+    )?;
+    Ok(())
 }
 
 pub fn plan_private_hnsw_oram_speculative_prefetch(
@@ -3199,8 +3410,8 @@ where
             continue;
         }
 
-        let vector = decode_f32_le_vector(&block)?;
-        let distance = private_hnsw_distance(query, &vector, params.distance)?;
+        let vector = decode_private_hnsw_f32_vector(&block)?;
+        let distance = private_hnsw_f32_distance(query, &vector, params.distance)?;
         hits.push(PrivateHnswSearchHit {
             node_id: block.node_id,
             point_token: block.point_token,
@@ -4608,7 +4819,7 @@ fn decode_private_hnsw_oram_leaf_label_shape(
         .map_err(|_| PrivateHnswClientError::InvalidLeafLabelLength)
 }
 
-fn decode_f32_le_vector(
+pub fn decode_private_hnsw_f32_vector(
     block: &PrivateHnswNodeBlockPlaintext,
 ) -> Result<Vec<f32>, PrivateHnswClientError> {
     if block.vector_encoding != PrivateHnswVectorEncoding::F32Le {
@@ -4628,7 +4839,7 @@ fn decode_f32_le_vector(
         .collect()
 }
 
-fn private_hnsw_distance(
+pub fn private_hnsw_f32_distance(
     query: &[f32],
     vector: &[f32],
     distance: DistanceKind,
