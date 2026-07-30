@@ -12,6 +12,7 @@ pub mod transfer;
 
 use std::cmp::max;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt;
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,6 +20,7 @@ use std::time::{Duration, Instant};
 
 use api::rest::models::HardwareUsage;
 use collection::collection::{Collection, RequestShardTransfer};
+use collection::collection_state;
 use collection::config::{
     CollectionConfigInternal, default_replication_factor, default_shard_number,
 };
@@ -43,13 +45,15 @@ use tokio::sync::{Mutex, RwLock, Semaphore};
 use self::collection_meta_ops::collection_params_use_private_oram_bucket_store;
 use self::dispatcher::TocDispatcher;
 use crate::ConsensusOperations;
+use crate::common::utils::try_unwrap_with_timeout_async;
 use crate::content_manager::alias_mapping::AliasPersistence;
 use crate::content_manager::collection_meta_ops::CreateCollectionOperation;
 use crate::content_manager::collections_ops::{Checker, Collections};
 use crate::content_manager::consensus::operation_sender::OperationSender;
 use crate::content_manager::consensus_ops::{
     PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryLeasePhase,
-    PrivateOramExternalRecoveryState, private_oram_index_keys_for_config,
+    PrivateOramExternalRecoveryState, PrivateOramShardLayoutEntry,
+    canonical_private_oram_shard_layout_digest, private_oram_index_keys_for_config,
 };
 use crate::content_manager::errors::StorageError;
 use crate::content_manager::shard_distribution::ShardDistributionProposal;
@@ -66,6 +70,8 @@ const PRIVATE_ORAM_EXTERNAL_RECOVERY_WRITE_FENCE_ERROR: &str =
     "collection writes are locked by private ORAM external recovery";
 const PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_FENCE_ERROR: &str =
     "collection is locked by private ORAM external recovery installation";
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_DRAIN_TIMEOUT: Duration = Duration::from_secs(60);
+const PRIVATE_ORAM_EXTERNAL_RECOVERY_DRAIN_INTERVAL: Duration = Duration::from_millis(50);
 
 /// How long to wait till deleted collection is released from previous operations
 pub const COLLECTION_DELETE_WAIT_TIMEOUT: Duration = Duration::from_secs(60 * 10); // 10 mins
@@ -75,6 +81,50 @@ pub const COLLECTION_DELETE_SPIN_INTERVAL: Duration = Duration::from_millis(200)
 enum PrivateOramExternalRecoveryFence {
     Writes,
     All,
+}
+
+pub struct PrivateOramExternalRecoveryCollectionInstallGuard<'a> {
+    toc: &'a TableOfContent,
+    collection_name: String,
+    collection_id: String,
+    operation_id_hash: String,
+    consensus_binding: PrivateOramExternalRecoveryInstallGuardConsensusBinding,
+}
+
+enum PrivateOramExternalRecoveryInstallGuardConsensusBinding {
+    Active,
+    Committed {
+        backup_generation: u64,
+        checkpoint_digest: String,
+        install_intent_digest: String,
+    },
+}
+
+#[derive(Clone)]
+struct PrivateOramExternalRecoveryDetachedCollection {
+    collection_id: String,
+    operation_id_hash: String,
+    state: collection_state::State,
+}
+
+impl fmt::Debug for PrivateOramExternalRecoveryDetachedCollection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramExternalRecoveryDetachedCollection")
+            .field("collection_id", &"[redacted]")
+            .field("operation_id_hash", &"[redacted]")
+            .field("state", &"[redacted]")
+            .finish()
+    }
+}
+
+impl fmt::Debug for PrivateOramExternalRecoveryCollectionInstallGuard<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramExternalRecoveryCollectionInstallGuard")
+            .field("collection_name", &"[redacted]")
+            .field("collection_id", &"[redacted]")
+            .field("operation_id_hash", &"[redacted]")
+            .finish()
+    }
 }
 
 /// The main object of the service. It holds all objects, required for proper functioning.
@@ -103,9 +153,10 @@ pub struct TableOfContent {
     ///
     /// If not defined - no rate limiting is applied.
     update_rate_limiter: Option<Semaphore>,
-    /// A lock to prevent concurrent collection creation.
-    /// Effectively, this lock ensures that `create_collection` is called sequentially.
-    collection_create_lock: Mutex<()>,
+    /// Serializes collection registry, path, and alias lifecycle changes.
+    collection_lifecycle_lock: Mutex<()>,
+    private_oram_external_recovery_detached:
+        DashMap<CollectionId, PrivateOramExternalRecoveryDetachedCollection>,
     /// Aggregation of all hardware measurements for each alias or collection config.
     collection_hw_metrics: DashMap<CollectionId, Arc<HwSharedDrain>>,
     client_payload_nonce_replay_cache: Mutex<ClientPayloadNonceReplayCache>,
@@ -342,7 +393,8 @@ impl TableOfContent {
             consensus_proposal_sender,
             toc_dispatcher: Default::default(),
             update_rate_limiter: rate_limiter,
-            collection_create_lock: Default::default(),
+            collection_lifecycle_lock: Default::default(),
+            private_oram_external_recovery_detached: Default::default(),
             collection_hw_metrics: DashMap::new(),
             client_payload_nonce_replay_cache: Mutex::new(ClientPayloadNonceReplayCache::default()),
             private_oram_snapshot_recovery_abort_requests: Default::default(),
@@ -398,11 +450,10 @@ impl TableOfContent {
         &self,
         multipass: &CollectionMultipass,
     ) -> Vec<CollectionPass<'static>> {
-        self.collections
-            .read()
+        self.collection_names_including_detached()
             .await
-            .keys()
-            .map(|name| multipass.issue_pass(name).into_static())
+            .into_iter()
+            .map(|name| multipass.issue_pass(&name).into_static())
             .collect()
     }
 
@@ -411,13 +462,12 @@ impl TableOfContent {
         access: &Access,
         access_requirements: AccessRequirements,
     ) -> Vec<CollectionPass<'static>> {
-        self.collections
-            .read()
+        self.collection_names_including_detached()
             .await
-            .keys()
+            .into_iter()
             .filter_map(|name| {
                 access
-                    .check_collection_access(name, access_requirements)
+                    .check_collection_access(&name, access_requirements)
                     .ok()
                     .map(|pass| pass.into_static())
             })
@@ -427,10 +477,111 @@ impl TableOfContent {
     /// List of all collections
     pub fn all_collections_sync(&self) -> Vec<String> {
         self.general_runtime
-            .block_on(self.collections.read())
-            .keys()
-            .cloned()
-            .collect()
+            .block_on(self.collection_names_including_detached())
+    }
+
+    pub fn private_oram_external_recovery_collection_is_loaded(
+        &self,
+        collection_name: &str,
+        collection_id: &str,
+        expected_layout_digest: &str,
+    ) -> Result<bool, StorageError> {
+        self.general_runtime.block_on(async {
+            let collection = self.collections.read().await.get(collection_name).cloned();
+            let Some(collection) = collection else {
+                return Ok(false);
+            };
+            let config = collection.config_snapshot().await;
+            if collection.name() != collection_name
+                || config.stable_crypto_id(collection_name)? != collection_id
+                || private_oram_index_keys_for_config(&config, collection_name)?.is_empty()
+            {
+                return Ok(false);
+            }
+            let state = collection.state().await;
+            if state.resharding.is_some() || !state.transfers.is_empty() || state.shards.is_empty()
+            {
+                return Ok(false);
+            }
+            let mut entries = Vec::with_capacity(state.shards.len());
+            for (shard_id, shard) in &state.shards {
+                if shard.replicas.is_empty()
+                    || shard
+                        .replicas
+                        .values()
+                        .any(|replica_state| *replica_state != ReplicaState::Active)
+                {
+                    return Ok(false);
+                }
+                entries.push(PrivateOramShardLayoutEntry {
+                    shard_id: *shard_id,
+                    shard_key: state.shards_key_mapping.shard_key(*shard_id),
+                    owner_peer_ids: shard.replicas.keys().copied().collect(),
+                });
+            }
+            let (_, layout_digest) = canonical_private_oram_shard_layout_digest(
+                collection_id,
+                config.params.sharding_method.unwrap_or_default(),
+                &entries,
+            )?;
+            Ok(layout_digest == expected_layout_digest)
+        })
+    }
+
+    async fn collection_names_including_detached(&self) -> Vec<String> {
+        let collections = self.collections.read().await;
+        let mut names: Vec<_> = collections.keys().cloned().collect();
+        for detached in &self.private_oram_external_recovery_detached {
+            if !collections.contains_key(detached.key()) {
+                names.push(detached.key().clone());
+            }
+        }
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    pub(crate) fn private_oram_external_recovery_collection_is_detached(
+        &self,
+        collection_name: &str,
+    ) -> bool {
+        self.private_oram_external_recovery_detached
+            .contains_key(collection_name)
+    }
+
+    async fn require_no_private_oram_external_recovery_lookup_fence(
+        &self,
+    ) -> Result<tokio::sync::MutexGuard<'_, ()>, StorageError> {
+        let lifecycle_guard = self.collection_lifecycle_lock.lock().await;
+        if !self.private_oram_external_recovery_detached.is_empty() {
+            return Err(StorageError::Locked {
+                description: PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_FENCE_ERROR.to_string(),
+            });
+        }
+        let collections: Vec<_> = self.collections.read().await.values().cloned().collect();
+        for collection in collections {
+            if self
+                .private_oram_external_recovery_fence(&collection)
+                .await?
+                == Some(PrivateOramExternalRecoveryFence::All)
+            {
+                return Err(StorageError::Locked {
+                    description: PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_FENCE_ERROR.to_string(),
+                });
+            }
+        }
+        Ok(lifecycle_guard)
+    }
+
+    pub fn private_oram_external_recovery_detached_state(
+        &self,
+        collection_name: &str,
+        operation_id_hash: &str,
+    ) -> Option<(String, collection_state::State)> {
+        self.private_oram_external_recovery_detached
+            .get(collection_name)
+            .filter(|detached| detached.operation_id_hash == operation_id_hash)
+            .map(|detached| (detached.collection_id.clone(), detached.state.clone()))
     }
 
     /// Same as `get_collection`, but does not check access rights.
@@ -455,18 +606,23 @@ impl TableOfContent {
 
         let real_collection_name = {
             let alias_persistence = self.alias_persistence.read().await;
-            Self::resolve_name(collection_name, &read_collection, &alias_persistence)?
+            Self::resolve_name(collection_name, &alias_persistence)
         };
 
-        let collection = read_collection
-            .get(&real_collection_name)
-            .cloned()
-            .ok_or_else(|| {
-                StorageError::service_error(format!(
-                    "Resolved collection '{real_collection_name}' is missing from the collection registry",
-                ))
-            })?;
-        Ok((real_collection_name, collection))
+        if let Some(collection) = read_collection.get(&real_collection_name).cloned() {
+            return Ok((real_collection_name, collection));
+        }
+        if self
+            .private_oram_external_recovery_detached
+            .contains_key(&real_collection_name)
+        {
+            return Err(StorageError::Locked {
+                description: PRIVATE_ORAM_EXTERNAL_RECOVERY_INSTALL_FENCE_ERROR.to_string(),
+            });
+        }
+        Err(StorageError::NotFound {
+            description: format!("Collection `{collection_name}` doesn't exist!"),
+        })
     }
 
     async fn private_oram_external_recovery_fence(
@@ -507,7 +663,7 @@ impl TableOfContent {
         Ok(())
     }
 
-    async fn require_private_oram_external_recovery_write_allowed(
+    pub async fn require_private_oram_external_recovery_write_allowed(
         &self,
         collection: &Collection,
     ) -> Result<(), StorageError> {
@@ -525,11 +681,208 @@ impl TableOfContent {
         }
     }
 
+    pub async fn acquire_private_oram_external_recovery_install_guard(
+        &self,
+        collection_name: &str,
+        collection_id: &str,
+        operation_id_hash: &str,
+    ) -> Result<PrivateOramExternalRecoveryCollectionInstallGuard<'_>, StorageError> {
+        let _collection_lifecycle_guard = self.collection_lifecycle_lock.lock().await;
+        if self
+            .private_oram_external_recovery_detached
+            .get(collection_name)
+            .is_some_and(|detached| {
+                detached.collection_id == collection_id
+                    && detached.operation_id_hash == operation_id_hash
+            })
+        {
+            self.validate_private_oram_external_recovery_consensus_binding(
+                collection_id,
+                operation_id_hash,
+            )?;
+            return Ok(PrivateOramExternalRecoveryCollectionInstallGuard {
+                toc: self,
+                collection_name: collection_name.to_string(),
+                collection_id: collection_id.to_string(),
+                operation_id_hash: operation_id_hash.to_string(),
+                consensus_binding: PrivateOramExternalRecoveryInstallGuardConsensusBinding::Active,
+            });
+        }
+        let (resolved_name, collection) = self.get_collection_unfenced(collection_name).await?;
+        if resolved_name != collection_name || collection.name() != collection_name {
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        }
+        self.validate_private_oram_external_recovery_active_binding(
+            &collection,
+            collection_id,
+            operation_id_hash,
+        )
+        .await?;
+        drop(collection);
+
+        Ok(PrivateOramExternalRecoveryCollectionInstallGuard {
+            toc: self,
+            collection_name: collection_name.to_string(),
+            collection_id: collection_id.to_string(),
+            operation_id_hash: operation_id_hash.to_string(),
+            consensus_binding: PrivateOramExternalRecoveryInstallGuardConsensusBinding::Active,
+        })
+    }
+
+    pub async fn acquire_committed_private_oram_external_recovery_install_guard(
+        &self,
+        collection_name: &str,
+        collection_id: &str,
+        operation_id_hash: &str,
+        backup_generation: u64,
+        checkpoint_digest: &str,
+        install_intent_digest: &str,
+    ) -> Result<PrivateOramExternalRecoveryCollectionInstallGuard<'_>, StorageError> {
+        let _collection_lifecycle_guard = self.collection_lifecycle_lock.lock().await;
+        let matching_tombstone = self
+            .private_oram_external_recovery_detached
+            .get(collection_name)
+            .is_some_and(|detached| {
+                detached.collection_id == collection_id
+                    && detached.operation_id_hash == operation_id_hash
+            });
+        if !matching_tombstone {
+            let (resolved_name, collection) = self.get_collection_unfenced(collection_name).await?;
+            if resolved_name != collection_name || collection.name() != collection_name {
+                return Err(invalid_private_oram_external_recovery_collection_state());
+            }
+            let config = collection.config_snapshot().await;
+            if config.stable_crypto_id(collection_name)? != collection_id
+                || private_oram_index_keys_for_config(&config, collection_name)?.is_empty()
+            {
+                return Err(invalid_private_oram_external_recovery_collection_state());
+            }
+        }
+        self.validate_private_oram_external_recovery_committed_binding(
+            collection_id,
+            backup_generation,
+            checkpoint_digest,
+            install_intent_digest,
+        )?;
+        Ok(PrivateOramExternalRecoveryCollectionInstallGuard {
+            toc: self,
+            collection_name: collection_name.to_string(),
+            collection_id: collection_id.to_string(),
+            operation_id_hash: operation_id_hash.to_string(),
+            consensus_binding: PrivateOramExternalRecoveryInstallGuardConsensusBinding::Committed {
+                backup_generation,
+                checkpoint_digest: checkpoint_digest.to_string(),
+                install_intent_digest: install_intent_digest.to_string(),
+            },
+        })
+    }
+
+    async fn validate_private_oram_external_recovery_active_binding(
+        &self,
+        collection: &Collection,
+        collection_id: &str,
+        operation_id_hash: &str,
+    ) -> Result<PrivateOramExternalRecoveryState, StorageError> {
+        let config = collection.config_snapshot().await;
+        if collection.name().is_empty()
+            || config.stable_crypto_id(collection.name())? != collection_id
+            || private_oram_index_keys_for_config(&config, collection.name())?.is_empty()
+        {
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        }
+        self.validate_private_oram_external_recovery_consensus_binding(
+            collection_id,
+            operation_id_hash,
+        )
+    }
+
+    fn validate_private_oram_external_recovery_consensus_binding(
+        &self,
+        collection_id: &str,
+        operation_id_hash: &str,
+    ) -> Result<PrivateOramExternalRecoveryState, StorageError> {
+        let dispatcher = self
+            .toc_dispatcher
+            .lock()
+            .clone()
+            .ok_or_else(invalid_private_oram_external_recovery_collection_state)?;
+        let state = dispatcher
+            .consensus_state()
+            .private_oram_external_recovery(&PrivateOramExternalRecoveryKey {
+                collection_id: collection_id.to_string(),
+            })
+            .ok_or_else(invalid_private_oram_external_recovery_collection_state)?;
+        let lease = state
+            .active_lease
+            .as_ref()
+            .ok_or_else(invalid_private_oram_external_recovery_collection_state)?;
+        if lease.owner_peer_id != self.this_peer_id
+            || lease.operation_id_hash != operation_id_hash
+            || !matches!(
+                lease.phase,
+                PrivateOramExternalRecoveryLeasePhase::Staging
+                    | PrivateOramExternalRecoveryLeasePhase::Installing
+            )
+        {
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        }
+        Ok(state)
+    }
+
+    fn validate_private_oram_external_recovery_committed_binding(
+        &self,
+        collection_id: &str,
+        backup_generation: u64,
+        checkpoint_digest: &str,
+        install_intent_digest: &str,
+    ) -> Result<PrivateOramExternalRecoveryState, StorageError> {
+        let dispatcher = self
+            .toc_dispatcher
+            .lock()
+            .clone()
+            .ok_or_else(invalid_private_oram_external_recovery_collection_state)?;
+        let state = dispatcher
+            .consensus_state()
+            .private_oram_external_recovery(&PrivateOramExternalRecoveryKey {
+                collection_id: collection_id.to_string(),
+            })
+            .ok_or_else(invalid_private_oram_external_recovery_collection_state)?;
+        if state.committed_backup_generation != backup_generation
+            || state.committed_checkpoint_digest.as_deref() != Some(checkpoint_digest)
+            || state.committed_install_intent_digest.as_deref() != Some(install_intent_digest)
+            || state.active_lease.is_some()
+        {
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        }
+        Ok(state)
+    }
+
     pub async fn get_collection(
         &self,
         collection: &CollectionPass<'_>,
     ) -> Result<Arc<Collection>, StorageError> {
         self.get_collection_unchecked(collection.name()).await
+    }
+
+    pub async fn get_collection_for_private_oram_external_recovery(
+        &self,
+        collection: &CollectionPass<'_>,
+        operation_id_hash: &str,
+    ) -> Result<Arc<Collection>, StorageError> {
+        let (resolved_name, resolved_collection) =
+            self.get_collection_unfenced(collection.name()).await?;
+        if resolved_name != collection.name() || resolved_collection.name() != collection.name() {
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        }
+        let config = resolved_collection.config_snapshot().await;
+        let collection_id = config.stable_crypto_id(collection.name())?;
+        self.validate_private_oram_external_recovery_active_binding(
+            &resolved_collection,
+            &collection_id,
+            operation_id_hash,
+        )
+        .await?;
+        Ok(resolved_collection)
     }
 
     async fn get_collection_opt(&self, collection_name: String) -> Option<Arc<Collection>> {
@@ -541,7 +894,6 @@ impl TableOfContent {
     /// # Arguments
     ///
     /// * `collection_name` - Name of the collection or alias to resolve
-    /// * `collections` - A reference to the collections map
     /// * `aliases` - A reference to the aliases storage
     ///
     /// # Result
@@ -549,19 +901,13 @@ impl TableOfContent {
     /// If the collection exists - return its name
     /// If alias exists - returns the original collection name
     /// If neither exists - returns [`StorageError`]
-    fn resolve_name(
-        collection_name: &str,
-        collections: &Collections,
-        aliases: &AliasPersistence,
-    ) -> Result<String, StorageError> {
+    fn resolve_name(collection_name: &str, aliases: &AliasPersistence) -> String {
         let alias_collection_name = aliases.get(collection_name);
 
-        let resolved_name = match alias_collection_name {
+        match alias_collection_name {
             None => collection_name.to_string(),
             Some(resolved_alias) => resolved_alias,
-        };
-        collections.validate_collection_exists(&resolved_name)?;
-        Ok(resolved_name)
+        }
     }
 
     pub async fn all_collection_aliases(
@@ -992,6 +1338,293 @@ impl TableOfContent {
     }
 }
 
+impl PrivateOramExternalRecoveryCollectionInstallGuard<'_> {
+    pub async fn unload_current_collection(&self) -> Result<(), StorageError> {
+        {
+            let _collection_lifecycle_guard = self.toc.collection_lifecycle_lock.lock().await;
+            if self.require_matching_tombstone().is_ok() {
+                if self
+                    .toc
+                    .collections
+                    .read()
+                    .await
+                    .contains_key(&self.collection_name)
+                {
+                    return Err(invalid_private_oram_external_recovery_collection_state());
+                }
+                self.validate_consensus_binding()?;
+                return Ok(());
+            }
+        }
+        let removed = {
+            let _collection_lifecycle_guard = self.toc.collection_lifecycle_lock.lock().await;
+            let (resolved_name, current) = self
+                .toc
+                .get_collection_unfenced(&self.collection_name)
+                .await?;
+            if resolved_name != self.collection_name {
+                return Err(invalid_private_oram_external_recovery_collection_state());
+            }
+            self.validate_loaded_collection_identity(&current).await?;
+            self.validate_consensus_binding()?;
+            let state = current.state().await;
+            let mut collections = self.toc.collections.write().await;
+            if !collections
+                .get(&self.collection_name)
+                .is_some_and(|registered| Arc::ptr_eq(registered, &current))
+                || self
+                    .toc
+                    .private_oram_external_recovery_detached
+                    .contains_key(&self.collection_name)
+            {
+                return Err(invalid_private_oram_external_recovery_collection_state());
+            }
+            self.toc.private_oram_external_recovery_detached.insert(
+                self.collection_name.clone(),
+                PrivateOramExternalRecoveryDetachedCollection {
+                    collection_id: self.collection_id.clone(),
+                    operation_id_hash: self.operation_id_hash.clone(),
+                    state,
+                },
+            );
+            let removed = collections
+                .remove(&self.collection_name)
+                .ok_or_else(invalid_private_oram_external_recovery_collection_state)?;
+            drop(current);
+            removed
+        };
+        let collection = match try_unwrap_with_timeout_async(
+            removed,
+            PRIVATE_ORAM_EXTERNAL_RECOVERY_DRAIN_INTERVAL,
+            PRIVATE_ORAM_EXTERNAL_RECOVERY_DRAIN_TIMEOUT,
+        )
+        .await
+        {
+            Ok(collection) => collection,
+            Err(collection) => {
+                self.restore_detached_collection(collection).await?;
+                return Err(StorageError::Locked {
+                    description:
+                        "collection is busy and cannot enter private ORAM recovery installation"
+                            .to_string(),
+                });
+            }
+        };
+
+        if let Err(error) = self
+            .validate_loaded_collection_identity(&collection)
+            .await
+            .and_then(|()| self.validate_consensus_binding())
+        {
+            self.restore_detached_collection(Arc::new(collection))
+                .await?;
+            return Err(error);
+        }
+        collection.stop_gracefully().await;
+        drop(collection);
+        Ok(())
+    }
+
+    fn validate_consensus_binding(&self) -> Result<(), StorageError> {
+        match &self.consensus_binding {
+            PrivateOramExternalRecoveryInstallGuardConsensusBinding::Active => self
+                .toc
+                .validate_private_oram_external_recovery_consensus_binding(
+                    &self.collection_id,
+                    &self.operation_id_hash,
+                )
+                .map(|_| ()),
+            PrivateOramExternalRecoveryInstallGuardConsensusBinding::Committed {
+                backup_generation,
+                checkpoint_digest,
+                install_intent_digest,
+            } => self
+                .toc
+                .validate_private_oram_external_recovery_committed_binding(
+                    &self.collection_id,
+                    *backup_generation,
+                    checkpoint_digest,
+                    install_intent_digest,
+                )
+                .map(|_| ()),
+        }
+    }
+
+    pub async fn load_live_collection_strict(&self) -> Result<Collection, StorageError> {
+        if self
+            .toc
+            .collections
+            .read()
+            .await
+            .contains_key(&self.collection_name)
+        {
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        }
+        self.require_matching_tombstone()?;
+        let collection_path = self.toc.get_collection_path(&self.collection_name);
+        let snapshots_path = TableOfContent::collection_snapshots_path(
+            &self.toc.storage_config.snapshots_path,
+            &self.collection_name,
+        );
+        let mut shared_storage_config = self
+            .toc
+            .storage_config
+            .to_shared_storage_config(self.toc.is_distributed());
+        shared_storage_config.handle_collection_load_errors = false;
+        let collection = Collection::load(
+            self.collection_name.clone(),
+            self.toc.this_peer_id,
+            &collection_path,
+            &snapshots_path,
+            Arc::new(shared_storage_config),
+            self.toc.channel_service.clone(),
+            TableOfContent::change_peer_from_state_callback(
+                self.toc.consensus_proposal_sender.clone(),
+                self.collection_name.clone(),
+                ReplicaState::Dead,
+            ),
+            TableOfContent::request_shard_transfer_callback(
+                self.toc.consensus_proposal_sender.clone(),
+                self.collection_name.clone(),
+            ),
+            TableOfContent::abort_shard_transfer_callback(
+                self.toc.consensus_proposal_sender.clone(),
+                self.collection_name.clone(),
+            ),
+            Some(self.toc.search_runtime.handle().clone()),
+            Some(self.toc.update_runtime.handle().clone()),
+            self.toc.optimizer_resource_budget.clone(),
+            self.toc.storage_config.optimizers_overwrite.clone(),
+        )
+        .await?;
+        if let Err(error) = self.validate_loaded_collection_identity(&collection).await {
+            collection.stop_gracefully().await;
+            return Err(error);
+        }
+        Ok(collection)
+    }
+
+    pub async fn publish_fenced_collection(
+        &self,
+        collection: Collection,
+    ) -> Result<(), StorageError> {
+        if let Err(error) = self
+            .toc
+            .validate_private_oram_external_recovery_active_binding(
+                &collection,
+                &self.collection_id,
+                &self.operation_id_hash,
+            )
+            .await
+        {
+            collection.stop_gracefully().await;
+            return Err(error);
+        }
+        self.insert_collection(collection).await
+    }
+
+    pub async fn publish_committed_collection(
+        &self,
+        collection: Collection,
+        backup_generation: u64,
+        checkpoint_digest: &str,
+        install_intent_digest: &str,
+    ) -> Result<(), StorageError> {
+        if let Err(error) = self.validate_loaded_collection_identity(&collection).await {
+            collection.stop_gracefully().await;
+            return Err(error);
+        }
+        let Some(dispatcher) = self.toc.toc_dispatcher.lock().clone() else {
+            collection.stop_gracefully().await;
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        };
+        let Some(state) = dispatcher.consensus_state().private_oram_external_recovery(
+            &PrivateOramExternalRecoveryKey {
+                collection_id: self.collection_id.clone(),
+            },
+        ) else {
+            collection.stop_gracefully().await;
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        };
+        if state.committed_backup_generation != backup_generation
+            || state.committed_checkpoint_digest.as_deref() != Some(checkpoint_digest)
+            || state.committed_install_intent_digest.as_deref() != Some(install_intent_digest)
+            || state.active_lease.is_some()
+        {
+            collection.stop_gracefully().await;
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        }
+        self.insert_collection(collection).await
+    }
+
+    async fn validate_loaded_collection_identity(
+        &self,
+        collection: &Collection,
+    ) -> Result<(), StorageError> {
+        if collection.name() != self.collection_name
+            || collection.path() != self.toc.get_collection_path(&self.collection_name)
+        {
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        }
+        let config = collection.config_snapshot().await;
+        if config.stable_crypto_id(&self.collection_name)? != self.collection_id
+            || private_oram_index_keys_for_config(&config, &self.collection_name)?.is_empty()
+        {
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        }
+        Ok(())
+    }
+
+    async fn insert_collection(&self, collection: Collection) -> Result<(), StorageError> {
+        let _collection_lifecycle_guard = self.toc.collection_lifecycle_lock.lock().await;
+        let mut collections = self.toc.collections.write().await;
+        if let Err(error) = collections
+            .validate_collection_not_exists(&self.collection_name)
+            .and_then(|()| self.require_matching_tombstone())
+        {
+            drop(collections);
+            drop(_collection_lifecycle_guard);
+            collection.stop_gracefully().await;
+            return Err(error);
+        }
+        collections.insert(self.collection_name.clone(), Arc::new(collection));
+        self.toc
+            .private_oram_external_recovery_detached
+            .remove(&self.collection_name);
+        Ok(())
+    }
+
+    async fn restore_detached_collection(
+        &self,
+        collection: Arc<Collection>,
+    ) -> Result<(), StorageError> {
+        let _collection_lifecycle_guard = self.toc.collection_lifecycle_lock.lock().await;
+        let mut collections = self.toc.collections.write().await;
+        collections.validate_collection_not_exists(&self.collection_name)?;
+        self.require_matching_tombstone()?;
+        collections.insert(self.collection_name.clone(), collection);
+        self.toc
+            .private_oram_external_recovery_detached
+            .remove(&self.collection_name);
+        Ok(())
+    }
+
+    fn require_matching_tombstone(&self) -> Result<(), StorageError> {
+        let matches = self
+            .toc
+            .private_oram_external_recovery_detached
+            .get(&self.collection_name)
+            .is_some_and(|detached| {
+                detached.collection_id == self.collection_id
+                    && detached.operation_id_hash == self.operation_id_hash
+            });
+        if !matches {
+            return Err(invalid_private_oram_external_recovery_collection_state());
+        }
+        Ok(())
+    }
+}
+
 fn private_oram_external_recovery_fence(
     state: Option<&PrivateOramExternalRecoveryState>,
 ) -> Option<PrivateOramExternalRecoveryFence> {
@@ -1004,6 +1637,10 @@ fn private_oram_external_recovery_fence(
         }
         Some(_) | None => None,
     }
+}
+
+fn invalid_private_oram_external_recovery_collection_state() -> StorageError {
+    StorageError::bad_request("private ORAM external recovery collection state is invalid")
 }
 
 fn reject_private_oram_receiving_shard_until_supported(

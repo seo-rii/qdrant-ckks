@@ -250,6 +250,7 @@ pub mod consensus_ops {
         Begin,
         Renew,
         PrepareInstall,
+        RollbackInstall,
         Commit,
         Abort,
     }

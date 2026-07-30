@@ -53,6 +53,9 @@ impl TableOfContent {
     ) -> StorageResult<Vec<ScoredPoint>> {
         let collection_pass = auth.check_point_op(collection_name, &request, "recommend")?;
 
+        let _recovery_lookup_guard = self
+            .require_no_private_oram_external_recovery_lookup_fence()
+            .await?;
         let collection = self.get_collection(&collection_pass).await?;
         recommendations::recommend_by(
             request,
@@ -95,6 +98,9 @@ impl TableOfContent {
             return Ok(vec![]);
         };
 
+        let _recovery_lookup_guard = self
+            .require_no_private_oram_external_recovery_lookup_fence()
+            .await?;
         let collection = self.get_collection(&collection_pass).await?;
         recommendations::recommend_batch_by(
             requests,
@@ -243,6 +249,9 @@ impl TableOfContent {
     ) -> StorageResult<GroupsResult> {
         let collection_pass = auth.check_point_op(collection_name, &request, "group")?;
 
+        let _recovery_lookup_guard = self
+            .require_no_private_oram_external_recovery_lookup_fence()
+            .await?;
         let collection = self.get_collection(&collection_pass).await?;
 
         let collection_by_name = |name| self.get_collection_opt(name);
@@ -272,6 +281,9 @@ impl TableOfContent {
     ) -> StorageResult<Vec<ScoredPoint>> {
         let collection_pass = auth.check_point_op(collection_name, &request, "discover")?;
 
+        let _recovery_lookup_guard = self
+            .require_no_private_oram_external_recovery_lookup_fence()
+            .await?;
         let collection = self.get_collection(&collection_pass).await?;
         discovery::discover(
             request,
@@ -304,6 +316,9 @@ impl TableOfContent {
             return Ok(vec![]);
         };
 
+        let _recovery_lookup_guard = self
+            .require_no_private_oram_external_recovery_lookup_fence()
+            .await?;
         let collection = self.get_collection(&collection_pass).await?;
 
         discovery::discover_batch(
@@ -373,6 +388,9 @@ impl TableOfContent {
             return Ok(vec![]);
         };
 
+        let _recovery_lookup_guard = self
+            .require_no_private_oram_external_recovery_lookup_fence()
+            .await?;
         let collection = self.get_collection(&collection_pass).await?;
 
         collection

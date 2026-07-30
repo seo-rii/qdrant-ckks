@@ -30,6 +30,9 @@ use shard::snapshots::snapshot_manifest::RecoveryType;
 use crate::content_manager::collection_meta_ops::{
     CollectionMetaOperations, CreateCollectionOperation, CreatePayloadIndex,
 };
+use crate::content_manager::consensus_ops::{
+    PrivateOramShardLayoutEntry, canonical_private_oram_shard_layout_digest,
+};
 use crate::content_manager::snapshots::download::download_snapshot;
 use crate::content_manager::snapshots::download_result::DownloadResult;
 use crate::content_manager::snapshots::private_oram_external_recovery::PrivateOramExternalRecoveryVerification;
@@ -45,6 +48,7 @@ pub fn verify_private_oram_external_recovery_snapshot(
     verification: &PrivateOramExternalRecoveryVerification,
     this_peer_id: PeerId,
     existing_config: &CollectionConfigInternal,
+    recovery_mode: Option<&str>,
     snapshot_config_validator: Option<&SnapshotConfigValidator>,
 ) -> Result<(), StorageError> {
     let checkpoint = &verification.checkpoint_bundle().checkpoint;
@@ -53,11 +57,10 @@ pub fn verify_private_oram_external_recovery_snapshot(
     }
 
     verification.reset_verification_output()?;
-    Collection::restore_snapshot(
+    Collection::restore_private_oram_external_recovery_snapshot(
         SnapshotData::new_packed_persistent(verification.snapshot_path()),
         verification.verify_temp_collection_path(),
         this_peer_id,
-        true,
     )
     .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
 
@@ -103,13 +106,33 @@ pub fn verify_private_oram_external_recovery_snapshot(
     )
     .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
 
-    let local_shard_ids = Collection::private_oram_restored_snapshot_local_shard_ids(
-        &snapshot_config,
+    let inspection = Collection::inspect_private_oram_recovery_candidate_read_only(
+        collection_name,
         restored_path,
         this_peer_id,
+        recovery_mode,
     )
     .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
-    if local_shard_ids != checkpoint.source_shard_ids {
+    let layout_entries: Vec<_> = inspection
+        .shards
+        .iter()
+        .map(|shard| PrivateOramShardLayoutEntry {
+            shard_id: shard.shard_id,
+            shard_key: shard.shard_key.clone(),
+            owner_peer_ids: shard.owner_peer_ids.clone(),
+        })
+        .collect();
+    let (owner_peer_ids, layout_digest) = canonical_private_oram_shard_layout_digest(
+        &checkpoint.collection_id,
+        inspection.config.params.sharding_method.unwrap_or_default(),
+        &layout_entries,
+    )
+    .map_err(|_| invalid_private_oram_external_recovery_snapshot())?;
+    if inspection.config != snapshot_config
+        || inspection.local_shard_ids != checkpoint.source_shard_ids
+        || owner_peer_ids != checkpoint.owner_peer_ids
+        || layout_digest != checkpoint.layout_digest
+    {
         return Err(invalid_private_oram_external_recovery_snapshot());
     }
 
@@ -305,9 +328,9 @@ async fn _do_recover_from_snapshot(
         "recover snapshot",
     )?;
 
-    let collection = match toc.get_collection(&collection_pass).await.ok() {
-        Some(collection) => collection,
-        None => {
+    let collection = match toc.get_collection(&collection_pass).await {
+        Ok(collection) => collection,
+        Err(StorageError::NotFound { .. }) => {
             log::debug!("Collection {collection_pass} does not exist, creating it");
             let operation =
                 CollectionMetaOperations::CreateCollection(CreateCollectionOperation::new(
@@ -336,7 +359,10 @@ async fn _do_recover_from_snapshot(
 
             toc.get_collection(&collection_pass).await?
         }
+        Err(error) => return Err(error),
     };
+    toc.require_private_oram_external_recovery_write_allowed(&collection)
+        .await?;
 
     let state = collection.state().await;
     validate_existing_collection_crypto_identity(

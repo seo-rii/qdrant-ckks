@@ -60,6 +60,7 @@ const REST_ENDPOINT_WHITELIST: &[&str] = &[
     "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
     "/collections/{collection_name}/private-oram/recovery/abort",
     "/collections/{collection_name}/private-oram/recovery/begin",
+    "/collections/{collection_name}/private-oram/recovery/commit",
     "/collections/{collection_name}/private-oram/recovery/status",
     "/collections/{collection_name}/private-oram/recovery/upload",
     "/collections/{collection_name}/private-oram/recovery/verify",
@@ -155,6 +156,9 @@ fn canonical_rest_endpoint_label(endpoint: &str) -> Option<&str> {
         }
         ["collections", _, "private-oram", "recovery", "begin"] => {
             Some("/collections/{collection_name}/private-oram/recovery/begin")
+        }
+        ["collections", _, "private-oram", "recovery", "commit"] => {
+            Some("/collections/{collection_name}/private-oram/recovery/commit")
         }
         ["collections", _, "private-oram", "recovery", "status"] => {
             Some("/collections/{collection_name}/private-oram/recovery/status")
@@ -1517,6 +1521,7 @@ mod tests {
             "/collections/{collection_name}/private-hnsw/{vector_name}/session/{session_id}/close",
             "/collections/{collection_name}/private-oram/recovery/abort",
             "/collections/{collection_name}/private-oram/recovery/begin",
+            "/collections/{collection_name}/private-oram/recovery/commit",
             "/collections/{collection_name}/private-oram/recovery/status",
             "/collections/{collection_name}/private-oram/recovery/upload",
             "/collections/{collection_name}/private-oram/recovery/verify",
@@ -1562,7 +1567,7 @@ mod tests {
     fn test_private_oram_recovery_metrics_normalizes_only_fixed_route_shapes() {
         use super::canonical_rest_endpoint_label;
 
-        for action in ["begin", "upload", "status", "verify", "abort"] {
+        for action in ["begin", "upload", "status", "verify", "commit", "abort"] {
             let raw =
                 format!("/collections/docs/private-oram/recovery/{action}?operation_id=sentinel");
             let canonical =
@@ -1575,7 +1580,7 @@ mod tests {
         }
 
         for raw in [
-            "/collections/docs/private-oram/recovery/commit",
+            "/collections/docs/private-oram/recovery/finalize",
             "/collections/docs/private-oram/recovery/begin/operation-token-sentinel",
             "/collections/docs/private-oram/recover/begin",
             "/collections/docs/private-oramish/recovery/begin",

@@ -142,6 +142,8 @@ pub(crate) async fn begin_private_oram_collection_lifecycle_guard(
         }
         Err(err) => return Err(err),
     };
+    toc.require_private_oram_external_recovery_write_allowed(&collection)
+        .await?;
     let config = collection.config_snapshot().await;
     Ok(PrivateOramCollectionLifecycleGuard {
         _private_hnsw_snapshot_guard: begin_private_hnsw_collection_lifecycle(

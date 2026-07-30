@@ -21,7 +21,7 @@ use qdrant_sec::{
     validate_private_result_oram_manifest_shape,
     validate_private_result_oram_manifest_signature_shape,
 };
-use segment::types::SnapshotFormat;
+use segment::types::{ShardKey, SnapshotFormat};
 use segment::utils::fs::move_all;
 use serde::Deserialize;
 use shard::files::PAYLOAD_INDEX_CONFIG_FILE;
@@ -47,15 +47,36 @@ use crate::private_hnsw_oram_store::{
 use crate::private_result_oram_store::{PRIVATE_RESULT_ORAM_DIR, PrivateResultOramStore};
 use crate::shards::local_shard::LocalShard;
 use crate::shards::remote_shard::RemoteShard;
-use crate::shards::replica_set::replica_set_state::ReplicaSetState;
+use crate::shards::replica_set::replica_set_state::{ReplicaSetState, ReplicaState};
 use crate::shards::replica_set::{REPLICA_STATE_FILE, ShardReplicaSet};
 use crate::shards::shard::{PeerId, ShardId};
 use crate::shards::shard_config::{self, ShardConfig};
 use crate::shards::shard_holder::shard_mapping::ShardKeyMapping;
 use crate::shards::shard_holder::{SHARD_KEY_MAPPING_FILE, ShardHolder, shard_not_found_error};
-use crate::shards::shard_path;
+use crate::shards::{shard_initializing_flag_path, shard_path};
 
 const PRIVATE_ORAM_SNAPSHOT_MAX_EPOCH_BYTES: u64 = 16 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PrivateOramRecoveryShardTopology {
+    pub shard_id: ShardId,
+    pub shard_key: Option<ShardKey>,
+    pub owner_peer_ids: Vec<PeerId>,
+    pub is_local: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrivateOramRecoveryCandidateInspection {
+    pub config: CollectionConfigInternal,
+    pub local_shard_ids: Vec<ShardId>,
+    pub shards: Vec<PrivateOramRecoveryShardTopology>,
+}
+
+#[derive(Clone, Copy)]
+enum SnapshotReplicaIdentityMode {
+    Rewrite,
+    Preserve,
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -263,6 +284,36 @@ impl Collection {
         this_peer_id: PeerId,
         is_distributed: bool,
     ) -> CollectionResult<()> {
+        Self::restore_snapshot_with_replica_identity(
+            snapshot_data,
+            target_dir,
+            this_peer_id,
+            is_distributed,
+            SnapshotReplicaIdentityMode::Rewrite,
+        )
+    }
+
+    pub fn restore_private_oram_external_recovery_snapshot(
+        snapshot_data: SnapshotData,
+        target_dir: &Path,
+        this_peer_id: PeerId,
+    ) -> CollectionResult<()> {
+        Self::restore_snapshot_with_replica_identity(
+            snapshot_data,
+            target_dir,
+            this_peer_id,
+            true,
+            SnapshotReplicaIdentityMode::Preserve,
+        )
+    }
+
+    fn restore_snapshot_with_replica_identity(
+        snapshot_data: SnapshotData,
+        target_dir: &Path,
+        this_peer_id: PeerId,
+        is_distributed: bool,
+        replica_identity_mode: SnapshotReplicaIdentityMode,
+    ) -> CollectionResult<()> {
         match snapshot_data {
             SnapshotData::Packed(snapshot_path) => {
                 tar_unpack_file(&snapshot_path, target_dir)?;
@@ -305,11 +356,20 @@ impl Collection {
                         RemoteShard::restore_snapshot(&shard_path)
                     }
                     shard_config::ShardType::Temporary => {}
-                    shard_config::ShardType::ReplicaSet => ShardReplicaSet::restore_snapshot(
-                        &shard_path,
-                        this_peer_id,
-                        is_distributed,
-                    )?,
+                    shard_config::ShardType::ReplicaSet => match replica_identity_mode {
+                        SnapshotReplicaIdentityMode::Rewrite => ShardReplicaSet::restore_snapshot(
+                            &shard_path,
+                            this_peer_id,
+                            is_distributed,
+                        )?,
+                        SnapshotReplicaIdentityMode::Preserve => {
+                            ShardReplicaSet::restore_snapshot_preserving_peer_identity(
+                                &shard_path,
+                                this_peer_id,
+                                is_distributed,
+                            )?
+                        }
+                    },
                 }
             } else {
                 return Err(CollectionError::service_error(format!(
@@ -704,6 +764,232 @@ impl Collection {
         let params = self.collection_config.read().await.params.clone();
         validate_private_oram_shard_snapshot_operation(self.name(), &params, operation_name)
     }
+}
+
+/// Inspects an external private ORAM recovery candidate without activating or modifying it.
+///
+/// This intentionally uses only read-only filesystem operations. In particular, it must not call
+/// collection/shard load paths, which can migrate files, repair segments, replay WAL entries, or
+/// start background workers.
+impl Collection {
+    pub fn inspect_private_oram_recovery_candidate_read_only(
+        collection_name: &str,
+        collection_path: &Path,
+        this_peer_id: PeerId,
+        recovery_mode: Option<&str>,
+    ) -> CollectionResult<PrivateOramRecoveryCandidateInspection> {
+        if collection_name.is_empty() {
+            return Err(private_oram_candidate_inspection_error(
+                "collection identity is invalid",
+            ));
+        }
+        if recovery_mode.is_some() {
+            return Err(private_oram_candidate_inspection_error(
+                "runtime recovery mode is active",
+            ));
+        }
+
+        require_private_oram_candidate_regular_file(
+            &collection_path.join(common::storage_version::VERSION_FILE),
+            "collection version",
+        )?;
+        let version =
+            std::fs::read_to_string(collection_path.join(common::storage_version::VERSION_FILE))
+                .map_err(|_| {
+                    private_oram_candidate_inspection_error("collection version cannot be read")
+                })?;
+        if version != CollectionVersion::current_raw() {
+            return Err(private_oram_candidate_inspection_error(
+                "collection version is not current",
+            ));
+        }
+
+        require_private_oram_candidate_regular_file(
+            &collection_path.join(COLLECTION_CONFIG_FILE),
+            "collection configuration",
+        )?;
+        let config = CollectionConfigInternal::load(collection_path).map_err(|_| {
+            private_oram_candidate_inspection_error("collection configuration cannot be read")
+        })?;
+
+        let expected_shard_ids = snapshot_shard_ids(&config, collection_path)?;
+        let expected_shard_set: HashSet<_> = expected_shard_ids.iter().copied().collect();
+        let actual_shard_set = private_oram_candidate_actual_shard_ids(collection_path)?;
+        if actual_shard_set != expected_shard_set {
+            return Err(private_oram_candidate_inspection_error(
+                "actual shard directories do not match collection configuration",
+            ));
+        }
+
+        let shard_key_mapping = match config.params.sharding_method.unwrap_or_default() {
+            ShardingMethod::Auto => None,
+            ShardingMethod::Custom => {
+                let mapping_path = collection_path.join(SHARD_KEY_MAPPING_FILE);
+                require_private_oram_candidate_regular_file(&mapping_path, "shard key mapping")?;
+                Some(read_json::<ShardKeyMapping>(&mapping_path).map_err(|_| {
+                    private_oram_candidate_inspection_error("shard key mapping cannot be read")
+                })?)
+            }
+        };
+
+        let mut shards = Vec::with_capacity(expected_shard_ids.len());
+        let mut local_shard_ids = Vec::new();
+        for shard_id in expected_shard_ids {
+            let initializing_flag = shard_initializing_flag_path(collection_path, shard_id);
+            if std::fs::symlink_metadata(&initializing_flag).is_ok() {
+                return Err(private_oram_candidate_inspection_error(
+                    "shard initializing marker is present",
+                ));
+            }
+
+            let shard_dir = shard_path(collection_path, shard_id);
+            require_private_oram_candidate_directory(&shard_dir, "shard")?;
+            require_private_oram_candidate_regular_file(
+                &ShardConfig::get_config_path(&shard_dir),
+                "shard configuration",
+            )?;
+            let shard_config: ShardConfig = read_json(&ShardConfig::get_config_path(&shard_dir))
+                .map_err(|_| {
+                    private_oram_candidate_inspection_error("shard configuration cannot be read")
+                })?;
+            if shard_config.r#type != shard_config::ShardType::ReplicaSet {
+                return Err(private_oram_candidate_inspection_error(
+                    "shard is not a replica set",
+                ));
+            }
+
+            let replica_state_path = shard_dir.join(REPLICA_STATE_FILE);
+            require_private_oram_candidate_regular_file(&replica_state_path, "replica state")?;
+            let replica_state: ReplicaSetState = read_json(&replica_state_path).map_err(|_| {
+                private_oram_candidate_inspection_error("replica state cannot be read")
+            })?;
+            if replica_state.this_peer_id != this_peer_id {
+                return Err(private_oram_candidate_inspection_error(
+                    "replica state peer identity is invalid",
+                ));
+            }
+            if replica_state.peers().is_empty()
+                || replica_state
+                    .peers()
+                    .values()
+                    .any(|state| *state != ReplicaState::Active)
+            {
+                return Err(private_oram_candidate_inspection_error(
+                    "replica state is not fully active",
+                ));
+            }
+            let local_peer_is_owner = replica_state.peers().contains_key(&this_peer_id);
+            if replica_state.is_local != local_peer_is_owner {
+                return Err(private_oram_candidate_inspection_error(
+                    "replica ownership is inconsistent",
+                ));
+            }
+
+            if replica_state.is_local {
+                require_private_oram_candidate_directory(
+                    &LocalShard::wal_path(&shard_dir),
+                    "local shard WAL",
+                )?;
+                require_private_oram_candidate_directory(
+                    &LocalShard::segments_path(&shard_dir),
+                    "local shard segments",
+                )?;
+                local_shard_ids.push(shard_id);
+            }
+
+            let mut owner_peer_ids: Vec<_> = replica_state.peers().keys().copied().collect();
+            owner_peer_ids.sort_unstable();
+            shards.push(PrivateOramRecoveryShardTopology {
+                shard_id,
+                shard_key: shard_key_mapping
+                    .as_ref()
+                    .and_then(|mapping| mapping.shard_key(shard_id)),
+                owner_peer_ids,
+                is_local: replica_state.is_local,
+            });
+        }
+
+        shards.sort_by_key(|shard| shard.shard_id);
+        local_shard_ids.sort_unstable();
+        Ok(PrivateOramRecoveryCandidateInspection {
+            config,
+            local_shard_ids,
+            shards,
+        })
+    }
+}
+
+fn private_oram_candidate_actual_shard_ids(
+    collection_path: &Path,
+) -> CollectionResult<HashSet<ShardId>> {
+    let entries = std::fs::read_dir(collection_path).map_err(|_| {
+        private_oram_candidate_inspection_error("collection directory cannot be read")
+    })?;
+    let mut shard_ids = HashSet::new();
+    for entry in entries {
+        let entry = entry.map_err(|_| {
+            private_oram_candidate_inspection_error("collection directory cannot be read")
+        })?;
+        let file_name = entry.file_name();
+        let Some(file_name) = file_name.to_str() else {
+            continue;
+        };
+        if file_name.starts_with("shard_") && file_name.ends_with(".initializing") {
+            return Err(private_oram_candidate_inspection_error(
+                "shard initializing marker is present",
+            ));
+        }
+        if !file_name.bytes().all(|byte| byte.is_ascii_digit()) || file_name.is_empty() {
+            continue;
+        }
+        let shard_id: ShardId = file_name.parse().map_err(|_| {
+            private_oram_candidate_inspection_error("shard directory name is invalid")
+        })?;
+        if file_name != shard_id.to_string() {
+            return Err(private_oram_candidate_inspection_error(
+                "shard directory name is not canonical",
+            ));
+        }
+        let file_type = entry.file_type().map_err(|_| {
+            private_oram_candidate_inspection_error("shard directory cannot be inspected")
+        })?;
+        if file_type.is_symlink() || !file_type.is_dir() || !shard_ids.insert(shard_id) {
+            return Err(private_oram_candidate_inspection_error(
+                "shard directory is invalid",
+            ));
+        }
+    }
+    Ok(shard_ids)
+}
+
+fn require_private_oram_candidate_directory(path: &Path, label: &str) -> CollectionResult<()> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| {
+        private_oram_candidate_inspection_error(&format!("{label} directory is missing"))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(private_oram_candidate_inspection_error(&format!(
+            "{label} must be a non-symlink directory"
+        )));
+    }
+    Ok(())
+}
+
+fn require_private_oram_candidate_regular_file(path: &Path, label: &str) -> CollectionResult<()> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| {
+        private_oram_candidate_inspection_error(&format!("{label} file is missing"))
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        return Err(private_oram_candidate_inspection_error(&format!(
+            "{label} must be a non-symlink regular file"
+        )));
+    }
+    Ok(())
+}
+
+fn private_oram_candidate_inspection_error(reason: &str) -> CollectionError {
+    CollectionError::service_error(format!(
+        "private ORAM recovery candidate inspection failed: {reason}"
+    ))
 }
 
 fn snapshot_shard_ids(
@@ -2204,6 +2490,7 @@ fn private_hnsw_distance_kind(distance: segment::types::Distance) -> DistanceKin
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
+    use std::num::NonZeroU32;
 
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{
@@ -2348,6 +2635,329 @@ mod tests {
         assert!(
             Collection::private_oram_restored_snapshot_local_shard_ids(&config, temp.path(), 11,)
                 .is_err()
+        );
+    }
+
+    fn write_private_oram_recovery_candidate_root(
+        collection_dir: &Path,
+        config: &CollectionConfigInternal,
+    ) {
+        config.save(collection_dir).unwrap();
+        fs::write(
+            collection_dir.join(common::storage_version::VERSION_FILE),
+            CollectionVersion::current_raw(),
+        )
+        .unwrap();
+    }
+
+    fn write_private_oram_recovery_candidate_shard(
+        collection_dir: &Path,
+        shard_id: ShardId,
+        this_peer_id: PeerId,
+        is_local: bool,
+        peers: &[(PeerId, ReplicaState)],
+    ) {
+        let shard_dir = shard_path(collection_dir, shard_id);
+        fs::create_dir_all(&shard_dir).unwrap();
+        ShardConfig::new_replica_set().save(&shard_dir).unwrap();
+
+        let mut replica_state = ReplicaSetState::default();
+        replica_state.is_local = is_local;
+        replica_state.this_peer_id = this_peer_id;
+        for (peer_id, state) in peers {
+            replica_state.set_peer_state(*peer_id, *state);
+        }
+        fs::write(
+            shard_dir.join(REPLICA_STATE_FILE),
+            serde_json::to_vec(&replica_state).unwrap(),
+        )
+        .unwrap();
+        if is_local {
+            fs::create_dir_all(LocalShard::wal_path(&shard_dir)).unwrap();
+            fs::create_dir_all(LocalShard::segments_path(&shard_dir)).unwrap();
+        }
+    }
+
+    fn write_private_oram_recovery_auto_candidate(
+        collection_dir: &Path,
+    ) -> CollectionConfigInternal {
+        let config = private_hnsw_config(Uuid::from_u128(701));
+        write_private_oram_recovery_candidate_root(collection_dir, &config);
+        write_private_oram_recovery_candidate_shard(
+            collection_dir,
+            0,
+            11,
+            true,
+            &[(11, ReplicaState::Active)],
+        );
+        config
+    }
+
+    fn private_oram_recovery_candidate_tree(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+        fn visit(root: &Path, path: &Path, entries: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
+            let mut children: Vec<_> = fs::read_dir(path)
+                .unwrap()
+                .map(|entry| entry.unwrap())
+                .collect();
+            children.sort_by_key(|entry| entry.file_name());
+            for child in children {
+                let child_path = child.path();
+                let relative = child_path.strip_prefix(root).unwrap().to_path_buf();
+                if child.file_type().unwrap().is_dir() {
+                    entries.insert(relative, None);
+                    visit(root, &child_path, entries);
+                } else {
+                    entries.insert(relative, Some(fs::read(&child_path).unwrap()));
+                }
+            }
+        }
+
+        let mut entries = BTreeMap::new();
+        visit(root, root, &mut entries);
+        entries
+    }
+
+    #[test]
+    fn private_oram_recovery_candidate_inspector_returns_sorted_read_only_topology() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = private_hnsw_config(Uuid::from_u128(702));
+        config.params.sharding_method = Some(ShardingMethod::Custom);
+        config.params.shard_number = NonZeroU32::new(2).unwrap();
+        write_private_oram_recovery_candidate_root(temp.path(), &config);
+
+        let mut shard_key_mapping = ShardKeyMapping::default();
+        shard_key_mapping
+            .entry(ShardKey::from("archive"))
+            .or_default()
+            .insert(2);
+        shard_key_mapping
+            .entry(ShardKey::from("current"))
+            .or_default()
+            .insert(0);
+        fs::write(
+            temp.path().join(SHARD_KEY_MAPPING_FILE),
+            serde_json::to_vec(&shard_key_mapping).unwrap(),
+        )
+        .unwrap();
+        write_private_oram_recovery_candidate_shard(
+            temp.path(),
+            2,
+            11,
+            true,
+            &[(29, ReplicaState::Active), (11, ReplicaState::Active)],
+        );
+        write_private_oram_recovery_candidate_shard(
+            temp.path(),
+            0,
+            11,
+            false,
+            &[(29, ReplicaState::Active)],
+        );
+
+        let before = private_oram_recovery_candidate_tree(temp.path());
+        let inspection = Collection::inspect_private_oram_recovery_candidate_read_only(
+            "docs",
+            temp.path(),
+            11,
+            None,
+        )
+        .unwrap();
+        let after = private_oram_recovery_candidate_tree(temp.path());
+
+        assert_eq!(before, after);
+        assert_eq!(inspection.config, config);
+        assert_eq!(inspection.local_shard_ids, vec![2]);
+        assert_eq!(
+            inspection.shards,
+            vec![
+                PrivateOramRecoveryShardTopology {
+                    shard_id: 0,
+                    shard_key: Some(ShardKey::from("current")),
+                    owner_peer_ids: vec![29],
+                    is_local: false,
+                },
+                PrivateOramRecoveryShardTopology {
+                    shard_id: 2,
+                    shard_key: Some(ShardKey::from("archive")),
+                    owner_peer_ids: vec![11, 29],
+                    is_local: true,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn private_oram_recovery_candidate_inspector_requires_exact_version_and_normal_runtime() {
+        let stale = tempfile::tempdir().unwrap();
+        write_private_oram_recovery_auto_candidate(stale.path());
+        fs::write(
+            stale.path().join(common::storage_version::VERSION_FILE),
+            "0.0.0",
+        )
+        .unwrap();
+        assert!(
+            Collection::inspect_private_oram_recovery_candidate_read_only(
+                "docs",
+                stale.path(),
+                11,
+                None,
+            )
+            .is_err()
+        );
+
+        let recovery = tempfile::tempdir().unwrap();
+        write_private_oram_recovery_auto_candidate(recovery.path());
+        assert!(
+            Collection::inspect_private_oram_recovery_candidate_read_only(
+                "docs",
+                recovery.path(),
+                11,
+                Some("operator recovery"),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn private_oram_recovery_candidate_inspector_requires_exact_shard_directory_set() {
+        let unexpected = tempfile::tempdir().unwrap();
+        write_private_oram_recovery_auto_candidate(unexpected.path());
+        fs::create_dir(unexpected.path().join("7")).unwrap();
+        assert!(
+            Collection::inspect_private_oram_recovery_candidate_read_only(
+                "docs",
+                unexpected.path(),
+                11,
+                None,
+            )
+            .is_err()
+        );
+
+        let missing = tempfile::tempdir().unwrap();
+        write_private_oram_recovery_auto_candidate(missing.path());
+        fs::remove_dir_all(missing.path().join("0")).unwrap();
+        assert!(
+            Collection::inspect_private_oram_recovery_candidate_read_only(
+                "docs",
+                missing.path(),
+                11,
+                None,
+            )
+            .is_err()
+        );
+
+        let initializing = tempfile::tempdir().unwrap();
+        write_private_oram_recovery_auto_candidate(initializing.path());
+        fs::write(initializing.path().join("shard_0.initializing"), b"").unwrap();
+        assert!(
+            Collection::inspect_private_oram_recovery_candidate_read_only(
+                "docs",
+                initializing.path(),
+                11,
+                None,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn private_oram_recovery_candidate_inspector_rejects_non_replica_and_recovery_states() {
+        let legacy = tempfile::tempdir().unwrap();
+        write_private_oram_recovery_auto_candidate(legacy.path());
+        fs::write(
+            ShardConfig::get_config_path(&legacy.path().join("0")),
+            serde_json::to_vec(&ShardConfig {
+                r#type: shard_config::ShardType::Local,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            Collection::inspect_private_oram_recovery_candidate_read_only(
+                "docs",
+                legacy.path(),
+                11,
+                None,
+            )
+            .is_err()
+        );
+
+        let recovering = tempfile::tempdir().unwrap();
+        write_private_oram_recovery_auto_candidate(recovering.path());
+        let mut replica_state = ReplicaSetState::default();
+        replica_state.is_local = true;
+        replica_state.this_peer_id = 11;
+        replica_state.set_peer_state(11, ReplicaState::Recovery);
+        fs::write(
+            recovering.path().join("0").join(REPLICA_STATE_FILE),
+            serde_json::to_vec(&replica_state).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            Collection::inspect_private_oram_recovery_candidate_read_only(
+                "docs",
+                recovering.path(),
+                11,
+                None,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn private_oram_recovery_candidate_inspector_requires_replica_state_and_local_storage() {
+        let missing_state = tempfile::tempdir().unwrap();
+        write_private_oram_recovery_auto_candidate(missing_state.path());
+        fs::remove_file(missing_state.path().join("0").join(REPLICA_STATE_FILE)).unwrap();
+        let before = private_oram_recovery_candidate_tree(missing_state.path());
+        assert!(
+            Collection::inspect_private_oram_recovery_candidate_read_only(
+                "docs",
+                missing_state.path(),
+                11,
+                None,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            before,
+            private_oram_recovery_candidate_tree(missing_state.path())
+        );
+        assert!(
+            !missing_state
+                .path()
+                .join("0")
+                .join(REPLICA_STATE_FILE)
+                .exists()
+        );
+
+        let missing_wal = tempfile::tempdir().unwrap();
+        write_private_oram_recovery_auto_candidate(missing_wal.path());
+        fs::remove_dir_all(LocalShard::wal_path(&missing_wal.path().join("0"))).unwrap();
+        assert!(
+            Collection::inspect_private_oram_recovery_candidate_read_only(
+                "docs",
+                missing_wal.path(),
+                11,
+                None,
+            )
+            .is_err()
+        );
+
+        let missing_segments = tempfile::tempdir().unwrap();
+        write_private_oram_recovery_auto_candidate(missing_segments.path());
+        fs::remove_dir_all(LocalShard::segments_path(
+            &missing_segments.path().join("0"),
+        ))
+        .unwrap();
+        assert!(
+            Collection::inspect_private_oram_recovery_candidate_read_only(
+                "docs",
+                missing_segments.path(),
+                11,
+                None,
+            )
+            .is_err()
         );
     }
 

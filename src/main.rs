@@ -34,7 +34,11 @@ use startup::setup_panic_hook;
 use storage::content_manager::consensus::operation_sender::OperationSender;
 use storage::content_manager::consensus::persistent::Persistent;
 use storage::content_manager::consensus_manager::{ConsensusManager, ConsensusStateRef};
-use storage::content_manager::snapshots::private_oram_external_recovery::reconcile_private_oram_external_recovery_installs;
+use storage::content_manager::snapshots::private_oram_external_recovery::{
+    finalize_committed_private_oram_external_recovery_installs,
+    private_oram_external_recovery_install_is_pending,
+    reconcile_private_oram_external_recovery_installs,
+};
 use storage::content_manager::toc::TableOfContent;
 use storage::content_manager::toc::dispatcher::TocDispatcher;
 use storage::dispatcher::Dispatcher;
@@ -158,7 +162,7 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let settings = Settings::new(args.config_path)?;
+    let mut settings = Settings::new(args.config_path)?;
 
     // Set global feature flags, sourced from configuration
     init_feature_flags(settings.feature_flags);
@@ -308,6 +312,18 @@ fn main() -> anyhow::Result<()> {
     .map_err(|err| {
         anyhow::anyhow!("Failed to reconcile private ORAM recovery installation: {err}")
     })?;
+    let private_oram_recovery_install_pending =
+        private_oram_external_recovery_install_is_pending(&settings.storage.storage_path)?;
+    let private_oram_external_recovery_active =
+        persistent_consensus_state.has_active_private_oram_external_recovery();
+    if (args.storage_snapshot.is_some() || args.snapshot.is_some())
+        && (private_oram_recovery_install_pending || private_oram_external_recovery_active)
+    {
+        anyhow::bail!("Snapshot recovery is blocked by an active private ORAM external recovery");
+    }
+    if private_oram_recovery_install_pending || private_oram_external_recovery_active {
+        settings.storage.handle_collection_load_errors = false;
+    }
 
     let is_distributed_deployment = settings.cluster.enabled;
 
@@ -418,6 +434,21 @@ fn main() -> anyhow::Result<()> {
         persistent_consensus_state.this_peer_id(),
         propose_operation_sender.clone(),
     )?;
+
+    finalize_committed_private_oram_external_recovery_installs(
+        &settings.storage.storage_path,
+        |key| persistent_consensus_state.private_oram_external_recovery(key),
+        |collection_name, collection_id, layout_digest| {
+            toc.private_oram_external_recovery_collection_is_loaded(
+                collection_name,
+                collection_id,
+                layout_digest,
+            )
+        },
+    )
+    .map_err(|err| {
+        anyhow::anyhow!("Failed to finalize private ORAM recovery installation: {err}")
+    })?;
 
     toc.clear_all_tmp_directories()?;
 

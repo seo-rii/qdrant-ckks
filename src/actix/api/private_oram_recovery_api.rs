@@ -20,8 +20,9 @@ use crate::actix::helpers::{HttpError, process_response};
 use crate::common::auth::Auth;
 use crate::common::private_oram_recovery::{
     PrivateOramExternalRecoveryChunk, do_abort_private_oram_external_recovery,
-    do_begin_private_oram_external_recovery, do_get_private_oram_external_recovery_status,
-    do_upload_private_oram_external_recovery_chunk, do_verify_private_oram_external_recovery,
+    do_begin_private_oram_external_recovery, do_commit_private_oram_external_recovery,
+    do_get_private_oram_external_recovery_status, do_upload_private_oram_external_recovery_chunk,
+    do_verify_private_oram_external_recovery,
 };
 use crate::settings::Settings;
 
@@ -95,8 +96,8 @@ async fn begin_recovery(
     dispatcher: web::Data<Dispatcher>,
     settings: web::Data<Settings>,
     path: Path<CollectionPath>,
-    request: Json<BeginPrivateOramExternalRecoveryRequest>,
     PrivateOramRecoveryManageAuth(auth): PrivateOramRecoveryManageAuth,
+    request: Json<BeginPrivateOramExternalRecoveryRequest>,
 ) -> HttpResponse {
     let timing = Instant::now();
     let path = path.into_inner();
@@ -175,8 +176,8 @@ async fn verify_recovery(
     dispatcher: web::Data<Dispatcher>,
     settings: web::Data<Settings>,
     path: Path<CollectionPath>,
-    request: Json<PrivateOramExternalRecoveryOperationRequest>,
     PrivateOramRecoveryManageAuth(auth): PrivateOramRecoveryManageAuth,
+    request: Json<PrivateOramExternalRecoveryOperationRequest>,
 ) -> HttpResponse {
     let timing = Instant::now();
     let path = path.into_inner();
@@ -197,13 +198,35 @@ async fn abort_recovery(
     dispatcher: web::Data<Dispatcher>,
     settings: web::Data<Settings>,
     path: Path<CollectionPath>,
-    request: Json<PrivateOramExternalRecoveryOperationRequest>,
     PrivateOramRecoveryManageAuth(auth): PrivateOramRecoveryManageAuth,
+    request: Json<PrivateOramExternalRecoveryOperationRequest>,
 ) -> HttpResponse {
     let timing = Instant::now();
     let path = path.into_inner();
     let request = request.into_inner();
     let result = do_abort_private_oram_external_recovery(
+        dispatcher.get_ref(),
+        &auth,
+        settings.get_ref(),
+        &path.collection_name,
+        &request.operation_token,
+    )
+    .await;
+    process_recovery_response(result, timing)
+}
+
+#[post("/collections/{collection_name}/private-oram/recovery/commit")]
+async fn commit_recovery(
+    dispatcher: web::Data<Dispatcher>,
+    settings: web::Data<Settings>,
+    path: Path<CollectionPath>,
+    PrivateOramRecoveryManageAuth(auth): PrivateOramRecoveryManageAuth,
+    request: Json<PrivateOramExternalRecoveryOperationRequest>,
+) -> HttpResponse {
+    let timing = Instant::now();
+    let path = path.into_inner();
+    let request = request.into_inner();
+    let result = do_commit_private_oram_external_recovery(
         dispatcher.get_ref(),
         &auth,
         settings.get_ref(),
@@ -247,6 +270,7 @@ pub fn config_private_oram_recovery_api(cfg: &mut web::ServiceConfig) {
         .service(upload_recovery_chunk)
         .service(recovery_status)
         .service(verify_recovery)
+        .service(commit_recovery)
         .service(abort_recovery);
 }
 

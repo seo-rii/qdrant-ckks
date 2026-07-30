@@ -3373,9 +3373,22 @@ impl TableOfContent {
     }
 
     async fn collections_snapshot(&self) -> consensus_manager::CollectionsSnapshot {
+        let _collection_lifecycle_guard = self.collection_lifecycle_lock.lock().await;
         let mut collections: HashMap<CollectionId, collection_state::State> = HashMap::new();
-        for (id, collection) in self.collections.read().await.iter() {
+        let live_collections: Vec<_> = self
+            .collections
+            .read()
+            .await
+            .iter()
+            .map(|(id, collection)| (id.clone(), collection.clone()))
+            .collect();
+        for (id, collection) in live_collections {
             collections.insert(id.clone(), collection.state().await);
+        }
+        for detached in &self.private_oram_external_recovery_detached {
+            collections
+                .entry(detached.key().clone())
+                .or_insert_with(|| detached.state.clone());
         }
         consensus_manager::CollectionsSnapshot {
             collections,
@@ -3389,12 +3402,53 @@ impl TableOfContent {
         private_oram_snapshot: Option<consensus_manager::PrivateOramSnapshotState<'_>>,
     ) -> Result<(), StorageError> {
         self.general_runtime.block_on(async {
+            let _collection_lifecycle_guard = self.collection_lifecycle_lock.lock().await;
+            let mut recovery_fenced: HashMap<_, _> = self
+                .private_oram_external_recovery_detached
+                .iter()
+                .map(|entry| (entry.key().clone(), entry.value().state.clone()))
+                .collect();
+            let live_collections: Vec<_> = self
+                .collections
+                .read()
+                .await
+                .iter()
+                .map(|(id, collection)| (id.clone(), collection.clone()))
+                .collect();
+            for (collection_name, collection) in live_collections {
+                if self
+                    .private_oram_external_recovery_fence(&collection)
+                    .await?
+                    .is_some()
+                {
+                    recovery_fenced
+                        .entry(collection_name)
+                        .or_insert(collection.state().await);
+                }
+            }
+            if !recovery_fenced.is_empty() {
+                let aliases = self.alias_persistence.read().await;
+                if aliases.state() != &data.aliases
+                    || recovery_fenced.iter().any(|(collection_name, state)| {
+                        data.collections.get(collection_name) != Some(state)
+                    })
+                {
+                    return Err(StorageError::Locked {
+                        description:
+                            "Raft snapshot conflicts with private ORAM recovery installation"
+                                .to_string(),
+                    });
+                }
+            }
             let mut collections = self.collections.write().await;
             let mut validated_private_oram_resharding = HashSet::new();
             let mut private_oram_snapshot_recovery_aborts = HashMap::new();
             let mut private_oram_transfer_snapshot_recovery_aborts = HashMap::new();
             let mut private_oram_transfer_snapshot_recovery_resumes = HashMap::new();
             for (id, state) in &data.collections {
+                if recovery_fenced.contains_key(id) {
+                    continue;
+                }
                 if private_oram_index_keys_for_config(&state.config, id)?.is_empty()
                     || state.resharding.is_none() && state.transfers.is_empty()
                 {
@@ -3465,6 +3519,9 @@ impl TableOfContent {
             }
 
             for (id, state) in &data.collections {
+                if recovery_fenced.contains_key(id) {
+                    continue;
+                }
                 if let Some(collection) = collections.get(id) {
                     let collection_config = collection.config_snapshot().await;
                     let collection_uuid = collection_config.uuid;
@@ -3506,7 +3563,7 @@ impl TableOfContent {
                         drop(collections);
 
                         // Delete collection
-                        self.delete_collection(id).await?;
+                        self.delete_collection_locked(id).await?;
 
                         // Re-acquire `collections` lock 🙄
                         collections = self.collections.write().await;
@@ -3673,7 +3730,7 @@ impl TableOfContent {
                          because it is not part of the consensus snapshot",
                     );
 
-                    self.delete_collection(collection_name).await?;
+                    self.delete_collection_locked(collection_name).await?;
                 }
             }
 
@@ -3688,8 +3745,28 @@ impl TableOfContent {
     }
 
     async fn remove_shards_at_peer(&self, peer_id: PeerId) -> Result<(), StorageError> {
-        let collections = self.collections.read().await;
-        for collection in collections.values() {
+        let _collection_lifecycle_guard = self.collection_lifecycle_lock.lock().await;
+        if !self.private_oram_external_recovery_detached.is_empty() {
+            return Err(StorageError::Locked {
+                description: "peer shard changes are locked by private ORAM recovery installation"
+                    .to_string(),
+            });
+        }
+        let collections: Vec<_> = self.collections.read().await.values().cloned().collect();
+        for collection in &collections {
+            if self
+                .private_oram_external_recovery_fence(collection)
+                .await?
+                .is_some()
+            {
+                return Err(StorageError::Locked {
+                    description:
+                        "peer shard changes are locked by private ORAM recovery installation"
+                            .to_string(),
+                });
+            }
+        }
+        for collection in collections {
             collection.remove_shards_at_peer(peer_id).await?;
         }
         Ok(())

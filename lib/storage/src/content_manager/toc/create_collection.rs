@@ -26,7 +26,13 @@ impl TableOfContent {
         // Collection operations require multiple file operations,
         // before collection can actually be registered in the service.
         // To prevent parallel writing of the files, we use this lock.
-        let collection_create_guard = self.collection_create_lock.lock().await;
+        let collection_lifecycle_guard = self.collection_lifecycle_lock.lock().await;
+        if self.private_oram_external_recovery_collection_is_detached(collection_name) {
+            return Err(StorageError::Locked {
+                description: "collection is locked by private ORAM external recovery installation"
+                    .to_string(),
+            });
+        }
 
         let CreateCollection {
             mut vectors,
@@ -51,7 +57,10 @@ impl TableOfContent {
             collections.validate_collection_not_exists(collection_name)?;
 
             if let Some(max_collections) = self.storage_config.max_collections
-                && collections.len() >= max_collections
+                && collections
+                    .len()
+                    .saturating_add(self.private_oram_external_recovery_detached.len())
+                    >= max_collections
             {
                 return Err(StorageError::bad_request(format!(
                     "Can't create collection with name {collection_name}. Max collections limit reached: {max_collections}",
@@ -278,7 +287,7 @@ impl TableOfContent {
             self.telemetry.init_snapshot_telemetry(collection_name);
         }
 
-        drop(collection_create_guard);
+        drop(collection_lifecycle_guard);
 
         // Notify the collection is created and ready to use
         for shard_id in local_shards {

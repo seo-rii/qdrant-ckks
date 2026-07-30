@@ -832,17 +832,20 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             current_private_oram_epochs,
             current_private_oram_layouts,
             current_private_oram_external_recoveries,
+            this_peer_id,
         ) = {
             let persistent = self.persistent.read();
             (
                 persistent.private_oram_epochs.clone(),
                 persistent.private_oram_layouts.clone(),
                 persistent.private_oram_external_recoveries.clone(),
+                persistent.this_peer_id(),
             )
         };
-        crate::content_manager::consensus::persistent::validate_private_oram_external_recovery_snapshot_transition(
+        crate::content_manager::consensus::persistent::validate_private_oram_external_recovery_snapshot_transition_for_peer(
             &current_private_oram_external_recoveries,
             &private_oram_external_recoveries,
+            this_peer_id,
         )?;
         self.toc
             .apply_collections_snapshot_with_private_oram_state(

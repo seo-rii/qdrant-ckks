@@ -114,6 +114,7 @@ fn redact_private_oram_path(path: &str) -> String {
         {
             Some(5)
         }
+        ["", "collections", _, "private-oram", "recovery", ..] => Some(4),
         ["", "collections", _, "private-hnsw", _, "buckets", ..] => Some(5),
         ["", "collections", _, "private-hnsw", _, "manifest", ..] => Some(5),
         [
@@ -474,8 +475,7 @@ fn path_has_private_oram_marker(path: &str) -> bool {
     let segments = path.split('/').collect::<Vec<_>>();
     matches!(
         segments.as_slice(),
-        ["", "collections", _, "private-oram", "recovery", action, ..]
-            if is_private_oram_recovery_action(action)
+        ["", "collections", _, "private-oram", "recovery", ..]
     ) || (segments.get(1) == Some(&"collections")
         && matches!(
             segments.get(3).copied(),
@@ -484,7 +484,10 @@ fn path_has_private_oram_marker(path: &str) -> bool {
 }
 
 fn is_private_oram_recovery_action(action: &str) -> bool {
-    matches!(action, "begin" | "upload" | "status" | "verify" | "abort")
+    matches!(
+        action,
+        "begin" | "upload" | "status" | "verify" | "commit" | "abort"
+    )
 }
 
 #[cfg(test)]
@@ -1466,7 +1469,7 @@ mod tests {
 
     #[test]
     fn private_oram_recovery_access_paths_redact_queries_and_unknown_suffixes() {
-        for action in ["begin", "upload", "status", "verify", "abort"] {
+        for action in ["begin", "upload", "status", "verify", "commit", "abort"] {
             let endpoint = format!("/collections/docs/private-oram/recovery/{action}");
             assert_eq!(redact_private_oram_access_path(&endpoint), endpoint);
             assert_eq!(
@@ -1483,8 +1486,14 @@ mod tests {
             );
         }
 
+        assert_eq!(
+            redact_private_oram_access_path(
+                "/collections/docs/private-oram/recovery/finalize?operation_id=operation-token-sentinel"
+            ),
+            "/collections/docs/private-oram/recovery/[redacted]?[redacted]"
+        );
+
         for lookalike in [
-            "/collections/docs/private-oram/recovery/commit?operation_id=operation-token-sentinel",
             "/collections/docs/private-oramish/recovery/begin?operation_id=operation-token-sentinel",
             "/collections/docs/private-oram/recover/begin?operation_id=operation-token-sentinel",
             "/collections/private-oram/points/search?operation_id=operation-token-sentinel",

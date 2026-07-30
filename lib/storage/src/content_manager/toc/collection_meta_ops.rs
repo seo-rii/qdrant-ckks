@@ -359,8 +359,20 @@ impl TableOfContent {
         &self,
         collection_name: &str,
     ) -> Result<bool, StorageError> {
-        let _collection_create_guard = self.collection_create_lock.lock().await;
+        let _collection_lifecycle_guard = self.collection_lifecycle_lock.lock().await;
+        if self.private_oram_external_recovery_collection_is_detached(collection_name) {
+            return Err(StorageError::Locked {
+                description: "collection is locked by private ORAM external recovery installation"
+                    .to_string(),
+            });
+        }
+        self.delete_collection_locked(collection_name).await
+    }
 
+    pub(super) async fn delete_collection_locked(
+        &self,
+        collection_name: &str,
+    ) -> Result<bool, StorageError> {
         self.alias_persistence
             .write()
             .await
@@ -447,6 +459,14 @@ impl TableOfContent {
         &self,
         operation: ChangeAliasesOperation,
     ) -> Result<bool, StorageError> {
+        let _collection_lifecycle_guard = self.collection_lifecycle_lock.lock().await;
+        if !self.private_oram_external_recovery_detached.is_empty() {
+            return Err(StorageError::Locked {
+                description:
+                    "collection aliases are locked by private ORAM external recovery installation"
+                        .to_string(),
+            });
+        }
         // Lock all collections for alias changes
         // Prevent search on partially switched collections
         let collection_lock = self.collections.write().await;

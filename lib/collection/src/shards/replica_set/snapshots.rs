@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use common::fs::{safe_delete_with_suffix, sync_parent_dir_async};
+use common::fs::{read_json, safe_delete_with_suffix, sync_parent_dir_async};
 use common::save_on_disk::SaveOnDisk;
 use common::tar_ext;
 use fs_err::tokio as tokio_fs;
@@ -100,6 +100,28 @@ impl ShardReplicaSet {
         })?;
 
         if replica_state.read().is_local {
+            LocalShard::restore_snapshot(snapshot_path)?;
+        }
+        Ok(())
+    }
+
+    pub fn restore_snapshot_preserving_peer_identity(
+        snapshot_path: &Path,
+        expected_peer_id: PeerId,
+        is_distributed: bool,
+    ) -> CollectionResult<()> {
+        let replica_state: ReplicaSetState = read_json(&snapshot_path.join(REPLICA_STATE_FILE))?;
+        if replica_state.this_peer_id != expected_peer_id {
+            return Err(CollectionError::service_error(
+                "private ORAM external recovery replica peer identity is invalid",
+            ));
+        }
+        if !is_distributed && !replica_state.is_local {
+            return Err(CollectionError::service_error(
+                "private ORAM external recovery snapshot has no local shard data",
+            ));
+        }
+        if replica_state.is_local {
             LocalShard::restore_snapshot(snapshot_path)?;
         }
         Ok(())
@@ -345,5 +367,29 @@ impl ShardReplicaSet {
             })?
             .snapshot_manifest()
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::shards::replica_set::replica_set_state::ReplicaState;
+
+    #[test]
+    fn private_oram_external_restore_rejects_and_preserves_wrong_peer_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = ReplicaSetState::default();
+        state.is_local = false;
+        state.this_peer_id = 29;
+        state.set_peer_state(29, ReplicaState::Active);
+        let state_path = temp.path().join(REPLICA_STATE_FILE);
+        std::fs::write(&state_path, serde_json::to_vec(&state).unwrap()).unwrap();
+        let before = std::fs::read(&state_path).unwrap();
+
+        assert!(
+            ShardReplicaSet::restore_snapshot_preserving_peer_identity(temp.path(), 11, true)
+                .is_err()
+        );
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
     }
 }

@@ -62,8 +62,10 @@ impl TableOfContent {
             "cleanup_local_shard",
         )?;
 
-        self.get_collection(&collection_pass)
-            .await?
+        let collection = self.get_collection(&collection_pass).await?;
+        self.require_private_oram_external_recovery_write_allowed(&collection)
+            .await?;
+        collection
             .cleanup_local_shard(shard_id, wait, timeout)
             .await
             .map_err(Into::into)
