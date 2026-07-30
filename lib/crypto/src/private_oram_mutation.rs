@@ -593,6 +593,7 @@ pub struct PrivateOramObservedReadTranscriptV1 {
     pub read_path_count: u32,
     pub paths_per_window: u32,
     pub tree_height: u32,
+    pub ordered_leaf_labels: Vec<String>,
     pub transcript_digest: String,
 }
 
@@ -675,6 +676,8 @@ impl Debug for PrivateOramObservedReadTranscriptV1 {
             .field("read_path_count", &self.read_path_count)
             .field("paths_per_window", &self.paths_per_window)
             .field("tree_height", &self.tree_height)
+            .field("ordered_leaf_label_count", &self.ordered_leaf_labels.len())
+            .field("ordered_leaf_labels", &"[redacted]")
             .field("transcript_digest", &"[redacted]")
             .finish()
     }
@@ -1193,6 +1196,11 @@ pub fn private_oram_append_read_transcript_v1(
     let transcript_digest = digest_message(
         try_private_oram_append_read_transcript_v1_digest_message(input)?,
     );
+    let ordered_leaf_labels = input
+        .windows
+        .iter()
+        .flat_map(|window| window.paths.iter().cloned())
+        .collect();
     Ok(PrivateOramObservedReadTranscriptV1 {
         collection_id: input.collection_id.to_string(),
         manifest_digest: input.manifest_digest.to_string(),
@@ -1205,6 +1213,7 @@ pub fn private_oram_append_read_transcript_v1(
         read_path_count: path_count,
         paths_per_window: input.paths_per_window,
         tree_height: input.tree_height,
+        ordered_leaf_labels,
         transcript_digest,
     })
 }
@@ -1259,7 +1268,7 @@ pub fn try_private_oram_append_writeback_v1_digest_message(
         "read_transcript_digest",
         PrivateOramMutationError::InvalidMutationField,
     )?;
-    validate_canonical_buckets(input.updated_buckets)?;
+    validate_ordered_bucket_occurrences(input.updated_buckets)?;
 
     let mut message = Vec::new();
     try_push_domain(
@@ -1965,14 +1974,36 @@ fn validate_writeback_transition(
         {
             return Err(PrivateOramMutationError::FixedBudgetMismatch);
         }
-        if writeback
-            .updated_buckets
-            .last()
-            .is_some_and(|bucket| bucket.bucket_id >= manifest_index.capacity.bucket_count)
+        let path_bucket_count = usize::try_from(oram.tree_height)
+            .ok()
+            .and_then(|tree_height| tree_height.checked_add(1))
+            .ok_or(PrivateOramMutationError::FixedBudgetMismatch)?;
+        if observed_read.ordered_leaf_labels.len()
+            != usize::try_from(writeback.read_path_count)
+                .map_err(|_| PrivateOramMutationError::FixedBudgetMismatch)?
+            || writeback.updated_buckets.len()
+                != observed_read
+                    .ordered_leaf_labels
+                    .len()
+                    .checked_mul(path_bucket_count)
+                    .ok_or(PrivateOramMutationError::FixedBudgetMismatch)?
         {
-            return Err(PrivateOramMutationError::InvalidMutationField(
-                "writebacks.bucket_id",
-            ));
+            return Err(PrivateOramMutationError::FixedBudgetMismatch);
+        }
+        for (leaf_label, bucket_frame) in observed_read
+            .ordered_leaf_labels
+            .iter()
+            .zip(writeback.updated_buckets.chunks_exact(path_bucket_count))
+        {
+            let expected_bucket_ids =
+                private_oram_path_bucket_ids_for_leaf_label(leaf_label, oram.tree_height)?;
+            if bucket_frame
+                .iter()
+                .zip(expected_bucket_ids)
+                .any(|(bucket, expected_bucket_id)| bucket.bucket_id != expected_bucket_id)
+            {
+                return Err(PrivateOramMutationError::FixedBudgetMismatch);
+            }
         }
         let digest =
             private_oram_append_writeback_v1_digest(PrivateOramAppendWritebackDigestInput {
@@ -2163,8 +2194,7 @@ fn validate_index_capacity(
             .fixed_append_read_path_count
             .is_multiple_of(oram.path_batch_size)
         || read_bucket_responses > PRIVATE_ORAM_MAX_UPDATED_BUCKETS_U64
-        || u64::from(capacity.fixed_append_write_bucket_count) < minimum_path_bucket_count
-        || u64::from(capacity.fixed_append_write_bucket_count) > capacity.bucket_count
+        || u64::from(capacity.fixed_append_write_bucket_count) != read_bucket_responses
         || u64::from(capacity.fixed_append_write_bucket_count)
             > PRIVATE_ORAM_MAX_UPDATED_BUCKETS_U64
     {
@@ -2176,7 +2206,10 @@ fn validate_index_capacity(
         max_neighbor_rewrites,
         ..
     } = params
-        && u64::from(*max_neighbor_rewrites) > capacity.logical_capacity
+        && (u64::from(*max_neighbor_rewrites) > capacity.logical_capacity
+            || max_neighbor_rewrites
+                .checked_add(2)
+                .is_none_or(|minimum| capacity.fixed_append_read_path_count < minimum))
     {
         return Err(PrivateOramMutationError::InvalidManifestField(
             "indexes.max_neighbor_rewrites",
@@ -2244,7 +2277,7 @@ fn validate_canonical_writebacks(
             "writebacks.read_transcript_digest",
             PrivateOramMutationError::InvalidMutationField,
         )?;
-        validate_canonical_buckets(&writeback.updated_buckets)?;
+        validate_ordered_bucket_occurrences(&writeback.updated_buckets)?;
         total_updated_buckets = total_updated_buckets
             .checked_add(writeback.updated_buckets.len())
             .ok_or(PrivateOramMutationError::NonCanonicalBuckets)?;
@@ -2303,6 +2336,9 @@ fn validate_observed_read_transcripts(
             || transcript.paths_per_window == 0
             || transcript.tree_height == 0
             || transcript.tree_height >= 63
+            || transcript.ordered_leaf_labels.len()
+                != usize::try_from(transcript.read_path_count)
+                    .map_err(|_| PrivateOramMutationError::FixedBudgetMismatch)?
         {
             return Err(PrivateOramMutationError::InvalidMutationField(
                 "observed_read_transcripts.geometry",
@@ -2313,20 +2349,24 @@ fn validate_observed_read_transcripts(
             "observed_read_transcripts.transcript_digest",
             PrivateOramMutationError::InvalidMutationField,
         )?;
+        let leaf_count = 1u64.checked_shl(transcript.tree_height).ok_or(
+            PrivateOramMutationError::InvalidMutationField("observed_read_transcripts.tree_height"),
+        )?;
+        for leaf_label in &transcript.ordered_leaf_labels {
+            if u64::from_be_bytes(decode_base64url_8(leaf_label)?) >= leaf_count {
+                return Err(PrivateOramMutationError::InvalidMutationField(
+                    "observed_read_transcripts.ordered_leaf_labels",
+                ));
+            }
+        }
     }
     Ok(())
 }
 
-fn validate_canonical_buckets(
+fn validate_ordered_bucket_occurrences(
     buckets: &[PrivateOramAppendBucketRefV1],
 ) -> Result<(), PrivateOramMutationError> {
     if buckets.is_empty() || buckets.len() > PRIVATE_ORAM_APPEND_MAX_TOTAL_BUCKET_REFS {
-        return Err(PrivateOramMutationError::NonCanonicalBuckets);
-    }
-    if buckets
-        .windows(2)
-        .any(|buckets| buckets[0].bucket_id >= buckets[1].bucket_id)
-    {
         return Err(PrivateOramMutationError::NonCanonicalBuckets);
     }
     for bucket in buckets {
@@ -2545,6 +2585,38 @@ fn decode_base64url_8(value: &str) -> Result<[u8; 8], PrivateOramMutationError> 
     decoded
         .try_into()
         .map_err(|_| PrivateOramMutationError::InvalidMutationField("read_windows.paths"))
+}
+
+fn private_oram_path_bucket_ids_for_leaf_label(
+    leaf_label: &str,
+    tree_height: u32,
+) -> Result<Vec<u64>, PrivateOramMutationError> {
+    let leaf = u64::from_be_bytes(decode_base64url_8(leaf_label)?);
+    let leaf_count =
+        1u64.checked_shl(tree_height)
+            .ok_or(PrivateOramMutationError::InvalidMutationField(
+                "read_windows.tree_height",
+            ))?;
+    if tree_height == 0 || tree_height >= 63 || leaf >= leaf_count {
+        return Err(PrivateOramMutationError::InvalidMutationField(
+            "read_windows.paths",
+        ));
+    }
+    let path_capacity = usize::try_from(tree_height)
+        .ok()
+        .and_then(|tree_height| tree_height.checked_add(1))
+        .ok_or(PrivateOramMutationError::FixedBudgetMismatch)?;
+    let mut bucket_ids = Vec::with_capacity(path_capacity);
+    for level in 0..=tree_height {
+        let level_start = (1u64 << level) - 1;
+        let prefix = if level == 0 {
+            0
+        } else {
+            leaf >> (tree_height - level)
+        };
+        bucket_ids.push(level_start + prefix);
+    }
+    Ok(bucket_ids)
 }
 
 fn decode_base64url_32(

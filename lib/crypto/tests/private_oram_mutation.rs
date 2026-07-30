@@ -1,6 +1,7 @@
 use data_encoding::BASE64URL_NOPAD;
 use qdrant_sec::*;
 use ring::signature::{Ed25519KeyPair, KeyPair};
+use sha2::Digest;
 
 fn digest(byte: u8) -> String {
     BASE64URL_NOPAD.encode(&[byte; 32])
@@ -35,7 +36,7 @@ fn capacity() -> PrivateOramIndexCapacityV2 {
         reserved_physical_slots: 16,
         max_client_stash_blocks: 8,
         fixed_append_read_path_count: 4,
-        fixed_append_write_bucket_count: 4,
+        fixed_append_write_bucket_count: 16,
     }
 }
 
@@ -71,7 +72,7 @@ fn hnsw_index() -> PrivateOramImmutableIndexV2 {
                 paths_per_round: 2,
                 fixed_result_k: 3,
             },
-            max_neighbor_rewrites: 4,
+            max_neighbor_rewrites: 2,
         },
         capacity: capacity(),
     }
@@ -118,29 +119,39 @@ fn fixture_manifest(paired: bool) -> PrivateOramImmutableManifestV2 {
     }
 }
 
-fn bucket_refs(seed: u8) -> Vec<PrivateOramAppendBucketRefV1> {
-    vec![
-        PrivateOramAppendBucketRefV1 {
-            bucket_id: 1,
-            ciphertext_sha256: digest(seed),
-            bucket_commitment: digest(seed + 1),
-        },
-        PrivateOramAppendBucketRefV1 {
-            bucket_id: 4,
-            ciphertext_sha256: digest(seed + 2),
-            bucket_commitment: digest(seed + 3),
-        },
-        PrivateOramAppendBucketRefV1 {
-            bucket_id: 7,
-            ciphertext_sha256: digest(seed + 4),
-            bucket_commitment: digest(seed + 5),
-        },
-        PrivateOramAppendBucketRefV1 {
-            bucket_id: 10,
-            ciphertext_sha256: digest(seed + 6),
-            bucket_commitment: digest(seed + 7),
-        },
-    ]
+fn path_bucket_ids(leaf: u64, tree_height: u32) -> Vec<u64> {
+    (0..=tree_height)
+        .map(|level| {
+            let level_start = (1u64 << level) - 1;
+            let prefix = if level == 0 {
+                0
+            } else {
+                leaf >> (tree_height - level)
+            };
+            level_start + prefix
+        })
+        .collect()
+}
+
+fn bucket_refs(seed: u8, offset: usize) -> Vec<PrivateOramAppendBucketRefV1> {
+    read_windows(offset)
+        .into_iter()
+        .flat_map(|window| window.paths)
+        .flat_map(|leaf_label| {
+            let leaf_bytes = BASE64URL_NOPAD.decode(leaf_label.as_bytes()).unwrap();
+            let leaf = u64::from_be_bytes(leaf_bytes.try_into().unwrap());
+            path_bucket_ids(leaf, 3)
+        })
+        .enumerate()
+        .map(|(occurrence, bucket_id)| {
+            let digest_offset = u8::try_from(occurrence * 2).unwrap();
+            PrivateOramAppendBucketRefV1 {
+                bucket_id,
+                ciphertext_sha256: digest(seed.checked_add(digest_offset).unwrap()),
+                bucket_commitment: digest(seed.checked_add(digest_offset + 1).unwrap()),
+            }
+        })
+        .collect()
 }
 
 fn fixture_state(
@@ -227,7 +238,7 @@ fn fixture(
     for offset in 0..old_state.indexes.len() {
         let old_index = &old_state.indexes[offset];
         let new_index = &new_state.indexes[offset];
-        let updated_buckets = bucket_refs(80 + u8::try_from(offset * 8).unwrap());
+        let updated_buckets = bucket_refs(80 + u8::try_from(offset * 32).unwrap(), offset);
         let windows = read_windows(offset);
         let observed_read =
             private_oram_append_read_transcript_v1(PrivateOramAppendReadTranscriptDigestInput {
@@ -431,12 +442,12 @@ fn v2_contract_known_answers_are_stable() {
             public_key.as_str(),
         ),
         (
-            "wyLpVAgjLdzrbpLUEy3VBRyDOoyvCd-twzv_Hak2Als",
-            "9g1Bu0IKiJhnpXRldsrc4T8dobEFFc9c73BecpsERzs",
-            "V675HqV9I0lOrERnCL1SS67CUiPZt1WQtj8-U7rNCvE",
-            "74crLaKB2DDM91jNAL4wHToHyQSUrzVeotV6JZDmPIga2y0KE3tI0BXcyTK7zz12aKS1emtQt0Tp8Bz6zuZrBQ",
-            "1CmRrB_TYFYfIN7ba7OZr-xCwvCwxELg6fsypO9IK4V7RPD-s-Ux91c_o-RGjsWYKpXHgOePwJ7wzB_L5iNcAQ",
-            "7e7XuaSFJp9DWDEDxQm5WIQ4QtjwazkDePBSAgXlZqzuMTlz463ZT1uW6_k-C_QFkyykRWGU3KQpgbNKLyQHDQ",
+            "pd1w1eNMwaNF2eYlUNspjA2vcflpoOcslL5WlQVHHX0",
+            "bcgzrYn4Qw-OhVo3zs1lc0Ho7CoT4x6yAmMrcqBms_w",
+            "LDIeMGo1s1viEY6le8lkTzD_BwsFYWPIyKNCranve28",
+            "EfSf5NlPAKCQdqkXCAHrzWY7tKmkxlojLGhxwrARfv8wQvFU4z3P172_w5_CuiFLW-olWMBd5Cp2kTVaQnK8Aw",
+            "0Lzmcto45LClqJmRqzGv_97Ner9D7JdgjA4ty4ciUZD1JaSCLr6TDU7cc9YrUhF83aGt9WAu-nDyZlv1LEw5Aw",
+            "wqonG_YMtz4VCQ9Wh6_X2rnJerRGUVnlFXFdsqYN0wt8HhThj1lKfVBElJmGOMa8Y8NDILAtkxfvHqdHWzRKBw",
             "vtfSq2aNo--tYTmY8G96v3h186a3Z3qfPOlH1313YKY",
         )
     );
@@ -539,13 +550,224 @@ fn read_transcript_rejects_noncontiguous_windows_and_malformed_paths() {
     );
 }
 
+fn signature_case(
+    name: &str,
+    domain: &str,
+    key_id: &str,
+    message: &[u8],
+    signature: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "domain": domain,
+        "signature_alg": "ed25519",
+        "signature_key_id": key_id,
+        "signature_message_len": message.len(),
+        "signature_message_b64": BASE64URL_NOPAD.encode(message),
+        "signature_message_sha256_b64": BASE64URL_NOPAD.encode(&sha2::Sha256::digest(message)),
+        "signature_b64": signature,
+    })
+}
+
+fn digest_case(name: &str, domain: &str, message: &[u8], digest: &str) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "domain": domain,
+        "digest_message_len": message.len(),
+        "digest_message_b64": BASE64URL_NOPAD.encode(message),
+        "digest_b64": digest,
+    })
+}
+
+fn private_oram_mutation_kat_vector() -> serde_json::Value {
+    let (key_pair, manifest, mutation) = fixture(true);
+    let manifest_digest = private_oram_immutable_manifest_v2_digest(&manifest.manifest).unwrap();
+    let old_state_digest =
+        private_oram_signed_state_v2_digest(&mutation.mutation.old_state.state).unwrap();
+    let manifest_message =
+        try_private_oram_immutable_manifest_v2_signature_message(&manifest.manifest).unwrap();
+    let old_state_message =
+        try_private_oram_signed_state_v2_signature_message(&mutation.mutation.old_state.state)
+            .unwrap();
+    let mutation_message =
+        try_private_oram_append_mutation_v1_signature_message(&mutation.mutation).unwrap();
+    let new_state_message =
+        try_private_oram_signed_state_v2_signature_message(&mutation.mutation.new_state.state)
+            .unwrap();
+
+    let mut read_inputs = Vec::new();
+    let mut cases = vec![
+        signature_case(
+            "immutable_manifest_v2",
+            PRIVATE_ORAM_IMMUTABLE_MANIFEST_V2_SIGNATURE_DOMAIN,
+            &manifest.manifest.owner_signing_key_id,
+            &manifest_message,
+            &manifest.signature.sig,
+        ),
+        signature_case(
+            "signed_state_v2",
+            PRIVATE_ORAM_SIGNED_STATE_V2_SIGNATURE_DOMAIN,
+            &mutation.mutation.old_state.state.owner_signing_key_id,
+            &old_state_message,
+            &mutation.mutation.old_state.signature.sig,
+        ),
+        signature_case(
+            "append_mutation_v1",
+            PRIVATE_ORAM_APPEND_MUTATION_V1_SIGNATURE_DOMAIN,
+            &mutation.mutation.owner_signing_key_id,
+            &mutation_message,
+            &mutation.signature.sig,
+        ),
+    ];
+    for (offset, index) in mutation.mutation.old_state.state.indexes.iter().enumerate() {
+        let windows = read_windows(offset);
+        let input = PrivateOramAppendReadTranscriptDigestInput {
+            collection_id: &mutation.mutation.collection_id,
+            manifest_digest: &manifest_digest,
+            mutation_id: &mutation.mutation.mutation_id,
+            old_state_digest: &old_state_digest,
+            writer_lease_digest: &mutation.mutation.writer_lease_digest,
+            writer_fence: mutation.mutation.writer_fence,
+            paths_per_window: 2,
+            tree_height: 3,
+            kind: index.kind,
+            index_name: &index.index_name,
+            windows: &windows,
+        };
+        let message = try_private_oram_append_read_transcript_v1_digest_message(input).unwrap();
+        read_inputs.push(serde_json::json!({
+            "collection_id": input.collection_id,
+            "manifest_digest": input.manifest_digest,
+            "mutation_id": input.mutation_id,
+            "old_state_digest": input.old_state_digest,
+            "writer_lease_digest": input.writer_lease_digest,
+            "writer_fence": input.writer_fence,
+            "paths_per_window": input.paths_per_window,
+            "tree_height": input.tree_height,
+            "kind": input.kind,
+            "index_name": input.index_name,
+            "windows": windows,
+        }));
+        cases.push(digest_case(
+            match offset {
+                0 => "append_read_transcript_v1_hnsw",
+                1 => "append_read_transcript_v1_result",
+                _ => unreachable!(),
+            },
+            PRIVATE_ORAM_APPEND_READ_TRANSCRIPT_V1_DIGEST_DOMAIN,
+            &message,
+            &mutation.mutation.writebacks[offset].read_transcript_digest,
+        ));
+    }
+    cases.push(signature_case(
+        "new_signed_state_v2",
+        PRIVATE_ORAM_SIGNED_STATE_V2_SIGNATURE_DOMAIN,
+        &mutation.mutation.new_state.state.owner_signing_key_id,
+        &new_state_message,
+        &mutation.mutation.new_state.signature.sig,
+    ));
+    for (offset, writeback) in mutation.mutation.writebacks.iter().enumerate() {
+        let old_index = &mutation.mutation.old_state.state.indexes[offset];
+        let new_index = &mutation.mutation.new_state.state.indexes[offset];
+        let message = try_private_oram_append_writeback_v1_digest_message(
+            PrivateOramAppendWritebackDigestInput {
+                collection_id: &mutation.mutation.collection_id,
+                manifest_digest: &mutation.mutation.manifest_digest,
+                kind: writeback.kind,
+                index_name: &writeback.index_name,
+                old_epoch: old_index.index_epoch,
+                new_epoch: new_index.index_epoch,
+                old_root_hash: &old_index.root_hash,
+                new_root_hash: &new_index.root_hash,
+                read_path_count: writeback.read_path_count,
+                read_transcript_digest: &writeback.read_transcript_digest,
+                updated_buckets: &writeback.updated_buckets,
+            },
+        )
+        .unwrap();
+        cases.push(digest_case(
+            match offset {
+                0 => "append_writeback_v1_hnsw",
+                1 => "append_writeback_v1_result",
+                _ => unreachable!(),
+            },
+            PRIVATE_ORAM_APPEND_WRITEBACK_V1_DIGEST_DOMAIN,
+            &message,
+            &new_index.last_writeback_digest,
+        ));
+    }
+    let no_server_message = try_private_oram_no_server_point_record_v1_digest_message(
+        &mutation.mutation.collection_id,
+        &mutation.mutation.manifest_digest,
+        &mutation.mutation.mutation_id,
+    )
+    .unwrap();
+    cases.push(digest_case(
+        "no_server_point_record_v1",
+        PRIVATE_ORAM_NO_SERVER_POINT_RECORD_V1_DIGEST_DOMAIN,
+        &no_server_message,
+        &mutation.mutation.point_operation_digest,
+    ));
+
+    let (_visible_key_pair, _visible_manifest, visible_mutation) = fixture(false);
+    let visible_input = serde_json::json!({
+        "collection_id": visible_mutation.mutation.collection_id,
+        "manifest_digest": visible_mutation.mutation.manifest_digest,
+        "mutation_id": visible_mutation.mutation.mutation_id,
+        "point_id": "42",
+        "staged_insert_sha256": digest(98),
+    });
+    let visible_record = PrivateOramVisiblePointRecordV1 {
+        point_id: visible_input["point_id"].as_str().unwrap(),
+        staged_insert_sha256: visible_input["staged_insert_sha256"].as_str().unwrap(),
+    };
+    let visible_message = try_private_oram_visible_point_record_v1_digest_message(
+        visible_input["collection_id"].as_str().unwrap(),
+        visible_input["manifest_digest"].as_str().unwrap(),
+        visible_input["mutation_id"].as_str().unwrap(),
+        visible_record,
+    )
+    .unwrap();
+    cases.push(digest_case(
+        "visible_point_record_v1",
+        PRIVATE_ORAM_VISIBLE_POINT_RECORD_V1_DIGEST_DOMAIN,
+        &visible_message,
+        &visible_mutation.mutation.point_operation_digest,
+    ));
+
+    serde_json::json!({
+        "format": "qdrant-sec/private-oram-v2-append-contract-test-vector/v1",
+        "fixture": "paired_hnsw_result_append",
+        "deterministic_seed_hex": "25".repeat(32),
+        "public_key_b64": BASE64URL_NOPAD.encode(key_pair.public_key().as_ref()),
+        "inputs": {
+            "immutable_manifest_v2": manifest.manifest,
+            "signed_state_v2": mutation.mutation.old_state.state,
+            "append_mutation_v1": mutation.mutation,
+            "append_read_transcripts_v1": read_inputs,
+            "visible_point_record_v1": visible_input,
+        },
+        "cases": cases,
+    })
+}
+
 #[test]
 fn v2_contract_json_test_vector_matches_known_answers() {
+    let generated = private_oram_mutation_kat_vector();
+    if std::env::var_os("QDRANT_SEC_UPDATE_PRIVATE_ORAM_MUTATION_KAT").is_some() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/qdrant-sec-private-oram-mutation-signature-test-vector.json");
+        let mut encoded = serde_json::to_vec_pretty(&generated).unwrap();
+        encoded.push(b'\n');
+        std::fs::write(path, encoded).unwrap();
+        return;
+    }
     let (_key_pair, manifest, mutation) = fixture(true);
     let vector: serde_json::Value = serde_json::from_str(include_str!(
         "../../../docs/qdrant-sec-private-oram-mutation-signature-test-vector.json"
     ))
     .unwrap();
+    assert_eq!(vector, generated);
     assert_eq!(
         vector["public_key_b64"],
         serde_json::json!("vtfSq2aNo--tYTmY8G96v3h186a3Z3qfPOlH1313YKY")
@@ -914,6 +1136,22 @@ fn manifest_rejects_capacity_without_reserved_slack_and_mixed_capacities() {
 
     let mut manifest = fixture_manifest(false);
     let PrivateOramImmutableIndexParamsV2::Hnsw {
+        max_neighbor_rewrites,
+        ..
+    } = &mut manifest.indexes[0].params
+    else {
+        unreachable!()
+    };
+    *max_neighbor_rewrites = 3;
+    assert!(matches!(
+        validate_private_oram_immutable_manifest_v2_shape(&manifest),
+        Err(PrivateOramMutationError::InvalidManifestField(
+            "indexes.max_neighbor_rewrites"
+        ))
+    ));
+
+    let mut manifest = fixture_manifest(false);
+    let PrivateOramImmutableIndexParamsV2::Hnsw {
         vector_encoding, ..
     } = &mut manifest.indexes[0].params
     else {
@@ -1019,12 +1257,15 @@ fn append_rejects_capacity_exhaustion_and_unchanged_private_state() {
 }
 
 #[test]
-fn append_rejects_noncanonical_and_non_fixed_bucket_batches() {
-    let (_key_pair, _manifest, mut mutation) = fixture(true);
+fn append_rejects_out_of_order_path_frames_and_non_fixed_bucket_batches() {
+    let (key_pair, manifest, mut mutation) = fixture(true);
+    let old_state_digest =
+        private_oram_signed_state_v2_digest(&mutation.mutation.old_state.state).unwrap();
     mutation.mutation.writebacks[0].updated_buckets.swap(0, 1);
+    resign_mutation(&key_pair, &mut mutation);
     assert_eq!(
-        validate_private_oram_append_mutation_v1_shape(&mutation.mutation),
-        Err(PrivateOramMutationError::NonCanonicalBuckets)
+        validate_fixture(&key_pair, &manifest, &mutation, &old_state_digest),
+        Err(PrivateOramMutationError::FixedBudgetMismatch)
     );
 
     let (key_pair, manifest, mut mutation) = fixture(true);
@@ -1055,12 +1296,10 @@ fn append_rejects_wrong_writeback_digest_and_out_of_range_bucket() {
         private_oram_signed_state_v2_digest(&mutation.mutation.old_state.state).unwrap();
     mutation.mutation.writebacks[0].updated_buckets[3].bucket_id = 15;
     resign_mutation(&key_pair, &mut mutation);
-    assert!(matches!(
+    assert_eq!(
         validate_fixture(&key_pair, &manifest, &mutation, &old_state_digest),
-        Err(PrivateOramMutationError::InvalidMutationField(
-            "writebacks.bucket_id"
-        ))
-    ));
+        Err(PrivateOramMutationError::FixedBudgetMismatch)
+    );
 }
 
 #[test]
