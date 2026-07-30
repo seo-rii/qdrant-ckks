@@ -157,7 +157,139 @@ rather than changing v1 in place. V2 is limited to fixed-capacity append-only
 insertion with one logical writer. Update, delete, tree resize, and concurrent
 writers remain out of scope.
 
-The first shared v2 primitive is
+V2 separates immutable index policy from mutable state. The owner-signed
+immutable manifest defines the complete canonical private index set, each
+index's HNSW/ORAM parameters, physical bucket layout, logical capacity,
+reserved physical slack, client stash bound, and exact padded append
+read/write budget. Mutable state is represented by one collection-wide
+`PrivateOramSignedStateV2`, not independent HNSW and result manifests. It binds
+the immutable manifest digest, stable collection and layout identity,
+monotonic state sequence, every index epoch/root and logical/dummy occupancy,
+the last writeback digest, the digest of the complete encrypted client
+checkpoint set, and the last mutation id.
+
+An append must move the entire configured index set from one signed state to
+the next:
+
+- the state sequence and every participating index epoch advance by exactly one
+- all participating indexes have the same immutable logical capacity and
+  occupancy, so one append cannot omit a configured private vector or result
+- every logical occupancy increases by one and every dummy occupancy decreases
+  by one, while their sum remains the signed logical capacity
+- every root, last-writeback digest, and encrypted client-state-set digest
+  changes
+- HNSW and optional result state are committed by one collection-wide CAS
+- every index records exactly the manifest's fixed append path count and a
+  server-observed ordered read-transcript digest; path multiplicity is
+  preserved, duplicate paths are not collapsed, and every contiguous request
+  window contains exactly the manifest ORAM `path_batch_size`
+- each index writeback contains the exact configured number of canonical,
+  strictly increasing bucket ids, including padded dummy re-encryption
+
+`private-oram-mutation/v1` signs the mutation id and expiry, exact old and new
+signed states, the consensus-issued writer lease digest and monotonic fencing
+token, a point-operation kind and digest, and the fixed padded HNSW/result
+writeback batches. The per-index writeback digest additionally binds the index
+identity, old/new epoch and root, fixed read path count, read transcript
+digest, bucket ids, ciphertext SHA-256 values, and bucket commitments. The
+read transcript is bound to collection, immutable manifest, mutation id,
+exact old-state digest, writer lease/fence, manifest `path_batch_size` and
+tree height, index identity, contiguous request-window sequence, and every
+ordered leaf label. Each leaf must be in `0..2^tree_height`, and the manifest
+rejects append path counts that do not divide exactly into fixed-size
+windows. This avoids circular signing: each state signature is
+verified independently, while the mutation signature binds canonical SHA-256
+digests of the state messages and the writeback contents. For
+`private_payload_oram_required`, the manifest itself forces
+`no_server_point_record`; caller-supplied validation context cannot downgrade
+it to a visible point operation. For `ids_visible`, the validator derives the
+digest from collection/manifest/mutation identity, canonical point id, and
+the SHA-256 of the exact D3 durable staged InsertOnly frame; it does not accept
+an arbitrary caller-selected digest. D1 accepts only `f32_le` HNSW vectors.
+`docs/qdrant-sec-private-oram-mutation-signature-test-vector.json` freezes the
+full paired HNSW/result manifest, old/new state, and append-mutation DTOs plus
+canonical bytes for both read transcripts, both writeback digests, and both
+point-operation modes. It also freezes message digests, Ed25519 signatures,
+lengths, and the deterministic public key.
+
+Canonical encoding is independent of JSON serialization:
+
+- the domain is `u32_be byte_length || raw domain bytes`
+- a UTF-8 string is `u64_be byte_length || raw UTF-8 bytes`
+- scalar integers are fixed-width big-endian; booleans are one byte (`0` or
+  `1`); an optional string is a one-byte presence tag followed by the string
+- a vector is `u32_be element_count` followed by its elements; no map encoding
+  is used
+- index tags are HNSW=`1`, result=`2`; point-operation tags are
+  visible-record=`1`, no-server-record=`2`; result-privacy tags are
+  ids-visible=`1`, private-payload-ORAM=`2`
+- vector encoding tags are f32-le=`1`, i8=`2`, PQ=`3`, binary=`4`; distance
+  tags are cosine=`1`, dot=`2`, Euclid=`3`, Manhattan=`4`; Path ORAM is `1`
+- index-bearing vectors are strictly sorted by `(kind tag, raw UTF-8 index
+  name)` and bucket references are strictly sorted by `bucket_id`; read
+  windows and leaf labels retain submitted order and duplicate leaf labels
+
+The manifest message field order is domain, version, collection id, manifest
+nonce, index count and indexes, result privacy, owner signing key id, and
+creation time. Each index is kind, name, kind-specific parameters, then
+capacity. HNSW parameters are provider, binding, key/rk ids and epoch,
+dimension, vector/distance tags, HNSW values, ORAM values, fixed search
+budget, and maximum neighbor rewrites. Result parameters omit HNSW-specific
+values. Capacity is bucket count, logical capacity, reserved physical slots,
+stash bound, fixed append read path count, and fixed append write bucket
+count.
+
+The signed-state message field order is domain, version, collection id,
+manifest digest, layout generation/digest, state sequence, index states,
+client-state digest, optional last mutation id, owner signing key id, and
+signed time. Each index state is kind, name, epoch, root, logical/dummy
+counts, and last writeback digest.
+
+The mutation message field order is domain, version, mutation id, collection
+id, manifest digest, layout generation, writer lease digest/fence,
+issued/expiry times, SHA-256 base64url digests of the old/new canonical state
+messages, point-operation tag/digest, writebacks, and owner signing key id.
+Each writeback is kind, name, read path count/transcript digest, then bucket
+references; each bucket reference is id, ciphertext SHA-256, and commitment.
+Signatures are Ed25519 over these bytes and use unpadded base64url on the wire.
+The read-transcript message order is domain, collection/manifest/mutation/old
+state identity, writer lease/fence, paths per window, tree height, index
+identity, then ordered windows and ordered leaf labels. The visible point
+record digest orders domain, collection, manifest, mutation, point id, and
+staged InsertOnly SHA-256; the no-server-record digest omits the final two
+visible-record fields. Immediate reuse of the prior mutation id and a new
+state signed later than server validation time fail closed. Historical
+mutation-id receipts remain a D2 consensus responsibility.
+
+In this contract, append-only means that one new logical point is added.
+Bounded backlink and neighbor-block rewrites required by HNSW insertion are
+allowed inside the signed fixed budget. Updating or deleting an existing
+point, standalone graph rewiring or compaction, capacity resize, and rebuild
+swap remain unsupported.
+
+The server implementation uses a dedicated private mutation staging WAL
+instead of the ordinary point WAL. The ordinary update path can enqueue an
+operation before the collection-wide crypto CAS and does not provide the
+required explicit pre-CAS fsync boundary. The coordinator therefore prepares
+all index owners, fsyncs the exact InsertOnly point operation in staging,
+performs one consensus CAS, then finalizes remote owners before the local
+owner. A live or expired-but-unreconciled mutation lease fences search,
+external recovery, snapshots, transfer/resharding, and collection lifecycle
+changes.
+
+The first v2 implementation slice is deliberately dormant: it adds only the
+immutable manifest, signed-state, ordered read-transcript and append-mutation
+canonical encodings and fail-closed validators. Provider registration,
+consensus state, storage journals, client insertion planning, and public
+routes are activated in later independently tested slices. Normal Qdrant
+upsert and update APIs remain rejected throughout.
+
+The append contract carries ciphertext hashes and commitments, not raw bucket
+bodies. When the route is activated, the transport layer must enforce a hard
+body and total-bucket limit before deserialization, hash each supplied
+ciphertext body, and match it to the signed reference before owner prepare.
+
+The external recovery primitive is
 `PrivateOramExternalRecoveryCheckpoint`, signed under
 `qdrant-sec/private-oram-external-recovery-checkpoint-signature/v1`. It binds:
 

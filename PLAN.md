@@ -881,27 +881,124 @@ Signed fields:
 
 ### V2-D: Mutable State and Append-Only Insert
 
-작업:
+범위와 불변식:
 
-- Immutable manifest에는 HNSW/ORAM config와 fixed capacity를 두고 mutable
-  `PrivateOramSignedStateV2`에는 state sequence, logical/dummy occupancy,
-  HNSW/result epochs/roots, client-state digest를 둔다.
-- `private-oram-mutation/v1` signature는 mutation id/expiry, old/new signed state,
-  point operation digest, fixed padded HNSW/result bucket batches를 묶는다.
-- Coordinator는 every-owner prepare, point-shard WAL durability, collection-wide
-  mutation CAS, remote-before-local finalize를 durable journal로 수행한다.
-- D1은 fixed-capacity append insertion만 연다. Update/delete/rewire compaction,
-  capacity resize, full rebuild swap은 후속 protocol로 남긴다.
+- v1 manifest와 provider는 read-only bulk-built 계약으로 유지한다. v2 immutable
+  manifest는 collection의 canonical private index set, provider-specific HNSW/ORAM
+  설정, physical slot 수, logical capacity, reserved physical slack, client stash
+  상한, exact append read/write budget을 서명한다.
+- Mutable `PrivateOramSignedStateV2`는 immutable manifest digest, layout generation,
+  monotonic state sequence, canonical HNSW/result index별 epoch/root,
+  logical/dummy occupancy, 마지막 writeback digest, complete encrypted client-state
+  set digest와 마지막 mutation id를 묶는다.
+- 모든 index에서 `logical + dummy == immutable logical capacity`를 유지한다.
+  한 append는 exact index set 전체에 대해 state sequence와 epoch를 각각 1 증가,
+  logical을 1 증가, dummy를 1 감소시킨다. Root, last writeback digest와 encrypted
+  client-state digest도 반드시 바뀐다.
+- "Append-only"는 새 logical point만 추가한다는 의미다. HNSW insertion에 필요한
+  bounded backlink/neighbor block rewrite는 signed fixed budget 안에서 허용하지만,
+  기존 point의 vector/payload update, delete, standalone rewiring/compaction,
+  capacity resize와 rebuild swap은 허용하지 않는다.
+- v2는 하나의 logical writer만 지원한다. Stale client는 exact current signed-state
+  digest/sequence CAS와 consensus-issued writer lease digest/monotonic operation
+  fence로 거부한다. Writer identity handoff와 concurrent position map/stash merge는
+  v3로 남긴다.
 - 일반 upsert/update_vectors/payload write는 v2 private names에서도 계속 거부한다.
+  전용 append route가 활성화되기 전까지 v2 contract 전체가 dormant 상태다.
+
+#### V2-D0: Signed mutation contract
+
+- `lib/crypto/src/private_oram_mutation.rs`에 immutable v2 manifest, collection-wide
+  signed state, `private-oram-mutation/v1` append bundle과 canonical Ed25519
+  encoding을 추가한다.
+- Mutation은 mutation id/issued/expiry, writer lease digest/fence, exact old/new
+  signed state, point operation kind/digest와 canonical sorted fixed-size
+  HNSW/result bucket batches를 묶는다. Result privacy가
+  `private_payload_oram_required`이면 manifest가 `no_server_point_record`를
+  강제하고 validation caller가 이를 visible point operation으로 완화할 수 없다.
+  각 new index state의 writeback digest는 index kind/name, old/new epoch/root,
+  exact read path count, server-observed ordered read transcript digest, bucket id,
+  ciphertext SHA-256와 bucket commitment를 다시 묶는다. Read transcript는
+  collection/manifest/mutation/old-state identity, writer lease+fence, manifest
+  path-batch/tree geometry, index identity와 contiguous request window, duplicate를
+  보존한 ordered in-range leaf-label sequence를 묶는다.
+- `ids_visible` point operation은 arbitrary context digest를 허용하지 않는다.
+  Collection/manifest/mutation, canonical point id와 exact durable staged InsertOnly
+  frame SHA-256를 domain-separated digest로 묶는다. D3는 이 staged frame의
+  canonical encoding을 route 활성화 전에 고정한다.
+- Shape/context/transition validation은 unknown field, malformed digest/signature,
+  unsorted/duplicate index와 bucket, stale/skip sequence, mixed epoch/root,
+  sequence/epoch overflow, immediate mutation-id reuse, future-signed new state,
+  stale writer fence, unobserved 또는 manifest-geometry-mismatched read transcript,
+  capacity exhaustion, wrong point digest, non-fixed batch 크기를 fail closed 한다.
+- D1 HNSW manifest는 `f32_le` vector encoding만 허용한다. Canonical KAT는 full
+  manifest/old+new state/mutation DTO, read transcript, writeback, private/visible
+  point operation의 canonical message bytes, digest와 Ed25519 signature를 함께
+  고정한다.
+- 이 단계에서는 provider registry, storage, consensus, route를 열지 않는다.
+
+#### V2-D1: Client append planner
+
+- v2 encrypted client checkpoint에는 immutable manifest/state digest, state sequence,
+  entry node, position map, stash와 node/point/payload-token duplicate ledger를
+  포함한다. 기존 `insert_position` overwrite helper를 append path에서 직접
+  사용하지 않고 duplicate-aware API를 추가한다.
+- 복제한 client state에서 bounded HNSW insertion과 optional result insertion을
+  계획하고, dummy path access와 bucket re-encryption으로 exact read/write budget을
+  채운 뒤 새 checkpoint와 signed mutation을 함께 생성한다.
+- Stash/capacity/neighbor rewrite 상한은 server prepare 전에 client에서 거부한다.
+
+#### V2-D2: Dormant collection-wide consensus primitive
+
+- Persistent consensus state에 signed-state digest/sequence, layout identity,
+  canonical index epoch/root set, occupancy/client-state digest와 exact last mutation
+  receipt를 하나의 record로 추가한다.
+- `ApplyPrivateOramMutation`은 collection state와 기존 HNSW/result consensus epoch를
+  한 번의 persistent save로 전진시킨다. Save 실패 시 관련 in-memory map 전체를
+  원복한다.
+- Mutation lease는 private search session, external recovery, transfer/reshard,
+  snapshot/lifecycle mutation과 상호 배타적이다. Lease expiry만으로 새 operation을
+  허용하지 않고 pending owner journal을 먼저 reconcile한다.
+
+#### V2-D3: Durable prepare/finalize
+
+- 기존 일반 point WAL은 append 즉시 update worker에 노출되고 explicit flush 전에는
+  durability 경계가 부족하므로 재사용하지 않는다. Exact InsertOnly point operation을
+  위한 private mutation staging WAL과 collection-level parent journal을 추가한다.
+- Coordinator 순서는 `LeaseAcquired -> OwnersPrepared -> PointWalDurable ->
+  ConsensusCommitted -> RemotesFinalized -> LocalFinalized -> Complete`로 고정한다.
+  모든 owner prepare와 point staging fsync 뒤 collection-wide CAS를 수행하고,
+  remote-before-local finalize한다.
+- Consensus가 old면 prepared index/point journal 전체를 abort하고, new면 모든
+  owner finalize를 재개한다. Submit ambiguity는 exact old/new state와 mutation
+  digest로만 판정하며 제3 상태는 fail closed 한다.
+
+#### V2-D4: Dedicated API activation
+
+- Public route는 collection-wide
+  `/collections/{collection}/private-oram/v2/mutation/{open,append,status,close}`로
+  분리하고 mutation/session id와 encrypted bodies를 URL/log에 넣지 않는다.
+- Route는 serde allocation 전에 hard request-body/updated-bucket count 상한을
+  적용하고, ciphertext body의 SHA-256/commitment가 signed refs와 일치하는지
+  prepare 전에 검증한다.
+- Internal gRPC는 prepare/finalize/abort/inspect를 하나의 paired mutation 단위로
+  제공한다. 기존 index별 writeback RPC를 순차 호출해 atomicity를 흉내 내지 않는다.
+- Mutation lease나 partial finalize가 있으면 private search, ordinary point read,
+  snapshot, transfer/reshard와 lifecycle operation을 fail closed 한다.
+
+#### V2-D5: Recovery, leakage and process gates
 
 테스트:
 
+- Canonical manifest/state/mutation known-answer vector와 tamper matrix를 고정한다.
 - HNSW-only와 paired HNSW/result append, duplicate token/mutation id, capacity/stash
-  overflow, stale writer/state sequence, partial prepare/finalize를 검증한다.
+  overflow, stale state sequence, partial prepare/finalize를 검증한다.
 - CAS 전후 crash matrix에서 old 또는 new point/index/client checkpoint 전체만
   선택되는지 검증한다.
 - Insert별 path/response/writeback 크기가 inserted node level과 neighbor count에
   무관하게 고정되는지 leakage fixture로 고정한다.
+- Legacy consensus snapshot에는 v2 field가 없어도 load되고, v2 snapshot은 pending
+  mutation 없이 complete state/receipt만 round-trip하는지 검증한다.
 
 완료 조건:
 
