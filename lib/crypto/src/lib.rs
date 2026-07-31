@@ -10,6 +10,7 @@ pub mod openfhe;
 pub mod payload;
 pub mod private_hnsw_client;
 pub mod private_hnsw_oram;
+pub mod private_oram_append_checkpoint;
 pub mod private_oram_append_client;
 pub mod private_oram_append_result_transaction;
 pub mod private_oram_append_transaction;
@@ -147,6 +148,12 @@ pub use private_hnsw_oram::{
     validate_private_hnsw_oram_upload_bundle as validate_server_private_hnsw_oram_upload_bundle,
     validate_private_hnsw_oram_upload_bundle_with_signature as validate_server_private_hnsw_oram_upload_bundle_with_signature,
 };
+pub use private_oram_append_checkpoint::{
+    PrivateOramAppendCheckpointError, PrivateOramAppendPairedCheckpointDeltaV2,
+    PrivateOramAppendPairedCheckpointResealInputV2, PrivateOramAppendPairedCheckpointResealV2,
+    plan_private_oram_append_paired_checkpoint_delta_v2,
+    reseal_private_oram_append_paired_checkpoint_v2,
+};
 pub use private_oram_append_client::{
     PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_AEAD_DOMAIN,
     PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_DIGEST_DOMAIN,
@@ -180,13 +187,16 @@ pub use private_oram_append_client::{
 pub use private_oram_append_result_transaction::{
     PRIVATE_ORAM_APPEND_RESULT_ATTEMPT_V3_DIGEST_DOMAIN,
     PRIVATE_ORAM_APPEND_RESULT_PREPARED_COMMIT_V3_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_RESULT_PREPARED_COMMIT_V4_DIGEST_DOMAIN,
     PRIVATE_ORAM_APPEND_RESULT_WORKING_ARTIFACT_V3_DIGEST_DOMAIN,
     PrivateOramAppendResultAttemptDigestInputV3, PrivateOramAppendResultPointV2,
-    PrivateOramAppendResultPreparedCommitDigestInputV3, PrivateOramAppendResultReadRequestV2,
+    PrivateOramAppendResultPreparedCommitDigestInputV3,
+    PrivateOramAppendResultPreparedCommitDigestInputV4, PrivateOramAppendResultReadRequestV2,
     PrivateOramAppendResultTransactionOutputV2, PrivateOramAppendResultTransactionPlanV2,
     PrivateOramAppendResultTransactionProgressV2, PrivateOramAppendResultTransactionV2,
     private_oram_append_result_attempt_v3_digest,
     private_oram_append_result_prepared_commit_v3_digest,
+    private_oram_append_result_prepared_commit_v4_digest,
     validate_private_oram_append_result_transaction_output_v2,
 };
 pub use private_oram_append_transaction::{
@@ -195,10 +205,12 @@ pub use private_oram_append_transaction::{
     PRIVATE_ORAM_APPEND_HNSW_GRAPH_DELTA_V3_DIGEST_DOMAIN,
     PRIVATE_ORAM_APPEND_HNSW_PREPARED_COMMIT_V2_DIGEST_DOMAIN,
     PRIVATE_ORAM_APPEND_HNSW_PREPARED_COMMIT_V3_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_HNSW_PREPARED_COMMIT_V4_DIGEST_DOMAIN,
     PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V2_VERSION, PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V3_VERSION,
     PrivateOramAppendHnswAttemptDigestInput, PrivateOramAppendHnswAttemptDigestInputV3,
     PrivateOramAppendHnswPreparedCommitDigestInput,
-    PrivateOramAppendHnswPreparedCommitDigestInputV3, PrivateOramAppendHnswReadRequestV2,
+    PrivateOramAppendHnswPreparedCommitDigestInputV3,
+    PrivateOramAppendHnswPreparedCommitDigestInputV4, PrivateOramAppendHnswReadRequestV2,
     PrivateOramAppendHnswTransactionOutputV2, PrivateOramAppendHnswTransactionPlanV2,
     PrivateOramAppendHnswTransactionProgressV2, PrivateOramAppendHnswTransactionV2,
     PrivateOramAppendRecoveryMarkerV2, PrivateOramAppendRecoveryMarkerV3,
@@ -207,6 +219,7 @@ pub use private_oram_append_transaction::{
     private_oram_append_hnsw_graph_delta_v3_digest,
     private_oram_append_hnsw_prepared_commit_v2_digest,
     private_oram_append_hnsw_prepared_commit_v3_digest,
+    private_oram_append_hnsw_prepared_commit_v4_digest,
 };
 pub use private_oram_mutation::{
     PAYLOAD_PRIVATE_RESULT_ORAM_V2_PROVIDER, PRIVATE_HNSW_ORAM_V2_BINDING,

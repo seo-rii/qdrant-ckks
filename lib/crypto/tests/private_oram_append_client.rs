@@ -500,11 +500,19 @@ fn complete_hnsw_append_transaction(
     fixture: &HnswAppendTransactionFixture,
     plan: PrivateOramAppendHnswTransactionPlanV2,
 ) -> (PrivateOramAppendHnswTransactionOutputV2, u32) {
+    complete_hnsw_append_transaction_with_point(fixture, plan, hnsw_append_transaction_point())
+}
+
+fn complete_hnsw_append_transaction_with_point(
+    fixture: &HnswAppendTransactionFixture,
+    plan: PrivateOramAppendHnswTransactionPlanV2,
+    point: PrivateOramAppendLevel0PointV2,
+) -> (PrivateOramAppendHnswTransactionOutputV2, u32) {
     let mut transaction = PrivateOramAppendHnswTransactionV2::begin(
         &fixture.manifest,
         &fixture.state,
         &fixture.checkpoint,
-        hnsw_append_transaction_point(),
+        point,
         plan,
     )
     .unwrap();
@@ -670,11 +678,19 @@ fn complete_result_append_transaction(
     fixture: &ResultAppendTransactionFixture,
     plan: PrivateOramAppendResultTransactionPlanV2,
 ) -> (PrivateOramAppendResultTransactionOutputV2, u32) {
+    complete_result_append_transaction_with_point(fixture, plan, result_append_transaction_point())
+}
+
+fn complete_result_append_transaction_with_point(
+    fixture: &ResultAppendTransactionFixture,
+    plan: PrivateOramAppendResultTransactionPlanV2,
+    point: PrivateOramAppendResultPointV2,
+) -> (PrivateOramAppendResultTransactionOutputV2, u32) {
     let mut transaction = PrivateOramAppendResultTransactionV2::begin(
         &fixture.manifest,
         &fixture.state,
         &fixture.checkpoint,
-        result_append_transaction_point(),
+        point,
         plan,
     )
     .unwrap();
@@ -692,6 +708,82 @@ fn complete_result_append_transaction(
         accepted_windows += 1;
     }
     (transaction.finalize().unwrap(), accepted_windows)
+}
+
+struct PairedAppendTransactionFixture {
+    manifest: PrivateOramImmutableManifestV2,
+    state: PrivateOramSignedStateV2,
+    checkpoint: PrivateOramAppendClientCheckpointV2,
+    old_encrypted_checkpoint: PrivateOramEncryptedAppendClientCheckpointV2,
+    hnsw_output: PrivateOramAppendHnswTransactionOutputV2,
+    result_output: PrivateOramAppendResultTransactionOutputV2,
+}
+
+fn paired_append_transaction_fixture() -> PairedAppendTransactionFixture {
+    paired_append_transaction_fixture_with_inputs(
+        hnsw_append_transaction_point(),
+        result_append_transaction_point(),
+        hnsw_append_transaction_plan(),
+        result_append_transaction_plan(1),
+    )
+}
+
+fn paired_append_transaction_fixture_with_inputs(
+    hnsw_point: PrivateOramAppendLevel0PointV2,
+    result_point: PrivateOramAppendResultPointV2,
+    hnsw_plan: PrivateOramAppendHnswTransactionPlanV2,
+    result_plan: PrivateOramAppendResultTransactionPlanV2,
+) -> PairedAppendTransactionFixture {
+    paired_append_transaction_fixture_with_inputs_and_last_mutation(
+        hnsw_point,
+        result_point,
+        hnsw_plan,
+        result_plan,
+        None,
+    )
+}
+
+fn paired_append_transaction_fixture_with_inputs_and_last_mutation(
+    hnsw_point: PrivateOramAppendLevel0PointV2,
+    result_point: PrivateOramAppendResultPointV2,
+    hnsw_plan: PrivateOramAppendHnswTransactionPlanV2,
+    result_plan: PrivateOramAppendResultTransactionPlanV2,
+    last_mutation_id: Option<String>,
+) -> PairedAppendTransactionFixture {
+    let mut hnsw_fixture = hnsw_append_transaction_fixture();
+    let mut result_fixture = result_append_transaction_fixture_with_path_batch_size(1);
+
+    hnsw_fixture.checkpoint.indexes[1] = result_fixture.checkpoint.indexes[1].clone();
+    hnsw_fixture.state.indexes[1] = result_fixture.state.indexes[1].clone();
+    result_fixture.checkpoint.indexes[0] = hnsw_fixture.checkpoint.indexes[0].clone();
+    result_fixture.state.indexes[0] = hnsw_fixture.state.indexes[0].clone();
+    let checkpoint_key = SecretKey::from_bytes([44; 32]);
+    let sealed =
+        seal_private_oram_append_client_checkpoint_v2(&checkpoint_key, &hnsw_fixture.checkpoint)
+            .unwrap();
+    let client_state_digest = private_oram_append_client_checkpoint_v2_digest(&sealed).unwrap();
+    hnsw_fixture.state.client_state_digest = client_state_digest.clone();
+    result_fixture.state.client_state_digest = client_state_digest;
+    if let Some(last_mutation_id) = last_mutation_id {
+        hnsw_fixture.state.last_mutation_id = Some(last_mutation_id.clone());
+        result_fixture.state.last_mutation_id = Some(last_mutation_id);
+    }
+    let old_encrypted_checkpoint =
+        bind_private_oram_append_client_checkpoint_v2(sealed, &hnsw_fixture.state).unwrap();
+
+    let (hnsw_output, _) =
+        complete_hnsw_append_transaction_with_point(&hnsw_fixture, hnsw_plan, hnsw_point);
+    let (result_output, _) =
+        complete_result_append_transaction_with_point(&result_fixture, result_plan, result_point);
+
+    PairedAppendTransactionFixture {
+        manifest: hnsw_fixture.manifest,
+        state: hnsw_fixture.state,
+        checkpoint: hnsw_fixture.checkpoint,
+        old_encrypted_checkpoint,
+        hnsw_output,
+        result_output,
+    }
 }
 
 #[test]
@@ -801,6 +893,8 @@ fn hnsw_append_recovery_digest_known_answers_are_stable() {
     let plan = hnsw_append_transaction_plan();
     let manifest_digest = private_oram_immutable_manifest_v2_digest(&manifest).unwrap();
     let old_state_digest = private_oram_signed_state_v2_digest(&state).unwrap();
+    let source_checkpoint_digest =
+        private_oram_append_client_checkpoint_plaintext_v3_digest(&checkpoint).unwrap();
     let attempt =
         private_oram_append_hnsw_attempt_v2_digest(PrivateOramAppendHnswAttemptDigestInput {
             manifest_digest: &manifest_digest,
@@ -871,6 +965,41 @@ fn hnsw_append_recovery_digest_known_answers_are_stable() {
     .unwrap();
     assert_eq!(attempt_v3, "w44sXNVM2ZJY7URs6zazcFtJFMlk0uNrtuIB2E_-G48");
     assert_eq!(prepared_v3, "Zq9VGumZ46WjHl1pDbuZOlbnmwdty6HcBTA2YDehafo");
+    let prepared_v4 = private_oram_append_hnsw_prepared_commit_v4_digest(
+        PrivateOramAppendHnswPreparedCommitDigestInputV4 {
+            attempt_digest: &attempt_v3,
+            source_checkpoint_digest: &source_checkpoint_digest,
+            graph_delta: &graph_delta,
+            old_epoch: 11,
+            new_epoch: 12,
+            old_root_hash: &digest(5),
+            new_root_hash: &digest(6),
+            read_transcript_digest: &digest(40),
+            writeback_digest: &digest(41),
+            next_client_state,
+        },
+    )
+    .unwrap();
+    assert_eq!(prepared_v4, "yzTgS8CIoXDT177h0jmp8ueqFYbS9YOHoYZ3BKB4XfM");
+    assert_ne!(prepared_v4, prepared_v3);
+    assert_ne!(
+        private_oram_append_hnsw_prepared_commit_v4_digest(
+            PrivateOramAppendHnswPreparedCommitDigestInputV4 {
+                attempt_digest: &attempt_v3,
+                source_checkpoint_digest: &digest(42),
+                graph_delta: &graph_delta,
+                old_epoch: 11,
+                new_epoch: 12,
+                old_root_hash: &digest(5),
+                new_root_hash: &digest(6),
+                read_transcript_digest: &digest(40),
+                writeback_digest: &digest(41),
+                next_client_state,
+            },
+        )
+        .unwrap(),
+        prepared_v4
+    );
     let mut changed_graph_delta = graph_delta.clone();
     changed_graph_delta.hnsw_record.generation += 1;
     assert_ne!(
@@ -901,6 +1030,8 @@ fn result_append_recovery_digest_known_answers_are_stable() {
     let plan = result_append_transaction_plan(1);
     let manifest_digest = private_oram_immutable_manifest_v2_digest(&manifest).unwrap();
     let old_state_digest = private_oram_signed_state_v2_digest(&state).unwrap();
+    let source_checkpoint_digest =
+        private_oram_append_client_checkpoint_plaintext_v3_digest(&checkpoint).unwrap();
     let attempt =
         private_oram_append_result_attempt_v3_digest(PrivateOramAppendResultAttemptDigestInputV3 {
             manifest_digest: &manifest_digest,
@@ -939,6 +1070,41 @@ fn result_append_recovery_digest_known_answers_are_stable() {
 
     assert_eq!(attempt, "JX-5ynW42HWB_1EyHULuiO4WzsxHZj57ILjG6HQUZIQ");
     assert_eq!(prepared, "HhzWkWrLQQg8TRLQhN0C4D2PiHoTrj59F5sGpJTArYo");
+    let prepared_v4 = private_oram_append_result_prepared_commit_v4_digest(
+        PrivateOramAppendResultPreparedCommitDigestInputV4 {
+            attempt_digest: &attempt,
+            source_checkpoint_digest: &source_checkpoint_digest,
+            result_record: &result_record,
+            old_epoch: 11,
+            new_epoch: 12,
+            old_root_hash: &digest(5),
+            new_root_hash: &digest(6),
+            read_transcript_digest: &digest(40),
+            writeback_digest: &digest(41),
+            next_client_state,
+        },
+    )
+    .unwrap();
+    assert_eq!(prepared_v4, "MOkAohmIksxudPs6cJNg-L8eo2mk_YpvFMzPtbOE5Ls");
+    assert_ne!(prepared_v4, prepared);
+    assert_ne!(
+        private_oram_append_result_prepared_commit_v4_digest(
+            PrivateOramAppendResultPreparedCommitDigestInputV4 {
+                attempt_digest: &attempt,
+                source_checkpoint_digest: &digest(42),
+                result_record: &result_record,
+                old_epoch: 11,
+                new_epoch: 12,
+                old_root_hash: &digest(5),
+                new_root_hash: &digest(6),
+                read_transcript_digest: &digest(40),
+                writeback_digest: &digest(41),
+                next_client_state,
+            },
+        )
+        .unwrap(),
+        prepared_v4
+    );
     let mut changed_result_record = result_record;
     changed_result_record.generation += 1;
     assert_ne!(
@@ -2383,9 +2549,10 @@ fn result_append_recovery_marker_binds_plan_point_and_randomized_artifact() {
             updated_buckets: &first.writeback.updated_buckets,
         })
         .unwrap();
-    let expected_prepared = private_oram_append_result_prepared_commit_v3_digest(
-        PrivateOramAppendResultPreparedCommitDigestInputV3 {
+    let expected_prepared = private_oram_append_result_prepared_commit_v4_digest(
+        PrivateOramAppendResultPreparedCommitDigestInputV4 {
             attempt_digest: &first.recovery_marker.attempt_digest,
+            source_checkpoint_digest: &first.source_checkpoint_digest,
             result_record: &first.result_record,
             old_epoch: first.old_epoch,
             new_epoch: first.new_epoch,
@@ -2637,9 +2804,10 @@ fn prepared_commit_marker_binds_randomized_ciphertext_artifact() {
             updated_buckets: &first.writeback.updated_buckets,
         })
         .unwrap();
-    let expected = private_oram_append_hnsw_prepared_commit_v3_digest(
-        PrivateOramAppendHnswPreparedCommitDigestInputV3 {
+    let expected = private_oram_append_hnsw_prepared_commit_v4_digest(
+        PrivateOramAppendHnswPreparedCommitDigestInputV4 {
             attempt_digest: &first.recovery_marker.attempt_digest,
+            source_checkpoint_digest: &first.source_checkpoint_digest,
             graph_delta: &first.graph_delta,
             old_epoch: first.old_epoch,
             new_epoch: first.new_epoch,
@@ -2925,5 +3093,436 @@ fn hnsw_append_transaction_poisoning_requires_recovery_after_first_read() {
     assert_eq!(
         transaction.finalize(),
         Err(PrivateOramAppendTransactionError::RecoveryRequired)
+    );
+}
+
+#[test]
+fn paired_checkpoint_delta_advances_both_ledgers_and_index_states() {
+    let fixture = paired_append_transaction_fixture();
+    let delta = plan_private_oram_append_paired_checkpoint_delta_v2(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        &fixture.hnsw_output,
+        &fixture.result_output,
+    )
+    .unwrap();
+    let checkpoint = delta.checkpoint();
+    let source_checkpoint_digest =
+        private_oram_append_client_checkpoint_plaintext_v3_digest(&fixture.checkpoint).unwrap();
+
+    assert_eq!(delta.mutation_id(), digest(20));
+    assert_eq!(
+        fixture.hnsw_output.source_checkpoint_digest,
+        source_checkpoint_digest
+    );
+    assert_eq!(
+        fixture.result_output.source_checkpoint_digest,
+        source_checkpoint_digest
+    );
+    assert_eq!(checkpoint.state_sequence, fixture.state.state_sequence + 1);
+    assert_eq!(checkpoint.points.len(), 2);
+    assert_eq!(
+        checkpoint.points[0].point_token,
+        BASE64URL_NOPAD.encode(&[3; 32])
+    );
+    assert_eq!(
+        checkpoint.points[1].point_token,
+        BASE64URL_NOPAD.encode(&[6; 32])
+    );
+    assert_eq!(delta.next_indexes().len(), 2);
+    assert!(
+        delta
+            .next_indexes()
+            .iter()
+            .all(|index| index.logical_count == 2 && index.dummy_count == 2)
+    );
+
+    let PrivateOramAppendClientIndexCheckpointV2::Hnsw {
+        index_epoch,
+        root_hash,
+        entry_node_id,
+        state,
+        records,
+        ..
+    } = &checkpoint.indexes[0]
+    else {
+        panic!("paired checkpoint HNSW index is missing");
+    };
+    assert_eq!(*index_epoch, fixture.hnsw_output.new_epoch);
+    assert_eq!(root_hash, &fixture.hnsw_output.new_root_hash);
+    assert_eq!(
+        entry_node_id.as_deref(),
+        Some(
+            BASE64URL_NOPAD
+                .encode(&fixture.hnsw_output.graph_delta.next_entry_node_id)
+                .as_str()
+        )
+    );
+    assert_eq!(state, &fixture.hnsw_output.next_client_state);
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].node_id, BASE64URL_NOPAD.encode(&[2; 32]));
+    assert_eq!(records[0].generation, 1);
+    assert_eq!(records[1].node_id, BASE64URL_NOPAD.encode(&[5; 32]));
+    assert_eq!(records[1].generation, 1);
+
+    let PrivateOramAppendClientIndexCheckpointV2::Result {
+        index_epoch,
+        root_hash,
+        state,
+        records,
+        ..
+    } = &checkpoint.indexes[1]
+    else {
+        panic!("paired checkpoint result index is missing");
+    };
+    assert_eq!(*index_epoch, fixture.result_output.new_epoch);
+    assert_eq!(root_hash, &fixture.result_output.new_root_hash);
+    assert_eq!(state, &fixture.result_output.next_client_state);
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records[0].payload_fetch_token,
+        BASE64URL_NOPAD.encode(&[4; 32])
+    );
+    assert_eq!(records[0].generation, 0);
+    assert_eq!(
+        records[1].payload_fetch_token,
+        BASE64URL_NOPAD.encode(&[7; 32])
+    );
+    assert_eq!(records[1].generation, 1);
+}
+
+#[test]
+fn paired_checkpoint_delta_canonicalizes_new_records_before_existing_records() {
+    let hnsw_point = PrivateOramAppendLevel0PointV2 {
+        node_id: [1; 32],
+        point_token: [1; 32],
+        visible_point_id: None,
+        payload_fetch_token: Some([1; 32]),
+        vector: vec![0.0, 1.0],
+        initial_leaf: 3,
+    };
+    let result_point = PrivateOramAppendResultPointV2 {
+        payload_fetch_token: [1; 32],
+        point_token: [1; 32],
+        payload: b"canonical private payload".to_vec(),
+        initial_leaf: 3,
+    };
+    let fixture = paired_append_transaction_fixture_with_inputs(
+        hnsw_point,
+        result_point,
+        hnsw_append_transaction_plan(),
+        result_append_transaction_plan(1),
+    );
+    let delta = plan_private_oram_append_paired_checkpoint_delta_v2(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        &fixture.hnsw_output,
+        &fixture.result_output,
+    )
+    .unwrap();
+
+    assert_eq!(
+        delta.checkpoint().points[0].point_token,
+        BASE64URL_NOPAD.encode(&[1; 32])
+    );
+    let PrivateOramAppendClientIndexCheckpointV2::Hnsw { records, .. } =
+        &delta.checkpoint().indexes[0]
+    else {
+        panic!("paired checkpoint HNSW index is missing");
+    };
+    assert_eq!(records[0].node_id, BASE64URL_NOPAD.encode(&[1; 32]));
+    let PrivateOramAppendClientIndexCheckpointV2::Result { records, .. } =
+        &delta.checkpoint().indexes[1]
+    else {
+        panic!("paired checkpoint result index is missing");
+    };
+    assert_eq!(
+        records[0].payload_fetch_token,
+        BASE64URL_NOPAD.encode(&[1; 32])
+    );
+}
+
+#[test]
+fn paired_checkpoint_delta_rejects_cross_index_point_and_payload_mismatches() {
+    let mismatched_point_fixture = paired_append_transaction_fixture_with_inputs(
+        hnsw_append_transaction_point(),
+        PrivateOramAppendResultPointV2 {
+            point_token: [8; 32],
+            ..result_append_transaction_point()
+        },
+        hnsw_append_transaction_plan(),
+        result_append_transaction_plan(1),
+    );
+    assert_eq!(
+        plan_private_oram_append_paired_checkpoint_delta_v2(
+            &mismatched_point_fixture.manifest,
+            &mismatched_point_fixture.state,
+            &mismatched_point_fixture.checkpoint,
+            &mismatched_point_fixture.hnsw_output,
+            &mismatched_point_fixture.result_output,
+        ),
+        Err(PrivateOramAppendCheckpointError::PreparedOutputMismatch(
+            "point_ledger"
+        ))
+    );
+
+    let mismatched_payload_fixture = paired_append_transaction_fixture_with_inputs(
+        hnsw_append_transaction_point(),
+        PrivateOramAppendResultPointV2 {
+            payload_fetch_token: [8; 32],
+            ..result_append_transaction_point()
+        },
+        hnsw_append_transaction_plan(),
+        result_append_transaction_plan(1),
+    );
+    assert_eq!(
+        plan_private_oram_append_paired_checkpoint_delta_v2(
+            &mismatched_payload_fixture.manifest,
+            &mismatched_payload_fixture.state,
+            &mismatched_payload_fixture.checkpoint,
+            &mismatched_payload_fixture.hnsw_output,
+            &mismatched_payload_fixture.result_output,
+        ),
+        Err(PrivateOramAppendCheckpointError::PreparedOutputMismatch(
+            "point_ledger"
+        ))
+    );
+}
+
+#[test]
+fn paired_checkpoint_delta_rejects_mixed_mutation_identity() {
+    let mut result_plan = result_append_transaction_plan(1);
+    result_plan.mutation_id = digest(22);
+    let fixture = paired_append_transaction_fixture_with_inputs(
+        hnsw_append_transaction_point(),
+        result_append_transaction_point(),
+        hnsw_append_transaction_plan(),
+        result_plan,
+    );
+
+    assert_eq!(
+        plan_private_oram_append_paired_checkpoint_delta_v2(
+            &fixture.manifest,
+            &fixture.state,
+            &fixture.checkpoint,
+            &fixture.hnsw_output,
+            &fixture.result_output,
+        ),
+        Err(PrivateOramAppendCheckpointError::PreparedOutputMismatch(
+            "paired_identity"
+        ))
+    );
+}
+
+#[test]
+fn paired_checkpoint_delta_rejects_a_tampered_source_checkpoint_digest() {
+    let mut fixture = paired_append_transaction_fixture();
+    fixture.result_output.source_checkpoint_digest = digest(99);
+
+    assert_eq!(
+        plan_private_oram_append_paired_checkpoint_delta_v2(
+            &fixture.manifest,
+            &fixture.state,
+            &fixture.checkpoint,
+            &fixture.hnsw_output,
+            &fixture.result_output,
+        ),
+        Err(PrivateOramAppendCheckpointError::Transaction(
+            PrivateOramAppendTransactionError::RecoveryMarkerMismatch
+        ))
+    );
+
+    let mut fixture = paired_append_transaction_fixture();
+    fixture.hnsw_output.source_checkpoint_digest = digest(99);
+    assert_eq!(
+        plan_private_oram_append_paired_checkpoint_delta_v2(
+            &fixture.manifest,
+            &fixture.state,
+            &fixture.checkpoint,
+            &fixture.hnsw_output,
+            &fixture.result_output,
+        ),
+        Err(PrivateOramAppendCheckpointError::PreparedOutputMismatch(
+            "hnsw.prepared_commit_digest"
+        ))
+    );
+}
+
+#[test]
+fn paired_checkpoint_delta_rejects_immediate_mutation_id_reuse() {
+    let fixture = paired_append_transaction_fixture_with_inputs_and_last_mutation(
+        hnsw_append_transaction_point(),
+        result_append_transaction_point(),
+        hnsw_append_transaction_plan(),
+        result_append_transaction_plan(1),
+        Some(digest(20)),
+    );
+
+    assert_eq!(
+        plan_private_oram_append_paired_checkpoint_delta_v2(
+            &fixture.manifest,
+            &fixture.state,
+            &fixture.checkpoint,
+            &fixture.hnsw_output,
+            &fixture.result_output,
+        ),
+        Err(PrivateOramAppendCheckpointError::InvalidTransition(
+            "mutation_id"
+        ))
+    );
+}
+
+#[test]
+fn paired_checkpoint_reseal_binds_exact_ciphertext_digest_and_reopens() {
+    let fixture = paired_append_transaction_fixture();
+    let checkpoint_key = SecretKey::from_bytes([44; 32]);
+    let resealed = reseal_private_oram_append_paired_checkpoint_v2(
+        &checkpoint_key,
+        PrivateOramAppendPairedCheckpointResealInputV2 {
+            manifest: &fixture.manifest,
+            old_state: &fixture.state,
+            old_encrypted_checkpoint: &fixture.old_encrypted_checkpoint,
+            hnsw_output: &fixture.hnsw_output,
+            result_output: &fixture.result_output,
+            new_state_signed_at_unix: fixture.state.signed_at_unix + 1,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        resealed.new_state.client_state_digest,
+        private_oram_append_client_checkpoint_v2_digest(&resealed.encrypted_checkpoint.sealed)
+            .unwrap()
+    );
+    assert_eq!(
+        resealed.encrypted_checkpoint.state_digest,
+        private_oram_signed_state_v2_digest(&resealed.new_state).unwrap()
+    );
+    assert_eq!(
+        resealed.new_state.last_mutation_id.as_deref(),
+        Some(digest(20).as_str())
+    );
+    assert_eq!(
+        resealed.new_state.state_sequence,
+        fixture.state.state_sequence + 1
+    );
+    assert_eq!(
+        open_private_oram_append_client_checkpoint_v2(
+            &checkpoint_key,
+            &resealed.encrypted_checkpoint,
+            &fixture.manifest,
+            &resealed.new_state,
+        )
+        .unwrap(),
+        resealed.checkpoint
+    );
+}
+
+#[test]
+fn paired_checkpoint_reseal_rejects_an_unbound_old_checkpoint() {
+    let fixture = paired_append_transaction_fixture();
+    let mut unbound = fixture.old_encrypted_checkpoint.clone();
+    unbound.state_digest = digest(99);
+
+    assert_eq!(
+        reseal_private_oram_append_paired_checkpoint_v2(
+            &SecretKey::from_bytes([44; 32]),
+            PrivateOramAppendPairedCheckpointResealInputV2 {
+                manifest: &fixture.manifest,
+                old_state: &fixture.state,
+                old_encrypted_checkpoint: &unbound,
+                hnsw_output: &fixture.hnsw_output,
+                result_output: &fixture.result_output,
+                new_state_signed_at_unix: fixture.state.signed_at_unix + 1,
+            },
+        ),
+        Err(PrivateOramAppendCheckpointError::Client(
+            PrivateOramAppendClientError::CheckpointStateMismatch
+        ))
+    );
+}
+
+#[test]
+fn paired_checkpoint_reseal_randomization_changes_the_pending_artifact() {
+    let fixture = paired_append_transaction_fixture();
+    let checkpoint_key = SecretKey::from_bytes([44; 32]);
+    let input = PrivateOramAppendPairedCheckpointResealInputV2 {
+        manifest: &fixture.manifest,
+        old_state: &fixture.state,
+        old_encrypted_checkpoint: &fixture.old_encrypted_checkpoint,
+        hnsw_output: &fixture.hnsw_output,
+        result_output: &fixture.result_output,
+        new_state_signed_at_unix: fixture.state.signed_at_unix + 1,
+    };
+    let first = reseal_private_oram_append_paired_checkpoint_v2(&checkpoint_key, input).unwrap();
+    let second = reseal_private_oram_append_paired_checkpoint_v2(&checkpoint_key, input).unwrap();
+
+    assert_ne!(
+        first.encrypted_checkpoint.sealed.ciphertext,
+        second.encrypted_checkpoint.sealed.ciphertext
+    );
+    assert_ne!(
+        first.new_state.client_state_digest,
+        second.new_state.client_state_digest
+    );
+    assert_ne!(
+        first.encrypted_checkpoint.state_digest,
+        second.encrypted_checkpoint.state_digest
+    );
+    assert_eq!(first.checkpoint, second.checkpoint);
+}
+
+#[test]
+fn paired_checkpoint_debug_output_redacts_client_state_and_ciphertext() {
+    let fixture = paired_append_transaction_fixture();
+    let checkpoint_key = SecretKey::from_bytes([44; 32]);
+    let input = PrivateOramAppendPairedCheckpointResealInputV2 {
+        manifest: &fixture.manifest,
+        old_state: &fixture.state,
+        old_encrypted_checkpoint: &fixture.old_encrypted_checkpoint,
+        hnsw_output: &fixture.hnsw_output,
+        result_output: &fixture.result_output,
+        new_state_signed_at_unix: fixture.state.signed_at_unix + 1,
+    };
+    let input_debug = format!("{input:?}");
+    let resealed = reseal_private_oram_append_paired_checkpoint_v2(&checkpoint_key, input).unwrap();
+    let output_debug = format!("{resealed:?}");
+    let delta = plan_private_oram_append_paired_checkpoint_delta_v2(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        &fixture.hnsw_output,
+        &fixture.result_output,
+    )
+    .unwrap();
+    let delta_debug = format!("{delta:?}");
+
+    for debug in [input_debug, output_debug, delta_debug] {
+        assert!(!debug.contains(&fixture.manifest.collection_id));
+        assert!(!debug.contains(&BASE64URL_NOPAD.encode(&[6; 32])));
+        assert!(!debug.contains(&resealed.encrypted_checkpoint.sealed.ciphertext));
+    }
+}
+
+#[test]
+fn paired_checkpoint_reseal_rejects_a_rollback_signed_at_time() {
+    let fixture = paired_append_transaction_fixture();
+    assert_eq!(
+        reseal_private_oram_append_paired_checkpoint_v2(
+            &SecretKey::from_bytes([44; 32]),
+            PrivateOramAppendPairedCheckpointResealInputV2 {
+                manifest: &fixture.manifest,
+                old_state: &fixture.state,
+                old_encrypted_checkpoint: &fixture.old_encrypted_checkpoint,
+                hnsw_output: &fixture.hnsw_output,
+                result_output: &fixture.result_output,
+                new_state_signed_at_unix: fixture.state.signed_at_unix - 1,
+            },
+        ),
+        Err(PrivateOramAppendCheckpointError::InvalidTransition(
+            "signed_state"
+        ))
     );
 }

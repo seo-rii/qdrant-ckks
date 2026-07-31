@@ -47,6 +47,8 @@ pub const PRIVATE_ORAM_APPEND_RESULT_ATTEMPT_V3_DIGEST_DOMAIN: &str =
     "qdrant-sec/private-oram-append-result-attempt/v3";
 pub const PRIVATE_ORAM_APPEND_RESULT_PREPARED_COMMIT_V3_DIGEST_DOMAIN: &str =
     "qdrant-sec/private-oram-append-result-prepared-commit/v3";
+pub const PRIVATE_ORAM_APPEND_RESULT_PREPARED_COMMIT_V4_DIGEST_DOMAIN: &str =
+    "qdrant-sec/private-oram-append-result-prepared-commit/v4";
 pub const PRIVATE_ORAM_APPEND_RESULT_WORKING_ARTIFACT_V3_DIGEST_DOMAIN: &str =
     "qdrant-sec/private-oram-append-result-working-artifact/v3";
 
@@ -142,6 +144,37 @@ impl Debug for PrivateOramAppendResultPreparedCommitDigestInputV3<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct PrivateOramAppendResultPreparedCommitDigestInputV4<'a> {
+    pub attempt_digest: &'a str,
+    pub source_checkpoint_digest: &'a str,
+    pub result_record: &'a PrivateOramAppendResultRecordV2,
+    pub old_epoch: u64,
+    pub new_epoch: u64,
+    pub old_root_hash: &'a str,
+    pub new_root_hash: &'a str,
+    pub read_transcript_digest: &'a str,
+    pub writeback_digest: &'a str,
+    pub next_client_state: &'a PrivateResultOramClientStateSnapshot,
+}
+
+impl Debug for PrivateOramAppendResultPreparedCommitDigestInputV4<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramAppendResultPreparedCommitDigestInputV4")
+            .field("attempt_digest", &"[redacted]")
+            .field("source_checkpoint_digest", &"[redacted]")
+            .field("result_record", &"[redacted]")
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("read_transcript_digest", &"[redacted]")
+            .field("writeback_digest", &"[redacted]")
+            .field("next_client_state", &"[redacted]")
+            .finish()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct PrivateOramAppendResultReadRequestV2 {
     pub window: PrivateOramAppendReadWindowV1,
@@ -159,6 +192,7 @@ impl Debug for PrivateOramAppendResultReadRequestV2 {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct PrivateOramAppendResultTransactionOutputV2 {
+    pub source_checkpoint_digest: String,
     pub result_record: PrivateOramAppendResultRecordV2,
     pub read_transcript: PrivateOramObservedReadTranscriptV1,
     pub writeback: PrivateOramAppendIndexWritebackV1,
@@ -176,6 +210,7 @@ pub struct PrivateOramAppendResultTransactionOutputV2 {
 impl Debug for PrivateOramAppendResultTransactionOutputV2 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateOramAppendResultTransactionOutputV2")
+            .field("source_checkpoint_digest", &"[redacted]")
             .field("result_record", &"[redacted]")
             .field("read_transcript", &self.read_transcript)
             .field("writeback", &self.writeback)
@@ -243,6 +278,7 @@ pub struct PrivateOramAppendResultTransactionV2 {
     plan: PrivateOramAppendResultTransactionPlanV2,
     manifest_digest: String,
     old_state_digest: String,
+    source_checkpoint_digest: String,
     attempt_digest: String,
     result_record: PrivateOramAppendResultRecordV2,
     new_block: PrivateResultOramPayloadBlockPlaintext,
@@ -489,6 +525,8 @@ impl PrivateOramAppendResultTransactionV2 {
 
         let manifest_digest = private_oram_immutable_manifest_v2_digest(manifest)?;
         let old_state_digest = private_oram_signed_state_v2_digest(old_state)?;
+        let source_checkpoint_digest =
+            private_oram_append_client_checkpoint_plaintext_v3_digest(checkpoint)?;
         let attempt_digest = private_oram_append_result_attempt_v3_digest(
             PrivateOramAppendResultAttemptDigestInputV3 {
                 manifest_digest: &manifest_digest,
@@ -521,6 +559,7 @@ impl PrivateOramAppendResultTransactionV2 {
             plan,
             manifest_digest,
             old_state_digest,
+            source_checkpoint_digest,
             attempt_digest,
             result_record,
             new_block,
@@ -791,9 +830,10 @@ impl PrivateOramAppendResultTransactionV2 {
                 updated_buckets: &writeback.updated_buckets,
             })?;
         recovery_marker.prepared_commit_digest =
-            Some(private_oram_append_result_prepared_commit_v3_digest(
-                PrivateOramAppendResultPreparedCommitDigestInputV3 {
+            Some(private_oram_append_result_prepared_commit_v4_digest(
+                PrivateOramAppendResultPreparedCommitDigestInputV4 {
                     attempt_digest: &self.attempt_digest,
+                    source_checkpoint_digest: &self.source_checkpoint_digest,
                     result_record: &self.result_record,
                     old_epoch: self.old_epoch,
                     new_epoch: self.new_epoch,
@@ -806,6 +846,7 @@ impl PrivateOramAppendResultTransactionV2 {
             )?);
         let manifest = self.manifest.clone();
         let output = PrivateOramAppendResultTransactionOutputV2 {
+            source_checkpoint_digest: self.source_checkpoint_digest,
             result_record: self.result_record,
             read_transcript,
             writeback,
@@ -1261,6 +1302,7 @@ pub fn validate_private_oram_append_result_transaction_output_v2(
         ));
     }
     validate_base64url_32(&marker.attempt_digest, "attempt_digest")?;
+    validate_base64url_32(&output.source_checkpoint_digest, "source_checkpoint_digest")?;
     validate_base64url_32(&output.old_root_hash, "old_root_hash")?;
     validate_base64url_32(&output.new_root_hash, "new_root_hash")?;
 
@@ -1470,9 +1512,10 @@ pub fn validate_private_oram_append_result_transaction_output_v2(
             read_transcript_digest: &output.writeback.read_transcript_digest,
             updated_buckets: &output.writeback.updated_buckets,
         })?;
-    let prepared_digest = private_oram_append_result_prepared_commit_v3_digest(
-        PrivateOramAppendResultPreparedCommitDigestInputV3 {
+    let prepared_digest = private_oram_append_result_prepared_commit_v4_digest(
+        PrivateOramAppendResultPreparedCommitDigestInputV4 {
             attempt_digest: &marker.attempt_digest,
+            source_checkpoint_digest: &output.source_checkpoint_digest,
             result_record: &output.result_record,
             old_epoch: output.old_epoch,
             new_epoch: output.new_epoch,
@@ -1531,6 +1574,35 @@ pub fn private_oram_append_result_prepared_commit_v3_digest(
         PRIVATE_ORAM_APPEND_RESULT_PREPARED_COMMIT_V3_DIGEST_DOMAIN.as_bytes(),
     )?;
     update_digest_bytes(&mut hasher, input.attempt_digest.as_bytes())?;
+    update_digest_bytes(
+        &mut hasher,
+        input.result_record.payload_fetch_token.as_bytes(),
+    )?;
+    update_digest_bytes(&mut hasher, input.result_record.point_token.as_bytes())?;
+    hasher.update(input.result_record.generation.to_be_bytes());
+    hasher.update(input.old_epoch.to_be_bytes());
+    hasher.update(input.new_epoch.to_be_bytes());
+    update_digest_bytes(&mut hasher, input.old_root_hash.as_bytes())?;
+    update_digest_bytes(&mut hasher, input.new_root_hash.as_bytes())?;
+    update_digest_bytes(&mut hasher, input.read_transcript_digest.as_bytes())?;
+    update_digest_bytes(&mut hasher, input.writeback_digest.as_bytes())?;
+    update_digest_bytes(&mut hasher, next_client_state_digest.as_bytes())?;
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+pub fn private_oram_append_result_prepared_commit_v4_digest(
+    input: PrivateOramAppendResultPreparedCommitDigestInputV4<'_>,
+) -> Result<String, PrivateOramAppendTransactionError> {
+    validate_base64url_32(input.source_checkpoint_digest, "source_checkpoint_digest")?;
+    let next_client_state_digest =
+        private_oram_append_result_client_state_v3_digest(input.next_client_state)?;
+    let mut hasher = Sha256::new();
+    update_digest_domain_v3(
+        &mut hasher,
+        PRIVATE_ORAM_APPEND_RESULT_PREPARED_COMMIT_V4_DIGEST_DOMAIN.as_bytes(),
+    )?;
+    update_digest_bytes(&mut hasher, input.attempt_digest.as_bytes())?;
+    update_digest_bytes(&mut hasher, input.source_checkpoint_digest.as_bytes())?;
     update_digest_bytes(
         &mut hasher,
         input.result_record.payload_fetch_token.as_bytes(),
