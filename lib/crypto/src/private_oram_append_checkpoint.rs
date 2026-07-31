@@ -29,6 +29,7 @@ use crate::private_oram_append_transaction::{
     PrivateOramAppendHnswPreparedCommitDigestInputV4, PrivateOramAppendHnswTransactionOutputV2,
     PrivateOramAppendRecoveryPhaseV2, PrivateOramAppendTransactionError,
     private_oram_append_hnsw_prepared_commit_v4_digest,
+    validate_private_oram_append_hnsw_transaction_output_v2,
 };
 use crate::private_oram_mutation::{
     PRIVATE_ORAM_SIGNED_STATE_V2_VERSION, PrivateOramAppendReadTranscriptDigestInput,
@@ -203,6 +204,7 @@ pub fn plan_private_oram_append_paired_checkpoint_delta_v2(
     }
 
     validate_old_state_capacity(manifest, old_state)?;
+    validate_private_oram_append_hnsw_transaction_output_v2(manifest, hnsw_output)?;
     validate_private_oram_append_result_transaction_output_v2(manifest, result_output)?;
 
     let manifest_digest = private_oram_immutable_manifest_v2_digest(manifest)?;
@@ -753,7 +755,31 @@ fn advance_hnsw_records(
         .map(|record| Ok((decode_base64url_32(&record.node_id)?, record)))
         .collect::<Result<BTreeMap<_, _>, PrivateOramAppendCheckpointError>>()?;
     let mut rewritten = BTreeSet::new();
+    let new_node_id = output.graph_delta.new_block.node_id;
     for rewrite in &output.graph_delta.neighbor_rewrites {
+        let previous_level_zero_neighbor_ids = rewrite
+            .previous
+            .neighbors
+            .iter()
+            .zip(&rewrite.previous.neighbor_levels)
+            .filter_map(|(node_id, level)| (*level == 0).then_some(*node_id))
+            .collect::<BTreeSet<_>>();
+        if rewrite
+            .replacement
+            .neighbors
+            .iter()
+            .zip(&rewrite.replacement.neighbor_levels)
+            .filter(|(_, level)| **level == 0)
+            .any(|(node_id, _)| {
+                *node_id != new_node_id
+                    && (!previous_level_zero_neighbor_ids.contains(node_id)
+                        || !records.contains_key(node_id))
+            })
+        {
+            return Err(PrivateOramAppendCheckpointError::InvalidTransition(
+                "neighbor_rewrites",
+            ));
+        }
         validate_hnsw_rewrite(&rewrite.previous, &rewrite.replacement)?;
         if !rewritten.insert(rewrite.previous.node_id) {
             return Err(PrivateOramAppendCheckpointError::InvalidTransition(

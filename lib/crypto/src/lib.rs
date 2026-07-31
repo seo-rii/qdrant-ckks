@@ -12,6 +12,7 @@ pub mod private_hnsw_client;
 pub mod private_hnsw_oram;
 pub mod private_oram_append_checkpoint;
 pub mod private_oram_append_client;
+pub mod private_oram_append_finalizer;
 pub mod private_oram_append_result_transaction;
 pub mod private_oram_append_transaction;
 pub mod private_oram_mutation;
@@ -184,6 +185,11 @@ pub use private_oram_append_client::{
     validate_private_oram_append_client_checkpoint_v2,
     validate_private_oram_append_client_checkpoint_v2_shape,
 };
+pub use private_oram_append_finalizer::{
+    PrivateOramAppendFinalizerError, PrivateOramAppendPairedFinalizationContextV1,
+    PrivateOramAppendPairedFinalizationInputV1, PrivateOramAppendPairedFinalizationV1,
+    finalize_private_oram_append_paired_mutation_v1,
+};
 pub use private_oram_append_result_transaction::{
     PRIVATE_ORAM_APPEND_RESULT_ATTEMPT_V3_DIGEST_DOMAIN,
     PRIVATE_ORAM_APPEND_RESULT_PREPARED_COMMIT_V3_DIGEST_DOMAIN,
@@ -220,6 +226,7 @@ pub use private_oram_append_transaction::{
     private_oram_append_hnsw_prepared_commit_v2_digest,
     private_oram_append_hnsw_prepared_commit_v3_digest,
     private_oram_append_hnsw_prepared_commit_v4_digest,
+    validate_private_oram_append_hnsw_transaction_output_v2,
 };
 pub use private_oram_mutation::{
     PAYLOAD_PRIVATE_RESULT_ORAM_V2_PROVIDER, PRIVATE_HNSW_ORAM_V2_BINDING,

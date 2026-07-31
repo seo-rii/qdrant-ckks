@@ -10,13 +10,14 @@ use crate::private_hnsw_client::{
     PrivateHnswBucketAeadBaseContext, PrivateHnswClientError, PrivateHnswClientKeys,
     PrivateHnswEncryptedPathBatch, PrivateHnswNodeBlockPlaintext, PrivateHnswOramClientConfig,
     PrivateHnswOramClientState, PrivateHnswOramClientStateSnapshot, PrivateHnswOramMerkleProof,
-    PrivateHnswOramPlaintextBucket, access_private_hnsw_oram_path,
-    access_private_hnsw_oram_path_with_append_rewrite, encode_private_hnsw_oram_leaf_label,
+    PrivateHnswOramPlaintextBucket, PrivateHnswVectorEncoding, access_private_hnsw_oram_path,
+    access_private_hnsw_oram_path_with_append_rewrite, decode_private_hnsw_oram_leaf_label,
+    encode_private_hnsw_node_block, encode_private_hnsw_oram_leaf_label,
     evict_private_hnsw_oram_path, open_private_hnsw_oram_verified_path_batch,
     private_hnsw_oram_bucket_count, private_hnsw_oram_bucket_ids_for_leaf,
-    seal_private_hnsw_oram_plaintext_bucket,
+    seal_private_hnsw_oram_plaintext_bucket, validate_private_hnsw_upload_bucket,
 };
-use crate::private_hnsw_oram::PrivateHnswOramBucket;
+use crate::private_hnsw_oram::{PrivateHnswOramBucket, private_hnsw_oram_bucket_ciphertext_bytes};
 use crate::private_oram_append_client::{
     PRIVATE_ORAM_APPEND_MERKLE_PATCH_PROOF_V1_VERSION, PrivateOramAppendClientCheckpointV2,
     PrivateOramAppendClientError, PrivateOramAppendClientIndexCheckpointV2,
@@ -409,6 +410,7 @@ pub struct PrivateOramAppendHnswTransactionOutputV2 {
     pub next_client_state: PrivateHnswOramClientStateSnapshot,
     pub ordered_encrypted_buckets: Vec<PrivateHnswOramBucket>,
     pub final_encrypted_buckets: Vec<PrivateHnswOramBucket>,
+    pub merkle_patch_proof: PrivateOramAppendMerklePatchProofV1,
     pub recovery_marker: PrivateOramAppendRecoveryMarkerV3,
 }
 
@@ -432,6 +434,7 @@ impl Debug for PrivateOramAppendHnswTransactionOutputV2 {
                 "final_encrypted_bucket_count",
                 &self.final_encrypted_buckets.len(),
             )
+            .field("merkle_patch_proof", &"[redacted]")
             .field("recovery_marker", &self.recovery_marker)
             .finish()
     }
@@ -1177,7 +1180,8 @@ impl PrivateOramAppendHnswTransactionV2 {
                     next_client_state: &next_client_state,
                 },
             )?);
-        Ok(PrivateOramAppendHnswTransactionOutputV2 {
+        let manifest = self.manifest.clone();
+        let output = PrivateOramAppendHnswTransactionOutputV2 {
             source_checkpoint_digest: self.source_checkpoint_digest,
             graph_delta,
             read_transcript,
@@ -1189,8 +1193,11 @@ impl PrivateOramAppendHnswTransactionV2 {
             next_client_state,
             ordered_encrypted_buckets: self.ordered_encrypted_buckets,
             final_encrypted_buckets,
+            merkle_patch_proof: proof,
             recovery_marker,
-        })
+        };
+        validate_private_oram_append_hnsw_transaction_output_v2(&manifest, &output)?;
+        Ok(output)
     }
 
     pub fn requires_recovery(&self) -> bool {
@@ -1667,6 +1674,517 @@ impl PrivateOramAppendHnswTransactionV2 {
         }
         Ok(())
     }
+}
+
+pub fn validate_private_oram_append_hnsw_transaction_output_v2(
+    manifest: &PrivateOramImmutableManifestV2,
+    output: &PrivateOramAppendHnswTransactionOutputV2,
+) -> Result<(), PrivateOramAppendTransactionError> {
+    let manifest_digest = private_oram_immutable_manifest_v2_digest(manifest)?;
+    let hnsw_indexes = manifest
+        .indexes
+        .iter()
+        .filter(|index| index.kind() == PrivateOramIndexKindV2::Hnsw)
+        .collect::<Vec<_>>();
+    if hnsw_indexes.len() != 1 || !(1..=2).contains(&manifest.indexes.len()) {
+        return Err(PrivateOramAppendTransactionError::UnsupportedTopology);
+    }
+    let manifest_index = hnsw_indexes[0];
+    let PrivateOramImmutableIndexParamsV2::Hnsw {
+        key_id,
+        rk_id,
+        rk_epoch,
+        dim,
+        vector_encoding,
+        hnsw,
+        oram,
+        max_neighbor_rewrites,
+        ..
+    } = &manifest_index.params
+    else {
+        return Err(PrivateOramAppendTransactionError::UnsupportedTopology);
+    };
+    let marker = &output.recovery_marker;
+    let window_count = output
+        .read_transcript
+        .read_path_count
+        .checked_div(oram.path_batch_size)
+        .ok_or(PrivateOramAppendTransactionError::InvalidInput(
+            "read_transcript",
+        ))?;
+    if marker.version != PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V3_VERSION
+        || marker.collection_id != manifest.collection_id
+        || marker.manifest_digest != manifest_digest
+        || marker.index_kind != PrivateOramIndexKindV2::Hnsw
+        || marker.index_name != manifest_index.index_name
+        || marker.phase != PrivateOramAppendRecoveryPhaseV2::PreparedCommit
+        || marker.requested_window_count != window_count
+        || marker.accepted_window_count != window_count
+        || marker.observed_read_path_count != output.read_transcript.read_path_count
+        || marker.prepared_commit_digest.is_none()
+        || output.new_epoch
+            != output.old_epoch.checked_add(1).ok_or(
+                PrivateOramAppendTransactionError::InvalidInput("index_epoch"),
+            )?
+        || output.old_root_hash == output.new_root_hash
+        || output.graph_delta.index_name != manifest_index.index_name
+        || output.graph_delta.fixed_read_path_count
+            != manifest_index.capacity.fixed_append_read_path_count
+        || output.writeback.kind != PrivateOramIndexKindV2::Hnsw
+        || output.writeback.index_name != manifest_index.index_name
+        || output.writeback.read_path_count != manifest_index.capacity.fixed_append_read_path_count
+        || output.writeback.read_path_count != output.read_transcript.read_path_count
+        || output.writeback.read_transcript_digest != output.read_transcript.transcript_digest
+        || output.writeback.updated_buckets.len()
+            != usize::try_from(manifest_index.capacity.fixed_append_write_bucket_count).map_err(
+                |_| PrivateOramAppendTransactionError::InvalidInput("fixed_write_bucket_count"),
+            )?
+        || output.ordered_encrypted_buckets.len() != output.writeback.updated_buckets.len()
+    {
+        return Err(PrivateOramAppendTransactionError::InvalidInput(
+            "prepared_output",
+        ));
+    }
+    validate_base64url_32(&marker.mutation_id, "mutation_id")?;
+    validate_base64url_32(&marker.old_state_digest, "old_state_digest")?;
+    validate_base64url_32(&marker.attempt_digest, "attempt_digest")?;
+    validate_base64url_32(&marker.writer_lease_digest, "writer_lease_digest")?;
+    validate_base64url_32(&output.source_checkpoint_digest, "source_checkpoint_digest")?;
+    validate_base64url_32(&output.old_root_hash, "old_root_hash")?;
+    validate_base64url_32(&output.new_root_hash, "new_root_hash")?;
+
+    let paths_per_window = oram.path_batch_size;
+    let paths_per_window_usize = usize::try_from(paths_per_window)
+        .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("paths_per_window"))?;
+    if output.read_transcript.collection_id != manifest.collection_id
+        || output.read_transcript.manifest_digest != manifest_digest
+        || output.read_transcript.mutation_id != marker.mutation_id
+        || output.read_transcript.old_state_digest != marker.old_state_digest
+        || output.read_transcript.writer_lease_digest != marker.writer_lease_digest
+        || output.read_transcript.writer_fence != marker.writer_fence
+        || output.read_transcript.kind != PrivateOramIndexKindV2::Hnsw
+        || output.read_transcript.index_name != manifest_index.index_name
+        || output.read_transcript.paths_per_window != paths_per_window
+        || output.read_transcript.tree_height != oram.tree_height
+        || output.read_transcript.ordered_leaf_labels.len()
+            != usize::try_from(output.read_transcript.read_path_count)
+                .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("read_path_count"))?
+        || !output
+            .read_transcript
+            .ordered_leaf_labels
+            .len()
+            .is_multiple_of(paths_per_window_usize)
+    {
+        return Err(PrivateOramAppendTransactionError::InvalidInput(
+            "read_transcript",
+        ));
+    }
+    let windows = output
+        .read_transcript
+        .ordered_leaf_labels
+        .chunks(paths_per_window_usize)
+        .enumerate()
+        .map(|(sequence, paths)| {
+            Ok(PrivateOramAppendReadWindowV1 {
+                sequence: u32::try_from(sequence).map_err(|_| {
+                    PrivateOramAppendTransactionError::InvalidInput("read_transcript")
+                })?,
+                paths: paths.to_vec(),
+            })
+        })
+        .collect::<Result<Vec<_>, PrivateOramAppendTransactionError>>()?;
+    let expected_transcript =
+        private_oram_append_read_transcript_v1(PrivateOramAppendReadTranscriptDigestInput {
+            collection_id: &manifest.collection_id,
+            manifest_digest: &manifest_digest,
+            mutation_id: &marker.mutation_id,
+            old_state_digest: &marker.old_state_digest,
+            writer_lease_digest: &marker.writer_lease_digest,
+            writer_fence: marker.writer_fence,
+            paths_per_window,
+            tree_height: oram.tree_height,
+            kind: PrivateOramIndexKindV2::Hnsw,
+            index_name: &manifest_index.index_name,
+            windows: &windows,
+        })?;
+    if expected_transcript != output.read_transcript {
+        return Err(PrivateOramAppendTransactionError::InvalidInput(
+            "read_transcript",
+        ));
+    }
+    let expected_ordered_bucket_ids = output
+        .read_transcript
+        .ordered_leaf_labels
+        .iter()
+        .map(|leaf_label| {
+            decode_private_hnsw_oram_leaf_label(leaf_label, oram.tree_height)
+                .map_err(PrivateOramAppendTransactionError::from)
+        })
+        .map(|leaf| {
+            leaf.and_then(|leaf| {
+                private_hnsw_oram_bucket_ids_for_leaf(leaf, oram.tree_height)
+                    .map_err(PrivateOramAppendTransactionError::from)
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    if expected_ordered_bucket_ids.len() != output.writeback.updated_buckets.len()
+        || output
+            .writeback
+            .updated_buckets
+            .iter()
+            .zip(&expected_ordered_bucket_ids)
+            .any(|(bucket, expected_bucket_id)| bucket.bucket_id != *expected_bucket_id)
+        || output
+            .ordered_encrypted_buckets
+            .iter()
+            .zip(&expected_ordered_bucket_ids)
+            .any(|(bucket, expected_bucket_id)| bucket.bucket_id != *expected_bucket_id)
+    {
+        return Err(PrivateOramAppendTransactionError::InvalidInput(
+            "ordered_bucket_frames",
+        ));
+    }
+
+    let bucket_count = private_hnsw_oram_bucket_count(oram.tree_height)?;
+    if bucket_count != manifest_index.capacity.bucket_count {
+        return Err(PrivateOramAppendTransactionError::InvalidInput(
+            "bucket_count",
+        ));
+    }
+    let expected_ciphertext_bytes = private_hnsw_oram_bucket_ciphertext_bytes(oram)
+        .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("encrypted_buckets"))?;
+    let base_context = PrivateHnswBucketAeadBaseContext {
+        collection_id: &manifest.collection_id,
+        vector_name: &manifest_index.index_name,
+        key_id,
+        rk_id,
+        rk_epoch: *rk_epoch,
+    };
+    let mut expected_final = BTreeMap::new();
+    for (bucket, expected_ref) in output
+        .ordered_encrypted_buckets
+        .iter()
+        .zip(&output.writeback.updated_buckets)
+    {
+        validate_private_hnsw_upload_bucket(
+            base_context,
+            bucket,
+            output.new_epoch,
+            bucket_count,
+            expected_ciphertext_bytes,
+        )?;
+        if bucket_ref(bucket) != *expected_ref {
+            return Err(PrivateOramAppendTransactionError::InvalidInput(
+                "encrypted_buckets",
+            ));
+        }
+        expected_final.insert(bucket.bucket_id, bucket.clone());
+    }
+    if output
+        .final_encrypted_buckets
+        .windows(2)
+        .any(|pair| pair[0].bucket_id >= pair[1].bucket_id)
+        || output.final_encrypted_buckets != expected_final.into_values().collect::<Vec<_>>()
+    {
+        return Err(PrivateOramAppendTransactionError::InvalidInput(
+            "final_encrypted_buckets",
+        ));
+    }
+    let patch = apply_private_oram_append_sparse_merkle_patch_v1(
+        output.old_epoch,
+        &output.old_root_hash,
+        bucket_count,
+        &output.merkle_patch_proof,
+        &output.writeback.updated_buckets,
+    )?;
+    let final_refs = output
+        .final_encrypted_buckets
+        .iter()
+        .map(bucket_ref)
+        .collect::<Vec<_>>();
+    if patch.new_root_hash != output.new_root_hash || patch.final_buckets != final_refs {
+        return Err(PrivateOramAppendTransactionError::InvalidInput(
+            "merkle_patch_proof",
+        ));
+    }
+
+    let graph_delta = &output.graph_delta;
+    let expected_node_id = BASE64URL_NOPAD.encode(&graph_delta.new_block.node_id);
+    let expected_point_token = BASE64URL_NOPAD.encode(&graph_delta.new_block.point_token);
+    let expected_payload_fetch_token = graph_delta
+        .new_block
+        .payload_fetch_token
+        .map(|value| BASE64URL_NOPAD.encode(&value));
+    let expected_vector_bytes = usize::try_from(*dim)
+        .ok()
+        .and_then(|dim| dim.checked_mul(std::mem::size_of::<f32>()))
+        .ok_or(PrivateOramAppendTransactionError::InvalidInput(
+            "graph_delta",
+        ))?;
+    let block_size_bytes = usize::try_from(oram.block_size_bytes)
+        .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("graph_delta"))?;
+    let fixed_neighbor_slots = usize::try_from(hnsw.fixed_neighbor_slots)
+        .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("graph_delta"))?;
+    let expected_candidate_budget = graph_delta
+        .fixed_read_path_count
+        .checked_sub(max_neighbor_rewrites.checked_add(1).ok_or(
+            PrivateOramAppendTransactionError::InvalidInput("graph_delta"),
+        )?)
+        .ok_or(PrivateOramAppendTransactionError::InvalidInput(
+            "graph_delta",
+        ))?;
+    let expected_real_count = graph_delta
+        .candidate_read_path_count
+        .checked_add(graph_delta.rewrite_read_path_count)
+        .and_then(|count| count.checked_add(1))
+        .ok_or(PrivateOramAppendTransactionError::InvalidInput(
+            "graph_delta",
+        ))?;
+    if graph_delta.new_block.version != crate::private_hnsw_client::PRIVATE_HNSW_NODE_BLOCK_VERSION
+        || graph_delta.new_block.node_id == [0; 32]
+        || graph_delta.new_block.point_token == [0; 32]
+        || graph_delta
+            .new_block
+            .payload_fetch_token
+            .is_some_and(|value| value == [0; 32])
+        || graph_delta.new_block.level_mask != 1
+        || graph_delta.new_block.vector_encoding != *vector_encoding
+        || *vector_encoding != PrivateHnswVectorEncoding::F32Le
+        || graph_delta.new_block.vector.len() != expected_vector_bytes
+        || graph_delta.new_block.deleted
+        || graph_delta.new_block.generation != 1
+        || graph_delta.hnsw_record.node_id != expected_node_id
+        || graph_delta.hnsw_record.point_token != expected_point_token
+        || graph_delta.hnsw_record.level_mask != graph_delta.new_block.level_mask
+        || graph_delta.hnsw_record.generation != graph_delta.new_block.generation
+        || graph_delta.point_record.point_token != expected_point_token
+        || graph_delta.point_record.payload_fetch_token != expected_payload_fetch_token
+        || graph_delta.next_entry_node_id == [0; 32]
+        || graph_delta.selected_neighbor_ids != graph_delta.new_block.neighbors
+        || graph_delta
+            .new_block
+            .neighbor_levels
+            .iter()
+            .any(|level| *level != 0)
+        || graph_delta.selected_neighbor_ids.len()
+            > usize::try_from(hnsw.m)
+                .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("graph_delta"))?
+        || graph_delta.candidate_read_path_budget != expected_candidate_budget
+        || graph_delta.candidate_read_path_count > graph_delta.candidate_read_path_budget
+        || graph_delta.rewrite_read_path_budget != *max_neighbor_rewrites
+        || graph_delta.rewrite_read_path_count
+            != u32::try_from(graph_delta.neighbor_rewrites.len())
+                .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("graph_delta"))?
+        || graph_delta.rewrite_read_path_count > graph_delta.rewrite_read_path_budget
+        || graph_delta.real_read_path_count != expected_real_count
+        || graph_delta
+            .real_read_path_count
+            .checked_add(graph_delta.padding_read_path_count)
+            != Some(graph_delta.fixed_read_path_count)
+        || match manifest.result_privacy {
+            crate::private_hnsw_oram::ResultPrivacyMode::IdsVisible => {
+                graph_delta
+                    .point_record
+                    .visible_point_id
+                    .as_ref()
+                    .is_none_or(String::is_empty)
+                    || graph_delta.point_record.payload_fetch_token.is_some()
+                    || graph_delta.new_block.payload_fetch_token.is_some()
+            }
+            crate::private_hnsw_oram::ResultPrivacyMode::PrivatePayloadOramRequired => {
+                graph_delta.point_record.visible_point_id.is_some()
+                    || graph_delta.point_record.payload_fetch_token.is_none()
+                    || graph_delta.new_block.payload_fetch_token.is_none()
+            }
+        }
+    {
+        return Err(PrivateOramAppendTransactionError::InvalidInput(
+            "graph_delta",
+        ));
+    }
+    encode_private_hnsw_node_block(
+        &graph_delta.new_block,
+        block_size_bytes,
+        fixed_neighbor_slots,
+    )?;
+    let selected_neighbor_ids = graph_delta
+        .selected_neighbor_ids
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if selected_neighbor_ids.len() != graph_delta.selected_neighbor_ids.len()
+        || selected_neighbor_ids.contains(&[0; 32])
+        || selected_neighbor_ids.contains(&graph_delta.new_block.node_id)
+    {
+        return Err(PrivateOramAppendTransactionError::InvalidInput(
+            "graph_delta",
+        ));
+    }
+    let mut rewritten_node_ids = BTreeSet::new();
+    let mut replacement_level_zero_neighbor_ids = BTreeSet::new();
+    for rewrite in &graph_delta.neighbor_rewrites {
+        let previous = &rewrite.previous;
+        let replacement = &rewrite.replacement;
+        encode_private_hnsw_node_block(previous, block_size_bytes, fixed_neighbor_slots)?;
+        encode_private_hnsw_node_block(replacement, block_size_bytes, fixed_neighbor_slots)?;
+        let previous_upper_neighbors = previous
+            .neighbors
+            .iter()
+            .zip(&previous.neighbor_levels)
+            .filter(|(_, level)| **level > 0)
+            .collect::<Vec<_>>();
+        let replacement_upper_neighbors = replacement
+            .neighbors
+            .iter()
+            .zip(&replacement.neighbor_levels)
+            .filter(|(_, level)| **level > 0)
+            .collect::<Vec<_>>();
+        let previous_level_zero_neighbor_ids = previous
+            .neighbors
+            .iter()
+            .zip(&previous.neighbor_levels)
+            .filter_map(|(node_id, level)| (*level == 0).then_some(*node_id))
+            .collect::<BTreeSet<_>>();
+        let replacement_level_zero_ids = replacement
+            .neighbors
+            .iter()
+            .zip(&replacement.neighbor_levels)
+            .filter_map(|(node_id, level)| (*level == 0).then_some(*node_id))
+            .collect::<BTreeSet<_>>();
+        if previous.version != crate::private_hnsw_client::PRIVATE_HNSW_NODE_BLOCK_VERSION
+            || replacement.version != previous.version
+            || previous.node_id == [0; 32]
+            || !rewritten_node_ids.insert(previous.node_id)
+            || !selected_neighbor_ids.contains(&previous.node_id)
+            || previous.node_id != replacement.node_id
+            || previous.point_token == [0; 32]
+            || previous.point_token != replacement.point_token
+            || previous.level_mask != replacement.level_mask
+            || previous.vector_encoding != *vector_encoding
+            || previous.vector_encoding != replacement.vector_encoding
+            || previous.vector.len() != expected_vector_bytes
+            || previous.vector != replacement.vector
+            || previous.deleted
+            || replacement.deleted
+            || previous
+                .payload_fetch_token
+                .is_some_and(|value| value == [0; 32])
+            || previous.payload_fetch_token != replacement.payload_fetch_token
+            || replacement.generation
+                != previous.generation.checked_add(1).ok_or(
+                    PrivateOramAppendTransactionError::InvalidInput("graph_delta"),
+                )?
+            || previous_upper_neighbors != replacement_upper_neighbors
+            || replacement
+                .neighbors
+                .iter()
+                .zip(&replacement.neighbor_levels)
+                .filter(|(node_id, level)| {
+                    **node_id == graph_delta.new_block.node_id && **level == 0
+                })
+                .count()
+                != 1
+            || replacement_level_zero_ids.iter().any(|node_id| {
+                *node_id != graph_delta.new_block.node_id
+                    && !previous_level_zero_neighbor_ids.contains(node_id)
+            })
+        {
+            return Err(PrivateOramAppendTransactionError::InvalidInput(
+                "graph_delta",
+            ));
+        }
+        replacement_level_zero_neighbor_ids.extend(replacement_level_zero_ids);
+    }
+    let next_state = PrivateHnswOramClientState::from_snapshot(&output.next_client_state)?;
+    if output.next_client_state.tree_height != oram.tree_height
+        || output.next_client_state.stash.len()
+            > usize::try_from(manifest_index.capacity.max_client_stash_blocks)
+                .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("next_client_state"))?
+        || next_state
+            .position(&graph_delta.new_block.node_id)
+            .is_none()
+        || next_state
+            .position(&graph_delta.next_entry_node_id)
+            .is_none()
+        || selected_neighbor_ids
+            .iter()
+            .any(|node_id| next_state.position(node_id).is_none())
+        || rewritten_node_ids
+            .iter()
+            .any(|node_id| next_state.position(node_id).is_none())
+        || replacement_level_zero_neighbor_ids
+            .iter()
+            .any(|node_id| next_state.position(node_id).is_none())
+    {
+        return Err(PrivateOramAppendTransactionError::InvalidInput(
+            "next_client_state",
+        ));
+    }
+    for block in &output.next_client_state.stash {
+        if block.version != crate::private_hnsw_client::PRIVATE_HNSW_NODE_BLOCK_VERSION
+            || block.vector_encoding != *vector_encoding
+            || block.vector.len() != expected_vector_bytes
+        {
+            return Err(PrivateOramAppendTransactionError::InvalidInput(
+                "next_client_state",
+            ));
+        }
+        encode_private_hnsw_node_block(block, block_size_bytes, fixed_neighbor_slots)?;
+    }
+    for block in std::iter::once(&graph_delta.new_block).chain(
+        graph_delta
+            .neighbor_rewrites
+            .iter()
+            .map(|rewrite| &rewrite.replacement),
+    ) {
+        if next_state.position(&block.node_id).is_none()
+            || output
+                .next_client_state
+                .stash
+                .iter()
+                .any(|stash_block| stash_block.node_id == block.node_id && stash_block != block)
+        {
+            return Err(PrivateOramAppendTransactionError::InvalidInput(
+                "next_client_state",
+            ));
+        }
+    }
+
+    let writeback_digest =
+        private_oram_append_writeback_v1_digest(PrivateOramAppendWritebackDigestInput {
+            collection_id: &manifest.collection_id,
+            manifest_digest: &manifest_digest,
+            kind: output.writeback.kind,
+            index_name: &output.writeback.index_name,
+            old_epoch: output.old_epoch,
+            new_epoch: output.new_epoch,
+            old_root_hash: &output.old_root_hash,
+            new_root_hash: &output.new_root_hash,
+            read_path_count: output.writeback.read_path_count,
+            read_transcript_digest: &output.writeback.read_transcript_digest,
+            updated_buckets: &output.writeback.updated_buckets,
+        })?;
+    let prepared_digest = private_oram_append_hnsw_prepared_commit_v4_digest(
+        PrivateOramAppendHnswPreparedCommitDigestInputV4 {
+            attempt_digest: &marker.attempt_digest,
+            source_checkpoint_digest: &output.source_checkpoint_digest,
+            graph_delta,
+            old_epoch: output.old_epoch,
+            new_epoch: output.new_epoch,
+            old_root_hash: &output.old_root_hash,
+            new_root_hash: &output.new_root_hash,
+            read_transcript_digest: &output.read_transcript.transcript_digest,
+            writeback_digest: &writeback_digest,
+            next_client_state: &output.next_client_state,
+        },
+    )?;
+    if marker.prepared_commit_digest.as_deref() != Some(prepared_digest.as_str()) {
+        return Err(PrivateOramAppendTransactionError::RecoveryMarkerMismatch);
+    }
+    Ok(())
 }
 
 pub fn private_oram_append_hnsw_attempt_v2_digest(

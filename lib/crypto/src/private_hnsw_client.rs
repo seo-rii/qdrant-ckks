@@ -2817,7 +2817,7 @@ pub fn validate_private_hnsw_oram_upload_bundle_with_signature(
     Ok(commitments)
 }
 
-fn validate_private_hnsw_upload_bucket(
+pub(crate) fn validate_private_hnsw_upload_bucket(
     base_context: PrivateHnswBucketAeadBaseContext<'_>,
     bucket: &PrivateHnswOramBucket,
     expected_epoch: u64,
