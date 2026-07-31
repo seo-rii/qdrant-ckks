@@ -349,8 +349,8 @@ old-tree nodes against the pinned epoch/root, applies the last occurrence for
 each changed bucket, and computes the new root without a full leaf commitment
 vector. Small non-power-of-two and single-bucket fixtures compare this result
 with full recomputation. These remain client-side dormant primitives: no
-append route or executable server mutation is exposed before D1-D through D4
-are complete.
+append route or executable server mutation is exposed before the remaining
+D1-D checkpoint/finalizer work and D2 through D4 are complete.
 
 D1-C now has a fail-closed level-0 graph-delta primitive. It validates the
 complete checkpoint and signed state before inspecting candidate blocks,
@@ -395,16 +395,72 @@ and candidate/remap/padding schedule, so a different plan cannot reuse a
 persisted marker with the same mutation metadata. Window changes are adopted
 only if the complete window succeeds.
 
-`finalize` returns a `prepared_commit` marker whose digest binds the attempt,
-old/new epochs and roots, read transcript, ordered writeback, and next client
-state. Re-encrypting the same logical attempt therefore produces a distinct
-marker when the ciphertext artifact changes. The marker remains durable until
-both the server CAS and the new encrypted checkpoint are confirmed.
+The legacy v2 recovery-marker schema and HNSW v2 attempt/prepared digest
+domains remain unchanged and readable. Active HNSW and result append attempts
+use a v3 marker that additionally binds index kind and index name, plus
+provider-specific v3 attempt and prepared-commit domains. Their checkpoint,
+graph-delta, and next-client-state digests use explicit canonical framing
+rather than JSON serialization: the domain has a 4-byte big-endian length,
+variable byte sequences have 8-byte big-endian lengths, scalar integers are
+fixed-width big-endian, and option/enum values have explicit one-byte tags.
+Position-map and stash snapshots are normalized through their keyed client
+state before encoding, so semantically equal map orderings have one digest.
+Known-answer tests preserve both the legacy HNSW v2 values and the active
+HNSW/result v3 values. A persisted legacy v2 HNSW `window_issued` marker can
+authorize its exact pending window once; the returned request carries the v3
+marker and every subsequent window remains on v3.
 
-This D1-C output is not yet a complete D0 mutation. Paired result insertion,
-checkpoint ledger advancement and resealing, new signed-state construction,
-point-operation digest, mutation signature, and final self-validation remain
-in D1-D. Storage, consensus, and public routes remain dormant.
+`finalize` returns a `prepared_commit` marker whose digest binds the attempt,
+graph delta, old/new epochs and roots, read transcript, ordered writeback, and
+next client state. Re-encrypting the same logical attempt therefore produces a
+distinct marker when the ciphertext artifact changes, while changing only the
+public graph delta also invalidates the marker. The marker remains durable
+until both the server CAS and the new encrypted checkpoint are confirmed.
+
+`PrivateOramAppendResultTransactionV2` provides the paired result-index half
+of the same protocol. It accepts exactly one private payload block insertion
+plus the manifest-fixed padding schedule, verifies the exact ordered
+old-root response including duplicate shared ancestors, applies prior-path
+plaintext overlays, reseals every path occurrence at the new epoch, and
+computes the final result root with the same sparse Merkle patch. Duplicate
+point or payload tokens and oversized payloads fail before the first read.
+Within-window duplicate paths fail closed, while a repeated path in a later
+window remains valid. `begin` preflights every fixed result window before any
+recovery marker or path can be disclosed, so a malformed later window cannot
+leak an earlier valid path prefix. Correct-cardinality read responses are also
+checked against the manifest's maximum encoded ciphertext length before any
+body is decoded. The authenticated verifier then enforces bucket hash,
+commitment, proof, and an epoch at or below the pinned current epoch, allowing
+unchanged buckets carried forward from older commits.
+
+Result window updates use a complete transaction snapshot. A failure after an
+earlier path has already changed the position map, stash, overlay, and ordered
+ciphertext frames restores all of them before poisoning the attempt. Its
+attempt digest binds the checkpoint, private payload point, and fixed path
+schedule. Its prepared digest additionally binds the result ledger record,
+old/new roots and epochs, transcript, ordered writeback, and next result client
+state. A canonical working-artifact digest covers the client state, accepted
+windows, plaintext overlay, proof set, ordered refs and ciphertext frames, and
+final bucket map; rollback tests require this complete digest to return to its
+pre-window value. Known-answer tests pin both HNSW and result recovery digest
+encodings.
+
+Result finalization revalidates its public prepared output before returning
+it. The validator checks fixed ciphertext size, decoded-body SHA-256, bucket
+commitment and epoch context for every ordered occurrence; requires each body
+to match the corresponding writeback reference; derives every expected bucket
+id from the ordered leaf transcript; derives the canonical final bucket set
+from the last occurrence of each bucket id; and applies the included old-tree
+Merkle patch proof to recompute the new root. It then recomputes the writeback
+digest, next-client-state digest, and prepared marker. Tampered bodies, frames,
+proofs, roots, final-bucket images, and transcripts therefore fail closed at
+this boundary.
+
+The two prepared index outputs are not yet a complete D0 mutation. Paired
+point/HNSW/result ledger advancement, checkpoint resealing, new signed-state
+construction, point-operation digest, mutation signature, and final
+self-validation remain in D1-D2 and D1-D3. Storage, consensus, and public
+routes remain dormant.
 
 The external recovery primitive is
 `PrivateOramExternalRecoveryCheckpoint`, signed under

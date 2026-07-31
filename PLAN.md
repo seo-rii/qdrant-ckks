@@ -1011,25 +1011,72 @@ Signed fields:
   재사용을 금지한다. Marker의 `attempt_digest`는 exact checkpoint, point,
   candidate/remap/padding schedule을 바인딩하므로 같은 mutation metadata를 재사용한
   다른 plan이 기존 marker로 path를 공개할 수 없다.
+- 기존 V2 recovery marker와 HNSW V2 attempt/prepared digest domain은 wire/storage
+  호환성을 위해 그대로 유지한다. 활성 HNSW/result transaction은 index kind/name을
+  포함하는 V3 marker와 별도 V3 digest domain을 사용한다. Checkpoint, graph delta,
+  HNSW/result client state는 JSON serialization이 아니라 명시적 length-prefix,
+  fixed-width big-endian scalar, option/enum tag로 canonical digest를 계산하며
+  client-state map/stash 순서는 keyed state로 정규화한다.
+- Legacy V2 HNSW `window_issued` marker는 exact pending window에 한해
+  `next_read_window_v2`로 1회 resume하며, 반환 request부터 V3 marker로 전환한다.
 - Window 적용은 cloned working set에서 원자적으로 수행하고, finalizer는 exact
   frame 수, proof coverage, stash bound와 full-recompute-compatible root를 다시
   확인한다. 출력의 `prepared_commit_digest`는 attempt, old/new epoch와 root,
-  read transcript, ordered writeback, next client state를 바인딩한다. 이 marker는
-  server CAS와 새 encrypted checkpoint 영속화 전에는 제거하지 않는다.
+  read transcript, ordered writeback, next client state와 graph delta를 바인딩한다.
+  이 marker는 server CAS와 새 encrypted checkpoint 영속화 전에는 제거하지 않는다.
 
 ##### V2-D1-D: Paired result append and D0 finalizer
 
-- Optional result block insertion을 같은 point/payload ledger에 묶고 HNSW/result
-  checkpoint와 root를 함께 전진시킨다.
-- D1-C 출력은 아직 HNSW prepared writeback과 다음 HNSW client-state snapshot만
-  만든다. D1-D에서 result ORAM fixed windows, point/result ledger update와 완전한
-  encrypted checkpoint 재봉인을 같은 transaction coordinator에 결합한다.
-- Finalizer는 새 encrypted checkpoint commitment, ordered transcripts/frames,
-  per-index root/writeback digest, 새 signed state와 D0 mutation signature를
-  생성한다. Authoritative observed transcript는 client DTO가 아니라 D4 server
-  session record에서 다시 생성한다.
-- 출력 전체가 `validate_private_oram_append_mutation_v1`을 통과해야 하며,
-  storage/consensus/public route는 D2-D4 전까지 dormant 상태를 유지한다.
+###### V2-D1-D1: Verified fixed-window result append transaction
+
+- 완료: `PrivateOramAppendResultTransactionV2`가 paired private-result topology에서
+  insert 1회와 manifest-fixed padding path를 소유한다. 각 read response는 pinned
+  old epoch/root와 exact ordered root-to-leaf sequence에 검증하며 shared ancestor
+  occurrence를 합치지 않는다.
+- 완료: 이전 path의 plaintext overlay를 우선 적용하고 매 occurrence를 새 epoch로
+  reseal한다. Ordered ciphertext frame과 bucket별 last value를 함께 보존하고 sparse
+  Merkle patch 결과를 full commitment-vector recomputation과 비교한다.
+- 완료: payload/point duplicate와 oversized payload는 첫 read 전에 거부한다.
+  Within-window duplicate path는 fail closed이고 later-window 동일 leaf는 허용한다.
+  전체 fixed-window schedule은 `begin`에서 사전 검증해 malformed later window도
+  첫 marker/path 공개 전에 거부한다.
+  Correct-cardinality response는 manifest ciphertext encoded-size를 body decode 전에
+  제한하고, verifier는 unchanged older-epoch bucket을 허용하면서 hash/commitment/
+  proof와 current-epoch upper bound를 검증한다.
+  두 번째 path operation 실패 fixture는 position map, stash, overlay와 ordered frame
+  전체를 포함한 canonical working-artifact digest가 window 시작 값으로 원복된 뒤
+  attempt가 poisoned 되는지 검증한다.
+- 완료: result attempt digest는 checkpoint/point/fixed schedule을 바인딩하고,
+  prepared digest는 result ledger record, old/new root와 epoch, transcript,
+  ordered writeback과 next result state를 추가로 바인딩한다. HNSW prepared digest도
+  V3에서 graph delta를 포함하며 legacy V2 digest는 변경하지 않았다. 두 active V3
+  encoding과 legacy V2 encoding은 known-answer test로 고정했다.
+- 완료: result prepared-output validator가 ordered raw ciphertext의 fixed size/hash/
+  commitment/context, writeback ref, bucket별 last-occurrence final image, transcript,
+  transcript-derived bucket frame, 포함된 old-tree Merkle patch proof/new root,
+  next client state와 prepared digest를 재검증한다. `finalize`는 반환 전에 이
+  validator를 반드시 통과하며 body/frame/proof/root/transcript 변조 회귀 테스트가
+  이를 고정한다.
+
+###### V2-D1-D2: Paired checkpoint ledger and encrypted reseal
+
+- 다음 작업: HNSW point/graph delta와 result record의 point/payload token을 exact
+  match하고 point/HNSW/result ledger를 canonical 순서와 generation 규칙으로 함께
+  전진시키는 순수 checkpoint delta를 추가한다.
+- 다음 작업: 두 index epoch/root/client-state를 한 state sequence에서 갱신하고
+  plaintext checkpoint를 먼저 검증·봉인한 뒤 그 digest를 새 signed state에 넣고
+  outer state binding을 생성한다.
+
+###### V2-D1-D3: Signed mutation finalizer and aggregate self-validation
+
+- 다음 작업: HNSW prepared output에도 result와 동등한 raw ciphertext/body/ref
+  self-validator를 추가하고, 두 prepared output의 mutation/index/old-state identity와
+  paired epoch transition을 교차 검증한 뒤 manifest index 순서의 writeback을 만든다.
+- 다음 작업: point-operation digest, 새 signed state와 D0 mutation signature를
+  생성하고 출력 전 `validate_private_oram_append_mutation_v1`과 checkpoint reopen을
+  모두 통과시킨다. Authoritative observed transcript는 D4에서 client DTO가 아니라
+  server session record로 다시 생성한다.
+- Storage/consensus/public route는 D2-D4 전까지 dormant 상태를 유지한다.
 
 #### V2-D2: Dormant collection-wide consensus primitive
 
