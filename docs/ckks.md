@@ -486,12 +486,34 @@ result to require exact equality. Checkpoint sealing uses a random nonce, so
 the returned ciphertext and state payload are one durable pending artifact:
 CAS recovery must reuse them rather than reseal the same logical delta.
 
-This D1-D2 state payload is not yet an Ed25519 state bundle. HNSW prepared
-output still needs the same raw body/frame/Merkle self-validator as the result
-output. D1-D3 adds that validator, signs the state and mutation, derives the
-point-operation digest, and requires the complete D0 mutation validator plus
-checkpoint reopen before returning. Storage, consensus, and public routes
-remain dormant.
+The D1-D3 paired finalizer completes the dormant client-side artifact. HNSW
+output now retains its old-tree Merkle patch proof and passes a public
+self-validator before `finalize` returns. The validator checks exact encoded
+body size before decoding, AEAD framing, hashes, commitment context, writeback
+refs, transcript-derived repeated path frames, the last-occurrence final image,
+the sparse patch and new root, graph and rewrite invariants, fixed budgets, and
+the manifest-specific next client state. A rewritten level-0 edge may target
+only a previous level-0 neighbor or the new node, and every retained target
+must exist in the next position map and checkpoint node ledger. Graph and state
+tests recompute the v4 prepared digest after tampering to ensure structural
+checks do not rely only on a stale marker.
+
+`finalize_private_oram_append_paired_mutation_v1` first verifies the trusted
+owner public key, signed manifest, signed old state, pinned collection,
+manifest, layout, sequence, state digest, and writer lease/fence. It runs both
+provider output validators, performs the randomized D1-D2 reseal exactly once,
+signs the new state, derives the `no_server_point_record` digest, preserves
+writebacks and observed transcripts in manifest index order, and signs the D0
+mutation. It returns only after the complete
+`validate_private_oram_append_mutation_v1` check and an exact checkpoint reopen
+against the signed new state succeed.
+
+The returned HNSW/result outputs, encrypted checkpoint, and mutation bundle are
+one pending aggregate. A CAS retry must persist and reuse that exact aggregate
+instead of rerunning randomized finalization. The current self-check uses
+transcripts carried by the prepared client outputs; D4 admission must rebuild
+the authoritative transcript from the server session record. Storage,
+consensus, and public routes remain dormant.
 
 The external recovery primitive is
 `PrivateOramExternalRecoveryCheckpoint`, signed under

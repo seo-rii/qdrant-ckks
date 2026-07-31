@@ -1087,18 +1087,33 @@ Signed fields:
   하나의 durable pending artifact로 저장하고 CAS retry에서 그대로 재사용해야 한다.
   같은 logical delta를 다시 seal하면 다른 client-state/state digest가 만들어진다는
   회귀 테스트가 이 계약을 고정한다.
-- Ed25519 state bundle과 mutation signature는 D1-D3 finalizer에서 생성한다.
+- 완료: Ed25519 state bundle과 mutation signature는 D1-D3 finalizer가 생성한다.
 
 ###### V2-D1-D3: Signed mutation finalizer and aggregate self-validation
 
-- 다음 작업: HNSW prepared output에도 result와 동등한 raw ciphertext/body/ref
-  self-validator를 추가하고, 두 prepared output의 mutation/index/old-state identity와
-  paired epoch transition을 교차 검증한 뒤 manifest index 순서의 writeback을 만든다.
-- 다음 작업: D1-D2 signable state payload를 Ed25519 bundle로 만들고,
-  point-operation digest와 D0 mutation signature를 생성한 뒤
-  `validate_private_oram_append_mutation_v1`과 checkpoint reopen을
-  모두 통과시킨다. Authoritative observed transcript는 D4에서 client DTO가 아니라
-  server session record로 다시 생성한다.
+- 완료: HNSW output이 old-tree Merkle patch proof를 보존하고, public self-validator가
+  body decode 전 exact encoded size, AEAD framing, hash/commitment/ref, transcript
+  derived frame, last-occurrence final image, sparse patch/new root를 result validator와
+  같은 수준으로 검증한다.
+- 완료: HNSW graph delta는 block version/nonzero identity/generation/F32 dimension과
+  finite encoding, level-0 neighbor/rewrite identity, 기존 level-0 또는 새 node로
+  제한된 edge transition, generation/upper-edge 보존, fixed
+  candidate/rewrite/padding budget을 V4 digest와 별도로 검사한다. Next client
+  state와 checkpoint ledger도 replacement edge target의 존재를 확인하고,
+  manifest block shape, stash bound와 new/entry/selected/rewrite position을
+  검사한다. Finalize는 이 validator 통과 전 output을 반환하지 않는다.
+- 완료: paired finalizer가 trusted owner public key와 manifest/old-state signature,
+  pinned collection/manifest/layout/sequence/state digest, writer lease/fence를 먼저
+  확인한다. D1-D2 reseal을 정확히 한 번 수행한 뒤 새 state bundle,
+  `no_server_point_record` digest, manifest-order writeback과 D0 mutation signature를
+  만든다.
+- 완료: finalizer는 `validate_private_oram_append_mutation_v1` 전체 검증과 signed
+  new state 기준 checkpoint exact reopen을 모두 통과한 경우에만 prepared HNSW/result
+  output, randomized encrypted checkpoint와 mutation bundle을 하나의 aggregate로
+  반환한다. CAS retry는 이 aggregate를 durable하게 저장하고 그대로 재사용한다.
+- 현재 self-check의 observed transcript는 prepared client output에서 온다.
+  Authoritative admission은 D4에서 client DTO가 아니라 server session record로
+  transcript를 다시 구성해 검증한다.
 - Storage/consensus/public route는 D2-D4 전까지 dormant 상태를 유지한다.
 
 #### V2-D2: Dormant collection-wide consensus primitive
