@@ -398,24 +398,28 @@ only if the complete window succeeds.
 The legacy v2 recovery-marker schema and HNSW v2 attempt/prepared digest
 domains remain unchanged and readable. Active HNSW and result append attempts
 use a v3 marker that additionally binds index kind and index name, plus
-provider-specific v3 attempt and prepared-commit domains. Their checkpoint,
-graph-delta, and next-client-state digests use explicit canonical framing
-rather than JSON serialization: the domain has a 4-byte big-endian length,
-variable byte sequences have 8-byte big-endian lengths, scalar integers are
-fixed-width big-endian, and option/enum values have explicit one-byte tags.
-Position-map and stash snapshots are normalized through their keyed client
-state before encoding, so semantically equal map orderings have one digest.
-Known-answer tests preserve both the legacy HNSW v2 values and the active
-HNSW/result v3 values. A persisted legacy v2 HNSW `window_issued` marker can
-authorize its exact pending window once; the returned request carries the v3
-marker and every subsequent window remains on v3.
+provider-specific v3 attempt domains. The v3 prepared-commit domains remain as
+compatibility known answers, while active finalization uses provider-specific
+v4 prepared-commit domains that additionally authenticate the canonical source
+checkpoint digest. Checkpoint, graph-delta, and next-client-state digests use
+explicit canonical framing rather than JSON serialization: the domain has a
+4-byte big-endian length, variable byte sequences have 8-byte big-endian
+lengths, scalar integers are fixed-width big-endian, and option/enum values
+have explicit one-byte tags. Position-map and stash snapshots are normalized
+through their keyed client state before encoding, so semantically equal map
+orderings have one digest. Known-answer tests preserve the legacy HNSW v2,
+compatibility HNSW/result v3, and active HNSW/result v4 values. A persisted
+legacy v2 HNSW `window_issued` marker can authorize its exact pending window
+once; the returned request carries the v3 marker and every subsequent window
+remains on v3.
 
-`finalize` returns a `prepared_commit` marker whose digest binds the attempt,
-graph delta, old/new epochs and roots, read transcript, ordered writeback, and
-next client state. Re-encrypting the same logical attempt therefore produces a
-distinct marker when the ciphertext artifact changes, while changing only the
-public graph delta also invalidates the marker. The marker remains durable
-until both the server CAS and the new encrypted checkpoint are confirmed.
+`finalize` returns a `prepared_commit` marker whose v4 digest binds the
+attempt, canonical source checkpoint, graph delta, old/new epochs and roots,
+read transcript, ordered writeback, and next client state. Re-encrypting the
+same logical attempt therefore produces a distinct marker when the ciphertext
+artifact changes, while changing only the public graph delta or source
+checkpoint also invalidates the marker. The marker remains durable until both
+the server CAS and the new encrypted checkpoint are confirmed.
 
 `PrivateOramAppendResultTransactionV2` provides the paired result-index half
 of the same protocol. It accepts exactly one private payload block insertion
@@ -438,12 +442,12 @@ earlier path has already changed the position map, stash, overlay, and ordered
 ciphertext frames restores all of them before poisoning the attempt. Its
 attempt digest binds the checkpoint, private payload point, and fixed path
 schedule. Its prepared digest additionally binds the result ledger record,
-old/new roots and epochs, transcript, ordered writeback, and next result client
-state. A canonical working-artifact digest covers the client state, accepted
-windows, plaintext overlay, proof set, ordered refs and ciphertext frames, and
-final bucket map; rollback tests require this complete digest to return to its
-pre-window value. Known-answer tests pin both HNSW and result recovery digest
-encodings.
+canonical source checkpoint, old/new roots and epochs, transcript, ordered
+writeback, and next result client state. A canonical working-artifact digest
+covers the client state, accepted windows, plaintext overlay, proof set,
+ordered refs and ciphertext frames, and final bucket map; rollback tests
+require this complete digest to return to its pre-window value. Known-answer
+tests pin both HNSW and result recovery digest encodings.
 
 Result finalization revalidates its public prepared output before returning
 it. The validator checks fixed ciphertext size, decoded-body SHA-256, bucket
@@ -457,10 +461,37 @@ proofs, roots, final-bucket images, and transcripts therefore fail closed at
 this boundary.
 
 The two prepared index outputs are not yet a complete D0 mutation. Paired
-point/HNSW/result ledger advancement, checkpoint resealing, new signed-state
-construction, point-operation digest, mutation signature, and final
-self-validation remain in D1-D2 and D1-D3. Storage, consensus, and public
-routes remain dormant.
+checkpoint advancement and resealing are now available as a client-side
+dormant primitive. The planner exact-matches the HNSW point record, HNSW
+record/new block, and result record point and payload tokens. New records start
+at generation one. Existing reciprocal rewrites must preserve node, point,
+payload, vector, level, and deletion identity while advancing generation by
+exactly one.
+
+The planner inserts the point, HNSW, and result records in canonical raw
+32-byte token order. It advances both client states, entry node, epochs, roots,
+logical/dummy occupancy, and ordered-writeback digests under one incremented
+state sequence, then runs the complete checkpoint validator. Both prepared
+outputs carry a canonical `source_checkpoint_digest`, and each provider's v4
+prepared-commit digest authenticates that value. Pairing requires the source
+digest plus collection, manifest, old-state, mutation, writer lease, and fence
+to match. Immediate mutation-id reuse is rejected.
+
+The reseal wrapper does not trust a caller-supplied plaintext checkpoint. It
+authenticates and opens the old encrypted checkpoint against the old signed
+state, uses that exact plaintext for pairing, validates and seals the advanced
+checkpoint, places the exact sealed-ciphertext digest in the next signable
+`PrivateOramSignedStateV2`, creates the outer state binding, and reopens the
+result to require exact equality. Checkpoint sealing uses a random nonce, so
+the returned ciphertext and state payload are one durable pending artifact:
+CAS recovery must reuse them rather than reseal the same logical delta.
+
+This D1-D2 state payload is not yet an Ed25519 state bundle. HNSW prepared
+output still needs the same raw body/frame/Merkle self-validator as the result
+output. D1-D3 adds that validator, signs the state and mutation, derives the
+point-operation digest, and requires the complete D0 mutation validator plus
+checkpoint reopen before returning. Storage, consensus, and public routes
+remain dormant.
 
 The external recovery primitive is
 `PrivateOramExternalRecoveryCheckpoint`, signed under

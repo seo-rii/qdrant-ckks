@@ -1013,17 +1013,20 @@ Signed fields:
   다른 plan이 기존 marker로 path를 공개할 수 없다.
 - 기존 V2 recovery marker와 HNSW V2 attempt/prepared digest domain은 wire/storage
   호환성을 위해 그대로 유지한다. 활성 HNSW/result transaction은 index kind/name을
-  포함하는 V3 marker와 별도 V3 digest domain을 사용한다. Checkpoint, graph delta,
-  HNSW/result client state는 JSON serialization이 아니라 명시적 length-prefix,
-  fixed-width big-endian scalar, option/enum tag로 canonical digest를 계산하며
-  client-state map/stash 순서는 keyed state로 정규화한다.
+  포함하는 V3 marker와 V3 attempt digest domain을 사용한다. V3 prepared digest
+  domain도 호환성 known-answer로 보존하지만, 활성 finalize 출력은 canonical source
+  checkpoint digest까지 인증하는 provider별 V4 prepared-commit domain을 사용한다.
+  Checkpoint, graph delta, HNSW/result client state는 JSON serialization이 아니라
+  명시적 length-prefix, fixed-width big-endian scalar, option/enum tag로 canonical
+  digest를 계산하며 client-state map/stash 순서는 keyed state로 정규화한다.
 - Legacy V2 HNSW `window_issued` marker는 exact pending window에 한해
   `next_read_window_v2`로 1회 resume하며, 반환 request부터 V3 marker로 전환한다.
 - Window 적용은 cloned working set에서 원자적으로 수행하고, finalizer는 exact
   frame 수, proof coverage, stash bound와 full-recompute-compatible root를 다시
-  확인한다. 출력의 `prepared_commit_digest`는 attempt, old/new epoch와 root,
-  read transcript, ordered writeback, next client state와 graph delta를 바인딩한다.
-  이 marker는 server CAS와 새 encrypted checkpoint 영속화 전에는 제거하지 않는다.
+  확인한다. 출력의 V4 `prepared_commit_digest`는 attempt, canonical source
+  checkpoint, old/new epoch와 root, read transcript, ordered writeback, next client
+  state와 graph delta를 바인딩한다. 이 marker는 server CAS와 새 encrypted
+  checkpoint 영속화 전에는 제거하지 않는다.
 
 ##### V2-D1-D: Paired result append and D0 finalizer
 
@@ -1049,8 +1052,10 @@ Signed fields:
 - 완료: result attempt digest는 checkpoint/point/fixed schedule을 바인딩하고,
   prepared digest는 result ledger record, old/new root와 epoch, transcript,
   ordered writeback과 next result state를 추가로 바인딩한다. HNSW prepared digest도
-  V3에서 graph delta를 포함하며 legacy V2 digest는 변경하지 않았다. 두 active V3
-  encoding과 legacy V2 encoding은 known-answer test로 고정했다.
+  V3에서 graph delta를 포함하며 legacy V2와 V3 digest는 변경하지 않았다. 활성
+  HNSW/result finalize는 source checkpoint digest를 추가로 바인딩하는 V4 prepared
+  domain을 사용한다. Legacy V2, 호환 V3, active V4 encoding은 known-answer test로
+  고정했다.
 - 완료: result prepared-output validator가 ordered raw ciphertext의 fixed size/hash/
   commitment/context, writeback ref, bucket별 last-occurrence final image, transcript,
   transcript-derived bucket frame, 포함된 old-tree Merkle patch proof/new root,
@@ -1060,20 +1065,38 @@ Signed fields:
 
 ###### V2-D1-D2: Paired checkpoint ledger and encrypted reseal
 
-- 다음 작업: HNSW point/graph delta와 result record의 point/payload token을 exact
-  match하고 point/HNSW/result ledger를 canonical 순서와 generation 규칙으로 함께
-  전진시키는 순수 checkpoint delta를 추가한다.
-- 다음 작업: 두 index epoch/root/client-state를 한 state sequence에서 갱신하고
-  plaintext checkpoint를 먼저 검증·봉인한 뒤 그 digest를 새 signed state에 넣고
-  outer state binding을 생성한다.
+- 완료: paired checkpoint planner가 HNSW graph point/record/new block과 result
+  record의 point/payload token을 exact-match한다. 새 record generation은 1,
+  reciprocal rewrite는 기존 ledger identity/vector/level을 보존하면서 generation만
+  정확히 1 증가해야 한다.
+- 완료: point/HNSW/result ledger는 raw 32-byte point/node/payload token 기준
+  canonical 순서로 함께 전진한다. HNSW entry, 두 position-map/stash snapshot,
+  epoch/root, logical/dummy count와 last-writeback digest를 하나의
+  `state_sequence + 1` checkpoint에 적용한 뒤 전체 checkpoint validator를 다시
+  통과한다.
+- 완료: 두 prepared output은 공통 canonical `source_checkpoint_digest`를 내보내며
+  각 provider별 V4 prepared-commit digest가 그 값을 인증한다. Paired planner는 같은
+  source checkpoint, mutation, old state, writer lease/fence를 요구한다. 직전
+  mutation id 재사용과 zero identity, partial index advancement는 fail closed다.
+- 완료: reseal wrapper는 caller가 준 plaintext checkpoint를 신뢰하지 않고 old
+  signed-state의 `client_state_digest/state_digest`에 결합된 encrypted checkpoint를
+  인증·복호화한다. 그 exact plaintext를 검증·봉인하고 sealed ciphertext digest를
+  새 signable `PrivateOramSignedStateV2.client_state_digest`에 넣은 다음 outer
+  state binding을 생성하고 즉시 재개봉해 equality를 확인한다.
+- 완료: checkpoint seal은 randomized이므로 반환된 ciphertext/state payload를
+  하나의 durable pending artifact로 저장하고 CAS retry에서 그대로 재사용해야 한다.
+  같은 logical delta를 다시 seal하면 다른 client-state/state digest가 만들어진다는
+  회귀 테스트가 이 계약을 고정한다.
+- Ed25519 state bundle과 mutation signature는 D1-D3 finalizer에서 생성한다.
 
 ###### V2-D1-D3: Signed mutation finalizer and aggregate self-validation
 
 - 다음 작업: HNSW prepared output에도 result와 동등한 raw ciphertext/body/ref
   self-validator를 추가하고, 두 prepared output의 mutation/index/old-state identity와
   paired epoch transition을 교차 검증한 뒤 manifest index 순서의 writeback을 만든다.
-- 다음 작업: point-operation digest, 새 signed state와 D0 mutation signature를
-  생성하고 출력 전 `validate_private_oram_append_mutation_v1`과 checkpoint reopen을
+- 다음 작업: D1-D2 signable state payload를 Ed25519 bundle로 만들고,
+  point-operation digest와 D0 mutation signature를 생성한 뒤
+  `validate_private_oram_append_mutation_v1`과 checkpoint reopen을
   모두 통과시킨다. Authoritative observed transcript는 D4에서 client DTO가 아니라
   server session record로 다시 생성한다.
 - Storage/consensus/public route는 D2-D4 전까지 dormant 상태를 유지한다.
