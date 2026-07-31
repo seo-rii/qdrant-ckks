@@ -23,6 +23,8 @@ use crate::private_oram_append_client::{
     PrivateOramAppendLevel0HnswGraphDeltaV2, PrivateOramAppendLevel0PointV2,
     PrivateOramAppendMerklePatchLeafV1, PrivateOramAppendMerklePatchProofV1,
     apply_private_oram_append_sparse_merkle_patch_v1, plan_private_oram_level0_hnsw_graph_delta_v2,
+    private_oram_append_client_checkpoint_plaintext_v3_digest,
+    private_oram_append_hnsw_client_state_v3_digest, push_hnsw_node_block_v3,
     validate_private_oram_append_client_checkpoint_v2,
 };
 use crate::private_oram_mutation::{
@@ -34,12 +36,20 @@ use crate::private_oram_mutation::{
     private_oram_append_read_transcript_v1, private_oram_append_writeback_v1_digest,
     private_oram_immutable_manifest_v2_digest, private_oram_signed_state_v2_digest,
 };
+use crate::private_result_oram::PrivateResultOramError;
 
 pub const PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V2_VERSION: u16 = 2;
+pub const PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V3_VERSION: u16 = 3;
 pub const PRIVATE_ORAM_APPEND_HNSW_ATTEMPT_V2_DIGEST_DOMAIN: &str =
     "qdrant-sec/private-oram-append-hnsw-attempt/v2";
+pub const PRIVATE_ORAM_APPEND_HNSW_ATTEMPT_V3_DIGEST_DOMAIN: &str =
+    "qdrant-sec/private-oram-append-hnsw-attempt/v3";
 pub const PRIVATE_ORAM_APPEND_HNSW_PREPARED_COMMIT_V2_DIGEST_DOMAIN: &str =
     "qdrant-sec/private-oram-append-hnsw-prepared-commit/v2";
+pub const PRIVATE_ORAM_APPEND_HNSW_PREPARED_COMMIT_V3_DIGEST_DOMAIN: &str =
+    "qdrant-sec/private-oram-append-hnsw-prepared-commit/v3";
+pub const PRIVATE_ORAM_APPEND_HNSW_GRAPH_DELTA_V3_DIGEST_DOMAIN: &str =
+    "qdrant-sec/private-oram-append-hnsw-graph-delta-digest/v3";
 
 #[derive(Error, PartialEq, Eq)]
 pub enum PrivateOramAppendTransactionError {
@@ -47,6 +57,8 @@ pub enum PrivateOramAppendTransactionError {
     Client(#[source] PrivateOramAppendClientError),
     #[error("private ORAM append transaction HNSW operation failed")]
     Hnsw(#[source] PrivateHnswClientError),
+    #[error("private ORAM append transaction result operation failed")]
+    Result(#[source] PrivateResultOramError),
     #[error("private ORAM append transaction contract operation failed")]
     Mutation(#[source] PrivateOramMutationError),
     #[error("private ORAM append transaction input is invalid")]
@@ -80,6 +92,7 @@ impl Debug for PrivateOramAppendTransactionError {
         match self {
             Self::Client(_) => f.write_str("Client([redacted])"),
             Self::Hnsw(_) => f.write_str("Hnsw([redacted])"),
+            Self::Result(_) => f.write_str("Result([redacted])"),
             Self::Mutation(_) => f.write_str("Mutation([redacted])"),
             Self::InvalidInput(field) => f.debug_tuple("InvalidInput").field(field).finish(),
             Self::UnsupportedTopology => f.write_str("UnsupportedTopology"),
@@ -105,6 +118,12 @@ impl From<PrivateOramAppendClientError> for PrivateOramAppendTransactionError {
 impl From<PrivateHnswClientError> for PrivateOramAppendTransactionError {
     fn from(error: PrivateHnswClientError) -> Self {
         Self::Hnsw(error)
+    }
+}
+
+impl From<PrivateResultOramError> for PrivateOramAppendTransactionError {
+    fn from(error: PrivateResultOramError) -> Self {
+        Self::Result(error)
     }
 }
 
@@ -165,6 +184,27 @@ impl Debug for PrivateOramAppendHnswAttemptDigestInput<'_> {
 }
 
 #[derive(Clone, Copy)]
+pub struct PrivateOramAppendHnswAttemptDigestInputV3<'a> {
+    pub manifest_digest: &'a str,
+    pub old_state_digest: &'a str,
+    pub checkpoint: &'a PrivateOramAppendClientCheckpointV2,
+    pub point: &'a PrivateOramAppendLevel0PointV2,
+    pub plan: &'a PrivateOramAppendHnswTransactionPlanV2,
+}
+
+impl Debug for PrivateOramAppendHnswAttemptDigestInputV3<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramAppendHnswAttemptDigestInputV3")
+            .field("manifest_digest", &"[redacted]")
+            .field("old_state_digest", &"[redacted]")
+            .field("checkpoint", &"[redacted]")
+            .field("point", &"[redacted]")
+            .field("plan", &self.plan)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy)]
 pub struct PrivateOramAppendHnswPreparedCommitDigestInput<'a> {
     pub attempt_digest: &'a str,
     pub old_epoch: u64,
@@ -180,6 +220,35 @@ impl Debug for PrivateOramAppendHnswPreparedCommitDigestInput<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateOramAppendHnswPreparedCommitDigestInput")
             .field("attempt_digest", &"[redacted]")
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("read_transcript_digest", &"[redacted]")
+            .field("writeback_digest", &"[redacted]")
+            .field("next_client_state", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct PrivateOramAppendHnswPreparedCommitDigestInputV3<'a> {
+    pub attempt_digest: &'a str,
+    pub graph_delta: &'a PrivateOramAppendLevel0HnswGraphDeltaV2,
+    pub old_epoch: u64,
+    pub new_epoch: u64,
+    pub old_root_hash: &'a str,
+    pub new_root_hash: &'a str,
+    pub read_transcript_digest: &'a str,
+    pub writeback_digest: &'a str,
+    pub next_client_state: &'a PrivateHnswOramClientStateSnapshot,
+}
+
+impl Debug for PrivateOramAppendHnswPreparedCommitDigestInputV3<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramAppendHnswPreparedCommitDigestInputV3")
+            .field("attempt_digest", &"[redacted]")
+            .field("graph_delta", &"[redacted]")
             .field("old_epoch", &self.old_epoch)
             .field("new_epoch", &self.new_epoch)
             .field("old_root_hash", &"[redacted]")
@@ -229,6 +298,48 @@ impl Debug for PrivateOramAppendRecoveryMarkerV2 {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrivateOramAppendRecoveryMarkerV3 {
+    pub version: u16,
+    pub collection_id: String,
+    pub manifest_digest: String,
+    pub mutation_id: String,
+    pub old_state_digest: String,
+    pub attempt_digest: String,
+    pub index_kind: PrivateOramIndexKindV2,
+    pub index_name: String,
+    pub writer_lease_digest: String,
+    pub writer_fence: u64,
+    pub requested_window_count: u32,
+    pub accepted_window_count: u32,
+    pub observed_read_path_count: u32,
+    pub phase: PrivateOramAppendRecoveryPhaseV2,
+    pub prepared_commit_digest: Option<String>,
+}
+
+impl Debug for PrivateOramAppendRecoveryMarkerV3 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramAppendRecoveryMarkerV3")
+            .field("version", &self.version)
+            .field("collection_id", &"[redacted]")
+            .field("manifest_digest", &"[redacted]")
+            .field("mutation_id", &"[redacted]")
+            .field("old_state_digest", &"[redacted]")
+            .field("attempt_digest", &"[redacted]")
+            .field("index_kind", &self.index_kind)
+            .field("index_name", &"[redacted]")
+            .field("writer_lease_digest", &"[redacted]")
+            .field("writer_fence", &self.writer_fence)
+            .field("requested_window_count", &self.requested_window_count)
+            .field("accepted_window_count", &self.accepted_window_count)
+            .field("observed_read_path_count", &self.observed_read_path_count)
+            .field("phase", &self.phase)
+            .field("prepared_commit_digest", &"[redacted]")
+            .finish()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrivateOramAppendRecoveryPhaseV2 {
@@ -240,7 +351,7 @@ pub enum PrivateOramAppendRecoveryPhaseV2 {
 #[derive(Clone, PartialEq, Eq)]
 pub struct PrivateOramAppendHnswReadRequestV2 {
     pub window: PrivateOramAppendReadWindowV1,
-    pub recovery_marker: PrivateOramAppendRecoveryMarkerV2,
+    pub recovery_marker: PrivateOramAppendRecoveryMarkerV3,
 }
 
 impl Debug for PrivateOramAppendHnswReadRequestV2 {
@@ -264,7 +375,7 @@ pub struct PrivateOramAppendHnswTransactionOutputV2 {
     pub next_client_state: PrivateHnswOramClientStateSnapshot,
     pub ordered_encrypted_buckets: Vec<PrivateHnswOramBucket>,
     pub final_encrypted_buckets: Vec<PrivateHnswOramBucket>,
-    pub recovery_marker: PrivateOramAppendRecoveryMarkerV2,
+    pub recovery_marker: PrivateOramAppendRecoveryMarkerV3,
 }
 
 impl Debug for PrivateOramAppendHnswTransactionOutputV2 {
@@ -339,7 +450,7 @@ impl PrivateOramAppendHnswPathActionV2 {
 enum PrivateOramAppendHnswTransactionStatusV2 {
     Ready,
     MarkerPrepared {
-        marker: Box<PrivateOramAppendRecoveryMarkerV2>,
+        marker: Box<PrivateOramAppendRecoveryMarkerV3>,
         window: PrivateOramAppendReadWindowV1,
         actions: Vec<PrivateOramAppendHnswPathActionV2>,
     },
@@ -358,6 +469,7 @@ pub struct PrivateOramAppendHnswTransactionV2 {
     plan: PrivateOramAppendHnswTransactionPlanV2,
     manifest_digest: String,
     old_state_digest: String,
+    legacy_attempt_digest: String,
     attempt_digest: String,
     old_epoch: u64,
     new_epoch: u64,
@@ -666,7 +778,7 @@ impl PrivateOramAppendHnswTransactionV2 {
 
         let manifest_digest = private_oram_immutable_manifest_v2_digest(manifest)?;
         let old_state_digest = private_oram_signed_state_v2_digest(old_state)?;
-        let attempt_digest =
+        let legacy_attempt_digest =
             private_oram_append_hnsw_attempt_v2_digest(PrivateOramAppendHnswAttemptDigestInput {
                 manifest_digest: &manifest_digest,
                 old_state_digest: &old_state_digest,
@@ -674,6 +786,15 @@ impl PrivateOramAppendHnswTransactionV2 {
                 point: &point,
                 plan: &plan,
             })?;
+        let attempt_digest = private_oram_append_hnsw_attempt_v3_digest(
+            PrivateOramAppendHnswAttemptDigestInputV3 {
+                manifest_digest: &manifest_digest,
+                old_state_digest: &old_state_digest,
+                checkpoint,
+                point: &point,
+                plan: &plan,
+            },
+        )?;
         let mut transaction = Self {
             manifest: manifest.clone(),
             old_state: old_state.clone(),
@@ -682,6 +803,7 @@ impl PrivateOramAppendHnswTransactionV2 {
             plan,
             manifest_digest,
             old_state_digest,
+            legacy_attempt_digest,
             attempt_digest,
             old_epoch,
             new_epoch,
@@ -723,7 +845,7 @@ impl PrivateOramAppendHnswTransactionV2 {
     /// this boundary, so the attempt can still be discarded safely.
     pub fn prepare_next_read_window(
         &mut self,
-    ) -> Result<Option<PrivateOramAppendRecoveryMarkerV2>, PrivateOramAppendTransactionError> {
+    ) -> Result<Option<PrivateOramAppendRecoveryMarkerV3>, PrivateOramAppendTransactionError> {
         match self.status {
             PrivateOramAppendHnswTransactionStatusV2::MarkerPrepared { .. }
             | PrivateOramAppendHnswTransactionStatusV2::Awaiting { .. } => {
@@ -795,9 +917,39 @@ impl PrivateOramAppendHnswTransactionV2 {
 
     /// Reveals the prepared path window only after the caller supplies the
     /// exact marker it has durably persisted.
-    pub fn next_read_window(
+    pub fn next_read_window_v2(
         &mut self,
         persisted_marker: &PrivateOramAppendRecoveryMarkerV2,
+    ) -> Result<PrivateOramAppendHnswReadRequestV2, PrivateOramAppendTransactionError> {
+        let current_marker = match &self.status {
+            PrivateOramAppendHnswTransactionStatusV2::MarkerPrepared { marker, .. } => {
+                marker.as_ref().clone()
+            }
+            PrivateOramAppendHnswTransactionStatusV2::Poisoned => {
+                return Err(PrivateOramAppendTransactionError::RecoveryRequired);
+            }
+            PrivateOramAppendHnswTransactionStatusV2::Awaiting { .. } => {
+                return Err(PrivateOramAppendTransactionError::WindowPending);
+            }
+            PrivateOramAppendHnswTransactionStatusV2::Ready => {
+                return Err(PrivateOramAppendTransactionError::WindowNotPending);
+            }
+        };
+        let expected = self.build_legacy_recovery_marker(
+            current_marker.requested_window_count,
+            current_marker.phase,
+        );
+        if &expected != persisted_marker {
+            return Err(PrivateOramAppendTransactionError::RecoveryMarkerMismatch);
+        }
+        self.next_read_window(&current_marker)
+    }
+
+    /// Reveals the prepared path window only after the caller supplies the
+    /// exact V3 marker it has durably persisted.
+    pub fn next_read_window(
+        &mut self,
+        persisted_marker: &PrivateOramAppendRecoveryMarkerV3,
     ) -> Result<PrivateOramAppendHnswReadRequestV2, PrivateOramAppendTransactionError> {
         let pending = std::mem::replace(
             &mut self.status,
@@ -972,9 +1124,10 @@ impl PrivateOramAppendHnswTransactionV2 {
                 updated_buckets: &writeback.updated_buckets,
             })?;
         recovery_marker.prepared_commit_digest =
-            Some(private_oram_append_hnsw_prepared_commit_v2_digest(
-                PrivateOramAppendHnswPreparedCommitDigestInput {
+            Some(private_oram_append_hnsw_prepared_commit_v3_digest(
+                PrivateOramAppendHnswPreparedCommitDigestInputV3 {
                     attempt_digest: &self.attempt_digest,
+                    graph_delta: &graph_delta,
                     old_epoch: self.old_epoch,
                     new_epoch: self.new_epoch,
                     old_root_hash: &self.old_root_hash,
@@ -1020,7 +1173,7 @@ impl PrivateOramAppendHnswTransactionV2 {
         }
     }
 
-    pub fn recovery_marker(&self) -> Option<PrivateOramAppendRecoveryMarkerV2> {
+    pub fn recovery_marker(&self) -> Option<PrivateOramAppendRecoveryMarkerV3> {
         self.requires_recovery().then(|| {
             let phase = if self.is_poisoned() {
                 PrivateOramAppendRecoveryPhaseV2::Poisoned
@@ -1035,6 +1188,31 @@ impl PrivateOramAppendHnswTransactionV2 {
         &self,
         requested_window_count: u32,
         phase: PrivateOramAppendRecoveryPhaseV2,
+    ) -> PrivateOramAppendRecoveryMarkerV3 {
+        PrivateOramAppendRecoveryMarkerV3 {
+            version: PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V3_VERSION,
+            collection_id: self.manifest.collection_id.clone(),
+            manifest_digest: self.manifest_digest.clone(),
+            mutation_id: self.plan.mutation_id.clone(),
+            old_state_digest: self.old_state_digest.clone(),
+            attempt_digest: self.attempt_digest.clone(),
+            index_kind: PrivateOramIndexKindV2::Hnsw,
+            index_name: self.plan.index_name.clone(),
+            writer_lease_digest: self.plan.writer_lease_digest.clone(),
+            writer_fence: self.plan.writer_fence,
+            requested_window_count,
+            accepted_window_count: u32::try_from(self.accepted_windows.len()).unwrap_or(u32::MAX),
+            observed_read_path_count: requested_window_count
+                .saturating_mul(self.plan.paths_per_window),
+            phase,
+            prepared_commit_digest: None,
+        }
+    }
+
+    fn build_legacy_recovery_marker(
+        &self,
+        requested_window_count: u32,
+        phase: PrivateOramAppendRecoveryPhaseV2,
     ) -> PrivateOramAppendRecoveryMarkerV2 {
         PrivateOramAppendRecoveryMarkerV2 {
             version: PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V2_VERSION,
@@ -1042,7 +1220,7 @@ impl PrivateOramAppendHnswTransactionV2 {
             manifest_digest: self.manifest_digest.clone(),
             mutation_id: self.plan.mutation_id.clone(),
             old_state_digest: self.old_state_digest.clone(),
-            attempt_digest: self.attempt_digest.clone(),
+            attempt_digest: self.legacy_attempt_digest.clone(),
             writer_lease_digest: self.plan.writer_lease_digest.clone(),
             writer_fence: self.plan.writer_fence,
             requested_window_count,
@@ -1455,16 +1633,60 @@ pub fn private_oram_append_hnsw_attempt_v2_digest(
 ) -> Result<String, PrivateOramAppendTransactionError> {
     let checkpoint = serde_json::to_vec(input.checkpoint)
         .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("checkpoint"))?;
-    let point = input.point;
-    let plan = input.plan;
+    private_oram_append_hnsw_attempt_digest(
+        PRIVATE_ORAM_APPEND_HNSW_ATTEMPT_V2_DIGEST_DOMAIN,
+        PrivateOramAppendDigestDomainEncoding::LegacyV2,
+        input.manifest_digest,
+        input.old_state_digest,
+        &checkpoint,
+        input.point,
+        input.plan,
+    )
+}
+
+pub fn private_oram_append_hnsw_attempt_v3_digest(
+    input: PrivateOramAppendHnswAttemptDigestInputV3<'_>,
+) -> Result<String, PrivateOramAppendTransactionError> {
+    let checkpoint_digest =
+        private_oram_append_client_checkpoint_plaintext_v3_digest(input.checkpoint)?;
+    private_oram_append_hnsw_attempt_digest(
+        PRIVATE_ORAM_APPEND_HNSW_ATTEMPT_V3_DIGEST_DOMAIN,
+        PrivateOramAppendDigestDomainEncoding::CanonicalV3,
+        input.manifest_digest,
+        input.old_state_digest,
+        checkpoint_digest.as_bytes(),
+        input.point,
+        input.plan,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum PrivateOramAppendDigestDomainEncoding {
+    LegacyV2,
+    CanonicalV3,
+}
+
+fn private_oram_append_hnsw_attempt_digest(
+    domain: &str,
+    domain_encoding: PrivateOramAppendDigestDomainEncoding,
+    manifest_digest: &str,
+    old_state_digest: &str,
+    checkpoint_binding: &[u8],
+    point: &PrivateOramAppendLevel0PointV2,
+    plan: &PrivateOramAppendHnswTransactionPlanV2,
+) -> Result<String, PrivateOramAppendTransactionError> {
     let mut hasher = Sha256::new();
-    update_digest_bytes(
-        &mut hasher,
-        PRIVATE_ORAM_APPEND_HNSW_ATTEMPT_V2_DIGEST_DOMAIN.as_bytes(),
-    )?;
-    update_digest_bytes(&mut hasher, input.manifest_digest.as_bytes())?;
-    update_digest_bytes(&mut hasher, input.old_state_digest.as_bytes())?;
-    update_digest_bytes(&mut hasher, &checkpoint)?;
+    match domain_encoding {
+        PrivateOramAppendDigestDomainEncoding::LegacyV2 => {
+            update_digest_bytes(&mut hasher, domain.as_bytes())?;
+        }
+        PrivateOramAppendDigestDomainEncoding::CanonicalV3 => {
+            update_digest_domain_v3(&mut hasher, domain.as_bytes())?;
+        }
+    }
+    update_digest_bytes(&mut hasher, manifest_digest.as_bytes())?;
+    update_digest_bytes(&mut hasher, old_state_digest.as_bytes())?;
+    update_digest_bytes(&mut hasher, checkpoint_binding)?;
     update_digest_bytes(&mut hasher, plan.index_name.as_bytes())?;
     update_digest_bytes(&mut hasher, plan.mutation_id.as_bytes())?;
     update_digest_bytes(&mut hasher, plan.writer_lease_digest.as_bytes())?;
@@ -1526,12 +1748,126 @@ pub fn private_oram_append_hnsw_prepared_commit_v2_digest(
     Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
 }
 
+pub fn private_oram_append_hnsw_prepared_commit_v3_digest(
+    input: PrivateOramAppendHnswPreparedCommitDigestInputV3<'_>,
+) -> Result<String, PrivateOramAppendTransactionError> {
+    let graph_delta_digest = private_oram_append_hnsw_graph_delta_v3_digest(input.graph_delta)?;
+    let next_client_state_digest =
+        private_oram_append_hnsw_client_state_v3_digest(input.next_client_state)?;
+    let mut hasher = Sha256::new();
+    update_digest_domain_v3(
+        &mut hasher,
+        PRIVATE_ORAM_APPEND_HNSW_PREPARED_COMMIT_V3_DIGEST_DOMAIN.as_bytes(),
+    )?;
+    update_digest_bytes(&mut hasher, input.attempt_digest.as_bytes())?;
+    update_digest_bytes(&mut hasher, graph_delta_digest.as_bytes())?;
+    hasher.update(input.old_epoch.to_be_bytes());
+    hasher.update(input.new_epoch.to_be_bytes());
+    update_digest_bytes(&mut hasher, input.old_root_hash.as_bytes())?;
+    update_digest_bytes(&mut hasher, input.new_root_hash.as_bytes())?;
+    update_digest_bytes(&mut hasher, input.read_transcript_digest.as_bytes())?;
+    update_digest_bytes(&mut hasher, input.writeback_digest.as_bytes())?;
+    update_digest_bytes(&mut hasher, next_client_state_digest.as_bytes())?;
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+pub fn private_oram_append_hnsw_graph_delta_v3_digest(
+    graph_delta: &PrivateOramAppendLevel0HnswGraphDeltaV2,
+) -> Result<String, PrivateOramAppendTransactionError> {
+    let mut hasher = Sha256::new();
+    update_digest_domain_v3(
+        &mut hasher,
+        PRIVATE_ORAM_APPEND_HNSW_GRAPH_DELTA_V3_DIGEST_DOMAIN.as_bytes(),
+    )?;
+    update_digest_bytes(&mut hasher, graph_delta.index_name.as_bytes())?;
+    update_digest_bytes(&mut hasher, graph_delta.point_record.point_token.as_bytes())?;
+    update_optional_digest_bytes(
+        &mut hasher,
+        graph_delta
+            .point_record
+            .visible_point_id
+            .as_deref()
+            .map(str::as_bytes),
+    )?;
+    update_optional_digest_bytes(
+        &mut hasher,
+        graph_delta
+            .point_record
+            .payload_fetch_token
+            .as_deref()
+            .map(str::as_bytes),
+    )?;
+    update_digest_bytes(&mut hasher, graph_delta.hnsw_record.node_id.as_bytes())?;
+    update_digest_bytes(&mut hasher, graph_delta.hnsw_record.point_token.as_bytes())?;
+    hasher.update(graph_delta.hnsw_record.level_mask.to_be_bytes());
+    hasher.update(graph_delta.hnsw_record.generation.to_be_bytes());
+    update_hnsw_node_block_digest(&mut hasher, &graph_delta.new_block)?;
+    update_digest_bytes(&mut hasher, &graph_delta.next_entry_node_id)?;
+    update_digest_len(&mut hasher, graph_delta.selected_neighbor_ids.len())?;
+    for node_id in &graph_delta.selected_neighbor_ids {
+        update_digest_bytes(&mut hasher, node_id)?;
+    }
+    update_digest_len(&mut hasher, graph_delta.neighbor_rewrites.len())?;
+    for rewrite in &graph_delta.neighbor_rewrites {
+        update_hnsw_node_block_digest(&mut hasher, &rewrite.previous)?;
+        update_hnsw_node_block_digest(&mut hasher, &rewrite.replacement)?;
+    }
+    for value in [
+        graph_delta.fixed_read_path_count,
+        graph_delta.candidate_read_path_budget,
+        graph_delta.candidate_read_path_count,
+        graph_delta.rewrite_read_path_budget,
+        graph_delta.rewrite_read_path_count,
+        graph_delta.real_read_path_count,
+        graph_delta.padding_read_path_count,
+    ] {
+        hasher.update(value.to_be_bytes());
+    }
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn update_hnsw_node_block_digest(
+    hasher: &mut Sha256,
+    block: &PrivateHnswNodeBlockPlaintext,
+) -> Result<(), PrivateOramAppendTransactionError> {
+    let mut encoded = Vec::new();
+    push_hnsw_node_block_v3(&mut encoded, block)?;
+    update_digest_bytes(hasher, &encoded)
+}
+
+fn update_optional_digest_bytes(
+    hasher: &mut Sha256,
+    value: Option<&[u8]>,
+) -> Result<(), PrivateOramAppendTransactionError> {
+    match value {
+        Some(value) => {
+            hasher.update([1]);
+            update_digest_bytes(hasher, value)
+        }
+        None => {
+            hasher.update([0]);
+            Ok(())
+        }
+    }
+}
+
 fn update_digest_bytes(
     hasher: &mut Sha256,
     value: &[u8],
 ) -> Result<(), PrivateOramAppendTransactionError> {
     update_digest_len(hasher, value.len())?;
     hasher.update(value);
+    Ok(())
+}
+
+pub(crate) fn update_digest_domain_v3(
+    hasher: &mut Sha256,
+    domain: &[u8],
+) -> Result<(), PrivateOramAppendTransactionError> {
+    let len = u32::try_from(domain.len())
+        .map_err(|_| PrivateOramAppendTransactionError::InvalidInput("digest_domain"))?;
+    hasher.update(len.to_be_bytes());
+    hasher.update(domain);
     Ok(())
 }
 

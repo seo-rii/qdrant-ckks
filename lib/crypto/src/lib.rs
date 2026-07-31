@@ -11,6 +11,7 @@ pub mod payload;
 pub mod private_hnsw_client;
 pub mod private_hnsw_oram;
 pub mod private_oram_append_client;
+pub mod private_oram_append_result_transaction;
 pub mod private_oram_append_transaction;
 pub mod private_oram_mutation;
 pub mod private_oram_recovery;
@@ -149,8 +150,11 @@ pub use private_hnsw_oram::{
 pub use private_oram_append_client::{
     PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_AEAD_DOMAIN,
     PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_PLAINTEXT_V3_DIGEST_DOMAIN,
     PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_V2_VERSION,
-    PRIVATE_ORAM_APPEND_MERKLE_PATCH_PROOF_V1_VERSION, PrivateOramAppendClientCheckpointV2,
+    PRIVATE_ORAM_APPEND_HNSW_CLIENT_STATE_V3_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_MERKLE_PATCH_PROOF_V1_VERSION,
+    PRIVATE_ORAM_APPEND_RESULT_CLIENT_STATE_V3_DIGEST_DOMAIN, PrivateOramAppendClientCheckpointV2,
     PrivateOramAppendClientError, PrivateOramAppendClientIndexCheckpointV2,
     PrivateOramAppendHnswNeighborRewriteV2, PrivateOramAppendHnswRecordV2,
     PrivateOramAppendLevel0HnswGraphDeltaV2, PrivateOramAppendLevel0PointV2,
@@ -160,22 +164,49 @@ pub use private_oram_append_client::{
     PrivateOramAppendSparseMerklePatchV1, PrivateOramEncryptedAppendClientCheckpointV2,
     PrivateOramSealedAppendClientCheckpointV2, apply_private_oram_append_sparse_merkle_patch_v1,
     bind_private_oram_append_client_checkpoint_v2, open_private_oram_append_client_checkpoint_v2,
-    plan_private_oram_level0_hnsw_graph_delta_v2, private_oram_append_client_checkpoint_v2_digest,
+    plan_private_oram_level0_hnsw_graph_delta_v2,
+    private_oram_append_client_checkpoint_plaintext_v3_digest,
+    private_oram_append_client_checkpoint_v2_digest,
+    private_oram_append_hnsw_client_state_v3_digest,
+    private_oram_append_result_client_state_v3_digest,
     seal_private_oram_append_client_checkpoint_v2,
+    try_private_oram_append_client_checkpoint_plaintext_v3_digest_message,
     try_private_oram_append_client_checkpoint_v2_digest_message,
+    try_private_oram_append_hnsw_client_state_v3_digest_message,
+    try_private_oram_append_result_client_state_v3_digest_message,
     validate_private_oram_append_client_checkpoint_v2,
     validate_private_oram_append_client_checkpoint_v2_shape,
 };
+pub use private_oram_append_result_transaction::{
+    PRIVATE_ORAM_APPEND_RESULT_ATTEMPT_V3_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_RESULT_PREPARED_COMMIT_V3_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_RESULT_WORKING_ARTIFACT_V3_DIGEST_DOMAIN,
+    PrivateOramAppendResultAttemptDigestInputV3, PrivateOramAppendResultPointV2,
+    PrivateOramAppendResultPreparedCommitDigestInputV3, PrivateOramAppendResultReadRequestV2,
+    PrivateOramAppendResultTransactionOutputV2, PrivateOramAppendResultTransactionPlanV2,
+    PrivateOramAppendResultTransactionProgressV2, PrivateOramAppendResultTransactionV2,
+    private_oram_append_result_attempt_v3_digest,
+    private_oram_append_result_prepared_commit_v3_digest,
+    validate_private_oram_append_result_transaction_output_v2,
+};
 pub use private_oram_append_transaction::{
     PRIVATE_ORAM_APPEND_HNSW_ATTEMPT_V2_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_HNSW_ATTEMPT_V3_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_HNSW_GRAPH_DELTA_V3_DIGEST_DOMAIN,
     PRIVATE_ORAM_APPEND_HNSW_PREPARED_COMMIT_V2_DIGEST_DOMAIN,
-    PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V2_VERSION, PrivateOramAppendHnswAttemptDigestInput,
-    PrivateOramAppendHnswPreparedCommitDigestInput, PrivateOramAppendHnswReadRequestV2,
+    PRIVATE_ORAM_APPEND_HNSW_PREPARED_COMMIT_V3_DIGEST_DOMAIN,
+    PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V2_VERSION, PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V3_VERSION,
+    PrivateOramAppendHnswAttemptDigestInput, PrivateOramAppendHnswAttemptDigestInputV3,
+    PrivateOramAppendHnswPreparedCommitDigestInput,
+    PrivateOramAppendHnswPreparedCommitDigestInputV3, PrivateOramAppendHnswReadRequestV2,
     PrivateOramAppendHnswTransactionOutputV2, PrivateOramAppendHnswTransactionPlanV2,
     PrivateOramAppendHnswTransactionProgressV2, PrivateOramAppendHnswTransactionV2,
-    PrivateOramAppendRecoveryMarkerV2, PrivateOramAppendRecoveryPhaseV2,
-    PrivateOramAppendTransactionError, private_oram_append_hnsw_attempt_v2_digest,
+    PrivateOramAppendRecoveryMarkerV2, PrivateOramAppendRecoveryMarkerV3,
+    PrivateOramAppendRecoveryPhaseV2, PrivateOramAppendTransactionError,
+    private_oram_append_hnsw_attempt_v2_digest, private_oram_append_hnsw_attempt_v3_digest,
+    private_oram_append_hnsw_graph_delta_v3_digest,
     private_oram_append_hnsw_prepared_commit_v2_digest,
+    private_oram_append_hnsw_prepared_commit_v3_digest,
 };
 pub use private_oram_mutation::{
     PAYLOAD_PRIVATE_RESULT_ORAM_V2_PROVIDER, PRIVATE_HNSW_ORAM_V2_BINDING,

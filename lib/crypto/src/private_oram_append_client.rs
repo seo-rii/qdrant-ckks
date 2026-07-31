@@ -33,6 +33,12 @@ pub const PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_AEAD_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-append-client-checkpoint-aead/v2";
 pub const PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_DIGEST_DOMAIN: &str =
     "qdrant-sec/private-oram-append-client-checkpoint-digest/v2";
+pub const PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_PLAINTEXT_V3_DIGEST_DOMAIN: &str =
+    "qdrant-sec/private-oram-append-client-checkpoint-plaintext-digest/v3";
+pub const PRIVATE_ORAM_APPEND_HNSW_CLIENT_STATE_V3_DIGEST_DOMAIN: &str =
+    "qdrant-sec/private-oram-append-hnsw-client-state-digest/v3";
+pub const PRIVATE_ORAM_APPEND_RESULT_CLIENT_STATE_V3_DIGEST_DOMAIN: &str =
+    "qdrant-sec/private-oram-append-result-client-state-digest/v3";
 
 const PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_KDF_CONTEXT_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-append-client-checkpoint-kdf-context/v2";
@@ -1206,6 +1212,116 @@ pub fn validate_private_oram_append_client_checkpoint_v2(
     Ok(())
 }
 
+pub fn try_private_oram_append_client_checkpoint_plaintext_v3_digest_message(
+    checkpoint: &PrivateOramAppendClientCheckpointV2,
+) -> Result<Vec<u8>, PrivateOramAppendClientError> {
+    validate_private_oram_append_client_checkpoint_v2_shape(checkpoint)?;
+    let mut message = Vec::new();
+    push_domain(
+        &mut message,
+        PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_PLAINTEXT_V3_DIGEST_DOMAIN.as_bytes(),
+    )?;
+    message.extend_from_slice(&checkpoint.version.to_be_bytes());
+    push_str(&mut message, &checkpoint.collection_id)?;
+    push_str(&mut message, &checkpoint.manifest_digest)?;
+    message.extend_from_slice(&checkpoint.layout_generation.to_be_bytes());
+    message.extend_from_slice(&checkpoint.state_sequence.to_be_bytes());
+    push_len(&mut message, checkpoint.points.len())?;
+    for point in &checkpoint.points {
+        push_point_record_v3(&mut message, point)?;
+    }
+    push_len(&mut message, checkpoint.indexes.len())?;
+    for index in &checkpoint.indexes {
+        match index {
+            PrivateOramAppendClientIndexCheckpointV2::Hnsw {
+                index_name,
+                index_epoch,
+                root_hash,
+                entry_node_id,
+                state,
+                records,
+            } => {
+                message.push(1);
+                push_str(&mut message, index_name)?;
+                message.extend_from_slice(&index_epoch.to_be_bytes());
+                push_str(&mut message, root_hash)?;
+                push_optional_str(&mut message, entry_node_id.as_deref())?;
+                push_hnsw_client_state_v3(&mut message, state)?;
+                push_len(&mut message, records.len())?;
+                for record in records {
+                    push_hnsw_record_v3(&mut message, record)?;
+                }
+            }
+            PrivateOramAppendClientIndexCheckpointV2::Result {
+                index_name,
+                index_epoch,
+                root_hash,
+                state,
+                records,
+            } => {
+                message.push(2);
+                push_str(&mut message, index_name)?;
+                message.extend_from_slice(&index_epoch.to_be_bytes());
+                push_str(&mut message, root_hash)?;
+                push_result_client_state_v3(&mut message, state)?;
+                push_len(&mut message, records.len())?;
+                for record in records {
+                    push_result_record_v3(&mut message, record)?;
+                }
+            }
+        }
+    }
+    Ok(message)
+}
+
+pub fn private_oram_append_client_checkpoint_plaintext_v3_digest(
+    checkpoint: &PrivateOramAppendClientCheckpointV2,
+) -> Result<String, PrivateOramAppendClientError> {
+    Ok(BASE64URL_NOPAD.encode(&Sha256::digest(
+        try_private_oram_append_client_checkpoint_plaintext_v3_digest_message(checkpoint)?,
+    )))
+}
+
+pub fn try_private_oram_append_hnsw_client_state_v3_digest_message(
+    state: &PrivateHnswOramClientStateSnapshot,
+) -> Result<Vec<u8>, PrivateOramAppendClientError> {
+    let mut message = Vec::new();
+    push_domain(
+        &mut message,
+        PRIVATE_ORAM_APPEND_HNSW_CLIENT_STATE_V3_DIGEST_DOMAIN.as_bytes(),
+    )?;
+    push_hnsw_client_state_v3(&mut message, state)?;
+    Ok(message)
+}
+
+pub fn private_oram_append_hnsw_client_state_v3_digest(
+    state: &PrivateHnswOramClientStateSnapshot,
+) -> Result<String, PrivateOramAppendClientError> {
+    Ok(BASE64URL_NOPAD.encode(&Sha256::digest(
+        try_private_oram_append_hnsw_client_state_v3_digest_message(state)?,
+    )))
+}
+
+pub fn try_private_oram_append_result_client_state_v3_digest_message(
+    state: &PrivateResultOramClientStateSnapshot,
+) -> Result<Vec<u8>, PrivateOramAppendClientError> {
+    let mut message = Vec::new();
+    push_domain(
+        &mut message,
+        PRIVATE_ORAM_APPEND_RESULT_CLIENT_STATE_V3_DIGEST_DOMAIN.as_bytes(),
+    )?;
+    push_result_client_state_v3(&mut message, state)?;
+    Ok(message)
+}
+
+pub fn private_oram_append_result_client_state_v3_digest(
+    state: &PrivateResultOramClientStateSnapshot,
+) -> Result<String, PrivateOramAppendClientError> {
+    Ok(BASE64URL_NOPAD.encode(&Sha256::digest(
+        try_private_oram_append_result_client_state_v3_digest_message(state)?,
+    )))
+}
+
 pub fn seal_private_oram_append_client_checkpoint_v2(
     checkpoint_key: &SecretKey,
     checkpoint: &PrivateOramAppendClientCheckpointV2,
@@ -1829,6 +1945,120 @@ fn decode_base64url_32(
         .map_err(|_| PrivateOramAppendClientError::InvalidCheckpointField(field))
 }
 
+fn push_point_record_v3(
+    output: &mut Vec<u8>,
+    record: &PrivateOramAppendPointRecordV2,
+) -> Result<(), PrivateOramAppendClientError> {
+    push_str(output, &record.point_token)?;
+    push_optional_str(output, record.visible_point_id.as_deref())?;
+    push_optional_str(output, record.payload_fetch_token.as_deref())
+}
+
+fn push_hnsw_record_v3(
+    output: &mut Vec<u8>,
+    record: &PrivateOramAppendHnswRecordV2,
+) -> Result<(), PrivateOramAppendClientError> {
+    push_str(output, &record.node_id)?;
+    push_str(output, &record.point_token)?;
+    output.extend_from_slice(&record.level_mask.to_be_bytes());
+    output.extend_from_slice(&record.generation.to_be_bytes());
+    Ok(())
+}
+
+fn push_result_record_v3(
+    output: &mut Vec<u8>,
+    record: &PrivateOramAppendResultRecordV2,
+) -> Result<(), PrivateOramAppendClientError> {
+    push_str(output, &record.payload_fetch_token)?;
+    push_str(output, &record.point_token)?;
+    output.extend_from_slice(&record.generation.to_be_bytes());
+    Ok(())
+}
+
+fn push_hnsw_client_state_v3(
+    output: &mut Vec<u8>,
+    state: &PrivateHnswOramClientStateSnapshot,
+) -> Result<(), PrivateOramAppendClientError> {
+    let state = PrivateHnswOramClientState::from_snapshot(state)?.to_snapshot(state.tree_height)?;
+    output.extend_from_slice(&state.version.to_be_bytes());
+    output.extend_from_slice(&state.tree_height.to_be_bytes());
+    push_len(output, state.positions.len())?;
+    for position in &state.positions {
+        push_str(output, &position.node_id)?;
+        push_str(output, &position.leaf_label)?;
+    }
+    push_len(output, state.stash.len())?;
+    for block in &state.stash {
+        push_hnsw_node_block_v3(output, block)?;
+    }
+    Ok(())
+}
+
+fn push_result_client_state_v3(
+    output: &mut Vec<u8>,
+    state: &PrivateResultOramClientStateSnapshot,
+) -> Result<(), PrivateOramAppendClientError> {
+    let state =
+        PrivateResultOramClientState::from_snapshot(state)?.to_snapshot(state.tree_height)?;
+    output.extend_from_slice(&state.version.to_be_bytes());
+    output.extend_from_slice(&state.tree_height.to_be_bytes());
+    push_len(output, state.positions.len())?;
+    for position in &state.positions {
+        push_str(output, &position.payload_fetch_token)?;
+        push_str(output, &position.leaf_label)?;
+    }
+    push_len(output, state.stash.len())?;
+    for block in &state.stash {
+        push_result_payload_block_v3(output, block)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn push_hnsw_node_block_v3(
+    output: &mut Vec<u8>,
+    block: &PrivateHnswNodeBlockPlaintext,
+) -> Result<(), PrivateOramAppendClientError> {
+    output.extend_from_slice(&block.version.to_be_bytes());
+    output.extend_from_slice(&block.node_id);
+    output.extend_from_slice(&block.point_token);
+    output.extend_from_slice(&block.level_mask.to_be_bytes());
+    output.push(match block.vector_encoding {
+        PrivateHnswVectorEncoding::F32Le => 1,
+        PrivateHnswVectorEncoding::I8Quantized => 2,
+        PrivateHnswVectorEncoding::PqCode => 3,
+        PrivateHnswVectorEncoding::BinaryQuantized => 4,
+    });
+    push_bytes(output, &block.vector)?;
+    push_len(output, block.neighbors.len())?;
+    for neighbor in &block.neighbors {
+        output.extend_from_slice(neighbor);
+    }
+    push_bytes(output, &block.neighbor_levels)?;
+    output.push(u8::from(block.deleted));
+    output.extend_from_slice(&block.generation.to_be_bytes());
+    match block.payload_fetch_token {
+        Some(payload_fetch_token) => {
+            output.push(1);
+            output.extend_from_slice(&payload_fetch_token);
+        }
+        None => output.push(0),
+    }
+    Ok(())
+}
+
+fn push_result_payload_block_v3(
+    output: &mut Vec<u8>,
+    block: &crate::private_result_oram::PrivateResultOramPayloadBlockPlaintext,
+) -> Result<(), PrivateOramAppendClientError> {
+    output.extend_from_slice(&block.version.to_be_bytes());
+    output.extend_from_slice(&block.payload_fetch_token);
+    output.extend_from_slice(&block.point_token);
+    push_bytes(output, &block.payload)?;
+    output.push(u8::from(block.deleted));
+    output.extend_from_slice(&block.generation.to_be_bytes());
+    Ok(())
+}
+
 const fn checkpoint_index_tag(kind: PrivateOramIndexKindV2) -> u8 {
     match kind {
         PrivateOramIndexKindV2::Hnsw => 1,
@@ -1849,6 +2079,41 @@ fn push_str(output: &mut Vec<u8>, value: &str) -> Result<(), PrivateOramAppendCl
         .map_err(|_| PrivateOramAppendClientError::InvalidCheckpointField("string"))?;
     output.extend_from_slice(&len.to_be_bytes());
     output.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn push_optional_str(
+    output: &mut Vec<u8>,
+    value: Option<&str>,
+) -> Result<(), PrivateOramAppendClientError> {
+    match value {
+        Some(value) => {
+            output.push(1);
+            push_str(output, value)
+        }
+        None => {
+            output.push(0);
+            Ok(())
+        }
+    }
+}
+
+pub(crate) fn push_len(
+    output: &mut Vec<u8>,
+    len: usize,
+) -> Result<(), PrivateOramAppendClientError> {
+    let len = u64::try_from(len)
+        .map_err(|_| PrivateOramAppendClientError::InvalidCheckpointField("length"))?;
+    output.extend_from_slice(&len.to_be_bytes());
+    Ok(())
+}
+
+pub(crate) fn push_bytes(
+    output: &mut Vec<u8>,
+    value: &[u8],
+) -> Result<(), PrivateOramAppendClientError> {
+    push_len(output, value.len())?;
+    output.extend_from_slice(value);
     Ok(())
 }
 

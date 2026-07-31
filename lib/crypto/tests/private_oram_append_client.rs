@@ -80,6 +80,49 @@ fn hnsw_merkle_proof(
     }
 }
 
+fn result_merkle_proof(
+    index_epoch: u64,
+    commitments: &[String],
+    bucket_ids: &[u64],
+) -> PrivateResultOramMerkleProof {
+    let levels = merkle_levels(commitments);
+    PrivateResultOramMerkleProof {
+        kind: PRIVATE_RESULT_ORAM_MERKLE_PROOF_KIND.to_string(),
+        index_epoch,
+        root_hash: BASE64URL_NOPAD.encode(&levels.last().unwrap()[0]),
+        bucket_count: commitments.len().try_into().unwrap(),
+        leaves: bucket_ids
+            .iter()
+            .map(|bucket_id| {
+                let mut index = usize::try_from(*bucket_id).unwrap();
+                let siblings = levels[..levels.len() - 1]
+                    .iter()
+                    .enumerate()
+                    .map(|(level, hashes)| {
+                        let sibling_index = index ^ 1;
+                        let sibling = PrivateResultOramMerkleSibling {
+                            level: level.try_into().unwrap(),
+                            position: if index % 2 == 0 {
+                                PrivateResultOramMerkleSiblingPosition::Right
+                            } else {
+                                PrivateResultOramMerkleSiblingPosition::Left
+                            },
+                            hash: BASE64URL_NOPAD.encode(&hashes[sibling_index]),
+                        };
+                        index /= 2;
+                        sibling
+                    })
+                    .collect();
+                PrivateResultOramMerkleProofLeaf {
+                    bucket_id: *bucket_id,
+                    leaf_hash: commitments[usize::try_from(*bucket_id).unwrap()].clone(),
+                    siblings,
+                }
+            })
+            .collect(),
+    }
+}
+
 fn append_bucket(bucket_id: u64, byte: u8) -> PrivateOramAppendBucketRefV1 {
     PrivateOramAppendBucketRefV1 {
         bucket_id,
@@ -488,6 +531,169 @@ fn complete_hnsw_append_transaction(
     (transaction.finalize().unwrap(), accepted_windows)
 }
 
+struct ResultAppendTransactionFixture {
+    manifest: PrivateOramImmutableManifestV2,
+    state: PrivateOramSignedStateV2,
+    checkpoint: PrivateOramAppendClientCheckpointV2,
+    keys: PrivateResultOramClientKeys,
+    buckets: Vec<PrivateResultOramBucket>,
+}
+
+fn result_append_transaction_fixture_with_path_batch_size(
+    path_batch_size: u32,
+) -> ResultAppendTransactionFixture {
+    let mut manifest = manifest();
+    let PrivateOramImmutableIndexParamsV2::Result { oram, .. } = &mut manifest.indexes[1].params
+    else {
+        panic!("fixture result manifest is missing");
+    };
+    oram.path_batch_size = path_batch_size;
+    let mut checkpoint = checkpoint(&manifest);
+    let config = PrivateResultOramClientConfig {
+        tree_height: 2,
+        bucket_size: 2,
+        block_size_bytes: 512,
+    };
+    let mut plaintext_buckets = (0..capacity().bucket_count)
+        .map(|bucket_id| empty_private_result_oram_plaintext_bucket(bucket_id, config).unwrap())
+        .collect::<Vec<_>>();
+    let existing_block = PrivateResultOramPayloadBlockPlaintext {
+        version: PRIVATE_RESULT_ORAM_PAYLOAD_BLOCK_VERSION,
+        payload_fetch_token: [4; 32],
+        point_token: [3; 32],
+        payload: b"existing payload".to_vec(),
+        deleted: false,
+        generation: 0,
+    };
+    plaintext_buckets[0].blocks[0] = Some(existing_block);
+
+    let resource_key = SecretKey::from_bytes([32; 32]);
+    let keys = PrivateResultOramClientKeys::derive_from_resource_key_with_context(
+        &resource_key,
+        &manifest.collection_id,
+        "tenant-a/result-rk",
+        7,
+    )
+    .unwrap();
+    let base_context = PrivateResultOramBucketAeadBaseContext {
+        collection_id: &manifest.collection_id,
+        key_id: "tenant-a/result-rk",
+        rk_id: "tenant-a/result-rk",
+        rk_epoch: 7,
+    };
+    let buckets = plaintext_buckets
+        .iter()
+        .map(|bucket| {
+            seal_private_result_oram_plaintext_bucket(&keys, base_context, 11, bucket, config)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let root_hash = private_result_oram_merkle_root_for_commitments(
+        &buckets
+            .iter()
+            .map(|bucket| bucket.bucket_commitment.clone())
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let PrivateOramAppendClientIndexCheckpointV2::Result {
+        root_hash: checkpoint_root,
+        state: checkpoint_state,
+        ..
+    } = &mut checkpoint.indexes[1]
+    else {
+        panic!("fixture result checkpoint is missing");
+    };
+    *checkpoint_root = root_hash.clone();
+    checkpoint_state.positions[0].leaf_label = encode_private_result_oram_leaf_label(3, 2).unwrap();
+    let mut state = state(&manifest, digest(30));
+    state.indexes[1].root_hash = root_hash;
+
+    ResultAppendTransactionFixture {
+        manifest,
+        state,
+        checkpoint,
+        keys,
+        buckets,
+    }
+}
+
+fn result_append_transaction_plan(
+    paths_per_window: u32,
+) -> PrivateOramAppendResultTransactionPlanV2 {
+    PrivateOramAppendResultTransactionPlanV2 {
+        index_name: "private-payload".to_string(),
+        mutation_id: digest(20),
+        writer_lease_digest: digest(21),
+        writer_fence: 3,
+        paths_per_window,
+        padding_leaves: vec![1, 2, 1],
+    }
+}
+
+fn result_append_transaction_point() -> PrivateOramAppendResultPointV2 {
+    PrivateOramAppendResultPointV2 {
+        payload_fetch_token: [7; 32],
+        point_token: [6; 32],
+        payload: b"new private payload".to_vec(),
+        initial_leaf: 3,
+    }
+}
+
+fn encrypted_result_window_batch(
+    window: &PrivateOramAppendReadWindowV1,
+    buckets: &[PrivateResultOramBucket],
+) -> PrivateResultOramEncryptedBucketBatch {
+    let bucket_ids = window
+        .paths
+        .iter()
+        .map(|leaf_label| decode_private_result_oram_leaf_label(leaf_label, 2).unwrap())
+        .flat_map(|leaf| private_result_oram_bucket_ids_for_leaf(leaf, 2).unwrap())
+        .collect::<Vec<_>>();
+    let commitments = buckets
+        .iter()
+        .map(|bucket| bucket.bucket_commitment.clone())
+        .collect::<Vec<_>>();
+    let proof = result_merkle_proof(11, &commitments, &bucket_ids);
+    PrivateResultOramEncryptedBucketBatch {
+        index_epoch: 11,
+        root_hash: proof.root_hash.clone(),
+        bucket_count: buckets.len().try_into().unwrap(),
+        proof_value: serde_json::to_string(&proof).unwrap(),
+        buckets: bucket_ids
+            .iter()
+            .map(|bucket_id| buckets[usize::try_from(*bucket_id).unwrap()].clone())
+            .collect(),
+    }
+}
+
+fn complete_result_append_transaction(
+    fixture: &ResultAppendTransactionFixture,
+    plan: PrivateOramAppendResultTransactionPlanV2,
+) -> (PrivateOramAppendResultTransactionOutputV2, u32) {
+    let mut transaction = PrivateOramAppendResultTransactionV2::begin(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        result_append_transaction_point(),
+        plan,
+    )
+    .unwrap();
+    assert!(!transaction.requires_recovery());
+
+    let mut accepted_windows = 0;
+    while let Some(marker) = transaction.prepare_next_read_window().unwrap() {
+        assert_eq!(marker.index_kind, PrivateOramIndexKindV2::Result);
+        assert_eq!(marker.index_name, "private-payload");
+        let request = transaction.next_read_window(&marker).unwrap();
+        let batch = encrypted_result_window_batch(&request.window, &fixture.buckets);
+        transaction
+            .accept_verified_window(request.window.sequence, &fixture.keys, &batch)
+            .unwrap();
+        accepted_windows += 1;
+    }
+    (transaction.finalize().unwrap(), accepted_windows)
+}
+
 #[test]
 fn hnsw_append_transaction_accepts_fixed_size_read_sequence_with_shared_ancestors() {
     let fixture = hnsw_append_transaction_fixture_with_path_batch_size(2);
@@ -611,7 +817,17 @@ fn hnsw_append_recovery_digest_known_answers_are_stable() {
     else {
         panic!("fixture HNSW checkpoint is missing");
     };
-    let prepared = private_oram_append_hnsw_prepared_commit_v2_digest(
+    let graph_delta = plan_private_oram_level0_hnsw_graph_delta_v2(
+        &manifest,
+        &state,
+        &checkpoint,
+        "text",
+        &point,
+        &[checkpoint_candidate_block()],
+        1,
+    )
+    .unwrap();
+    let legacy_prepared = private_oram_append_hnsw_prepared_commit_v2_digest(
         PrivateOramAppendHnswPreparedCommitDigestInput {
             attempt_digest: &attempt,
             old_epoch: 11,
@@ -626,7 +842,263 @@ fn hnsw_append_recovery_digest_known_answers_are_stable() {
     .unwrap();
 
     assert_eq!(attempt, "k6aBmpM33qQZMHZUlLm8zjcuFuNJIxs_kmRYFFOH_9M");
-    assert_eq!(prepared, "ftlODQe353ZRs3E7s_ZUGCJrY16zvRysuW3-SR4iRQQ");
+    assert_eq!(
+        legacy_prepared,
+        "ftlODQe353ZRs3E7s_ZUGCJrY16zvRysuW3-SR4iRQQ"
+    );
+    let attempt_v3 =
+        private_oram_append_hnsw_attempt_v3_digest(PrivateOramAppendHnswAttemptDigestInputV3 {
+            manifest_digest: &manifest_digest,
+            old_state_digest: &old_state_digest,
+            checkpoint: &checkpoint,
+            point: &point,
+            plan: &plan,
+        })
+        .unwrap();
+    let prepared_v3 = private_oram_append_hnsw_prepared_commit_v3_digest(
+        PrivateOramAppendHnswPreparedCommitDigestInputV3 {
+            attempt_digest: &attempt_v3,
+            graph_delta: &graph_delta,
+            old_epoch: 11,
+            new_epoch: 12,
+            old_root_hash: &digest(5),
+            new_root_hash: &digest(6),
+            read_transcript_digest: &digest(40),
+            writeback_digest: &digest(41),
+            next_client_state,
+        },
+    )
+    .unwrap();
+    assert_eq!(attempt_v3, "w44sXNVM2ZJY7URs6zazcFtJFMlk0uNrtuIB2E_-G48");
+    assert_eq!(prepared_v3, "Zq9VGumZ46WjHl1pDbuZOlbnmwdty6HcBTA2YDehafo");
+    let mut changed_graph_delta = graph_delta.clone();
+    changed_graph_delta.hnsw_record.generation += 1;
+    assert_ne!(
+        private_oram_append_hnsw_prepared_commit_v3_digest(
+            PrivateOramAppendHnswPreparedCommitDigestInputV3 {
+                attempt_digest: &attempt_v3,
+                graph_delta: &changed_graph_delta,
+                old_epoch: 11,
+                new_epoch: 12,
+                old_root_hash: &digest(5),
+                new_root_hash: &digest(6),
+                read_transcript_digest: &digest(40),
+                writeback_digest: &digest(41),
+                next_client_state,
+            },
+        )
+        .unwrap(),
+        prepared_v3
+    );
+}
+
+#[test]
+fn result_append_recovery_digest_known_answers_are_stable() {
+    let manifest = manifest();
+    let checkpoint = checkpoint(&manifest);
+    let state = state(&manifest, digest(30));
+    let point = result_append_transaction_point();
+    let plan = result_append_transaction_plan(1);
+    let manifest_digest = private_oram_immutable_manifest_v2_digest(&manifest).unwrap();
+    let old_state_digest = private_oram_signed_state_v2_digest(&state).unwrap();
+    let attempt =
+        private_oram_append_result_attempt_v3_digest(PrivateOramAppendResultAttemptDigestInputV3 {
+            manifest_digest: &manifest_digest,
+            old_state_digest: &old_state_digest,
+            checkpoint: &checkpoint,
+            point: &point,
+            plan: &plan,
+        })
+        .unwrap();
+    let PrivateOramAppendClientIndexCheckpointV2::Result {
+        state: next_client_state,
+        ..
+    } = &checkpoint.indexes[1]
+    else {
+        panic!("fixture result checkpoint is missing");
+    };
+    let result_record = PrivateOramAppendResultRecordV2 {
+        payload_fetch_token: BASE64URL_NOPAD.encode(&point.payload_fetch_token),
+        point_token: BASE64URL_NOPAD.encode(&point.point_token),
+        generation: 1,
+    };
+    let prepared = private_oram_append_result_prepared_commit_v3_digest(
+        PrivateOramAppendResultPreparedCommitDigestInputV3 {
+            attempt_digest: &attempt,
+            result_record: &result_record,
+            old_epoch: 11,
+            new_epoch: 12,
+            old_root_hash: &digest(5),
+            new_root_hash: &digest(6),
+            read_transcript_digest: &digest(40),
+            writeback_digest: &digest(41),
+            next_client_state,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(attempt, "JX-5ynW42HWB_1EyHULuiO4WzsxHZj57ILjG6HQUZIQ");
+    assert_eq!(prepared, "HhzWkWrLQQg8TRLQhN0C4D2PiHoTrj59F5sGpJTArYo");
+    let mut changed_result_record = result_record;
+    changed_result_record.generation += 1;
+    assert_ne!(
+        private_oram_append_result_prepared_commit_v3_digest(
+            PrivateOramAppendResultPreparedCommitDigestInputV3 {
+                attempt_digest: &attempt,
+                result_record: &changed_result_record,
+                old_epoch: 11,
+                new_epoch: 12,
+                old_root_hash: &digest(5),
+                new_root_hash: &digest(6),
+                read_transcript_digest: &digest(40),
+                writeback_digest: &digest(41),
+                next_client_state,
+            },
+        )
+        .unwrap(),
+        prepared
+    );
+}
+
+#[test]
+fn v3_checkpoint_and_client_state_digests_use_u32_domain_framing() {
+    let manifest = manifest();
+    let checkpoint = checkpoint(&manifest);
+    let PrivateOramAppendClientIndexCheckpointV2::Hnsw {
+        state: hnsw_state, ..
+    } = &checkpoint.indexes[0]
+    else {
+        panic!("fixture HNSW checkpoint is missing");
+    };
+    let PrivateOramAppendClientIndexCheckpointV2::Result {
+        state: result_state,
+        ..
+    } = &checkpoint.indexes[1]
+    else {
+        panic!("fixture result checkpoint is missing");
+    };
+    let cases = [
+        (
+            try_private_oram_append_client_checkpoint_plaintext_v3_digest_message(&checkpoint)
+                .unwrap(),
+            PRIVATE_ORAM_APPEND_CLIENT_CHECKPOINT_PLAINTEXT_V3_DIGEST_DOMAIN,
+        ),
+        (
+            try_private_oram_append_hnsw_client_state_v3_digest_message(hnsw_state).unwrap(),
+            PRIVATE_ORAM_APPEND_HNSW_CLIENT_STATE_V3_DIGEST_DOMAIN,
+        ),
+        (
+            try_private_oram_append_result_client_state_v3_digest_message(result_state).unwrap(),
+            PRIVATE_ORAM_APPEND_RESULT_CLIENT_STATE_V3_DIGEST_DOMAIN,
+        ),
+    ];
+
+    for (message, domain) in cases {
+        let domain_len = u32::try_from(domain.len()).unwrap().to_be_bytes();
+        assert_eq!(&message[..4], &domain_len);
+        assert_eq!(&message[4..4 + domain.len()], domain.as_bytes());
+    }
+}
+
+#[test]
+fn v3_client_state_digests_canonicalize_snapshot_map_order() {
+    let mut first_hnsw_block = checkpoint_candidate_block();
+    first_hnsw_block.node_id = [1; 32];
+    first_hnsw_block.point_token = [10; 32];
+    first_hnsw_block.payload_fetch_token = Some([11; 32]);
+    let mut second_hnsw_block = checkpoint_candidate_block();
+    second_hnsw_block.node_id = [2; 32];
+    second_hnsw_block.point_token = [12; 32];
+    second_hnsw_block.payload_fetch_token = Some([13; 32]);
+    let mut hnsw = PrivateHnswOramClientStateSnapshot {
+        version: 1,
+        tree_height: 2,
+        positions: vec![
+            PrivateHnswPositionMapSnapshotEntry {
+                node_id: BASE64URL_NOPAD.encode(&[1; 32]),
+                leaf_label: encode_private_hnsw_oram_leaf_label(1, 2).unwrap(),
+            },
+            PrivateHnswPositionMapSnapshotEntry {
+                node_id: BASE64URL_NOPAD.encode(&[2; 32]),
+                leaf_label: encode_private_hnsw_oram_leaf_label(2, 2).unwrap(),
+            },
+        ],
+        stash: vec![first_hnsw_block, second_hnsw_block],
+    };
+    let hnsw_digest = private_oram_append_hnsw_client_state_v3_digest(&hnsw).unwrap();
+    hnsw.positions.reverse();
+    hnsw.stash.reverse();
+    assert_eq!(
+        private_oram_append_hnsw_client_state_v3_digest(&hnsw).unwrap(),
+        hnsw_digest
+    );
+
+    let mut result = PrivateResultOramClientStateSnapshot {
+        version: 1,
+        tree_height: 2,
+        positions: vec![
+            PrivateResultOramPositionMapSnapshotEntry {
+                payload_fetch_token: BASE64URL_NOPAD.encode(&[3; 32]),
+                leaf_label: encode_private_result_oram_leaf_label(1, 2).unwrap(),
+            },
+            PrivateResultOramPositionMapSnapshotEntry {
+                payload_fetch_token: BASE64URL_NOPAD.encode(&[4; 32]),
+                leaf_label: encode_private_result_oram_leaf_label(2, 2).unwrap(),
+            },
+        ],
+        stash: vec![
+            PrivateResultOramPayloadBlockPlaintext {
+                version: PRIVATE_RESULT_ORAM_PAYLOAD_BLOCK_VERSION,
+                payload_fetch_token: [3; 32],
+                point_token: [5; 32],
+                payload: b"first".to_vec(),
+                deleted: false,
+                generation: 1,
+            },
+            PrivateResultOramPayloadBlockPlaintext {
+                version: PRIVATE_RESULT_ORAM_PAYLOAD_BLOCK_VERSION,
+                payload_fetch_token: [4; 32],
+                point_token: [6; 32],
+                payload: b"second".to_vec(),
+                deleted: false,
+                generation: 1,
+            },
+        ],
+    };
+    let result_digest = private_oram_append_result_client_state_v3_digest(&result).unwrap();
+    result.positions.reverse();
+    result.stash.reverse();
+    assert_eq!(
+        private_oram_append_result_client_state_v3_digest(&result).unwrap(),
+        result_digest
+    );
+}
+
+#[test]
+fn legacy_v2_recovery_marker_round_trips_without_v3_index_fields() {
+    let encoded = serde_json::json!({
+        "version": PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V2_VERSION,
+        "collection_id": "collection",
+        "manifest_digest": digest(1),
+        "mutation_id": "mutation",
+        "old_state_digest": digest(2),
+        "attempt_digest": digest(3),
+        "writer_lease_digest": digest(4),
+        "writer_fence": 7,
+        "requested_window_count": 3,
+        "accepted_window_count": 2,
+        "observed_read_path_count": 4,
+        "phase": "window_issued",
+        "prepared_commit_digest": null
+    });
+    let marker: PrivateOramAppendRecoveryMarkerV2 =
+        serde_json::from_value(encoded.clone()).unwrap();
+
+    assert_eq!(
+        marker.version,
+        PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V2_VERSION
+    );
+    assert_eq!(serde_json::to_value(marker).unwrap(), encoded);
 }
 
 #[test]
@@ -1406,6 +1878,670 @@ fn targetless_result_eviction_places_a_new_private_payload_block() {
 }
 
 #[test]
+fn verified_result_append_transaction_preserves_fixed_ordered_frames_and_overlay() {
+    let fixture = result_append_transaction_fixture_with_path_batch_size(2);
+    let (output, accepted_windows) =
+        complete_result_append_transaction(&fixture, result_append_transaction_plan(2));
+    assert_eq!(accepted_windows, 2);
+
+    assert_eq!(output.old_epoch, 11);
+    assert_eq!(output.new_epoch, 12);
+    assert_eq!(output.read_transcript.read_path_count, 4);
+    assert_eq!(output.read_transcript.ordered_leaf_labels.len(), 4);
+    assert_eq!(
+        output.read_transcript.ordered_leaf_labels[1],
+        output.read_transcript.ordered_leaf_labels[3]
+    );
+    assert_eq!(output.writeback.kind, PrivateOramIndexKindV2::Result);
+    assert_eq!(output.writeback.updated_buckets.len(), 12);
+    assert_eq!(output.ordered_encrypted_buckets.len(), 12);
+    assert_eq!(
+        output
+            .writeback
+            .updated_buckets
+            .iter()
+            .filter(|bucket| bucket.bucket_id == 0)
+            .count(),
+        4
+    );
+    assert_eq!(
+        output.result_record.payload_fetch_token,
+        BASE64URL_NOPAD.encode(&[7; 32])
+    );
+    assert_eq!(
+        output.result_record.point_token,
+        BASE64URL_NOPAD.encode(&[6; 32])
+    );
+    assert_eq!(
+        output.recovery_marker.phase,
+        PrivateOramAppendRecoveryPhaseV2::PreparedCommit
+    );
+    assert_eq!(
+        output.recovery_marker.version,
+        PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V3_VERSION
+    );
+    assert_eq!(
+        output.recovery_marker.index_kind,
+        PrivateOramIndexKindV2::Result
+    );
+    assert_eq!(output.recovery_marker.index_name, "private-payload");
+    assert_eq!(output.recovery_marker.attempt_digest.len(), 43);
+    assert_eq!(
+        output
+            .recovery_marker
+            .prepared_commit_digest
+            .as_ref()
+            .map(String::len),
+        Some(43)
+    );
+    assert!(
+        output
+            .next_client_state
+            .positions
+            .iter()
+            .any(|entry| entry.payload_fetch_token == BASE64URL_NOPAD.encode(&[7; 32]))
+    );
+
+    let mut next_commitments = fixture
+        .buckets
+        .iter()
+        .map(|bucket| bucket.bucket_commitment.clone())
+        .collect::<Vec<_>>();
+    for bucket in &output.final_encrypted_buckets {
+        next_commitments[usize::try_from(bucket.bucket_id).unwrap()] =
+            bucket.bucket_commitment.clone();
+    }
+    assert_eq!(
+        private_result_oram_merkle_root_for_commitments(&next_commitments).unwrap(),
+        output.new_root_hash
+    );
+
+    let base_context = PrivateResultOramBucketAeadBaseContext {
+        collection_id: &fixture.manifest.collection_id,
+        key_id: "tenant-a/result-rk",
+        rk_id: "tenant-a/result-rk",
+        rk_epoch: 7,
+    };
+    let config = PrivateResultOramClientConfig {
+        tree_height: 2,
+        bucket_size: 2,
+        block_size_bytes: 512,
+    };
+    let mut stored_tokens = output
+        .final_encrypted_buckets
+        .iter()
+        .flat_map(|bucket| {
+            open_private_result_oram_plaintext_bucket(&fixture.keys, base_context, bucket, config)
+                .unwrap()
+                .blocks
+                .into_iter()
+                .flatten()
+                .map(|block| block.payload_fetch_token)
+        })
+        .collect::<Vec<_>>();
+    stored_tokens.extend(
+        output
+            .next_client_state
+            .stash
+            .iter()
+            .map(|block| block.payload_fetch_token),
+    );
+    assert_eq!(
+        stored_tokens
+            .iter()
+            .filter(|token| **token == [4; 32])
+            .count(),
+        1
+    );
+    assert_eq!(
+        stored_tokens
+            .iter()
+            .filter(|token| **token == [7; 32])
+            .count(),
+        1
+    );
+    validate_private_oram_append_result_transaction_output_v2(&fixture.manifest, &output).unwrap();
+}
+
+#[test]
+fn result_prepared_output_validator_rejects_body_frame_and_transcript_tampering() {
+    let fixture = result_append_transaction_fixture_with_path_batch_size(2);
+    let (output, _) =
+        complete_result_append_transaction(&fixture, result_append_transaction_plan(2));
+
+    let mut tampered_body = output.clone();
+    let replacement = if tampered_body.ordered_encrypted_buckets[0]
+        .ciphertext
+        .starts_with('A')
+    {
+        "B"
+    } else {
+        "A"
+    };
+    tampered_body.ordered_encrypted_buckets[0]
+        .ciphertext
+        .replace_range(..1, replacement);
+    assert!(
+        validate_private_oram_append_result_transaction_output_v2(
+            &fixture.manifest,
+            &tampered_body,
+        )
+        .is_err()
+    );
+
+    let mut missing_final_bucket = output.clone();
+    missing_final_bucket.final_encrypted_buckets.pop();
+    assert_eq!(
+        validate_private_oram_append_result_transaction_output_v2(
+            &fixture.manifest,
+            &missing_final_bucket,
+        ),
+        Err(PrivateOramAppendTransactionError::InvalidInput(
+            "final_encrypted_buckets",
+        ))
+    );
+
+    let mut tampered_frame = output.clone();
+    tampered_frame.ordered_encrypted_buckets.swap(1, 2);
+    tampered_frame.writeback.updated_buckets.swap(1, 2);
+    assert_eq!(
+        validate_private_oram_append_result_transaction_output_v2(
+            &fixture.manifest,
+            &tampered_frame,
+        ),
+        Err(PrivateOramAppendTransactionError::InvalidInput(
+            "ordered_bucket_frames",
+        ))
+    );
+
+    let mut tampered_proof = output.clone();
+    tampered_proof.merkle_patch_proof.leaves[0].old_commitment = digest(99);
+    assert!(
+        validate_private_oram_append_result_transaction_output_v2(
+            &fixture.manifest,
+            &tampered_proof,
+        )
+        .is_err()
+    );
+
+    let mut tampered_root = output.clone();
+    tampered_root.new_root_hash = digest(99);
+    assert_eq!(
+        validate_private_oram_append_result_transaction_output_v2(
+            &fixture.manifest,
+            &tampered_root,
+        ),
+        Err(PrivateOramAppendTransactionError::InvalidInput(
+            "merkle_patch_proof",
+        ))
+    );
+
+    let mut tampered_transcript = output;
+    tampered_transcript
+        .read_transcript
+        .ordered_leaf_labels
+        .swap(0, 1);
+    assert_eq!(
+        validate_private_oram_append_result_transaction_output_v2(
+            &fixture.manifest,
+            &tampered_transcript,
+        ),
+        Err(PrivateOramAppendTransactionError::InvalidInput(
+            "read_transcript",
+        ))
+    );
+}
+
+#[test]
+fn result_append_transaction_rejects_reordered_read_sequence_and_rolls_back() {
+    let fixture = result_append_transaction_fixture_with_path_batch_size(2);
+    let mut transaction = PrivateOramAppendResultTransactionV2::begin(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        result_append_transaction_point(),
+        result_append_transaction_plan(2),
+    )
+    .unwrap();
+    let before = transaction.progress();
+    let marker = transaction.prepare_next_read_window().unwrap().unwrap();
+    let request = transaction.next_read_window(&marker).unwrap();
+    let mut batch = encrypted_result_window_batch(&request.window, &fixture.buckets);
+    batch.buckets.swap(1, 2);
+
+    assert_eq!(
+        transaction.accept_verified_window(request.window.sequence, &fixture.keys, &batch),
+        Err(PrivateOramAppendTransactionError::ResponseBucketSequenceMismatch)
+    );
+    assert!(transaction.is_poisoned());
+    assert_eq!(transaction.progress(), before);
+    let recovery = transaction.recovery_marker().unwrap();
+    assert_eq!(recovery.accepted_window_count, 0);
+    assert_eq!(recovery.observed_read_path_count, 2);
+    assert_eq!(recovery.phase, PrivateOramAppendRecoveryPhaseV2::Poisoned);
+}
+
+#[test]
+fn result_append_transaction_rolls_back_after_a_later_path_operation_fails() {
+    let mut manifest = manifest();
+    let PrivateOramImmutableIndexParamsV2::Result { oram, .. } = &mut manifest.indexes[1].params
+    else {
+        panic!("fixture result manifest is missing");
+    };
+    oram.bucket_size = 2;
+    oram.tree_height = 1;
+    oram.path_batch_size = 2;
+    manifest.indexes[1].capacity.bucket_count = 3;
+    manifest.indexes[1].capacity.reserved_physical_slots = 2;
+    manifest.indexes[1].capacity.fixed_append_write_bucket_count = 8;
+
+    let mut checkpoint = checkpoint(&manifest);
+    checkpoint.points.push(PrivateOramAppendPointRecordV2 {
+        point_token: BASE64URL_NOPAD.encode(&[10; 32]),
+        visible_point_id: None,
+        payload_fetch_token: Some(BASE64URL_NOPAD.encode(&[5; 32])),
+    });
+    let PrivateOramAppendClientIndexCheckpointV2::Hnsw {
+        state: hnsw_state,
+        records: hnsw_records,
+        ..
+    } = &mut checkpoint.indexes[0]
+    else {
+        panic!("fixture HNSW checkpoint is missing");
+    };
+    hnsw_state
+        .positions
+        .push(PrivateHnswPositionMapSnapshotEntry {
+            node_id: BASE64URL_NOPAD.encode(&[9; 32]),
+            leaf_label: encode_private_hnsw_oram_leaf_label(2, 2).unwrap(),
+        });
+    hnsw_records.push(PrivateOramAppendHnswRecordV2 {
+        node_id: BASE64URL_NOPAD.encode(&[9; 32]),
+        point_token: BASE64URL_NOPAD.encode(&[10; 32]),
+        level_mask: 1,
+        generation: 0,
+    });
+    let PrivateOramAppendClientIndexCheckpointV2::Result {
+        root_hash: checkpoint_root,
+        state: result_state,
+        records: result_records,
+        ..
+    } = &mut checkpoint.indexes[1]
+    else {
+        panic!("fixture result checkpoint is missing");
+    };
+    result_state.tree_height = 1;
+    result_state.positions[0].leaf_label = encode_private_result_oram_leaf_label(1, 1).unwrap();
+    result_state
+        .positions
+        .push(PrivateResultOramPositionMapSnapshotEntry {
+            payload_fetch_token: BASE64URL_NOPAD.encode(&[5; 32]),
+            leaf_label: encode_private_result_oram_leaf_label(1, 1).unwrap(),
+        });
+    result_records.push(PrivateOramAppendResultRecordV2 {
+        payload_fetch_token: BASE64URL_NOPAD.encode(&[5; 32]),
+        point_token: BASE64URL_NOPAD.encode(&[10; 32]),
+        generation: 0,
+    });
+
+    let config = PrivateResultOramClientConfig {
+        tree_height: 1,
+        bucket_size: 2,
+        block_size_bytes: 512,
+    };
+    let mut plaintext_buckets = (0..3)
+        .map(|bucket_id| empty_private_result_oram_plaintext_bucket(bucket_id, config).unwrap())
+        .collect::<Vec<_>>();
+    plaintext_buckets[2].blocks = vec![
+        Some(PrivateResultOramPayloadBlockPlaintext {
+            version: PRIVATE_RESULT_ORAM_PAYLOAD_BLOCK_VERSION,
+            payload_fetch_token: [4; 32],
+            point_token: [3; 32],
+            payload: b"first existing payload".to_vec(),
+            deleted: false,
+            generation: 0,
+        }),
+        Some(PrivateResultOramPayloadBlockPlaintext {
+            version: PRIVATE_RESULT_ORAM_PAYLOAD_BLOCK_VERSION,
+            payload_fetch_token: [5; 32],
+            point_token: [10; 32],
+            payload: b"second existing payload".to_vec(),
+            deleted: false,
+            generation: 0,
+        }),
+    ];
+    plaintext_buckets[1].blocks[0] = Some(PrivateResultOramPayloadBlockPlaintext {
+        version: PRIVATE_RESULT_ORAM_PAYLOAD_BLOCK_VERSION,
+        payload_fetch_token: [8; 32],
+        point_token: [6; 32],
+        payload: b"conflicting authenticated payload".to_vec(),
+        deleted: false,
+        generation: 0,
+    });
+    let resource_key = SecretKey::from_bytes([33; 32]);
+    let keys = PrivateResultOramClientKeys::derive_from_resource_key_with_context(
+        &resource_key,
+        &manifest.collection_id,
+        "tenant-a/result-rk",
+        7,
+    )
+    .unwrap();
+    let base_context = PrivateResultOramBucketAeadBaseContext {
+        collection_id: &manifest.collection_id,
+        key_id: "tenant-a/result-rk",
+        rk_id: "tenant-a/result-rk",
+        rk_epoch: 7,
+    };
+    let buckets = plaintext_buckets
+        .iter()
+        .map(|bucket| {
+            seal_private_result_oram_plaintext_bucket(&keys, base_context, 11, bucket, config)
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let commitments = buckets
+        .iter()
+        .map(|bucket| bucket.bucket_commitment.clone())
+        .collect::<Vec<_>>();
+    let root_hash = private_result_oram_merkle_root_for_commitments(&commitments).unwrap();
+    *checkpoint_root = root_hash.clone();
+    let mut state = state(&manifest, digest(30));
+    for index in &mut state.indexes {
+        index.logical_count = 2;
+        index.dummy_count = 2;
+    }
+    state.indexes[1].root_hash = root_hash;
+
+    let point = PrivateOramAppendResultPointV2 {
+        payload_fetch_token: [7; 32],
+        point_token: [6; 32],
+        payload: b"new private payload".to_vec(),
+        initial_leaf: 1,
+    };
+    let plan = PrivateOramAppendResultTransactionPlanV2 {
+        index_name: "private-payload".to_string(),
+        mutation_id: digest(20),
+        writer_lease_digest: digest(21),
+        writer_fence: 3,
+        paths_per_window: 2,
+        padding_leaves: vec![0, 1, 0],
+    };
+    let mut transaction =
+        PrivateOramAppendResultTransactionV2::begin(&manifest, &state, &checkpoint, point, plan)
+            .unwrap();
+    let before = transaction.progress();
+    let before_client_state = transaction.working_client_state_digest().unwrap();
+    let before_artifacts = transaction.working_artifact_digest().unwrap();
+    let marker = transaction.prepare_next_read_window().unwrap().unwrap();
+    let request = transaction.next_read_window(&marker).unwrap();
+    let bucket_ids = request
+        .window
+        .paths
+        .iter()
+        .map(|leaf_label| decode_private_result_oram_leaf_label(leaf_label, 1).unwrap())
+        .flat_map(|leaf| private_result_oram_bucket_ids_for_leaf(leaf, 1).unwrap())
+        .collect::<Vec<_>>();
+    let proof = result_merkle_proof(11, &commitments, &bucket_ids);
+    let batch = PrivateResultOramEncryptedBucketBatch {
+        index_epoch: 11,
+        root_hash: proof.root_hash.clone(),
+        bucket_count: 3,
+        proof_value: serde_json::to_string(&proof).unwrap(),
+        buckets: bucket_ids
+            .iter()
+            .map(|bucket_id| buckets[usize::try_from(*bucket_id).unwrap()].clone())
+            .collect(),
+    };
+
+    assert_eq!(
+        transaction.accept_verified_window(request.window.sequence, &keys, &batch),
+        Err(PrivateOramAppendTransactionError::Result(
+            PrivateResultOramError::DuplicatePointToken
+        ))
+    );
+    assert!(transaction.is_poisoned());
+    assert_eq!(transaction.progress(), before);
+    assert_eq!(
+        transaction.working_client_state_digest().unwrap(),
+        before_client_state
+    );
+    assert_eq!(
+        transaction.working_artifact_digest().unwrap(),
+        before_artifacts
+    );
+}
+
+#[test]
+fn result_append_recovery_marker_binds_plan_point_and_randomized_artifact() {
+    let fixture = result_append_transaction_fixture_with_path_batch_size(1);
+    let point = result_append_transaction_point();
+    let plan = result_append_transaction_plan(1);
+    let manifest_digest = private_oram_immutable_manifest_v2_digest(&fixture.manifest).unwrap();
+    let old_state_digest = private_oram_signed_state_v2_digest(&fixture.state).unwrap();
+    let expected_attempt =
+        private_oram_append_result_attempt_v3_digest(PrivateOramAppendResultAttemptDigestInputV3 {
+            manifest_digest: &manifest_digest,
+            old_state_digest: &old_state_digest,
+            checkpoint: &fixture.checkpoint,
+            point: &point,
+            plan: &plan,
+        })
+        .unwrap();
+    let mut transaction = PrivateOramAppendResultTransactionV2::begin(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        point,
+        plan,
+    )
+    .unwrap();
+    let marker = transaction.prepare_next_read_window().unwrap().unwrap();
+    assert_eq!(marker.attempt_digest, expected_attempt);
+
+    let mut changed_plan = result_append_transaction_plan(1);
+    changed_plan.padding_leaves[2] = 0;
+    let mut changed = PrivateOramAppendResultTransactionV2::begin(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        result_append_transaction_point(),
+        changed_plan,
+    )
+    .unwrap();
+    let changed_marker = changed.prepare_next_read_window().unwrap().unwrap();
+    assert_ne!(marker.attempt_digest, changed_marker.attempt_digest);
+    assert_eq!(
+        changed.next_read_window(&marker),
+        Err(PrivateOramAppendTransactionError::RecoveryMarkerMismatch)
+    );
+
+    let (first, _) =
+        complete_result_append_transaction(&fixture, result_append_transaction_plan(1));
+    let (second, _) =
+        complete_result_append_transaction(&fixture, result_append_transaction_plan(1));
+    assert_eq!(
+        first.recovery_marker.attempt_digest,
+        second.recovery_marker.attempt_digest
+    );
+    assert_ne!(first.new_root_hash, second.new_root_hash);
+    assert_ne!(
+        first.recovery_marker.prepared_commit_digest,
+        second.recovery_marker.prepared_commit_digest
+    );
+    let writeback_digest =
+        private_oram_append_writeback_v1_digest(PrivateOramAppendWritebackDigestInput {
+            collection_id: &fixture.manifest.collection_id,
+            manifest_digest: &manifest_digest,
+            kind: first.writeback.kind,
+            index_name: &first.writeback.index_name,
+            old_epoch: first.old_epoch,
+            new_epoch: first.new_epoch,
+            old_root_hash: &first.old_root_hash,
+            new_root_hash: &first.new_root_hash,
+            read_path_count: first.writeback.read_path_count,
+            read_transcript_digest: &first.writeback.read_transcript_digest,
+            updated_buckets: &first.writeback.updated_buckets,
+        })
+        .unwrap();
+    let expected_prepared = private_oram_append_result_prepared_commit_v3_digest(
+        PrivateOramAppendResultPreparedCommitDigestInputV3 {
+            attempt_digest: &first.recovery_marker.attempt_digest,
+            result_record: &first.result_record,
+            old_epoch: first.old_epoch,
+            new_epoch: first.new_epoch,
+            old_root_hash: &first.old_root_hash,
+            new_root_hash: &first.new_root_hash,
+            read_transcript_digest: &first.read_transcript.transcript_digest,
+            writeback_digest: &writeback_digest,
+            next_client_state: &first.next_client_state,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        first.recovery_marker.prepared_commit_digest.as_deref(),
+        Some(expected_prepared.as_str())
+    );
+}
+
+#[test]
+fn result_append_transaction_rejects_duplicates_and_oversized_payload_before_read() {
+    let fixture = result_append_transaction_fixture_with_path_batch_size(1);
+    let mut duplicate = result_append_transaction_point();
+    duplicate.payload_fetch_token = [4; 32];
+    assert_eq!(
+        PrivateOramAppendResultTransactionV2::begin(
+            &fixture.manifest,
+            &fixture.state,
+            &fixture.checkpoint,
+            duplicate,
+            result_append_transaction_plan(1),
+        )
+        .unwrap_err(),
+        PrivateOramAppendTransactionError::Client(
+            PrivateOramAppendClientError::DuplicateCheckpointRecord,
+        )
+    );
+
+    let mut oversized = result_append_transaction_point();
+    oversized.payload = vec![0; 512];
+    assert_eq!(
+        PrivateOramAppendResultTransactionV2::begin(
+            &fixture.manifest,
+            &fixture.state,
+            &fixture.checkpoint,
+            oversized,
+            result_append_transaction_plan(1),
+        )
+        .unwrap_err(),
+        PrivateOramAppendTransactionError::Result(PrivateResultOramError::PayloadBlockOversized)
+    );
+}
+
+#[test]
+fn result_append_transaction_rejects_oversized_read_body_before_decode() {
+    let fixture = result_append_transaction_fixture_with_path_batch_size(1);
+    let mut transaction = PrivateOramAppendResultTransactionV2::begin(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        result_append_transaction_point(),
+        result_append_transaction_plan(1),
+    )
+    .unwrap();
+    let marker = transaction.prepare_next_read_window().unwrap().unwrap();
+    let request = transaction.next_read_window(&marker).unwrap();
+    let mut batch = encrypted_result_window_batch(&request.window, &fixture.buckets);
+    let oversized_encoded_len = batch.buckets[0].ciphertext.len() + 1;
+    batch.buckets[0].ciphertext = "A".repeat(oversized_encoded_len);
+
+    assert_eq!(
+        transaction.accept_verified_window(request.window.sequence, &fixture.keys, &batch),
+        Err(PrivateOramAppendTransactionError::Result(
+            PrivateResultOramError::BucketOversized,
+        ))
+    );
+    assert!(transaction.is_poisoned());
+}
+
+#[test]
+fn result_append_transaction_accepts_authenticated_buckets_from_an_older_epoch() {
+    let mut fixture = result_append_transaction_fixture_with_path_batch_size(1);
+    let PrivateOramAppendClientIndexCheckpointV2::Result { index_epoch, .. } =
+        &mut fixture.checkpoint.indexes[1]
+    else {
+        panic!("fixture result checkpoint is missing");
+    };
+    *index_epoch = 12;
+    fixture.state.indexes[1].index_epoch = 12;
+
+    let mut transaction = PrivateOramAppendResultTransactionV2::begin(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        result_append_transaction_point(),
+        result_append_transaction_plan(1),
+    )
+    .unwrap();
+    let marker = transaction.prepare_next_read_window().unwrap().unwrap();
+    let request = transaction.next_read_window(&marker).unwrap();
+    let mut batch = encrypted_result_window_batch(&request.window, &fixture.buckets);
+    batch.index_epoch = 12;
+    let mut proof: PrivateResultOramMerkleProof = serde_json::from_str(&batch.proof_value).unwrap();
+    proof.index_epoch = 12;
+    batch.proof_value = serde_json::to_string(&proof).unwrap();
+
+    assert!(batch.buckets.iter().all(|bucket| bucket.index_epoch == 11));
+    transaction
+        .accept_verified_window(request.window.sequence, &fixture.keys, &batch)
+        .unwrap();
+    assert_eq!(transaction.progress().accepted_read_path_count, 1);
+}
+
+#[test]
+fn result_append_transaction_rejects_duplicate_paths_only_within_a_window() {
+    let fixture = result_append_transaction_fixture_with_path_batch_size(2);
+    let mut plan = result_append_transaction_plan(2);
+    plan.padding_leaves[0] = 3;
+    assert_eq!(
+        PrivateOramAppendResultTransactionV2::begin(
+            &fixture.manifest,
+            &fixture.state,
+            &fixture.checkpoint,
+            result_append_transaction_point(),
+            plan,
+        )
+        .unwrap_err(),
+        PrivateOramAppendTransactionError::InvalidInput("duplicate_window_path")
+    );
+
+    let (output, accepted_windows) =
+        complete_result_append_transaction(&fixture, result_append_transaction_plan(2));
+    assert_eq!(accepted_windows, 2);
+    assert_eq!(
+        output.read_transcript.ordered_leaf_labels[1],
+        output.read_transcript.ordered_leaf_labels[3]
+    );
+}
+
+#[test]
+fn result_append_transaction_preflights_a_later_window_before_any_read() {
+    let fixture = result_append_transaction_fixture_with_path_batch_size(2);
+    let mut plan = result_append_transaction_plan(2);
+    plan.padding_leaves[2] = 2;
+    assert_eq!(
+        PrivateOramAppendResultTransactionV2::begin(
+            &fixture.manifest,
+            &fixture.state,
+            &fixture.checkpoint,
+            result_append_transaction_point(),
+            plan,
+        )
+        .unwrap_err(),
+        PrivateOramAppendTransactionError::InvalidInput("duplicate_window_path",)
+    );
+}
+
+#[test]
 fn verified_hnsw_append_transaction_preserves_fixed_ordered_frames() {
     let fixture = hnsw_append_transaction_fixture_with_path_batch_size(2);
     let mut plan = hnsw_append_transaction_plan();
@@ -1501,9 +2637,10 @@ fn prepared_commit_marker_binds_randomized_ciphertext_artifact() {
             updated_buckets: &first.writeback.updated_buckets,
         })
         .unwrap();
-    let expected = private_oram_append_hnsw_prepared_commit_v2_digest(
-        PrivateOramAppendHnswPreparedCommitDigestInput {
+    let expected = private_oram_append_hnsw_prepared_commit_v3_digest(
+        PrivateOramAppendHnswPreparedCommitDigestInputV3 {
             attempt_digest: &first.recovery_marker.attempt_digest,
+            graph_delta: &first.graph_delta,
             old_epoch: first.old_epoch,
             new_epoch: first.new_epoch,
             old_root_hash: &first.old_root_hash,
@@ -1528,7 +2665,7 @@ fn hnsw_append_recovery_marker_binds_the_exact_attempt_plan() {
     let manifest_digest = private_oram_immutable_manifest_v2_digest(&fixture.manifest).unwrap();
     let old_state_digest = private_oram_signed_state_v2_digest(&fixture.state).unwrap();
     let expected_attempt =
-        private_oram_append_hnsw_attempt_v2_digest(PrivateOramAppendHnswAttemptDigestInput {
+        private_oram_append_hnsw_attempt_v3_digest(PrivateOramAppendHnswAttemptDigestInputV3 {
             manifest_digest: &manifest_digest,
             old_state_digest: &old_state_digest,
             checkpoint: &fixture.checkpoint,
@@ -1545,6 +2682,12 @@ fn hnsw_append_recovery_marker_binds_the_exact_attempt_plan() {
     )
     .unwrap();
     let first_marker = first.prepare_next_read_window().unwrap().unwrap();
+    assert_eq!(
+        first_marker.version,
+        PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V3_VERSION
+    );
+    assert_eq!(first_marker.index_kind, PrivateOramIndexKindV2::Hnsw);
+    assert_eq!(first_marker.index_name, "text");
     assert_eq!(first_marker.attempt_digest, expected_attempt);
 
     let mut changed_plan = hnsw_append_transaction_plan();
@@ -1563,6 +2706,61 @@ fn hnsw_append_recovery_marker_binds_the_exact_attempt_plan() {
     assert_eq!(
         changed.next_read_window(&first_marker),
         Err(PrivateOramAppendTransactionError::RecoveryMarkerMismatch)
+    );
+}
+
+#[test]
+fn hnsw_append_transaction_migrates_a_persisted_v2_window_marker_to_v3() {
+    let fixture = hnsw_append_transaction_fixture();
+    let point = hnsw_append_transaction_point();
+    let plan = hnsw_append_transaction_plan();
+    let manifest_digest = private_oram_immutable_manifest_v2_digest(&fixture.manifest).unwrap();
+    let old_state_digest = private_oram_signed_state_v2_digest(&fixture.state).unwrap();
+    let legacy_attempt =
+        private_oram_append_hnsw_attempt_v2_digest(PrivateOramAppendHnswAttemptDigestInput {
+            manifest_digest: &manifest_digest,
+            old_state_digest: &old_state_digest,
+            checkpoint: &fixture.checkpoint,
+            point: &point,
+            plan: &plan,
+        })
+        .unwrap();
+    let mut transaction = PrivateOramAppendHnswTransactionV2::begin(
+        &fixture.manifest,
+        &fixture.state,
+        &fixture.checkpoint,
+        point,
+        plan,
+    )
+    .unwrap();
+    let v3_marker = transaction.prepare_next_read_window().unwrap().unwrap();
+    let legacy_marker = PrivateOramAppendRecoveryMarkerV2 {
+        version: PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V2_VERSION,
+        collection_id: v3_marker.collection_id.clone(),
+        manifest_digest: v3_marker.manifest_digest.clone(),
+        mutation_id: v3_marker.mutation_id.clone(),
+        old_state_digest: v3_marker.old_state_digest.clone(),
+        attempt_digest: legacy_attempt,
+        writer_lease_digest: v3_marker.writer_lease_digest.clone(),
+        writer_fence: v3_marker.writer_fence,
+        requested_window_count: v3_marker.requested_window_count,
+        accepted_window_count: v3_marker.accepted_window_count,
+        observed_read_path_count: v3_marker.observed_read_path_count,
+        phase: v3_marker.phase,
+        prepared_commit_digest: None,
+    };
+    let mut wrong_marker = legacy_marker.clone();
+    wrong_marker.attempt_digest = digest(99);
+    assert_eq!(
+        transaction.next_read_window_v2(&wrong_marker),
+        Err(PrivateOramAppendTransactionError::RecoveryMarkerMismatch)
+    );
+
+    let request = transaction.next_read_window_v2(&legacy_marker).unwrap();
+    assert_eq!(request.recovery_marker, v3_marker);
+    assert_eq!(
+        request.recovery_marker.version,
+        PRIVATE_ORAM_APPEND_RECOVERY_MARKER_V3_VERSION
     );
 }
 
