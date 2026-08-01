@@ -1206,13 +1206,29 @@ Signed fields:
   호출해야 하고 host filesystem은 owner-only local Linux storage, durable file/directory
   fsync와 `RENAME_NOREPLACE`를 제공해야 한다. Private vector bytes는 항상 거부하며,
   D3-B3/D4 전까지 이 primitive는 dormant다.
-- 남음(D3-B3): Parent의 owner prepare/finalize digest를 실제 child journal의
-  signature/proof/durable state와 대조하고, point staging을 publish/abort한다.
-  Consensus가 exact old면 모든 prepared child와 point stage를 abort하고, exact new면
-  remote-before-local finalize를 재개한다. 완료/abort 뒤 child와 point-stage artifact,
-  parent journal을 순서대로 durable removal한 다음 consensus mutation lease를 마지막에
-  clear해 새 admission이 stale local artifact와 겹치지 않게 한다. Submit ambiguity의
-  제3 상태는 fail closed 한다.
+- 완료(D3-B3-A1): Parent descriptor에서 exact new consensus record를 다시 만들고 현재
+  collection record와 active lease slot을 함께 분류하는 validated reconciliation context를
+  추가했다. Generation/max-fence, immutable lease identity, renewal monotonicity, parent phase,
+  recorded committed renewal을 묶는다. Exact new + `ConsensusCommitted`만 finalize authority다.
+  Unrelated state, old+committed, new+preparing, missing/cleared/ABA slot은 fail closed 한다.
+- 유지 조건(D3-B3-A1): Exact old + `Preparing`은 현재 관찰값일 뿐 abort authority가
+  아니다. Submit timeout 뒤 지연된 Raft entry가 적용될 수 있으므로 결과 이름도
+  `ObservedOldNeedsAbortDecision`으로 고정했다.
+- 남음(D3-B3-A2): Consensus lease에 `AbortDecided` phase를 추가하고 exact old state와
+  동일 active generation에서 `Preparing -> AbortDecided`를 선형화한다. 그 CAS가 적용된
+  뒤에만 owner pending과 point stage를 abort할 수 있으며, 기존 mutation apply는
+  `AbortDecided` lease를 반드시 거부해야 한다.
+- 남음(D3-B3-B): Parent의 owner prepare/finalize digest를 실제 V2 child journal의
+  signature/proof/durable state에서만 생성되는 opaque token으로 교체한다. Legacy
+  HNSW/result pending journal은 digest domain, duplicate-bucket model과 signature contract가
+  V2 ordered append와 다르므로 직접 증거로 재사용하지 않는다. Signed ordered occurrence를
+  검증하고 last-occurrence canonical final image를 보존하는 V2 전용 Prepared/Finalized/
+  AbortedOld child record와 paired inspect RPC가 필요하다 (`ARCH-023`).
+- 남음(D3-B3-C): Exact new면 remote-before-local finalize와 point publish를 재개하고,
+  `AbortDecided`면 remote/local owner와 point stage를 exact-old로 abort한다. Mutable child와
+  point artifact를 durable cleanup한 뒤 parent를 immutable reconciliation witness로
+  compact하고, consensus mutation lease clear를 마지막 authority release로 수행한다.
+  Clear 응답 유실은 exact clear receipt read-back으로 판정하며 witness는 이후 GC한다.
 
 #### V2-D4: Dedicated API activation
 

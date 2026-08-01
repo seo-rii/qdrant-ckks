@@ -330,6 +330,30 @@ storage is assumed to be an owner-only local Linux filesystem that provides
 durable file and directory fsync plus `RENAME_NOREPLACE`; unsupported platforms
 or filesystems fail closed. Private vector bytes are always rejected.
 
+D3-B3-A1 adds an exact reconciliation classifier over the durable parent,
+current collection consensus record, and current active mutation lease slot.
+It validates generation/max-fence equality, immutable lease identity, monotonic
+renewal, parent phase, and any already-recorded committed renewal. Exact new
+state with the exact `ConsensusCommitted` lease is finalize authority. Mixed
+old/committed or new/preparing state, unrelated records, missing/cleared slots,
+ABA generations, and lease-renewal rollback fail closed.
+
+Exact old state with a `Preparing` lease is deliberately returned only as
+`ObservedOldNeedsAbortDecision`. It is not abort authority: after a submit
+timeout, a delayed Raft entry can still commit the mutation. D3-B3-A2 must add a
+consensus-linearized `Preparing -> AbortDecided` lease transition that is valid
+only while the collection remains exact old. Mutation apply must reject that
+phase, and owner or point-stage abort may begin only after it is observed.
+
+The legacy per-index HNSW/result pending journals also cannot directly supply
+V2 parent evidence. Their digest/signature domains use a unique bucket set,
+while V2 append signs ordered Path ORAM occurrences and allows repeated bucket
+IDs whose last occurrence forms the final image. D3-B3-B therefore needs V2
+owner records that retain the signed ordered contract, canonical final image,
+prepared journal digest, and finalized or exact-old-aborted proof. Parent
+prepare/finalize transitions will accept only opaque tokens produced by those
+validated records, not caller-selected digest strings.
+
 The parent descriptor and current-state digest formats have known-answer
 tests. Journal files live below a private non-symlink directory, use bounded
 owner-only files and same-file checks, and redact identity and digest values
@@ -341,8 +365,11 @@ candidate that was already exposed. The typed point-stage token proves the
 Prepared child point artifact, but parent owner prepare/finalize digests remain
 coordination evidence rather than proof of exact owner child journals. D3-B3
 must inspect those journals before consensus commit or finalization. Cleanup
-must durably remove child/point artifacts and the parent journal before clearing
-the consensus mutation lease last.
+must durably remove mutable child/point artifacts, compact the parent into an
+immutable reconciliation witness, and clear the consensus mutation lease as
+the final authority release. The witness makes a crash before or after lease
+clear distinguishable and can be garbage-collected after the exact clear
+receipt is observed.
 
 All v2 implementation slices remain deliberately dormant. D0 and D1 provide
 the immutable manifest, signed state, ordered read transcript, append mutation,
@@ -350,9 +377,10 @@ encrypted checkpoint, fixed-window Path ORAM transactions, and signed paired
 finalizer. D2 provides a dormant consensus state machine; D3-B1 provides the
 parent mutation journal; and D3-B2 provides the canonical invisible Prepared
 point stage. None adds a dispatcher proposal method or public route. Durable
-child-owner verification, publish/abort reconciliation, state-aware search and
-lifecycle admission, and public APIs remain D3-B3/D4 gates. Normal Qdrant upsert
-and update APIs remain rejected throughout.
+child-owner verification, `AbortDecided`, publish/abort reconciliation,
+reconciliation-witness cleanup, state-aware search and lifecycle admission, and
+public APIs remain D3-B3/D4 gates. Normal Qdrant upsert and update APIs remain
+rejected throughout.
 
 The append contract carries ciphertext hashes and commitments, not raw bucket
 bodies. When the route is activated, the transport layer must enforce a hard
@@ -649,12 +677,14 @@ and a Prepared-only point-stage artifact tied to the exact parent chain tip; the
 parent can advance only with its opaque durable token. It intentionally does
 not treat structurally valid owner-child digests as proof of owner preparation
 or finalization. D3-B3 must inspect those exact child journals and proofs,
-reconcile old/new consensus outcomes, publish or abort the point stage, durably
-remove child and parent artifacts, and clear the mutation lease last. D3/D4
-must also add V2-aware search writeback and consensus lifecycle reservations so
-search, external snapshots, delete/restore, transfer, and reshard cannot race
-mutation acquisition. Runtime authorization and owner-child evidence are not
-inferred by D2 or the point-stage primitive alone.
+finalize exact-new consensus outcomes, and first consensus-fence an observed old
+state with `AbortDecided` before any abort. It must then publish or abort the
+point stage, replace mutable artifacts with an immutable reconciliation witness,
+and clear the mutation lease last. D3/D4 must also add V2-aware search writeback
+and consensus lifecycle reservations so search, external snapshots,
+delete/restore, transfer, and reshard cannot race mutation acquisition. Runtime
+authorization and owner-child evidence are not inferred by D2 or the
+point-stage primitive alone.
 
 The external recovery primitive is
 `PrivateOramExternalRecoveryCheckpoint`, signed under
