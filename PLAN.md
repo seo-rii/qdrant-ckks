@@ -1151,14 +1151,27 @@ Signed fields:
   projection은 collection/index/root/mutation/client-state digest를 redaction한다.
 - 유지 조건: D2 operation은 consensus state-machine/WAL decode에만 존재하며 Dispatcher
   proposal method와 public route를 제공하지 않는다.
-- 활성화 전 남음: `Persistent::save()`의 post-rename parent-fsync 오류를 definitive
-  failure와 indeterminate failure로 분리하고 후자는 reload/fail-stop 해야 한다
-  (`DUR-003`). D3 owner/point journal이 signature/proof/durability evidence를 검증하고,
+- 완료(D3-A): `Persistent::save()`를 temp create/serialize/file-fsync의 definitive
+  failure와 atomic publish/parent-fsync의 indeterminate failure로 분리했다. Publish 뒤
+  오류는 target SHA-256이 candidate와 같을 때만 parent fsync를 세 번까지 재시도해
+  success로 복구한다. 그 외에는 memory rollback 없이 process-local poison을 세우고
+  fixed `ServiceError`로 consensus loop를 중단한다. Restart는 미적용 committed-entry
+  queue에서 old/new durable image 모두 exact replay한다 (`DUR-003`).
+- 활성화 전 남음: D3 owner/point journal이 signature/proof/durability evidence를 검증하고,
   D4 state-aware search writeback 및 consensus snapshot/lifecycle reservation이 모든
   race를 닫은 뒤에만 proposal admission을 추가한다 (`ARCH-022`).
 
 #### V2-D3: Durable prepare/finalize
 
+- 완료(D3-A): Raft persistent image는 destination parent의 named temp file에 JSON을
+  serialize하면서 digest를 계산하고 file fsync 뒤 atomic publish, parent-directory
+  fsync 순으로 저장한다. Publish 오류는 보수적으로 indeterminate이며, exposed target이
+  exact candidate일 때만 parent fsync retry로 확정한다. Exhausted/changed outcome은
+  poisoned consensus save gate가 restart 전까지 모든 후속 save를 거부한다.
+- 완료(D3-A): Transactional private ORAM state 변경은 definitive failure에서만 old
+  in-memory maps를 복원한다. Indeterminate outcome은 new memory image를 유지하고 entry를
+  applied 처리하지 않는다. Fault fixture는 old-disk/new-memory restart replay,
+  rename-ahead recovery, parent-fsync retry/exhaustion을 고정한다.
 - 기존 일반 point WAL은 append 즉시 update worker에 노출되고 explicit flush 전에는
   durability 경계가 부족하므로 재사용하지 않는다. Exact InsertOnly point operation을
   위한 private mutation staging WAL과 collection-level parent journal을 추가한다.

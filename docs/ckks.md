@@ -562,16 +562,33 @@ collection/data snapshots are a different boundary and require a D4 consensus
 lifecycle reservation; command-line snapshot restore already rejects a
 persisted active mutation.
 
-D2 is not an activation boundary. `Persistent::save()` currently uses an
-atomic rename followed by parent-directory fsync; an error after rename can be
-durability-indeterminate, so the existing in-memory rollback is proven only
-for definitive pre-rename failures. D3 must add classified save/fail-stop
-handling and durable owner/point journals. D3/D4 must also add V2-aware search
-writeback and consensus lifecycle reservations so search, external snapshots,
-delete/restore, transfer, and reshard cannot race mutation acquisition. State
-and mutation signatures, runtime authorization, ORAM proofs, staged point
-durability, and owner-finalization evidence are not inferred by D2 structural
-validation.
+D2 is not an activation boundary. D3-A replaces the opaque atomic-write result
+with an explicitly classified persistent-image sequence: create a named temp
+file in the destination parent, serialize while hashing, fsync the file,
+atomically publish it, and fsync the parent directory. Temp creation,
+serialization, and temp-file fsync failures are definitive and may roll back
+the in-memory transaction. Publish errors are conservatively indeterminate.
+If the visible target has the exact candidate SHA-256, parent fsync is retried
+up to three total attempts; only a successful parent fsync converts that path
+to success.
+
+An unresolved publish or parent-fsync outcome never rolls the in-memory state
+back. It sets a serde-skipped process-local poison flag, keeps the state dirty,
+and returns a fixed service error. The consensus loop stops before marking the
+entry applied, and its next-entry preflight also rejects every save while the
+flag is set. On restart, the earlier durable apply-progress queue replays the
+same committed entry: an old persistent image applies the transition, while a
+new image takes the exact no-op replay path. Fault tests cover definitive
+pre-publish rollback, old-disk/new-memory replay, rename-ahead recovery, and
+parent-fsync retry and exhaustion. A real power-loss/process crash matrix
+remains a D5 release gate.
+
+D3 must still add durable owner/point journals. D3/D4 must also add V2-aware
+search writeback and consensus lifecycle reservations so search, external
+snapshots, delete/restore, transfer, and reshard cannot race mutation
+acquisition. State and mutation signatures, runtime authorization, ORAM
+proofs, staged point durability, and owner-finalization evidence are not
+inferred by D2 structural validation.
 
 The external recovery primitive is
 `PrivateOramExternalRecoveryCheckpoint`, signed under
