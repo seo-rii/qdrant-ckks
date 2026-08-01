@@ -385,11 +385,33 @@ performed again. D4 must connect the recorder to the actual read handler and
 session registry before enabling admission; client SDK output cannot mint the
 server session capability.
 
-D3-B3-B2 still needs V2 owner records that retain the signed ordered contract,
-canonical final image, prepared journal digest, and finalized or
-exact-old-aborted proof. Parent prepare/finalize transitions will accept only
-opaque tokens produced by those validated records, not caller-selected digest
-strings. D3-B3-B3 then adds paired owner inspection and internal evidence RPCs.
+D3-B3-B2 now persists the Prepared portion of a paired V2 owner journal below
+the primary HNSW store's existing `temp` snapshot gate. One immutable descriptor
+binds the exact parent descriptor and lease-acquired record, owner peer,
+mutation/lease/fence identity, all manifest-order signed bucket occurrences and
+read transcripts, and the bucket-ID-sorted last-occurrence final references. A
+single canonical frame retains the encrypted final HNSW buckets and optional
+result buckets. Prepare does not modify canonical bucket, Merkle, epoch, or
+point files.
+
+Publication requires an owner-only local Linux filesystem, mounted procfs
+fd-relative access, durable file and directory fsync, `RENAME_NOREPLACE`, and
+cooperation by all journal writers with the root advisory lock. Candidate and
+installed directory identities remain pinned while the files, empty temp
+directory, active directory, and root directory are synced. The implementation
+then rereads every pinned file for an exact byte match and rechecks all active
+and root entries before issuing a crate-private durable token. Exact replay can
+return the same token; unknown entries, symlinks, hard links, unsafe modes, and
+same-inode content changes fail closed.
+
+Structural inspection deliberately returns only a self-consistent untrusted
+snapshot and cannot mint evidence. Token issuance remains crate-private and
+dormant until D3-B3-B3 rebinds it to typed parent state, the signed mutation,
+canonical old stores, manifests, and authenticated local or destination peer
+identity. D3-B3-B2 still needs domain-separated `Finalized` and `AbortedOld`
+terminal records plus restart recovery adapters. Parent prepare/finalize
+transitions will ultimately accept only opaque tokens produced by those
+validated records, not caller-selected digest strings.
 
 The parent descriptor and current-state digest formats have known-answer
 tests. Journal files live below a private non-symlink directory, use bounded
@@ -399,9 +421,11 @@ the current file atomically, then fsyncs the parent directory. A failure that
 leaves the old file is definitive; a changed or unknown target and exhausted
 post-publish parent fsync are indeterminate. An exact retry can reconcile a
 candidate that was already exposed. The typed point-stage token proves the
-Prepared child point artifact, but parent owner prepare/finalize digests remain
-coordination evidence rather than proof of exact owner child journals. D3-B3
-must inspect those journals before consensus commit or finalization. Cleanup
+Prepared child point artifact, and the paired owner journal can now prove a
+structurally and durably installed Prepared artifact to crate-private callers.
+Parent owner prepare/finalize digests remain coordination evidence until
+D3-B3-B3 performs typed parent and authenticated peer binding and the terminal
+owner records exist. Cleanup
 must durably remove mutable child/point artifacts, compact the parent into an
 immutable reconciliation witness, and clear the consensus mutation lease as
 the final authority release. The witness makes a crash before or after lease
@@ -418,11 +442,13 @@ encrypted checkpoint, fixed-window Path ORAM transactions, and signed paired
 finalizer. D2 provides a dormant consensus state machine; D3-B1 provides the
 parent mutation journal; and D3-B2 provides the canonical invisible Prepared
 point stage. D3-B3-A2 provides the dormant `AbortDecided` consensus barrier,
-and D3-B3-B1 provides the server-safe owner-prepare validation contract. None
-adds a dispatcher proposal method or public route. Durable child-owner journal
-installation and inspection, abort/finalize execution, reconciliation-witness
-cleanup, state-aware search and lifecycle admission, and public APIs remain
-D3-B3/D4 gates. Normal Qdrant upsert and update APIs remain rejected throughout.
+D3-B3-B1 provides the server-safe owner-prepare validation contract, and the
+D3-B3-B2 Prepared slice provides the paired durable owner journal without
+external evidence wiring. None adds a dispatcher proposal method or public
+route. Terminal child-owner records and typed inspection, abort/finalize
+execution, reconciliation-witness cleanup, state-aware search and lifecycle
+admission, and public APIs remain D3-B3/D4 gates. Normal Qdrant upsert and update
+APIs remain rejected throughout.
 
 The append contract carries ciphertext hashes and commitments, not raw bucket
 bodies. The owner-prepare wire package supplies those encrypted bodies, and the

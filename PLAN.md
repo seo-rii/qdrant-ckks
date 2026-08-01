@@ -1241,12 +1241,25 @@ Signed fields:
   append session에서만 산다. Restart로 capability가 사라지면 owner prepare 전 read를 다시
   수행한다. D4가 recorder를 실제 accepted read-window log에 연결하기 전에는 public
   admission을 열지 않는다. Transport hard body limit도 deserialization 전에 별도로 필요하다.
-- 남음(D3-B3-B2): Parent의 owner prepare/finalize digest를 실제 V2 child journal의
-  signature/proof/durable state에서만 생성되는 opaque token으로 교체한다. Legacy
-  HNSW/result pending journal은 digest domain, duplicate-bucket model과 signature contract가
-  V2 ordered append와 다르므로 직접 증거로 재사용하지 않는다. Signed ordered occurrence를
-  검증하고 last-occurrence canonical final image를 보존하는 V2 전용 Prepared/Finalized/
-  AbortedOld child record가 필요하다 (`ARCH-023`).
+- 완료(D3-B3-B2-Prepared): Primary HNSW store의 기존 `temp` gate 아래 paired V2 owner
+  journal을 추가했다. Immutable descriptor는 exact parent descriptor/lease record와 owner,
+  mutation/lease/fence, manifest-order signed occurrence 전체와 read transcript, bucket-ID-sorted
+  last-occurrence final refs를 묶고 encrypted HNSW 및 optional result final bucket frame을 함께
+  보존한다. Candidate file/temp/active/root fsync, Linux `RENAME_NOREPLACE`, root exclusive
+  advisory lock, pinned candidate/installed inode와 post-fsync exact byte/entry-set 검증 뒤에만
+  exact prepare/replay가 crate-private durable token을 발급한다. Structural inspection은
+  self-consistent snapshot만 반환하며 evidence token을 만들지 않는다. Unknown entry,
+  symlink/hardlink/bad mode, stale/tampered bytes는 fail closed 하고 canonical index 파일은
+  prepare에서 수정하지 않는다 (`ARCH-023`).
+- 유지 조건(D3-B3-B2-Prepared): 이 primitive는 owner-only local Linux filesystem,
+  mounted procfs fd-relative access, durable file/directory fsync와 모든 journal writer의
+  advisory-lock 준수를 요구한다. Token minting API는 D3-B3-B3의 typed parent state,
+  authenticated peer identity와 연결될 때까지 crate-private/dormant다.
+- 남음(D3-B3-B2-Terminal): 같은 journal에 domain-separated `Finalized | AbortedOld`
+  terminal record와 restart recovery adapter를 추가한다. Finalized는 prepared digest,
+  exact new epoch/root와 canonical final refs를 묶고, AbortedOld는 consensus-linearized
+  exact-old authority를 묶어야 한다. Legacy HNSW/result pending journal은 digest domain,
+  duplicate-bucket model과 signature contract가 달라 직접 증거로 재사용하지 않는다.
 - 남음(D3-B3-B3): HNSW/result owner record를 pair로 inspect하고 peer/parent requirement와
   exact terminal authority를 검증해 parent journal에 opaque evidence를 공급하는 internal
   RPC와 adapter가 필요하다.
