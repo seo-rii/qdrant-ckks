@@ -26,10 +26,11 @@ use tempfile::NamedTempFile;
 use thiserror::Error;
 
 use super::consensus_ops::{
-    PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION, PRIVATE_ORAM_MUTATION_RECEIPT_VERSION,
-    PrivateOramConsensusCollectionIndexStateV2, PrivateOramConsensusCollectionStateV2,
-    PrivateOramConsensusEpoch, PrivateOramConsensusTransitionV2, PrivateOramIndexKind,
-    PrivateOramMutationLease, PrivateOramMutationLeasePhase, PrivateOramMutationReceiptV2,
+    PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION, PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION,
+    PRIVATE_ORAM_MUTATION_RECEIPT_VERSION, PrivateOramConsensusCollectionIndexStateV2,
+    PrivateOramConsensusCollectionStateV2, PrivateOramConsensusEpoch,
+    PrivateOramConsensusTransitionV2, PrivateOramIndexKind, PrivateOramMutationLease,
+    PrivateOramMutationLeasePhase, PrivateOramMutationLeaseSlotV2, PrivateOramMutationReceiptV2,
     canonical_private_oram_consensus_state_record_digest,
     canonical_private_oram_mutation_receipt_digest,
     canonical_private_oram_mutation_transition_digest,
@@ -321,6 +322,48 @@ impl Debug for PrivateOramMutationJournalSnapshotV1 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateOramMutationReconcileDispositionV1 {
+    /// Observation only. Owner or point abort requires a later consensus abort decision.
+    ObservedOldNeedsAbortDecision,
+    ExactNew,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramValidatedMutationReconcileContextV1 {
+    snapshot: PrivateOramMutationJournalSnapshotV1,
+    active_lease: PrivateOramMutationLease,
+    disposition: PrivateOramMutationReconcileDispositionV1,
+}
+
+impl Debug for PrivateOramValidatedMutationReconcileContextV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramValidatedMutationReconcileContextV1")
+            .field("snapshot", &"[redacted]")
+            .field("active_lease", &self.active_lease)
+            .field("disposition", &self.disposition)
+            .finish()
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "D3-B3-A context is consumed by the dormant D3-B3 coordinator"
+)]
+impl PrivateOramValidatedMutationReconcileContextV1 {
+    pub(super) fn snapshot(&self) -> &PrivateOramMutationJournalSnapshotV1 {
+        &self.snapshot
+    }
+
+    pub(super) fn active_lease(&self) -> &PrivateOramMutationLease {
+        &self.active_lease
+    }
+
+    pub(super) const fn disposition(&self) -> PrivateOramMutationReconcileDispositionV1 {
+        self.disposition
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PrivateOramValidatedPointStageParentPhaseV1 {
     OwnersPrepared,
     PointStageDurable,
@@ -496,6 +539,55 @@ impl PrivateOramMutationJournal {
             return Ok(None);
         }
         self.load_locked().map(Some)
+    }
+
+    pub fn validated_reconcile_context(
+        &self,
+        consensus_state: &PrivateOramConsensusCollectionStateV2,
+        lease_slot: &PrivateOramMutationLeaseSlotV2,
+    ) -> Result<PrivateOramValidatedMutationReconcileContextV1, PrivateOramMutationJournalError>
+    {
+        let snapshot = self
+            .load()?
+            .ok_or(PrivateOramMutationJournalError::Corrupt)?;
+        let active_lease = validate_reconcile_lease_slot(&snapshot.descriptor, lease_slot)?;
+        let expected_new = expected_consensus_new_state(&snapshot.descriptor)?;
+        let disposition = if consensus_state == &snapshot.descriptor.expected_consensus_old_state {
+            if snapshot.state.phase.sequence()
+                > PrivateOramMutationJournalPhaseV1::PointStageDurable.sequence()
+                || !matches!(active_lease.phase, PrivateOramMutationLeasePhase::Preparing)
+            {
+                return Err(PrivateOramMutationJournalError::InvalidTransition);
+            }
+            PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision
+        } else if consensus_state == &expected_new {
+            if snapshot.state.phase.sequence()
+                < PrivateOramMutationJournalPhaseV1::PointStageDurable.sequence()
+            {
+                return Err(PrivateOramMutationJournalError::InvalidTransition);
+            }
+            let derived =
+                derive_consensus_evidence(&snapshot.descriptor, &active_lease, consensus_state)?;
+            if snapshot.state.consensus.as_ref().is_some_and(|recorded| {
+                recorded.committed_record_digest != derived.committed_record_digest
+                    || recorded.committed_state_sequence != derived.committed_state_sequence
+                    || recorded.committed_signed_state_digest
+                        != derived.committed_signed_state_digest
+                    || recorded.receipt_digest != derived.receipt_digest
+                    || recorded.transition_digest != derived.transition_digest
+                    || recorded.lease_renewal_revision > derived.lease_renewal_revision
+            }) {
+                return Err(PrivateOramMutationJournalError::InvalidTransition);
+            }
+            PrivateOramMutationReconcileDispositionV1::ExactNew
+        } else {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        };
+        Ok(PrivateOramValidatedMutationReconcileContextV1 {
+            snapshot,
+            active_lease,
+            disposition,
+        })
     }
 
     pub fn mark_owners_prepared(
@@ -1333,6 +1425,45 @@ pub(super) fn private_oram_point_id_digest(
     hasher.update(POINT_ID_DIGEST_DOMAIN);
     hash_string(&mut hasher, point_id)?;
     Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn validate_reconcile_lease_slot(
+    descriptor: &PrivateOramMutationJournalDescriptorV1,
+    slot: &PrivateOramMutationLeaseSlotV2,
+) -> Result<PrivateOramMutationLease, PrivateOramMutationJournalError> {
+    let Some(active) = slot.active.as_ref() else {
+        return Err(PrivateOramMutationJournalError::InvalidTransition);
+    };
+    let preparing = &descriptor.preparing_lease;
+    if slot.version != PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION
+        || slot.generation != slot.max_writer_fence
+        || slot.generation != active.generation
+        || slot.max_writer_fence != active.writer_fence
+        || slot
+            .last_clear
+            .as_ref()
+            .is_some_and(|clear| clear.generation >= active.generation)
+        || active.generation != preparing.generation
+        || active.collection_id != preparing.collection_id
+        || active.owner_peer_id != preparing.owner_peer_id
+        || active.mutation_id != preparing.mutation_id
+        || active.signed_mutation_digest != preparing.signed_mutation_digest
+        || active.transition_digest != preparing.transition_digest
+        || active.base_record_digest != preparing.base_record_digest
+        || active.base_state_sequence != preparing.base_state_sequence
+        || active.writer_lease_digest != preparing.writer_lease_digest
+        || active.writer_fence != preparing.writer_fence
+        || active.issued_at_unix != preparing.issued_at_unix
+        || active.expires_at_unix < preparing.expires_at_unix
+        || active.renewal_revision < preparing.renewal_revision
+        || (active.renewal_revision == preparing.renewal_revision
+            && active.expires_at_unix != preparing.expires_at_unix)
+        || (active.renewal_revision > preparing.renewal_revision
+            && active.expires_at_unix <= preparing.expires_at_unix)
+    {
+        return Err(PrivateOramMutationJournalError::InvalidTransition);
+    }
+    Ok(active.clone())
 }
 
 fn derive_consensus_evidence(
@@ -2357,7 +2488,7 @@ mod tests {
         };
         let base_record_digest =
             canonical_private_oram_consensus_state_record_digest(&old_consensus).unwrap();
-        let mutation_lease_generation = 5;
+        let mutation_lease_generation = 9;
         let receipt = PrivateOramMutationReceiptV2 {
             version: PRIVATE_ORAM_MUTATION_RECEIPT_VERSION,
             mutation_id: mutation_id.clone(),
@@ -2524,6 +2655,16 @@ mod tests {
         journal.mark_no_server_point_stage_durable(&parent).unwrap()
     }
 
+    fn active_lease_slot(lease: PrivateOramMutationLease) -> PrivateOramMutationLeaseSlotV2 {
+        PrivateOramMutationLeaseSlotV2 {
+            version: PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION,
+            generation: lease.generation,
+            active: Some(lease.clone()),
+            last_clear: None,
+            max_writer_fence: lease.writer_fence,
+        }
+    }
+
     #[test]
     fn parent_journal_persists_exact_seven_phase_progression() {
         let temp = tempfile::tempdir().unwrap();
@@ -2638,6 +2779,156 @@ mod tests {
     }
 
     #[test]
+    fn reconciliation_context_classifies_exact_old_and_exact_new_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(19, 20);
+        let journal = journal(&temp, &fixture);
+        let initial = begin(&journal, &fixture, &[11]);
+        journal
+            .mark_owners_prepared(owner_prepares(&initial))
+            .unwrap();
+        mark_no_server_point_stage(&journal);
+
+        let mut renewed_preparing = fixture.preparing_lease.clone();
+        renewed_preparing.expires_at_unix += 10;
+        renewed_preparing.renewal_revision += 1;
+        let old = journal
+            .validated_reconcile_context(
+                &fixture.old_consensus,
+                &active_lease_slot(renewed_preparing.clone()),
+            )
+            .unwrap();
+        assert_eq!(
+            old.disposition(),
+            PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision
+        );
+        assert_eq!(old.active_lease(), &renewed_preparing);
+        assert_eq!(
+            old.snapshot().state.phase,
+            PrivateOramMutationJournalPhaseV1::PointStageDurable
+        );
+        let rendered = format!("{old:?}");
+        assert!(!rendered.contains(&fixture.mutation_bundle.mutation.collection_id));
+        assert!(!rendered.contains(&fixture.mutation_bundle.mutation.mutation_id));
+
+        let new = journal
+            .validated_reconcile_context(
+                &fixture.new_consensus,
+                &active_lease_slot(fixture.committed_lease.clone()),
+            )
+            .unwrap();
+        assert_eq!(
+            new.disposition(),
+            PrivateOramMutationReconcileDispositionV1::ExactNew
+        );
+        assert_eq!(new.active_lease(), &fixture.committed_lease);
+        let mut renewed_committed = fixture.committed_lease.clone();
+        renewed_committed.expires_at_unix += 20;
+        renewed_committed.renewal_revision += 1;
+        journal
+            .mark_consensus_committed(&renewed_committed, &fixture.new_consensus)
+            .unwrap();
+        assert!(
+            journal
+                .validated_reconcile_context(
+                    &fixture.new_consensus,
+                    &active_lease_slot(fixture.committed_lease.clone()),
+                )
+                .is_err()
+        );
+        assert_eq!(
+            journal
+                .validated_reconcile_context(
+                    &fixture.new_consensus,
+                    &active_lease_slot(renewed_committed),
+                )
+                .unwrap()
+                .disposition(),
+            PrivateOramMutationReconcileDispositionV1::ExactNew
+        );
+    }
+
+    #[test]
+    fn reconciliation_context_rejects_mixed_ambiguous_and_aba_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(20, 30);
+        let journal = journal(&temp, &fixture);
+        let initial = begin(&journal, &fixture, &[11]);
+        journal
+            .mark_owners_prepared(owner_prepares(&initial))
+            .unwrap();
+        assert!(
+            journal
+                .validated_reconcile_context(
+                    &fixture.new_consensus,
+                    &active_lease_slot(fixture.committed_lease.clone()),
+                )
+                .is_err()
+        );
+        mark_no_server_point_stage(&journal);
+
+        assert!(
+            journal
+                .validated_reconcile_context(
+                    &fixture.old_consensus,
+                    &active_lease_slot(fixture.committed_lease.clone()),
+                )
+                .is_err()
+        );
+        assert!(
+            journal
+                .validated_reconcile_context(
+                    &fixture.new_consensus,
+                    &active_lease_slot(fixture.preparing_lease.clone()),
+                )
+                .is_err()
+        );
+
+        let mut ambiguous_state = fixture.old_consensus.clone();
+        ambiguous_state.state_sequence += 10;
+        assert!(
+            journal
+                .validated_reconcile_context(
+                    &ambiguous_state,
+                    &active_lease_slot(fixture.preparing_lease.clone()),
+                )
+                .is_err()
+        );
+
+        let mut aba_slot = active_lease_slot(fixture.preparing_lease.clone());
+        aba_slot.generation += 1;
+        aba_slot.max_writer_fence += 1;
+        assert!(
+            journal
+                .validated_reconcile_context(&fixture.old_consensus, &aba_slot)
+                .is_err()
+        );
+
+        let mut forged_renewal = fixture.preparing_lease.clone();
+        forged_renewal.expires_at_unix += 1;
+        assert!(
+            journal
+                .validated_reconcile_context(
+                    &fixture.old_consensus,
+                    &active_lease_slot(forged_renewal),
+                )
+                .is_err()
+        );
+
+        journal
+            .mark_consensus_committed(&fixture.committed_lease, &fixture.new_consensus)
+            .unwrap();
+        assert!(
+            journal
+                .validated_reconcile_context(
+                    &fixture.old_consensus,
+                    &active_lease_slot(fixture.preparing_lease.clone()),
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn begin_is_exactly_idempotent_and_rejects_another_mutation() {
         let temp = tempfile::tempdir().unwrap();
         let original = fixture(19, 20);
@@ -2667,12 +2958,14 @@ mod tests {
         let snapshot = begin(&journal, &fixture, &[11, 12]);
 
         assert_eq!(
-            snapshot.descriptor.descriptor_digest,
-            "geBQA0ccZmDEuE_jUN3x8UNDbq4xIsM9ftA7yotg8LQ"
-        );
-        assert_eq!(
-            snapshot.state.record_digest,
-            "cngBtA8lWsC7SOEYl2HGSTbxW3IuIJQwcH9KS-RXHD8"
+            (
+                snapshot.descriptor.descriptor_digest.as_str(),
+                snapshot.state.record_digest.as_str(),
+            ),
+            (
+                "9tpFN8mc5ErsCTDstFEb_mnGjN5_2RANiwIC5di0lgQ",
+                "gi78kODdPKibnEKFRZhQEMYtQ6eN0ctSpVdGarg3dqE",
+            )
         );
     }
 
