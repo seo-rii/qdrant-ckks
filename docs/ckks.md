@@ -265,8 +265,12 @@ identity, then ordered windows and ordered leaf labels. The visible point
 record digest orders domain, collection, manifest, mutation, point id, and
 staged InsertOnly SHA-256; the no-server-record digest omits the final two
 visible-record fields. Immediate reuse of the prior mutation id and a new
-state signed later than server validation time fail closed. Historical
-mutation-id receipts remain a D2 consensus responsibility.
+state signed later than server validation time fail closed. D2 consensus keeps
+the exact latest mutation receipt. An exact retry succeeds only while that
+resulting collection state is still current, including after its lease is
+cleared or while the next mutation is only preparing. Once a later mutation
+advances the state, an older retry is stale. Perpetual historical deduplication
+would require a separate receipt ledger and is not part of v2.
 
 In this contract, append-only means that one new logical point is added.
 Bounded backlink and neighbor-block rewrites required by HNSW insertion are
@@ -284,11 +288,12 @@ owner. A live or expired-but-unreconciled mutation lease fences search,
 external recovery, snapshots, transfer/resharding, and collection lifecycle
 changes.
 
-The first v2 implementation slice is deliberately dormant: it adds only the
-immutable manifest, signed-state, ordered read-transcript and append-mutation
-canonical encodings and fail-closed validators. Provider registration,
-consensus state, storage journals, client insertion planning, and public
-routes are activated in later independently tested slices. Normal Qdrant
+All v2 implementation slices remain deliberately dormant. D0 and D1 provide
+the immutable manifest, signed state, ordered read transcript, append mutation,
+encrypted checkpoint, fixed-window Path ORAM transactions, and signed paired
+finalizer. D2 provides a dormant consensus state machine, but no dispatcher
+proposal method or public route. Durable owner/point journals, state-aware
+search and lifecycle admission, and public APIs are D3/D4 gates. Normal Qdrant
 upsert and update APIs remain rejected throughout.
 
 The append contract carries ciphertext hashes and commitments, not raw bucket
@@ -514,6 +519,59 @@ instead of rerunning randomized finalization. The current self-check uses
 transcripts carried by the prepared client outputs; D4 admission must rebuild
 the authoritative transcript from the server session record. Storage,
 consensus, and public routes remain dormant.
+
+The dormant D2 consensus primitive stores one versioned collection record per
+enrolled stable collection identity. The record repeats the immutable manifest
+digest, layout generation/digest, state sequence, signed-state and encrypted
+client-state digests, and the canonical ordered HNSW/result index set with each
+epoch/root/writeback digest and logical/dummy occupancy. Its transition is
+explicitly `genesis` at sequence zero or contains the exact latest mutation
+receipt. The receipt binds old/new sequences and signed-state digests, point
+operation and writer-lease digests, writer fence, lease-slot generation, and a
+transition digest recomputed from the complete old record, new record core,
+and receipt core. Canonical consensus digest encodings are domain separated,
+fixed-width, strict about index order, and pinned by a known-answer test.
+
+Every enrolled collection also has a permanent mutation lease slot. The slot
+is never deleted and its generation and maximum writer fence increase together
+on each acquire. It contains either an active `preparing` or
+`consensus_committed` lease, or an exact typed clear tombstone:
+`aborted_before_consensus_commit` or
+`finalized_or_reconciled_after_consensus_commit`. Expiry does not authorize
+takeover. A delayed acquire against an earlier vacant generation fails, which
+closes the optional-lease `None -> lease -> None` ABA case. Preparing binds the
+exact base record and transition; apply derives the committed phase rather than
+accepting it from the caller.
+
+First apply validates the complete old/new collection transition and active
+preparing lease, then advances every configured epoch/root, the collection
+record, layout `index_state_digest`, and lease phase in one persistent save.
+Every index must advance epoch by one, change root and writeback digest, add one
+logical slot, consume one dummy slot, and preserve total capacity. Exact replay
+against the still-current new state performs no write and does not recreate or
+modify a cleared lease or a later preparing lease. A V2-enrolled collection
+rejects standalone v1 epoch/layout mutation and new v1 search-session leases,
+because those operations cannot update the collection record atomically.
+
+Raft snapshots include both collection records and lease slots. Legacy
+snapshots may omit both top-level maps and decode as non-enrolled; a V2 state
+without its exact slot, layout, or index epochs fails closed. Active preparing
+and committed slots, including expired ones, are valid Raft snapshot state and
+must round-trip. The slot owner must remain in the bound layout. External
+collection/data snapshots are a different boundary and require a D4 consensus
+lifecycle reservation; command-line snapshot restore already rejects a
+persisted active mutation.
+
+D2 is not an activation boundary. `Persistent::save()` currently uses an
+atomic rename followed by parent-directory fsync; an error after rename can be
+durability-indeterminate, so the existing in-memory rollback is proven only
+for definitive pre-rename failures. D3 must add classified save/fail-stop
+handling and durable owner/point journals. D3/D4 must also add V2-aware search
+writeback and consensus lifecycle reservations so search, external snapshots,
+delete/restore, transfer, and reshard cannot race mutation acquisition. State
+and mutation signatures, runtime authorization, ORAM proofs, staged point
+durability, and owner-finalization evidence are not inferred by D2 structural
+validation.
 
 The external recovery primitive is
 `PrivateOramExternalRecoveryCheckpoint`, signed under

@@ -1118,15 +1118,44 @@ Signed fields:
 
 #### V2-D2: Dormant collection-wide consensus primitive
 
-- Persistent consensus state에 signed-state digest/sequence, layout identity,
-  canonical index epoch/root set, occupancy/client-state digest와 exact last mutation
-  receipt를 하나의 record로 추가한다.
-- `ApplyPrivateOramMutation`은 collection state와 기존 HNSW/result consensus epoch를
-  한 번의 persistent save로 전진시킨다. Save 실패 시 관련 in-memory map 전체를
-  원복한다.
-- Mutation lease는 private search session, external recovery, transfer/reshard,
-  snapshot/lifecycle mutation과 상호 배타적이다. Lease expiry만으로 새 operation을
-  허용하지 않고 pending owner journal을 먼저 reconcile한다.
+- 완료: Persistent consensus state에 versioned collection record를 추가했다. Stable
+  collection identity, manifest/layout, state sequence와 signed/client-state digest,
+  canonical ordered HNSW/result epoch/root/writeback/occupancy set, tagged
+  `Genesis | Mutation(exact receipt)`를 함께 저장한다.
+- 완료: Receipt transition digest는 complete old record digest, receipt를 제외한 new
+  state core digest, transition digest를 제외한 receipt core에서 재계산한다. Domain과
+  field order는 known-answer regression으로 고정하고 nested V2 field는 required 및
+  unknown-field reject로 유지한다.
+- 완료: Optional lease map 대신 enrolled collection마다 삭제되지 않는 generation
+  slot을 둔다. Acquire마다 generation과 max writer fence를 함께 증가시키며,
+  `Preparing | ConsensusCommitted` active phase와 typed abort/finalize clear tombstone를
+  보존한다. Expiry만으로 takeover하지 않고 stale vacant generation acquire를 거부해
+  `None -> lease -> None` ABA를 막는다.
+- 완료: `ApplyPrivateOramMutation` first-apply는 exact preparing lease와 old/new state를
+  검증한 뒤 모든 HNSW/result epoch, collection state, layout index-state digest와
+  committed lease phase를 한 번의 `Persistent::save()`로 전진시킨다. 각 index는 epoch
+  +1, changed root/writeback, logical +1, dummy -1, fixed total capacity를 강제한다.
+- 완료: Exact current new-state replay는 save나 lease mutation 없이 성공한다. Clear
+  이후나 다음 mutation이 Preparing인 동안에도 latest-state replay가 유지되지만,
+  후속 commit이 receipt를 교체하면 이전 retry는 stale이다. Perpetual historical
+  receipt ledger는 v2 범위가 아니다.
+- 완료: Enrollment는 standalone v1 epoch/layout mutation과 새 v1 search-session lease를
+  막는다. Mutation acquire와 external recovery/session은 consensus apply 지점에서
+  양방향으로 충돌하고 transfer/reshard는 enrolled layout CAS에서 fail closed 한다.
+- 완료: Raft snapshot은 active preparing/committed slot을 차단하지 않고 그대로
+  포함한다. Legacy snapshot은 두 top-level map 부재를 non-enrolled로 decode하며, V2
+  state/slot/layout/epoch mismatch, rogue slot owner, active session/recovery overlap은
+  reject한다. Startup command-line snapshot restore는 persisted active mutation을
+  거부한다.
+- 완료: State/slot/receipt/operation/Persistent/SnapshotData Debug와 consensus WAL log
+  projection은 collection/index/root/mutation/client-state digest를 redaction한다.
+- 유지 조건: D2 operation은 consensus state-machine/WAL decode에만 존재하며 Dispatcher
+  proposal method와 public route를 제공하지 않는다.
+- 활성화 전 남음: `Persistent::save()`의 post-rename parent-fsync 오류를 definitive
+  failure와 indeterminate failure로 분리하고 후자는 reload/fail-stop 해야 한다
+  (`DUR-003`). D3 owner/point journal이 signature/proof/durability evidence를 검증하고,
+  D4 state-aware search writeback 및 consensus snapshot/lifecycle reservation이 모든
+  race를 닫은 뒤에만 proposal admission을 추가한다 (`ARCH-022`).
 
 #### V2-D3: Durable prepare/finalize
 
