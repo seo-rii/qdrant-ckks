@@ -1214,10 +1214,19 @@ Signed fields:
 - 유지 조건(D3-B3-A1): Exact old + `Preparing`은 현재 관찰값일 뿐 abort authority가
   아니다. Submit timeout 뒤 지연된 Raft entry가 적용될 수 있으므로 결과 이름도
   `ObservedOldNeedsAbortDecision`으로 고정했다.
-- 남음(D3-B3-A2): Consensus lease에 `AbortDecided` phase를 추가하고 exact old state와
-  동일 active generation에서 `Preparing -> AbortDecided`를 선형화한다. 그 CAS가 적용된
-  뒤에만 owner pending과 point stage를 abort할 수 있으며, 기존 mutation apply는
-  `AbortDecided` lease를 반드시 거부해야 한다.
+- 완료(D3-B3-A2): Consensus lease에 unit `AbortDecided` phase를 추가하고 기존 Raft
+  lease CAS 안에서 exact old state와 동일 active generation의
+  `Preparing -> AbortDecided`만 선형화한다. Lease identity/generation/max-fence/last-clear와
+  expiry/renewal revision은 decision 중 바꿀 수 없고, idempotent replay도 현재 state-slot
+  관계를 다시 검증한다. `Preparing -> clear`와 terminal phase escape는 거부하며,
+  `AbortDecided` 상태에서는 cleanup용 동일-phase renewal만 허용하고 mutation apply를
+  거부한다. Parent classifier는 이 조합만 `ExactOldAbortDecided` abort authority로 낸다.
+- 유지 조건(D3-B3-A2): `AbortDecided`는 Raft payload, persistent image와 snapshot에
+  나타나는 새 serde variant다. 모든 peer가 이 phase와 강화된 clear 규칙을 지원한다는
+  cluster capability gate 전에는 operation을 제안하지 않고, active/in-snapshot phase가
+  남아 있는 동안 downgrade를 금지한다 (`ARCH-024`). Proposal timeout 뒤 local getter만
+  보고 abort하지 않으며 같은 CAS의 Raft apply barrier와 한 read guard의 state-slot
+  snapshot을 거친다.
 - 남음(D3-B3-B): Parent의 owner prepare/finalize digest를 실제 V2 child journal의
   signature/proof/durable state에서만 생성되는 opaque token으로 교체한다. Legacy
   HNSW/result pending journal은 digest domain, duplicate-bucket model과 signature contract가
@@ -1228,7 +1237,10 @@ Signed fields:
   `AbortDecided`면 remote/local owner와 point stage를 exact-old로 abort한다. Mutable child와
   point artifact를 durable cleanup한 뒤 parent를 immutable reconciliation witness로
   compact하고, consensus mutation lease clear를 마지막 authority release로 수행한다.
-  Clear 응답 유실은 exact clear receipt read-back으로 판정하며 witness는 이후 GC한다.
+  Generic lease CAS의 caller-supplied reconciliation digest는 cleanup 증거가 아니므로
+  typed witness를 받은 internal coordinator만 clear를 제출한다. Clear 응답 유실은 Raft
+  barrier 뒤 한 guard에서 읽은 exact clear receipt로 판정하고, 다음 generation admission은
+  판정 완료까지 직렬화하며 witness는 이후 GC한다.
 
 #### V2-D4: Dedicated API activation
 

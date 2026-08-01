@@ -340,10 +340,23 @@ ABA generations, and lease-renewal rollback fail closed.
 
 Exact old state with a `Preparing` lease is deliberately returned only as
 `ObservedOldNeedsAbortDecision`. It is not abort authority: after a submit
-timeout, a delayed Raft entry can still commit the mutation. D3-B3-A2 must add a
+timeout, a delayed Raft entry can still commit the mutation. D3-B3-A2 adds a
 consensus-linearized `Preparing -> AbortDecided` lease transition that is valid
-only while the collection remains exact old. Mutation apply must reject that
-phase, and owner or point-stage abort may begin only after it is observed.
+only while the collection remains exact old. The decision preserves the exact
+lease identity, generation, max writer fence, last-clear receipt, expiry, and
+renewal revision. Its idempotent replay revalidates the current state-slot
+relationship. Direct `Preparing -> clear`, phase escape, and mutation apply
+after the decision fail closed; same-phase renewal remains available while
+durable abort cleanup runs. Only exact old plus this phase is returned as
+`ExactOldAbortDecided` abort authority.
+
+`AbortDecided` is a new named serde variant in Raft entries, persistent state,
+and snapshots. It must not be proposed until every peer advertises support for
+both the variant and the strengthened clear transition, and downgrade is not
+supported while the phase remains active or appears in retained snapshots.
+After proposal timeout, a local state getter is not an apply barrier: recovery
+must resubmit the exact CAS through Raft and inspect state plus slot under one
+read guard before using the classifier.
 
 The legacy per-index HNSW/result pending journals also cannot directly supply
 V2 parent evidence. Their digest/signature domains use a unique bucket set,
@@ -369,18 +382,22 @@ must durably remove mutable child/point artifacts, compact the parent into an
 immutable reconciliation witness, and clear the consensus mutation lease as
 the final authority release. The witness makes a crash before or after lease
 clear distinguishable and can be garbage-collected after the exact clear
-receipt is observed.
+receipt is observed. The generic lease CAS currently validates only the shape
+of its reconciliation digest; it is not cleanup proof and remains dormant.
+D3-B3-C must restrict clear submission to an internal coordinator holding the
+typed witness, then use a Raft barrier and paired state-slot readback for an
+ambiguous response before allowing the next generation.
 
 All v2 implementation slices remain deliberately dormant. D0 and D1 provide
 the immutable manifest, signed state, ordered read transcript, append mutation,
 encrypted checkpoint, fixed-window Path ORAM transactions, and signed paired
 finalizer. D2 provides a dormant consensus state machine; D3-B1 provides the
 parent mutation journal; and D3-B2 provides the canonical invisible Prepared
-point stage. None adds a dispatcher proposal method or public route. Durable
-child-owner verification, `AbortDecided`, publish/abort reconciliation,
-reconciliation-witness cleanup, state-aware search and lifecycle admission, and
-public APIs remain D3-B3/D4 gates. Normal Qdrant upsert and update APIs remain
-rejected throughout.
+point stage. D3-B3-A2 provides the dormant `AbortDecided` consensus barrier.
+None adds a dispatcher proposal method or public route. Durable child-owner
+verification, abort/finalize execution, reconciliation-witness cleanup,
+state-aware search and lifecycle admission, and public APIs remain D3-B3/D4
+gates. Normal Qdrant upsert and update APIs remain rejected throughout.
 
 The append contract carries ciphertext hashes and commitments, not raw bucket
 bodies. When the route is activated, the transport layer must enforce a hard
