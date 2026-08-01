@@ -40,22 +40,34 @@ const ACTIVE_TEMP_DIR: &str = "temp";
 const DESCRIPTOR_FILE: &str = "descriptor.bin";
 const FINAL_BUCKETS_FILE: &str = "final-buckets.bin";
 const STATE_FILE: &str = "state.bin";
+const TERMINAL_DIR: &str = "terminal";
+const TERMINAL_RECORD_FILE: &str = "record.bin";
 const CANDIDATE_PREFIX: &str = ".candidate-";
+const TERMINAL_CANDIDATE_PREFIX: &str = ".terminal-candidate-";
 const PREPARED_PHASE_TAG: u8 = 1;
+const FINALIZED_PHASE_TAG: u8 = 2;
+const ABORTED_OLD_PHASE_TAG: u8 = 3;
 const HNSW_KIND_TAG: u8 = 1;
 const RESULT_KIND_TAG: u8 = 2;
 const MAX_DESCRIPTOR_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_FINAL_BUCKET_FRAME_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_STATE_BYTES: u64 = 4 * 1024;
+const MAX_TERMINAL_RECORD_BYTES: u64 = 4 * 1024;
 const MAX_RESOURCE_ID_BYTES: usize = 256;
 const DIGEST_BYTES: usize = 32;
 const MAX_PAIRED_OWNER_INDEXES: usize = 2;
 
 const DESCRIPTOR_DOMAIN: &[u8] = b"qdrant-sec/private-oram-owner-journal-descriptor/v1";
 const STATE_DOMAIN: &[u8] = b"qdrant-sec/private-oram-owner-journal-state/v1";
+const FINALIZED_STATE_DOMAIN: &[u8] = b"qdrant-sec/private-oram-owner-finalized-state/v1";
+const ABORTED_OLD_STATE_DOMAIN: &[u8] = b"qdrant-sec/private-oram-owner-aborted-old-state/v1";
 const FINAL_BUCKET_FRAME_DOMAIN: &[u8] = b"qdrant-sec/private-oram-owner-final-bucket-frame/v1";
 const INDEX_PREPARED_EVIDENCE_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-owner-index-prepared-evidence/v1";
+const INDEX_FINALIZED_EVIDENCE_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-index-finalized-evidence/v1";
+const INDEX_ABORTED_OLD_EVIDENCE_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-index-aborted-old-evidence/v1";
 
 #[derive(Error, Clone, Copy, PartialEq, Eq)]
 pub enum PrivateOramOwnerJournalError {
@@ -65,6 +77,8 @@ pub enum PrivateOramOwnerJournalError {
     InvalidInput(&'static str),
     #[error("another private ORAM owner journal is active")]
     ConcurrentMutation,
+    #[error("private ORAM owner journal phase transition is invalid")]
+    InvalidTransition,
     #[error("private ORAM owner journal contains corrupt or inconsistent state")]
     Corrupt,
     #[error("private ORAM owner journal I/O failed before publication")]
@@ -79,6 +93,7 @@ impl Debug for PrivateOramOwnerJournalError {
             Self::Unsupported => f.write_str("Unsupported"),
             Self::InvalidInput(field) => f.debug_tuple("InvalidInput").field(field).finish(),
             Self::ConcurrentMutation => f.write_str("ConcurrentMutation"),
+            Self::InvalidTransition => f.write_str("InvalidTransition"),
             Self::Corrupt => f.write_str("Corrupt([redacted])"),
             Self::Io => f.write_str("Io([redacted])"),
             Self::Indeterminate => f.write_str("Indeterminate([redacted])"),
@@ -117,6 +132,64 @@ pub(crate) struct PrivateOramOwnerJournalPrepareContextV1<'a> {
     pub(crate) parent_lease_acquired_record_digest: &'a str,
     pub(crate) owner_peer_id: u64,
     pub(crate) requirements: &'a [PrivateOramOwnerJournalRequirementV1<'a>],
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PrivateOramOwnerJournalFinalizeContextV1<'a> {
+    expected_journal_descriptor_digest: &'a str,
+    parent_descriptor_digest: &'a str,
+    authenticated_owner_peer_id: u64,
+    consensus_authority_record_digest: &'a str,
+    reconciliation_authority_digest: &'a str,
+    canonical_index_states: &'a [PrivateOramOwnerJournalTerminalIndexStateV1],
+}
+
+impl Debug for PrivateOramOwnerJournalFinalizeContextV1<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerJournalFinalizeContextV1")
+            .field("expected_journal_descriptor_digest", &"[redacted]")
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field(
+                "authenticated_owner_peer_id",
+                &self.authenticated_owner_peer_id,
+            )
+            .field("consensus_authority_record_digest", &"[redacted]")
+            .field("reconciliation_authority_digest", &"[redacted]")
+            .field(
+                "canonical_index_state_count",
+                &self.canonical_index_states.len(),
+            )
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PrivateOramOwnerJournalAbortOldContextV1<'a> {
+    expected_journal_descriptor_digest: &'a str,
+    parent_descriptor_digest: &'a str,
+    authenticated_owner_peer_id: u64,
+    consensus_authority_record_digest: &'a str,
+    reconciliation_authority_digest: &'a str,
+    canonical_index_states: &'a [PrivateOramOwnerJournalTerminalIndexStateV1],
+}
+
+impl Debug for PrivateOramOwnerJournalAbortOldContextV1<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerJournalAbortOldContextV1")
+            .field("expected_journal_descriptor_digest", &"[redacted]")
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field(
+                "authenticated_owner_peer_id",
+                &self.authenticated_owner_peer_id,
+            )
+            .field("consensus_authority_record_digest", &"[redacted]")
+            .field("reconciliation_authority_digest", &"[redacted]")
+            .field(
+                "canonical_index_state_count",
+                &self.canonical_index_states.len(),
+            )
+            .finish()
+    }
 }
 
 impl Debug for PrivateOramOwnerJournalPrepareContextV1<'_> {
@@ -208,6 +281,8 @@ impl Debug for PrivateOramOwnerJournalDescriptorV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PrivateOramOwnerJournalPhaseV1 {
     Prepared,
+    Finalized,
+    AbortedOld,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -218,6 +293,62 @@ pub struct PrivateOramOwnerJournalStateV1 {
     pub previous_record_digest: Option<String>,
     pub phase: PrivateOramOwnerJournalPhaseV1,
     pub state_digest: String,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerJournalTerminalIndexStateV1 {
+    pub kind: PrivateOramIndexKindV2,
+    pub index_name: String,
+    pub canonical_state_digest: String,
+}
+
+impl Debug for PrivateOramOwnerJournalTerminalIndexStateV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerJournalTerminalIndexStateV1")
+            .field("kind", &self.kind)
+            .field("index_name", &"[redacted]")
+            .field("canonical_state_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerJournalTerminalRecordV1 {
+    pub version: u16,
+    pub sequence: u64,
+    pub descriptor_digest: String,
+    pub previous_record_digest: String,
+    pub phase: PrivateOramOwnerJournalPhaseV1,
+    pub parent_descriptor_digest: String,
+    pub authenticated_owner_peer_id: u64,
+    pub consensus_authority_record_digest: String,
+    pub reconciliation_authority_digest: String,
+    pub canonical_index_states: Vec<PrivateOramOwnerJournalTerminalIndexStateV1>,
+    pub record_digest: String,
+}
+
+impl Debug for PrivateOramOwnerJournalTerminalRecordV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerJournalTerminalRecordV1")
+            .field("version", &self.version)
+            .field("sequence", &self.sequence)
+            .field("descriptor_digest", &"[redacted]")
+            .field("previous_record_digest", &"[redacted]")
+            .field("phase", &self.phase)
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field(
+                "authenticated_owner_peer_id",
+                &self.authenticated_owner_peer_id,
+            )
+            .field("consensus_authority_record_digest", &"[redacted]")
+            .field("reconciliation_authority_digest", &"[redacted]")
+            .field(
+                "canonical_index_state_count",
+                &self.canonical_index_states.len(),
+            )
+            .field("record_digest", &"[redacted]")
+            .finish()
+    }
 }
 
 impl Debug for PrivateOramOwnerJournalStateV1 {
@@ -288,6 +419,7 @@ impl Debug for PrivateOramOwnerFinalBucketIndexV1 {
 pub struct PrivateOramOwnerJournalSnapshotV1 {
     pub descriptor: PrivateOramOwnerJournalDescriptorV1,
     pub state: PrivateOramOwnerJournalStateV1,
+    pub terminal: Option<PrivateOramOwnerJournalTerminalRecordV1>,
     pub final_buckets: Vec<PrivateOramOwnerFinalBucketIndexV1>,
 }
 
@@ -296,6 +428,7 @@ impl Debug for PrivateOramOwnerJournalSnapshotV1 {
         f.debug_struct("PrivateOramOwnerJournalSnapshotV1")
             .field("descriptor", &self.descriptor)
             .field("state", &self.state)
+            .field("terminal", &self.terminal)
             .field("final_bucket_index_count", &self.final_buckets.len())
             .field("final_buckets", &"[redacted]")
             .finish()
@@ -376,6 +509,202 @@ impl PrivateOramDurableOwnerPreparedTokenV1 {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct PrivateOramOwnerFinalizedIndexEvidenceV1 {
+    kind: PrivateOramIndexKindV2,
+    index_name: String,
+    prepared_journal_digest: String,
+    finalized_state_digest: String,
+}
+
+impl Debug for PrivateOramOwnerFinalizedIndexEvidenceV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerFinalizedIndexEvidenceV1")
+            .field("kind", &self.kind)
+            .field("index_name", &"[redacted]")
+            .field("prepared_journal_digest", &"[redacted]")
+            .field("finalized_state_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerFinalizedIndexEvidenceV1 {
+    pub(crate) const fn kind(&self) -> PrivateOramIndexKindV2 {
+        self.kind
+    }
+
+    pub(crate) fn index_name(&self) -> &str {
+        &self.index_name
+    }
+
+    pub(crate) fn prepared_journal_digest(&self) -> &str {
+        &self.prepared_journal_digest
+    }
+
+    pub(crate) fn finalized_state_digest(&self) -> &str {
+        &self.finalized_state_digest
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct PrivateOramDurableOwnerFinalizedTokenV1 {
+    owner_peer_id: u64,
+    journal_descriptor_digest: String,
+    prepared_state_digest: String,
+    terminal_record_digest: String,
+    parent_descriptor_digest: String,
+    consensus_authority_record_digest: String,
+    reconciliation_authority_digest: String,
+    indexes: Vec<PrivateOramOwnerFinalizedIndexEvidenceV1>,
+}
+
+impl Debug for PrivateOramDurableOwnerFinalizedTokenV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramDurableOwnerFinalizedTokenV1")
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("journal_descriptor_digest", &"[redacted]")
+            .field("prepared_state_digest", &"[redacted]")
+            .field("terminal_record_digest", &"[redacted]")
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field("consensus_authority_record_digest", &"[redacted]")
+            .field("reconciliation_authority_digest", &"[redacted]")
+            .field("index_count", &self.indexes.len())
+            .finish()
+    }
+}
+
+impl PrivateOramDurableOwnerFinalizedTokenV1 {
+    pub(crate) const fn owner_peer_id(&self) -> u64 {
+        self.owner_peer_id
+    }
+
+    pub(crate) fn journal_descriptor_digest(&self) -> &str {
+        &self.journal_descriptor_digest
+    }
+
+    pub(crate) fn prepared_state_digest(&self) -> &str {
+        &self.prepared_state_digest
+    }
+
+    pub(crate) fn terminal_record_digest(&self) -> &str {
+        &self.terminal_record_digest
+    }
+
+    pub(crate) fn parent_descriptor_digest(&self) -> &str {
+        &self.parent_descriptor_digest
+    }
+
+    pub(crate) fn consensus_authority_record_digest(&self) -> &str {
+        &self.consensus_authority_record_digest
+    }
+
+    pub(crate) fn reconciliation_authority_digest(&self) -> &str {
+        &self.reconciliation_authority_digest
+    }
+
+    pub(crate) fn indexes(&self) -> &[PrivateOramOwnerFinalizedIndexEvidenceV1] {
+        &self.indexes
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct PrivateOramOwnerAbortedOldIndexEvidenceV1 {
+    kind: PrivateOramIndexKindV2,
+    index_name: String,
+    prepared_journal_digest: String,
+    aborted_old_state_digest: String,
+}
+
+impl Debug for PrivateOramOwnerAbortedOldIndexEvidenceV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerAbortedOldIndexEvidenceV1")
+            .field("kind", &self.kind)
+            .field("index_name", &"[redacted]")
+            .field("prepared_journal_digest", &"[redacted]")
+            .field("aborted_old_state_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerAbortedOldIndexEvidenceV1 {
+    pub(crate) const fn kind(&self) -> PrivateOramIndexKindV2 {
+        self.kind
+    }
+
+    pub(crate) fn index_name(&self) -> &str {
+        &self.index_name
+    }
+
+    pub(crate) fn prepared_journal_digest(&self) -> &str {
+        &self.prepared_journal_digest
+    }
+
+    pub(crate) fn aborted_old_state_digest(&self) -> &str {
+        &self.aborted_old_state_digest
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct PrivateOramDurableOwnerAbortedOldTokenV1 {
+    owner_peer_id: u64,
+    journal_descriptor_digest: String,
+    prepared_state_digest: String,
+    terminal_record_digest: String,
+    parent_descriptor_digest: String,
+    consensus_authority_record_digest: String,
+    reconciliation_authority_digest: String,
+    indexes: Vec<PrivateOramOwnerAbortedOldIndexEvidenceV1>,
+}
+
+impl Debug for PrivateOramDurableOwnerAbortedOldTokenV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramDurableOwnerAbortedOldTokenV1")
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("journal_descriptor_digest", &"[redacted]")
+            .field("prepared_state_digest", &"[redacted]")
+            .field("terminal_record_digest", &"[redacted]")
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field("consensus_authority_record_digest", &"[redacted]")
+            .field("reconciliation_authority_digest", &"[redacted]")
+            .field("index_count", &self.indexes.len())
+            .finish()
+    }
+}
+
+impl PrivateOramDurableOwnerAbortedOldTokenV1 {
+    pub(crate) const fn owner_peer_id(&self) -> u64 {
+        self.owner_peer_id
+    }
+
+    pub(crate) fn journal_descriptor_digest(&self) -> &str {
+        &self.journal_descriptor_digest
+    }
+
+    pub(crate) fn prepared_state_digest(&self) -> &str {
+        &self.prepared_state_digest
+    }
+
+    pub(crate) fn terminal_record_digest(&self) -> &str {
+        &self.terminal_record_digest
+    }
+
+    pub(crate) fn parent_descriptor_digest(&self) -> &str {
+        &self.parent_descriptor_digest
+    }
+
+    pub(crate) fn consensus_authority_record_digest(&self) -> &str {
+        &self.consensus_authority_record_digest
+    }
+
+    pub(crate) fn reconciliation_authority_digest(&self) -> &str {
+        &self.reconciliation_authority_digest
+    }
+
+    pub(crate) fn indexes(&self) -> &[PrivateOramOwnerAbortedOldIndexEvidenceV1] {
+        &self.indexes
+    }
+}
+
 #[derive(Clone)]
 pub struct PrivateOramOwnerJournal {
     root: PathBuf,
@@ -421,9 +750,10 @@ impl PrivateOramOwnerJournal {
 
     /// Loads a self-consistent but untrusted snapshot without minting durable owner evidence.
     ///
-    /// Recovery must bind this snapshot to typed parent state, the signed mutation, manifests,
-    /// and canonical old index state before it can produce new evidence.
-    pub fn inspect_prepared_structural(
+    /// The snapshot may contain only the Prepared record or an append-only terminal record.
+    /// Recovery must bind it to typed parent state, the signed mutation, manifests, and canonical
+    /// index state before it can produce new evidence.
+    pub fn inspect_structural(
         &self,
     ) -> Result<Option<PrivateOramOwnerJournalSnapshotV1>, PrivateOramOwnerJournalError> {
         #[cfg(not(target_os = "linux"))]
@@ -432,6 +762,7 @@ impl PrivateOramOwnerJournal {
             return Ok(None);
         }
         let root_file = open_private_directory(&self.root)?;
+        let _root_lock = lock_private_journal_root_shared(&root_file)?;
         let output = match Self::stable_root_entry_from(&root_file)? {
             StableRootEntry::Empty => None,
             StableRootEntry::Active => Some(
@@ -441,6 +772,63 @@ impl PrivateOramOwnerJournal {
         };
         validate_open_directory_at_path(&root_file, &self.root)?;
         Ok(output)
+    }
+
+    #[deprecated(note = "use inspect_structural, which also describes terminal snapshots")]
+    pub fn inspect_prepared_structural(
+        &self,
+    ) -> Result<Option<PrivateOramOwnerJournalSnapshotV1>, PrivateOramOwnerJournalError> {
+        self.inspect_structural()
+    }
+
+    /// Records a durable Finalized terminal state after a higher-level adapter has verified the
+    /// canonical new index state and exact-new reconciliation authority.
+    fn record_finalized(
+        &self,
+        context: PrivateOramOwnerJournalFinalizeContextV1<'_>,
+    ) -> Result<
+        (
+            PrivateOramOwnerJournalSnapshotV1,
+            PrivateOramDurableOwnerFinalizedTokenV1,
+        ),
+        PrivateOramOwnerJournalError,
+    > {
+        let journal = self.record_terminal(TerminalTransition {
+            phase: PrivateOramOwnerJournalPhaseV1::Finalized,
+            expected_journal_descriptor_digest: context.expected_journal_descriptor_digest,
+            parent_descriptor_digest: context.parent_descriptor_digest,
+            authenticated_owner_peer_id: context.authenticated_owner_peer_id,
+            consensus_authority_record_digest: context.consensus_authority_record_digest,
+            reconciliation_authority_digest: context.reconciliation_authority_digest,
+            canonical_index_states: context.canonical_index_states,
+        })?;
+        let token = finalized_token(&journal.snapshot)?;
+        Ok((journal.snapshot, token))
+    }
+
+    /// Records a durable AbortedOld terminal state after a higher-level adapter has verified the
+    /// canonical old index state and consensus-linearized abort authority.
+    fn record_aborted_old(
+        &self,
+        context: PrivateOramOwnerJournalAbortOldContextV1<'_>,
+    ) -> Result<
+        (
+            PrivateOramOwnerJournalSnapshotV1,
+            PrivateOramDurableOwnerAbortedOldTokenV1,
+        ),
+        PrivateOramOwnerJournalError,
+    > {
+        let journal = self.record_terminal(TerminalTransition {
+            phase: PrivateOramOwnerJournalPhaseV1::AbortedOld,
+            expected_journal_descriptor_digest: context.expected_journal_descriptor_digest,
+            parent_descriptor_digest: context.parent_descriptor_digest,
+            authenticated_owner_peer_id: context.authenticated_owner_peer_id,
+            consensus_authority_record_digest: context.consensus_authority_record_digest,
+            reconciliation_authority_digest: context.reconciliation_authority_digest,
+            canonical_index_states: context.canonical_index_states,
+        })?;
+        let token = aborted_old_token(&journal.snapshot)?;
+        Ok((journal.snapshot, token))
     }
 
     fn prepare_validated(
@@ -527,6 +915,124 @@ impl PrivateOramOwnerJournal {
         }
     }
 
+    fn record_terminal(
+        &self,
+        transition: TerminalTransition<'_>,
+    ) -> Result<ValidatedOwnerJournal, PrivateOramOwnerJournalError> {
+        #[cfg(not(target_os = "linux"))]
+        ensure_supported_platform()?;
+        validate_digest(
+            transition.expected_journal_descriptor_digest,
+            "expected_journal_descriptor_digest",
+        )?;
+        validate_digest(
+            transition.parent_descriptor_digest,
+            "parent_descriptor_digest",
+        )?;
+        validate_digest(
+            transition.consensus_authority_record_digest,
+            "consensus_authority_record_digest",
+        )?;
+        validate_digest(
+            transition.reconciliation_authority_digest,
+            "reconciliation_authority_digest",
+        )?;
+        if transition.phase == PrivateOramOwnerJournalPhaseV1::Prepared
+            || !path_entry_exists(&self.root)?
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+
+        let root = open_private_directory(&self.root)?;
+        let _root_lock = lock_private_journal_root(&root)?;
+        if Self::stable_root_entry_from(&root)? != StableRootEntry::Active {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let current = self.load_active_structural_from(&root, true, None)?;
+        if current.snapshot.descriptor.descriptor_digest
+            != transition.expected_journal_descriptor_digest
+            || current.snapshot.descriptor.parent_descriptor_digest
+                != transition.parent_descriptor_digest
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let desired_terminal = build_terminal_record(&current.snapshot, transition)?;
+        let desired_terminal_bytes = encode_terminal_record(&desired_terminal)?;
+        if let Some(existing) = current.snapshot.terminal.as_ref() {
+            if existing != &desired_terminal
+                || current.terminal_bytes.as_deref() != Some(desired_terminal_bytes.as_slice())
+            {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            sync_open_directory(&root)
+                .and_then(|()| validate_open_directory_at_path(&root, &self.root))
+                .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+            return Ok(current);
+        }
+
+        let active_path = open_directory_entry_path(&root, OsStr::new(ACTIVE_DIR))?;
+        let active = open_private_directory(&active_path)?;
+        let temp_path = open_directory_entry_path(&active, OsStr::new(ACTIVE_TEMP_DIR))?;
+        let temp = open_private_directory(&temp_path)?;
+        validate_terminal_temp_entries_open(&temp)?;
+        let candidate = tempfile::Builder::new()
+            .prefix(TERMINAL_CANDIDATE_PREFIX)
+            .tempdir_in(&temp_path)
+            .map_err(|_| PrivateOramOwnerJournalError::Io)?;
+        set_private_directory_permissions(candidate.path())?;
+        validate_private_directory_exact(candidate.path())?;
+        write_new_private_file(
+            &candidate.path().join(TERMINAL_RECORD_FILE),
+            &desired_terminal_bytes,
+            MAX_TERMINAL_RECORD_BYTES,
+        )?;
+        validate_terminal_entry_set(candidate.path())?;
+        sync_private_directory(candidate.path()).map_err(|_| PrivateOramOwnerJournalError::Io)?;
+        let candidate_directory = open_private_directory(candidate.path())?;
+        sync_open_directory(&temp).map_err(|_| PrivateOramOwnerJournalError::Io)?;
+
+        validate_open_directory_at_path(&root, &self.root)?;
+        validate_open_directory_at_path(&active, &active_path)?;
+        validate_open_directory_at_path(&temp, &temp_path)?;
+        let candidate_name = candidate
+            .path()
+            .file_name()
+            .ok_or(PrivateOramOwnerJournalError::Corrupt)?;
+        match rename_entry_noreplace(&temp, candidate_name, &active, OsStr::new(TERMINAL_DIR)) {
+            Ok(()) => {
+                let installed_terminal_path =
+                    open_directory_entry_path(&active, OsStr::new(TERMINAL_DIR))
+                        .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                let installed_terminal = open_private_directory(&installed_terminal_path)
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                ensure_same_open_inode(&candidate_directory, &installed_terminal)
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                let installed = self
+                    .load_active_structural_from(&root, true, None)
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                ensure_same_open_inode(&candidate_directory, &installed_terminal)
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+                if installed.snapshot.terminal.as_ref() != Some(&desired_terminal)
+                    || installed.terminal_bytes.as_deref()
+                        != Some(desired_terminal_bytes.as_slice())
+                {
+                    return Err(PrivateOramOwnerJournalError::Indeterminate);
+                }
+                Ok(installed)
+            }
+            Err(PrivateOramOwnerJournalError::ConcurrentMutation) => {
+                let existing = self.load_active_structural_from(&root, true, None)?;
+                if existing.snapshot.terminal.as_ref() != Some(&desired_terminal)
+                    || existing.terminal_bytes.as_deref() != Some(desired_terminal_bytes.as_slice())
+                {
+                    return Err(PrivateOramOwnerJournalError::InvalidTransition);
+                }
+                Ok(existing)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     fn ensure_root(&self) -> Result<File, PrivateOramOwnerJournalError> {
         let parent = self
             .root
@@ -576,10 +1082,10 @@ impl PrivateOramOwnerJournal {
         if let Some(expected_active) = expected_active {
             ensure_same_open_inode(expected_active, &active)?;
         }
-        validate_active_entry_set_open(&active)?;
+        let has_terminal = validate_active_entry_set_open(&active)?;
         let temp_path = open_directory_entry_path(&active, OsStr::new(ACTIVE_TEMP_DIR))?;
         let temp = open_private_directory(&temp_path)?;
-        validate_directory_is_empty_open(&temp)?;
+        validate_terminal_temp_entries_open(&temp)?;
 
         let (mut descriptor_file, descriptor_bytes) = read_private_file_pinned(
             &open_directory_entry_path(&active, OsStr::new(DESCRIPTOR_FILE))?,
@@ -593,28 +1099,73 @@ impl PrivateOramOwnerJournal {
             &open_directory_entry_path(&active, OsStr::new(STATE_FILE))?,
             MAX_STATE_BYTES,
         )?;
+        let (mut terminal_file, terminal_bytes, terminal_directory, terminal_path) = if has_terminal
+        {
+            let terminal_path = open_directory_entry_path(&active, OsStr::new(TERMINAL_DIR))?;
+            let terminal_directory = open_private_directory(&terminal_path)?;
+            validate_terminal_entry_set_open(&terminal_directory)?;
+            let (terminal_file, terminal_bytes) = read_private_file_pinned(
+                &open_directory_entry_path(&terminal_directory, OsStr::new(TERMINAL_RECORD_FILE))?,
+                MAX_TERMINAL_RECORD_BYTES,
+            )?;
+            (
+                Some(terminal_file),
+                Some(terminal_bytes),
+                Some(terminal_directory),
+                Some(terminal_path),
+            )
+        } else {
+            (None, None, None, None)
+        };
 
-        let validated =
-            ValidatedOwnerJournal::decode(descriptor_bytes, final_bucket_bytes, state_bytes)?;
+        let validated = ValidatedOwnerJournal::decode(
+            descriptor_bytes,
+            final_bucket_bytes,
+            state_bytes,
+            terminal_bytes,
+        )?;
         if durably_sync {
             descriptor_file.sync()?;
             final_bucket_file.sync()?;
             state_file.sync()?;
+            if let Some(terminal_file) = terminal_file.as_ref() {
+                terminal_file.sync()?;
+            }
+            if let Some(terminal_directory) = terminal_directory.as_ref() {
+                sync_open_directory(terminal_directory)
+                    .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
+            }
             sync_open_directory(&temp).map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
             sync_open_directory(&active)
                 .map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
             sync_open_directory(root).map_err(|_| PrivateOramOwnerJournalError::Indeterminate)?;
         }
 
-        validate_active_entry_set_open(&active)?;
-        validate_directory_is_empty_open(&temp)?;
+        if validate_active_entry_set_open(&active)? != has_terminal {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        validate_terminal_temp_entries_open(&temp)?;
         descriptor_file.validate_exact_contents(&validated.descriptor_bytes)?;
         final_bucket_file.validate_exact_contents(&validated.final_bucket_bytes)?;
         state_file.validate_exact_contents(&validated.state_bytes)?;
+        if let (Some(terminal_file), Some(terminal_bytes)) =
+            (terminal_file.as_mut(), validated.terminal_bytes.as_deref())
+        {
+            terminal_file.validate_exact_contents(terminal_bytes)?;
+        }
         descriptor_file.validate_at_path()?;
         final_bucket_file.validate_at_path()?;
         state_file.validate_at_path()?;
+        if let Some(terminal_file) = terminal_file.as_ref() {
+            terminal_file.validate_at_path()?;
+        }
         validate_open_directory_at_path(&temp, &temp_path)?;
+        if let (Some(terminal_directory), Some(terminal_path)) =
+            (terminal_directory.as_ref(), terminal_path.as_ref())
+        {
+            validate_terminal_entry_set_open(terminal_directory)?;
+            validate_open_directory_at_path(terminal_directory, terminal_path)?;
+        }
         validate_open_directory_at_path(&active, &active_path)?;
         if let Some(expected_active) = expected_active {
             ensure_same_open_inode(expected_active, &active)?;
@@ -633,12 +1184,24 @@ enum StableRootEntry {
     Active,
 }
 
+#[derive(Clone, Copy)]
+struct TerminalTransition<'a> {
+    phase: PrivateOramOwnerJournalPhaseV1,
+    expected_journal_descriptor_digest: &'a str,
+    parent_descriptor_digest: &'a str,
+    authenticated_owner_peer_id: u64,
+    consensus_authority_record_digest: &'a str,
+    reconciliation_authority_digest: &'a str,
+    canonical_index_states: &'a [PrivateOramOwnerJournalTerminalIndexStateV1],
+}
+
 #[derive(Clone)]
 struct ValidatedOwnerJournal {
     snapshot: PrivateOramOwnerJournalSnapshotV1,
     descriptor_bytes: Vec<u8>,
     final_bucket_bytes: Vec<u8>,
     state_bytes: Vec<u8>,
+    terminal_bytes: Option<Vec<u8>>,
 }
 
 impl ValidatedOwnerJournal {
@@ -787,6 +1350,7 @@ impl ValidatedOwnerJournal {
         let snapshot = PrivateOramOwnerJournalSnapshotV1 {
             descriptor,
             state,
+            terminal: None,
             final_buckets,
         };
         validate_snapshot(&snapshot, &final_bucket_bytes)?;
@@ -795,6 +1359,7 @@ impl ValidatedOwnerJournal {
             descriptor_bytes,
             final_bucket_bytes,
             state_bytes,
+            terminal_bytes: None,
         })
     }
 
@@ -802,13 +1367,19 @@ impl ValidatedOwnerJournal {
         descriptor_bytes: Vec<u8>,
         final_bucket_bytes: Vec<u8>,
         state_bytes: Vec<u8>,
+        terminal_bytes: Option<Vec<u8>>,
     ) -> Result<Self, PrivateOramOwnerJournalError> {
         let descriptor = decode_descriptor(&descriptor_bytes)?;
         let final_buckets = decode_final_bucket_frame(&descriptor.indexes, &final_bucket_bytes)?;
         let state = decode_state(&state_bytes)?;
+        let terminal = terminal_bytes
+            .as_deref()
+            .map(decode_terminal_record)
+            .transpose()?;
         let snapshot = PrivateOramOwnerJournalSnapshotV1 {
             descriptor,
             state,
+            terminal,
             final_buckets,
         };
         validate_snapshot(&snapshot, &final_bucket_bytes)?;
@@ -817,6 +1388,7 @@ impl ValidatedOwnerJournal {
             descriptor_bytes,
             final_bucket_bytes,
             state_bytes,
+            terminal_bytes,
         })
     }
 
@@ -824,6 +1396,7 @@ impl ValidatedOwnerJournal {
         self.descriptor_bytes == other.descriptor_bytes
             && self.final_bucket_bytes == other.final_bucket_bytes
             && self.state_bytes == other.state_bytes
+            && self.terminal_bytes == other.terminal_bytes
     }
 
     fn into_output(
@@ -832,6 +1405,7 @@ impl ValidatedOwnerJournal {
         PrivateOramOwnerJournalSnapshotV1,
         PrivateOramDurableOwnerPreparedTokenV1,
     ) {
+        assert!(self.snapshot.terminal.is_none());
         let token = prepared_token(&self.snapshot.descriptor)
             .expect("decoded owner journal descriptor must produce prepared evidence");
         (self.snapshot, token)
@@ -868,6 +1442,34 @@ fn validate_snapshot(
             || index.final_bucket_refs != final_bucket_refs(&final_index.buckets)
         {
             return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+    }
+    if let Some(terminal) = snapshot.terminal.as_ref() {
+        if terminal.version != PRIVATE_ORAM_OWNER_JOURNAL_STATE_VERSION
+            || terminal.sequence != 2
+            || terminal.phase == PrivateOramOwnerJournalPhaseV1::Prepared
+            || terminal.descriptor_digest != snapshot.descriptor.descriptor_digest
+            || terminal.previous_record_digest != snapshot.state.state_digest
+            || terminal.parent_descriptor_digest != snapshot.descriptor.parent_descriptor_digest
+            || terminal.authenticated_owner_peer_id != snapshot.descriptor.owner_peer_id
+            || terminal.canonical_index_states.len() != snapshot.descriptor.indexes.len()
+            || terminal_record_digest(terminal)? != terminal.record_digest
+        {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        for (index, canonical) in snapshot
+            .descriptor
+            .indexes
+            .iter()
+            .zip(&terminal.canonical_index_states)
+        {
+            if index.kind != canonical.kind
+                || index.index_name != canonical.index_name
+                || validate_digest(&canonical.canonical_state_digest, "canonical_state_digest")
+                    .is_err()
+            {
+                return Err(PrivateOramOwnerJournalError::Corrupt);
+            }
         }
     }
     Ok(())
@@ -915,6 +1517,172 @@ fn index_prepared_evidence_digest(
     push_digest(&mut bytes, &index.old_root_hash, "old_root_hash")?;
     push_digest(&mut bytes, &index.new_root_hash, "new_root_hash")?;
     push_digest(&mut bytes, &index.writeback_digest, "writeback_digest")?;
+    Ok(digest_string(&bytes))
+}
+
+fn build_terminal_record(
+    snapshot: &PrivateOramOwnerJournalSnapshotV1,
+    transition: TerminalTransition<'_>,
+) -> Result<PrivateOramOwnerJournalTerminalRecordV1, PrivateOramOwnerJournalError> {
+    if snapshot.state.phase != PrivateOramOwnerJournalPhaseV1::Prepared
+        || transition.phase == PrivateOramOwnerJournalPhaseV1::Prepared
+        || snapshot.descriptor.descriptor_digest != transition.expected_journal_descriptor_digest
+        || snapshot.descriptor.parent_descriptor_digest != transition.parent_descriptor_digest
+        || snapshot.descriptor.owner_peer_id != transition.authenticated_owner_peer_id
+        || snapshot.descriptor.indexes.len() != transition.canonical_index_states.len()
+    {
+        return Err(PrivateOramOwnerJournalError::InvalidTransition);
+    }
+    for (index, canonical) in snapshot
+        .descriptor
+        .indexes
+        .iter()
+        .zip(transition.canonical_index_states)
+    {
+        if index.kind != canonical.kind || index.index_name != canonical.index_name {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        validate_digest(&canonical.canonical_state_digest, "canonical_state_digest")?;
+    }
+    let mut record = PrivateOramOwnerJournalTerminalRecordV1 {
+        version: PRIVATE_ORAM_OWNER_JOURNAL_STATE_VERSION,
+        sequence: 2,
+        descriptor_digest: snapshot.descriptor.descriptor_digest.clone(),
+        previous_record_digest: snapshot.state.state_digest.clone(),
+        phase: transition.phase,
+        parent_descriptor_digest: transition.parent_descriptor_digest.to_string(),
+        authenticated_owner_peer_id: transition.authenticated_owner_peer_id,
+        consensus_authority_record_digest: transition.consensus_authority_record_digest.to_string(),
+        reconciliation_authority_digest: transition.reconciliation_authority_digest.to_string(),
+        canonical_index_states: transition.canonical_index_states.to_vec(),
+        record_digest: String::new(),
+    };
+    record.record_digest = terminal_record_digest(&record)?;
+    Ok(record)
+}
+
+fn finalized_token(
+    snapshot: &PrivateOramOwnerJournalSnapshotV1,
+) -> Result<PrivateOramDurableOwnerFinalizedTokenV1, PrivateOramOwnerJournalError> {
+    let terminal = snapshot
+        .terminal
+        .as_ref()
+        .filter(|terminal| terminal.phase == PrivateOramOwnerJournalPhaseV1::Finalized)
+        .ok_or(PrivateOramOwnerJournalError::InvalidTransition)?;
+    let indexes = snapshot
+        .descriptor
+        .indexes
+        .iter()
+        .map(|index| {
+            Ok(PrivateOramOwnerFinalizedIndexEvidenceV1 {
+                kind: index.kind,
+                index_name: index.index_name.clone(),
+                prepared_journal_digest: index_prepared_evidence_digest(
+                    &snapshot.descriptor,
+                    index,
+                )?,
+                finalized_state_digest: index_terminal_evidence_digest(snapshot, terminal, index)?,
+            })
+        })
+        .collect::<Result<Vec<_>, PrivateOramOwnerJournalError>>()?;
+    Ok(PrivateOramDurableOwnerFinalizedTokenV1 {
+        owner_peer_id: snapshot.descriptor.owner_peer_id,
+        journal_descriptor_digest: snapshot.descriptor.descriptor_digest.clone(),
+        prepared_state_digest: snapshot.state.state_digest.clone(),
+        terminal_record_digest: terminal.record_digest.clone(),
+        parent_descriptor_digest: terminal.parent_descriptor_digest.clone(),
+        consensus_authority_record_digest: terminal.consensus_authority_record_digest.clone(),
+        reconciliation_authority_digest: terminal.reconciliation_authority_digest.clone(),
+        indexes,
+    })
+}
+
+fn aborted_old_token(
+    snapshot: &PrivateOramOwnerJournalSnapshotV1,
+) -> Result<PrivateOramDurableOwnerAbortedOldTokenV1, PrivateOramOwnerJournalError> {
+    let terminal = snapshot
+        .terminal
+        .as_ref()
+        .filter(|terminal| terminal.phase == PrivateOramOwnerJournalPhaseV1::AbortedOld)
+        .ok_or(PrivateOramOwnerJournalError::InvalidTransition)?;
+    let indexes = snapshot
+        .descriptor
+        .indexes
+        .iter()
+        .map(|index| {
+            Ok(PrivateOramOwnerAbortedOldIndexEvidenceV1 {
+                kind: index.kind,
+                index_name: index.index_name.clone(),
+                prepared_journal_digest: index_prepared_evidence_digest(
+                    &snapshot.descriptor,
+                    index,
+                )?,
+                aborted_old_state_digest: index_terminal_evidence_digest(
+                    snapshot, terminal, index,
+                )?,
+            })
+        })
+        .collect::<Result<Vec<_>, PrivateOramOwnerJournalError>>()?;
+    Ok(PrivateOramDurableOwnerAbortedOldTokenV1 {
+        owner_peer_id: snapshot.descriptor.owner_peer_id,
+        journal_descriptor_digest: snapshot.descriptor.descriptor_digest.clone(),
+        prepared_state_digest: snapshot.state.state_digest.clone(),
+        terminal_record_digest: terminal.record_digest.clone(),
+        parent_descriptor_digest: terminal.parent_descriptor_digest.clone(),
+        consensus_authority_record_digest: terminal.consensus_authority_record_digest.clone(),
+        reconciliation_authority_digest: terminal.reconciliation_authority_digest.clone(),
+        indexes,
+    })
+}
+
+fn index_terminal_evidence_digest(
+    snapshot: &PrivateOramOwnerJournalSnapshotV1,
+    terminal: &PrivateOramOwnerJournalTerminalRecordV1,
+    index: &PrivateOramOwnerJournalIndexDescriptorV1,
+) -> Result<String, PrivateOramOwnerJournalError> {
+    let domain = match terminal.phase {
+        PrivateOramOwnerJournalPhaseV1::Finalized => INDEX_FINALIZED_EVIDENCE_DOMAIN,
+        PrivateOramOwnerJournalPhaseV1::AbortedOld => INDEX_ABORTED_OLD_EVIDENCE_DOMAIN,
+        PrivateOramOwnerJournalPhaseV1::Prepared => {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+    };
+    let canonical = terminal
+        .canonical_index_states
+        .iter()
+        .find(|canonical| canonical.kind == index.kind && canonical.index_name == index.index_name)
+        .ok_or(PrivateOramOwnerJournalError::Corrupt)?;
+    let mut bytes = Vec::with_capacity(1024);
+    push_domain(&mut bytes, domain)?;
+    push_digest(
+        &mut bytes,
+        &snapshot.descriptor.descriptor_digest,
+        "descriptor_digest",
+    )?;
+    push_digest(
+        &mut bytes,
+        &snapshot.state.state_digest,
+        "prepared_state_digest",
+    )?;
+    push_digest(
+        &mut bytes,
+        &terminal.record_digest,
+        "terminal_record_digest",
+    )?;
+    bytes.extend_from_slice(&snapshot.descriptor.owner_peer_id.to_be_bytes());
+    bytes.push(kind_tag(index.kind));
+    push_resource_id(&mut bytes, &index.index_name, "index_name")?;
+    bytes.extend_from_slice(&index.old_epoch.to_be_bytes());
+    bytes.extend_from_slice(&index.new_epoch.to_be_bytes());
+    push_digest(&mut bytes, &index.old_root_hash, "old_root_hash")?;
+    push_digest(&mut bytes, &index.new_root_hash, "new_root_hash")?;
+    push_digest(&mut bytes, &index.writeback_digest, "writeback_digest")?;
+    push_bucket_refs(&mut bytes, &index.final_bucket_refs)?;
+    push_digest(
+        &mut bytes,
+        &canonical.canonical_state_digest,
+        "canonical_state_digest",
+    )?;
     Ok(digest_string(&bytes))
 }
 
@@ -1175,6 +1943,192 @@ fn decode_state(
         return Err(PrivateOramOwnerJournalError::Corrupt);
     }
     Ok(state)
+}
+
+fn terminal_record_digest(
+    record: &PrivateOramOwnerJournalTerminalRecordV1,
+) -> Result<String, PrivateOramOwnerJournalError> {
+    Ok(digest_string(&terminal_record_body(record)?))
+}
+
+fn encode_terminal_record(
+    record: &PrivateOramOwnerJournalTerminalRecordV1,
+) -> Result<Vec<u8>, PrivateOramOwnerJournalError> {
+    let mut bytes = terminal_record_body(record)?;
+    if record.record_digest != digest_string(&bytes) {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    push_digest(&mut bytes, &record.record_digest, "terminal_record_digest")?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_TERMINAL_RECORD_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(bytes)
+}
+
+fn terminal_record_body(
+    record: &PrivateOramOwnerJournalTerminalRecordV1,
+) -> Result<Vec<u8>, PrivateOramOwnerJournalError> {
+    if record.version != PRIVATE_ORAM_OWNER_JOURNAL_STATE_VERSION || record.sequence != 2 {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    validate_digest(&record.descriptor_digest, "descriptor_digest")?;
+    validate_digest(&record.previous_record_digest, "previous_record_digest")?;
+    validate_digest(&record.parent_descriptor_digest, "parent_descriptor_digest")?;
+    validate_digest(
+        &record.consensus_authority_record_digest,
+        "consensus_authority_record_digest",
+    )?;
+    validate_digest(
+        &record.reconciliation_authority_digest,
+        "reconciliation_authority_digest",
+    )?;
+    if record.canonical_index_states.is_empty()
+        || record.canonical_index_states.len() > MAX_PAIRED_OWNER_INDEXES
+        || record.canonical_index_states[0].kind != PrivateOramIndexKindV2::Hnsw
+    {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let mut names = BTreeSet::new();
+    for (position, canonical) in record.canonical_index_states.iter().enumerate() {
+        validate_resource_id(&canonical.index_name, "index_name")?;
+        validate_digest(&canonical.canonical_state_digest, "canonical_state_digest")?;
+        if !names.insert(canonical.index_name.clone()) {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        match (position, canonical.kind) {
+            (0, PrivateOramIndexKindV2::Hnsw) | (1, PrivateOramIndexKindV2::Result) => {}
+            _ => return Err(PrivateOramOwnerJournalError::Corrupt),
+        }
+    }
+    let mut bytes = Vec::with_capacity(512);
+    push_domain(&mut bytes, terminal_record_domain(record.phase)?)?;
+    bytes.extend_from_slice(&record.version.to_be_bytes());
+    bytes.extend_from_slice(&record.sequence.to_be_bytes());
+    bytes.push(terminal_phase_tag(record.phase)?);
+    push_digest(&mut bytes, &record.descriptor_digest, "descriptor_digest")?;
+    push_digest(
+        &mut bytes,
+        &record.previous_record_digest,
+        "previous_record_digest",
+    )?;
+    push_digest(
+        &mut bytes,
+        &record.parent_descriptor_digest,
+        "parent_descriptor_digest",
+    )?;
+    push_digest(
+        &mut bytes,
+        &record.consensus_authority_record_digest,
+        "consensus_authority_record_digest",
+    )?;
+    push_digest(
+        &mut bytes,
+        &record.reconciliation_authority_digest,
+        "reconciliation_authority_digest",
+    )?;
+    bytes.extend_from_slice(&record.authenticated_owner_peer_id.to_be_bytes());
+    push_len(
+        &mut bytes,
+        record.canonical_index_states.len(),
+        "canonical_index_states",
+    )?;
+    for canonical in &record.canonical_index_states {
+        bytes.push(kind_tag(canonical.kind));
+        push_resource_id(&mut bytes, &canonical.index_name, "index_name")?;
+        push_digest(
+            &mut bytes,
+            &canonical.canonical_state_digest,
+            "canonical_state_digest",
+        )?;
+    }
+    Ok(bytes)
+}
+
+fn decode_terminal_record(
+    bytes: &[u8],
+) -> Result<PrivateOramOwnerJournalTerminalRecordV1, PrivateOramOwnerJournalError> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_TERMINAL_RECORD_BYTES {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let mut decoder = BinaryDecoder::new(bytes);
+    let domain_index =
+        decoder.read_domain_choice(&[FINALIZED_STATE_DOMAIN, ABORTED_OLD_STATE_DOMAIN])?;
+    let domain_phase = match domain_index {
+        0 => PrivateOramOwnerJournalPhaseV1::Finalized,
+        1 => PrivateOramOwnerJournalPhaseV1::AbortedOld,
+        _ => return Err(PrivateOramOwnerJournalError::Corrupt),
+    };
+    let version = decoder.read_u16()?;
+    let sequence = decoder.read_u64()?;
+    let phase = match decoder.read_u8()? {
+        FINALIZED_PHASE_TAG => PrivateOramOwnerJournalPhaseV1::Finalized,
+        ABORTED_OLD_PHASE_TAG => PrivateOramOwnerJournalPhaseV1::AbortedOld,
+        _ => return Err(PrivateOramOwnerJournalError::Corrupt),
+    };
+    if phase != domain_phase {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let descriptor_digest = decoder.read_digest()?;
+    let previous_record_digest = decoder.read_digest()?;
+    let parent_descriptor_digest = decoder.read_digest()?;
+    let consensus_authority_record_digest = decoder.read_digest()?;
+    let reconciliation_authority_digest = decoder.read_digest()?;
+    let authenticated_owner_peer_id = decoder.read_u64()?;
+    let canonical_index_count = decoder.read_len(MAX_PAIRED_OWNER_INDEXES)?;
+    let mut canonical_index_states = Vec::with_capacity(canonical_index_count);
+    for _ in 0..canonical_index_count {
+        let kind = match decoder.read_u8()? {
+            HNSW_KIND_TAG => PrivateOramIndexKindV2::Hnsw,
+            RESULT_KIND_TAG => PrivateOramIndexKindV2::Result,
+            _ => return Err(PrivateOramOwnerJournalError::Corrupt),
+        };
+        canonical_index_states.push(PrivateOramOwnerJournalTerminalIndexStateV1 {
+            kind,
+            index_name: decoder.read_resource_id()?,
+            canonical_state_digest: decoder.read_digest()?,
+        });
+    }
+    let record_digest = decoder.read_digest()?;
+    if !decoder.is_finished() {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    let record = PrivateOramOwnerJournalTerminalRecordV1 {
+        version,
+        sequence,
+        descriptor_digest,
+        previous_record_digest,
+        phase,
+        parent_descriptor_digest,
+        authenticated_owner_peer_id,
+        consensus_authority_record_digest,
+        reconciliation_authority_digest,
+        canonical_index_states,
+        record_digest,
+    };
+    if encode_terminal_record(&record)? != bytes {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(record)
+}
+
+fn terminal_record_domain(
+    phase: PrivateOramOwnerJournalPhaseV1,
+) -> Result<&'static [u8], PrivateOramOwnerJournalError> {
+    match phase {
+        PrivateOramOwnerJournalPhaseV1::Finalized => Ok(FINALIZED_STATE_DOMAIN),
+        PrivateOramOwnerJournalPhaseV1::AbortedOld => Ok(ABORTED_OLD_STATE_DOMAIN),
+        PrivateOramOwnerJournalPhaseV1::Prepared => Err(PrivateOramOwnerJournalError::Corrupt),
+    }
+}
+
+fn terminal_phase_tag(
+    phase: PrivateOramOwnerJournalPhaseV1,
+) -> Result<u8, PrivateOramOwnerJournalError> {
+    match phase {
+        PrivateOramOwnerJournalPhaseV1::Finalized => Ok(FINALIZED_PHASE_TAG),
+        PrivateOramOwnerJournalPhaseV1::AbortedOld => Ok(ABORTED_OLD_PHASE_TAG),
+        PrivateOramOwnerJournalPhaseV1::Prepared => Err(PrivateOramOwnerJournalError::Corrupt),
+    }
 }
 
 fn encode_final_bucket_frame(
@@ -1525,6 +2479,19 @@ impl<'a> BinaryDecoder<'a> {
         Ok(())
     }
 
+    fn read_domain_choice(
+        &mut self,
+        expected: &[&[u8]],
+    ) -> Result<usize, PrivateOramOwnerJournalError> {
+        let max_length = expected.iter().map(|value| value.len()).max().unwrap_or(0);
+        let length = self.read_len(max_length)?;
+        let actual = self.read_exact(length)?;
+        expected
+            .iter()
+            .position(|candidate| *candidate == actual)
+            .ok_or(PrivateOramOwnerJournalError::Corrupt)
+    }
+
     fn read_u8(&mut self) -> Result<u8, PrivateOramOwnerJournalError> {
         Ok(self.read_exact(1)?[0])
     }
@@ -1773,6 +2740,52 @@ fn validate_file_metadata(
     Ok(())
 }
 
+fn validate_stranded_candidate_file(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    let before = fs::symlink_metadata(path).map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    validate_stranded_candidate_file_metadata(&before, max_bytes)?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use fs_err::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+    }
+    #[cfg(not(unix))]
+    return Err(PrivateOramOwnerJournalError::Unsupported);
+    #[allow(unreachable_code)]
+    let file = options
+        .open(path)
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    let after = file
+        .metadata()
+        .map_err(|_| PrivateOramOwnerJournalError::Corrupt)?;
+    validate_stranded_candidate_file_metadata(&after, max_bytes)?;
+    ensure_same_inode(&before, &after)
+}
+
+fn validate_stranded_candidate_file_metadata(
+    metadata: &std::fs::Metadata,
+    max_bytes: u64,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    if !metadata.file_type().is_file() || metadata.len() > max_bytes {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        if metadata.uid() != nix::unistd::Uid::effective().as_raw()
+            || metadata.permissions().mode() & 0o7777 != 0o600
+            || metadata.nlink() != 1
+        {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+    }
+    Ok(())
+}
+
 fn ensure_same_inode(
     before: &std::fs::Metadata,
     after: &std::fs::Metadata,
@@ -1941,9 +2954,23 @@ impl Drop for PrivateJournalRootLock<'_> {
 fn lock_private_journal_root(
     root: &File,
 ) -> Result<PrivateJournalRootLock<'_>, PrivateOramOwnerJournalError> {
+    lock_private_journal_root_with_operation(root, nix::libc::LOCK_EX)
+}
+
+#[cfg(target_os = "linux")]
+fn lock_private_journal_root_shared(
+    root: &File,
+) -> Result<PrivateJournalRootLock<'_>, PrivateOramOwnerJournalError> {
+    lock_private_journal_root_with_operation(root, nix::libc::LOCK_SH)
+}
+
+#[cfg(target_os = "linux")]
+fn lock_private_journal_root_with_operation(
+    root: &File,
+    operation: nix::libc::c_int,
+) -> Result<PrivateJournalRootLock<'_>, PrivateOramOwnerJournalError> {
     // SAFETY: root is a validated, live directory fd retained by the returned guard.
-    let result =
-        unsafe { nix::libc::flock(root.as_raw_fd(), nix::libc::LOCK_EX | nix::libc::LOCK_NB) };
+    let result = unsafe { nix::libc::flock(root.as_raw_fd(), operation | nix::libc::LOCK_NB) };
     if result == 0 {
         return Ok(PrivateJournalRootLock { root });
     }
@@ -1957,6 +2984,13 @@ fn lock_private_journal_root(
 
 #[cfg(not(target_os = "linux"))]
 fn lock_private_journal_root(
+    _root: &File,
+) -> Result<PrivateJournalRootLock<'_>, PrivateOramOwnerJournalError> {
+    Err(PrivateOramOwnerJournalError::Unsupported)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn lock_private_journal_root_shared(
     _root: &File,
 ) -> Result<PrivateJournalRootLock<'_>, PrivateOramOwnerJournalError> {
     Err(PrivateOramOwnerJournalError::Unsupported)
@@ -2113,9 +3147,9 @@ fn validate_active_entry_set(path: &Path) -> Result<(), PrivateOramOwnerJournalE
     Ok(())
 }
 
-fn validate_active_entry_set_open(directory: &File) -> Result<(), PrivateOramOwnerJournalError> {
+fn validate_active_entry_set_open(directory: &File) -> Result<bool, PrivateOramOwnerJournalError> {
     let actual = directory_entry_names_open(directory)?;
-    let expected = [
+    let mut expected = [
         DESCRIPTOR_FILE,
         FINAL_BUCKETS_FILE,
         STATE_FILE,
@@ -2124,10 +3158,14 @@ fn validate_active_entry_set_open(directory: &File) -> Result<(), PrivateOramOwn
     .into_iter()
     .map(std::ffi::OsString::from)
     .collect::<BTreeSet<_>>();
+    let has_terminal = actual.contains(OsStr::new(TERMINAL_DIR));
+    if has_terminal {
+        expected.insert(std::ffi::OsString::from(TERMINAL_DIR));
+    }
     if actual != expected {
         return Err(PrivateOramOwnerJournalError::Corrupt);
     }
-    Ok(())
+    Ok(has_terminal)
 }
 
 fn validate_directory_is_empty(path: &Path) -> Result<(), PrivateOramOwnerJournalError> {
@@ -2145,9 +3183,61 @@ fn validate_directory_is_empty_open(directory: &File) -> Result<(), PrivateOramO
     Ok(())
 }
 
+fn validate_terminal_entry_set(path: &Path) -> Result<(), PrivateOramOwnerJournalError> {
+    validate_private_directory_exact(path)?;
+    let expected = [std::ffi::OsString::from(TERMINAL_RECORD_FILE)]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if directory_entry_names(path)? != expected {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(())
+}
+
+fn validate_terminal_entry_set_open(directory: &File) -> Result<(), PrivateOramOwnerJournalError> {
+    let expected = [std::ffi::OsString::from(TERMINAL_RECORD_FILE)]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if directory_entry_names_open(directory)? != expected {
+        return Err(PrivateOramOwnerJournalError::Corrupt);
+    }
+    Ok(())
+}
+
+fn validate_terminal_temp_entries_open(
+    directory: &File,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    for name in directory_entry_names_open(directory)? {
+        if !is_terminal_candidate_name(&name) {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        let candidate_path = open_directory_entry_path(directory, &name)?;
+        let candidate = open_private_directory(&candidate_path)?;
+        let entries = directory_entry_names_open(&candidate)?;
+        if entries.is_empty() {
+            continue;
+        }
+        let expected = [std::ffi::OsString::from(TERMINAL_RECORD_FILE)]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if entries != expected {
+            return Err(PrivateOramOwnerJournalError::Corrupt);
+        }
+        let record_path = open_directory_entry_path(&candidate, OsStr::new(TERMINAL_RECORD_FILE))?;
+        validate_stranded_candidate_file(&record_path, MAX_TERMINAL_RECORD_BYTES)?;
+    }
+    Ok(())
+}
+
 fn is_candidate_name(name: &OsStr) -> bool {
     name.to_str().is_some_and(|name| {
         name.len() > CANDIDATE_PREFIX.len() && name.starts_with(CANDIDATE_PREFIX)
+    })
+}
+
+fn is_terminal_candidate_name(name: &OsStr) -> bool {
+    name.to_str().is_some_and(|name| {
+        name.len() > TERMINAL_CANDIDATE_PREFIX.len() && name.starts_with(TERMINAL_CANDIDATE_PREFIX)
     })
 }
 
@@ -2157,16 +3247,26 @@ fn rename_directory_noreplace(
     source_name: &OsStr,
     destination_name: &OsStr,
 ) -> Result<(), PrivateOramOwnerJournalError> {
+    rename_entry_noreplace(root, source_name, root, destination_name)
+}
+
+#[cfg(target_os = "linux")]
+fn rename_entry_noreplace(
+    source_directory: &File,
+    source_name: &OsStr,
+    destination_directory: &File,
+    destination_name: &OsStr,
+) -> Result<(), PrivateOramOwnerJournalError> {
     let source = checked_single_component_cstring(source_name)?;
     let destination = checked_single_component_cstring(destination_name)?;
-    // SAFETY: both names are validated single-component C strings. The same pinned, no-follow
-    // directory descriptor is used for both sides of a non-replacing rename.
+    // SAFETY: both names are validated single-component C strings and both directory descriptors
+    // are pinned, live, no-follow handles retained across the non-replacing rename.
     let result = unsafe {
         nix::libc::syscall(
             nix::libc::SYS_renameat2,
-            root.as_raw_fd(),
+            source_directory.as_raw_fd(),
             source.as_ptr(),
-            root.as_raw_fd(),
+            destination_directory.as_raw_fd(),
             destination.as_ptr(),
             nix::libc::RENAME_NOREPLACE,
         )
@@ -2187,6 +3287,16 @@ fn rename_directory_noreplace(
 fn rename_directory_noreplace(
     _root: &File,
     _source_name: &OsStr,
+    _destination_name: &OsStr,
+) -> Result<(), PrivateOramOwnerJournalError> {
+    Err(PrivateOramOwnerJournalError::Unsupported)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn rename_entry_noreplace(
+    _source_directory: &File,
+    _source_name: &OsStr,
+    _destination_directory: &File,
     _destination_name: &OsStr,
 ) -> Result<(), PrivateOramOwnerJournalError> {
     Err(PrivateOramOwnerJournalError::Unsupported)
@@ -2224,6 +3334,26 @@ mod tests {
 
     fn digest(fill: u8) -> String {
         BASE64URL_NOPAD.encode(&[fill; DIGEST_BYTES])
+    }
+
+    fn canonical_index_states(
+        desired: &ValidatedOwnerJournal,
+        marker: u8,
+    ) -> Vec<PrivateOramOwnerJournalTerminalIndexStateV1> {
+        desired
+            .snapshot
+            .descriptor
+            .indexes
+            .iter()
+            .enumerate()
+            .map(
+                |(position, index)| PrivateOramOwnerJournalTerminalIndexStateV1 {
+                    kind: index.kind,
+                    index_name: index.index_name.clone(),
+                    canonical_state_digest: digest(marker.wrapping_add(position as u8)),
+                },
+            )
+            .collect()
     }
 
     fn bucket_ref(
@@ -2385,6 +3515,7 @@ mod tests {
         let snapshot = PrivateOramOwnerJournalSnapshotV1 {
             descriptor,
             state,
+            terminal: None,
             final_buckets,
         };
         validate_snapshot(&snapshot, &final_bucket_bytes).unwrap();
@@ -2393,6 +3524,7 @@ mod tests {
             descriptor_bytes,
             final_bucket_bytes,
             state_bytes,
+            terminal_bytes: None,
         }
     }
 
@@ -2413,6 +3545,31 @@ mod tests {
         fixture.journal.root.join(ACTIVE_DIR)
     }
 
+    fn terminal_path(fixture: &JournalFixture) -> PathBuf {
+        active_path(fixture).join(TERMINAL_DIR)
+    }
+
+    fn prepare_and_finalize(fixture: &JournalFixture, marker: u8) {
+        let desired = validated_fixture(marker, false);
+        let descriptor_digest = desired.snapshot.descriptor.descriptor_digest.clone();
+        let parent_descriptor_digest = desired.snapshot.descriptor.parent_descriptor_digest.clone();
+        let consensus_authority_record_digest = digest(marker.wrapping_add(120));
+        let reconciliation_authority_digest = digest(marker.wrapping_add(121));
+        let canonical_index_states = canonical_index_states(&desired, marker.wrapping_add(122));
+        fixture.journal.prepare_validated(desired).unwrap();
+        fixture
+            .journal
+            .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                expected_journal_descriptor_digest: &descriptor_digest,
+                parent_descriptor_digest: &parent_descriptor_digest,
+                authenticated_owner_peer_id: 7,
+                consensus_authority_record_digest: &consensus_authority_record_digest,
+                reconciliation_authority_digest: &reconciliation_authority_digest,
+                canonical_index_states: &canonical_index_states,
+            })
+            .unwrap();
+    }
+
     #[test]
     fn canonical_codecs_round_trip() {
         let desired = validated_fixture(1, true);
@@ -2420,6 +3577,7 @@ mod tests {
             desired.descriptor_bytes.clone(),
             desired.final_bucket_bytes.clone(),
             desired.state_bytes.clone(),
+            None,
         )
         .unwrap();
 
@@ -2451,6 +3609,76 @@ mod tests {
                 "roOyXeChO0guhChkl6yBmv9_TsfQo4nK7lrsXt1VWZY",
                 "h_xkYfrPQjXyBnKbMSgp4ZfEkB4xog6HaVht2CGCoM0",
                 "-ji2rNgkMAUaRNGwJsrrUuGPk35jHqh4W5bouJgNTpo",
+            )
+        );
+    }
+
+    #[test]
+    fn terminal_codecs_round_trip_with_distinct_known_answers() {
+        let desired = validated_fixture(19, true);
+        let consensus_authority_record_digest = digest(90);
+        let finalize_authority_digest = digest(91);
+        let abort_authority_digest = digest(92);
+        let finalized_index_states = canonical_index_states(&desired, 105);
+        let aborted_index_states = canonical_index_states(&desired, 107);
+        let finalized = build_terminal_record(
+            &desired.snapshot,
+            TerminalTransition {
+                phase: PrivateOramOwnerJournalPhaseV1::Finalized,
+                expected_journal_descriptor_digest: &desired.snapshot.descriptor.descriptor_digest,
+                parent_descriptor_digest: &desired.snapshot.descriptor.parent_descriptor_digest,
+                authenticated_owner_peer_id: 7,
+                consensus_authority_record_digest: &consensus_authority_record_digest,
+                reconciliation_authority_digest: &finalize_authority_digest,
+                canonical_index_states: &finalized_index_states,
+            },
+        )
+        .unwrap();
+        let aborted = build_terminal_record(
+            &desired.snapshot,
+            TerminalTransition {
+                phase: PrivateOramOwnerJournalPhaseV1::AbortedOld,
+                expected_journal_descriptor_digest: &desired.snapshot.descriptor.descriptor_digest,
+                parent_descriptor_digest: &desired.snapshot.descriptor.parent_descriptor_digest,
+                authenticated_owner_peer_id: 7,
+                consensus_authority_record_digest: &consensus_authority_record_digest,
+                reconciliation_authority_digest: &abort_authority_digest,
+                canonical_index_states: &aborted_index_states,
+            },
+        )
+        .unwrap();
+        let finalized_bytes = encode_terminal_record(&finalized).unwrap();
+        let aborted_bytes = encode_terminal_record(&aborted).unwrap();
+        let mut finalized_snapshot = desired.snapshot.clone();
+        finalized_snapshot.terminal = Some(finalized.clone());
+        let mut aborted_snapshot = desired.snapshot;
+        aborted_snapshot.terminal = Some(aborted.clone());
+
+        assert_eq!(decode_terminal_record(&finalized_bytes).unwrap(), finalized);
+        assert_eq!(decode_terminal_record(&aborted_bytes).unwrap(), aborted);
+        assert_ne!(finalized_bytes, aborted_bytes);
+        assert_eq!(
+            (
+                finalized.record_digest.as_str(),
+                aborted.record_digest.as_str(),
+                index_terminal_evidence_digest(
+                    &finalized_snapshot,
+                    finalized_snapshot.terminal.as_ref().unwrap(),
+                    &finalized_snapshot.descriptor.indexes[0],
+                )
+                .unwrap(),
+                index_terminal_evidence_digest(
+                    &aborted_snapshot,
+                    aborted_snapshot.terminal.as_ref().unwrap(),
+                    &aborted_snapshot.descriptor.indexes[0],
+                )
+                .unwrap(),
+            ),
+            (
+                "jZhaXH4MRgJwDEN_Y6-OZWStljvlUMGJKPcnAJQxh-w",
+                "9-LWfFY2Nz1jzF24JDe5-zXrfm22cbldScGIvVZDJGo",
+                "YCC1KyQTJvinV6YCB149WrgesDcLVRCwwfFpnwx95Xk".to_string(),
+                "JfZ28r4ATcFOFUuPIcBhDcgEFkySkUQywfEOHZfTKZY".to_string()
             )
         );
     }
@@ -2501,11 +3729,7 @@ mod tests {
 
         let (prepared, token) = fixture.journal.prepare_validated(desired.clone()).unwrap();
         let (replayed, replay_token) = fixture.journal.prepare_validated(desired).unwrap();
-        let reopened = fixture
-            .journal
-            .inspect_prepared_structural()
-            .unwrap()
-            .unwrap();
+        let reopened = fixture.journal.inspect_structural().unwrap().unwrap();
 
         assert_eq!(prepared, replayed);
         assert_eq!(prepared, reopened);
@@ -2528,11 +3752,7 @@ mod tests {
             fixture.journal.prepare_validated(second).unwrap_err(),
             PrivateOramOwnerJournalError::ConcurrentMutation
         );
-        let current = fixture
-            .journal
-            .inspect_prepared_structural()
-            .unwrap()
-            .unwrap();
+        let current = fixture.journal.inspect_structural().unwrap().unwrap();
         assert_eq!(
             current.descriptor.descriptor_digest,
             first_token.journal_descriptor_digest()
@@ -2598,13 +3818,7 @@ mod tests {
         let stranded = fixture.journal.root.join(".candidate-stranded");
         create_private_directory(&stranded).unwrap();
 
-        assert!(
-            fixture
-                .journal
-                .inspect_prepared_structural()
-                .unwrap()
-                .is_none()
-        );
+        assert!(fixture.journal.inspect_structural().unwrap().is_none());
         fixture
             .journal
             .prepare_validated(validated_fixture(7, false))
@@ -2647,7 +3861,7 @@ mod tests {
         fs::write(state, bytes).unwrap();
 
         assert_eq!(
-            fixture.journal.inspect_prepared_structural().unwrap_err(),
+            fixture.journal.inspect_structural().unwrap_err(),
             PrivateOramOwnerJournalError::Corrupt
         );
     }
@@ -2672,6 +3886,324 @@ mod tests {
         );
     }
 
+    #[test]
+    fn finalized_terminal_reopens_and_exact_replay_returns_same_token() {
+        let fixture = fixture();
+        let desired = validated_fixture(20, true);
+        let descriptor_digest = desired.snapshot.descriptor.descriptor_digest.clone();
+        let parent_descriptor_digest = desired.snapshot.descriptor.parent_descriptor_digest.clone();
+        let consensus_authority_record_digest = digest(93);
+        let reconciliation_authority_digest = digest(94);
+        let canonical_index_states = canonical_index_states(&desired, 109);
+        fixture.journal.prepare_validated(desired.clone()).unwrap();
+        let context = PrivateOramOwnerJournalFinalizeContextV1 {
+            expected_journal_descriptor_digest: &descriptor_digest,
+            parent_descriptor_digest: &parent_descriptor_digest,
+            authenticated_owner_peer_id: 7,
+            consensus_authority_record_digest: &consensus_authority_record_digest,
+            reconciliation_authority_digest: &reconciliation_authority_digest,
+            canonical_index_states: &canonical_index_states,
+        };
+
+        let (finalized, token) = fixture.journal.record_finalized(context).unwrap();
+        let (replayed, replay_token) = fixture.journal.record_finalized(context).unwrap();
+        let reopened = fixture.journal.inspect_structural().unwrap().unwrap();
+
+        assert_eq!(finalized, replayed);
+        assert_eq!(finalized, reopened);
+        assert_eq!(token, replay_token);
+        assert_eq!(
+            finalized.terminal.as_ref().unwrap().phase,
+            PrivateOramOwnerJournalPhaseV1::Finalized
+        );
+        assert_eq!(token.owner_peer_id(), 7);
+        assert_eq!(token.journal_descriptor_digest(), descriptor_digest);
+        assert_eq!(token.indexes().len(), 2);
+        assert_eq!(
+            token.indexes()[0].prepared_journal_digest(),
+            prepared_token(&finalized.descriptor).unwrap().indexes()[0].prepared_journal_digest()
+        );
+        assert!(terminal_path(&fixture).join(TERMINAL_RECORD_FILE).exists());
+        assert_eq!(
+            fixture.journal.prepare_validated(desired).unwrap_err(),
+            PrivateOramOwnerJournalError::ConcurrentMutation
+        );
+    }
+
+    #[test]
+    fn aborted_old_terminal_replays_and_rejects_finalize_substitution() {
+        let fixture = fixture();
+        let desired = validated_fixture(21, false);
+        let descriptor_digest = desired.snapshot.descriptor.descriptor_digest.clone();
+        let parent_descriptor_digest = desired.snapshot.descriptor.parent_descriptor_digest.clone();
+        let consensus_authority_record_digest = digest(95);
+        let abort_authority_digest = digest(96);
+        let finalize_authority_digest = digest(97);
+        let aborted_index_states = canonical_index_states(&desired, 111);
+        let finalized_index_states = canonical_index_states(&desired, 112);
+        fixture.journal.prepare_validated(desired).unwrap();
+        let abort_context = PrivateOramOwnerJournalAbortOldContextV1 {
+            expected_journal_descriptor_digest: &descriptor_digest,
+            parent_descriptor_digest: &parent_descriptor_digest,
+            authenticated_owner_peer_id: 7,
+            consensus_authority_record_digest: &consensus_authority_record_digest,
+            reconciliation_authority_digest: &abort_authority_digest,
+            canonical_index_states: &aborted_index_states,
+        };
+
+        let (aborted, token) = fixture.journal.record_aborted_old(abort_context).unwrap();
+        let (replayed, replay_token) = fixture.journal.record_aborted_old(abort_context).unwrap();
+        let finalize_context = PrivateOramOwnerJournalFinalizeContextV1 {
+            expected_journal_descriptor_digest: &descriptor_digest,
+            parent_descriptor_digest: &parent_descriptor_digest,
+            authenticated_owner_peer_id: 7,
+            consensus_authority_record_digest: &consensus_authority_record_digest,
+            reconciliation_authority_digest: &finalize_authority_digest,
+            canonical_index_states: &finalized_index_states,
+        };
+
+        assert_eq!(aborted, replayed);
+        assert_eq!(token, replay_token);
+        assert_eq!(
+            aborted.terminal.as_ref().unwrap().phase,
+            PrivateOramOwnerJournalPhaseV1::AbortedOld
+        );
+        assert_eq!(token.owner_peer_id(), 7);
+        assert_eq!(token.indexes().len(), 1);
+        assert_eq!(
+            fixture
+                .journal
+                .record_finalized(finalize_context)
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+    }
+
+    #[test]
+    fn terminal_requires_exact_descriptor_parent_and_authenticated_owner() {
+        let fixture = fixture();
+        let desired = validated_fixture(22, false);
+        let descriptor_digest = desired.snapshot.descriptor.descriptor_digest.clone();
+        let parent_descriptor_digest = desired.snapshot.descriptor.parent_descriptor_digest.clone();
+        let wrong_digest = digest(98);
+        let consensus_authority_record_digest = digest(99);
+        let authority_digest = digest(100);
+        let canonical_index_states = canonical_index_states(&desired, 113);
+        fixture.journal.prepare_validated(desired).unwrap();
+
+        assert_eq!(
+            fixture
+                .journal
+                .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                    expected_journal_descriptor_digest: &wrong_digest,
+                    parent_descriptor_digest: &parent_descriptor_digest,
+                    authenticated_owner_peer_id: 7,
+                    consensus_authority_record_digest: &consensus_authority_record_digest,
+                    reconciliation_authority_digest: &authority_digest,
+                    canonical_index_states: &canonical_index_states,
+                })
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+        assert_eq!(
+            fixture
+                .journal
+                .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                    expected_journal_descriptor_digest: &descriptor_digest,
+                    parent_descriptor_digest: &wrong_digest,
+                    authenticated_owner_peer_id: 7,
+                    consensus_authority_record_digest: &consensus_authority_record_digest,
+                    reconciliation_authority_digest: &authority_digest,
+                    canonical_index_states: &canonical_index_states,
+                })
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+        assert_eq!(
+            fixture
+                .journal
+                .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                    expected_journal_descriptor_digest: &descriptor_digest,
+                    parent_descriptor_digest: &parent_descriptor_digest,
+                    authenticated_owner_peer_id: 8,
+                    consensus_authority_record_digest: &consensus_authority_record_digest,
+                    reconciliation_authority_digest: &authority_digest,
+                    canonical_index_states: &canonical_index_states,
+                })
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+        assert!(!terminal_path(&fixture).exists());
+    }
+
+    #[test]
+    fn terminal_requires_exact_authorities_and_canonical_index_states() {
+        let fixture = fixture();
+        let desired = validated_fixture(25, true);
+        let descriptor_digest = desired.snapshot.descriptor.descriptor_digest.clone();
+        let parent_descriptor_digest = desired.snapshot.descriptor.parent_descriptor_digest.clone();
+        let consensus_authority_record_digest = digest(116);
+        let reconciliation_authority_digest = digest(117);
+        let canonical_index_states = canonical_index_states(&desired, 118);
+        fixture.journal.prepare_validated(desired).unwrap();
+
+        assert_eq!(
+            fixture
+                .journal
+                .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                    expected_journal_descriptor_digest: &descriptor_digest,
+                    parent_descriptor_digest: &parent_descriptor_digest,
+                    authenticated_owner_peer_id: 7,
+                    consensus_authority_record_digest: &consensus_authority_record_digest,
+                    reconciliation_authority_digest: &reconciliation_authority_digest,
+                    canonical_index_states: &canonical_index_states[..1],
+                })
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+        let mut wrong_identity = canonical_index_states.clone();
+        wrong_identity[1].index_name.push_str("-wrong");
+        assert_eq!(
+            fixture
+                .journal
+                .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                    expected_journal_descriptor_digest: &descriptor_digest,
+                    parent_descriptor_digest: &parent_descriptor_digest,
+                    authenticated_owner_peer_id: 7,
+                    consensus_authority_record_digest: &consensus_authority_record_digest,
+                    reconciliation_authority_digest: &reconciliation_authority_digest,
+                    canonical_index_states: &wrong_identity,
+                })
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+        assert!(!terminal_path(&fixture).exists());
+
+        fixture
+            .journal
+            .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                expected_journal_descriptor_digest: &descriptor_digest,
+                parent_descriptor_digest: &parent_descriptor_digest,
+                authenticated_owner_peer_id: 7,
+                consensus_authority_record_digest: &consensus_authority_record_digest,
+                reconciliation_authority_digest: &reconciliation_authority_digest,
+                canonical_index_states: &canonical_index_states,
+            })
+            .unwrap();
+
+        let changed_consensus_authority = digest(119);
+        assert_eq!(
+            fixture
+                .journal
+                .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                    expected_journal_descriptor_digest: &descriptor_digest,
+                    parent_descriptor_digest: &parent_descriptor_digest,
+                    authenticated_owner_peer_id: 7,
+                    consensus_authority_record_digest: &changed_consensus_authority,
+                    reconciliation_authority_digest: &reconciliation_authority_digest,
+                    canonical_index_states: &canonical_index_states,
+                })
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+        let changed_reconciliation_authority = digest(120);
+        assert_eq!(
+            fixture
+                .journal
+                .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                    expected_journal_descriptor_digest: &descriptor_digest,
+                    parent_descriptor_digest: &parent_descriptor_digest,
+                    authenticated_owner_peer_id: 7,
+                    consensus_authority_record_digest: &consensus_authority_record_digest,
+                    reconciliation_authority_digest: &changed_reconciliation_authority,
+                    canonical_index_states: &canonical_index_states,
+                })
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+        let mut changed_canonical_state = canonical_index_states;
+        changed_canonical_state[0].canonical_state_digest = digest(121);
+        assert_eq!(
+            fixture
+                .journal
+                .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                    expected_journal_descriptor_digest: &descriptor_digest,
+                    parent_descriptor_digest: &parent_descriptor_digest,
+                    authenticated_owner_peer_id: 7,
+                    consensus_authority_record_digest: &consensus_authority_record_digest,
+                    reconciliation_authority_digest: &reconciliation_authority_digest,
+                    canonical_index_states: &changed_canonical_state,
+                })
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+    }
+
+    #[test]
+    fn stranded_terminal_candidate_is_preserved_but_never_adopted() {
+        let fixture = fixture();
+        let desired = validated_fixture(23, false);
+        let descriptor_digest = desired.snapshot.descriptor.descriptor_digest.clone();
+        let parent_descriptor_digest = desired.snapshot.descriptor.parent_descriptor_digest.clone();
+        let consensus_authority_record_digest = digest(101);
+        let authority_digest = digest(102);
+        let canonical_index_states = canonical_index_states(&desired, 114);
+        fixture.journal.prepare_validated(desired).unwrap();
+        let stranded = active_path(&fixture)
+            .join(ACTIVE_TEMP_DIR)
+            .join(".terminal-candidate-stranded");
+        create_private_directory(&stranded).unwrap();
+
+        let structural = fixture.journal.inspect_structural().unwrap().unwrap();
+        assert!(structural.terminal.is_none());
+        fixture
+            .journal
+            .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                expected_journal_descriptor_digest: &descriptor_digest,
+                parent_descriptor_digest: &parent_descriptor_digest,
+                authenticated_owner_peer_id: 7,
+                consensus_authority_record_digest: &consensus_authority_record_digest,
+                reconciliation_authority_digest: &authority_digest,
+                canonical_index_states: &canonical_index_states,
+            })
+            .unwrap();
+
+        assert!(stranded.exists());
+        assert!(terminal_path(&fixture).exists());
+    }
+
+    #[test]
+    fn terminal_record_tamper_fails_closed() {
+        let fixture = fixture();
+        let desired = validated_fixture(24, false);
+        let descriptor_digest = desired.snapshot.descriptor.descriptor_digest.clone();
+        let parent_descriptor_digest = desired.snapshot.descriptor.parent_descriptor_digest.clone();
+        let consensus_authority_record_digest = digest(103);
+        let authority_digest = digest(104);
+        let canonical_index_states = canonical_index_states(&desired, 115);
+        fixture.journal.prepare_validated(desired).unwrap();
+        fixture
+            .journal
+            .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                expected_journal_descriptor_digest: &descriptor_digest,
+                parent_descriptor_digest: &parent_descriptor_digest,
+                authenticated_owner_peer_id: 7,
+                consensus_authority_record_digest: &consensus_authority_record_digest,
+                reconciliation_authority_digest: &authority_digest,
+                canonical_index_states: &canonical_index_states,
+            })
+            .unwrap();
+        let record_path = terminal_path(&fixture).join(TERMINAL_RECORD_FILE);
+        let mut bytes = fs::read(&record_path).unwrap();
+        bytes[0] ^= 1;
+        fs::write(record_path, bytes).unwrap();
+
+        assert_eq!(
+            fixture.journal.inspect_structural().unwrap_err(),
+            PrivateOramOwnerJournalError::Corrupt
+        );
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn exclusive_root_lock_rejects_concurrent_prepare() {
@@ -2684,6 +4216,23 @@ mod tests {
                 .journal
                 .prepare_validated(validated_fixture(18, false))
                 .unwrap_err(),
+            PrivateOramOwnerJournalError::ConcurrentMutation
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn structural_read_rejects_concurrent_terminal_writer() {
+        let fixture = fixture();
+        fixture
+            .journal
+            .prepare_validated(validated_fixture(26, false))
+            .unwrap();
+        let root = open_private_directory(&fixture.journal.root).unwrap();
+        let _lock = lock_private_journal_root(&root).unwrap();
+
+        assert_eq!(
+            fixture.journal.inspect_structural().unwrap_err(),
             PrivateOramOwnerJournalError::ConcurrentMutation
         );
     }
@@ -2703,10 +4252,7 @@ mod tests {
         fs::rename(&symlink_state, &outside).unwrap();
         symlink(&outside, &symlink_state).unwrap();
         assert_eq!(
-            symlink_fixture
-                .journal
-                .inspect_prepared_structural()
-                .unwrap_err(),
+            symlink_fixture.journal.inspect_structural().unwrap_err(),
             PrivateOramOwnerJournalError::Corrupt
         );
 
@@ -2722,10 +4268,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            hardlink_fixture
-                .journal
-                .inspect_prepared_structural()
-                .unwrap_err(),
+            hardlink_fixture.journal.inspect_structural().unwrap_err(),
             PrivateOramOwnerJournalError::Corrupt
         );
 
@@ -2737,10 +4280,98 @@ mod tests {
         let mode_state = active_path(&mode_fixture).join(STATE_FILE);
         fs::set_permissions(&mode_state, std::fs::Permissions::from_mode(0o640)).unwrap();
         assert_eq!(
-            mode_fixture
+            mode_fixture.journal.inspect_structural().unwrap_err(),
+            PrivateOramOwnerJournalError::Corrupt
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_symlink_hardlink_bad_mode_and_oversize_fail_closed() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let symlink_fixture = fixture();
+        prepare_and_finalize(&symlink_fixture, 27);
+        let symlink_record = terminal_path(&symlink_fixture).join(TERMINAL_RECORD_FILE);
+        let outside = symlink_fixture.hnsw_root.join("outside-terminal-record");
+        fs::rename(&symlink_record, &outside).unwrap();
+        symlink(&outside, &symlink_record).unwrap();
+        assert_eq!(
+            symlink_fixture.journal.inspect_structural().unwrap_err(),
+            PrivateOramOwnerJournalError::Corrupt
+        );
+
+        let hardlink_fixture = fixture();
+        prepare_and_finalize(&hardlink_fixture, 28);
+        let hardlink_record = terminal_path(&hardlink_fixture).join(TERMINAL_RECORD_FILE);
+        fs::hard_link(
+            &hardlink_record,
+            hardlink_fixture.hnsw_root.join("terminal-record-hardlink"),
+        )
+        .unwrap();
+        assert_eq!(
+            hardlink_fixture.journal.inspect_structural().unwrap_err(),
+            PrivateOramOwnerJournalError::Corrupt
+        );
+
+        let mode_fixture = fixture();
+        prepare_and_finalize(&mode_fixture, 29);
+        let mode_record = terminal_path(&mode_fixture).join(TERMINAL_RECORD_FILE);
+        fs::set_permissions(&mode_record, std::fs::Permissions::from_mode(0o640)).unwrap();
+        assert_eq!(
+            mode_fixture.journal.inspect_structural().unwrap_err(),
+            PrivateOramOwnerJournalError::Corrupt
+        );
+
+        let oversized_fixture = fixture();
+        prepare_and_finalize(&oversized_fixture, 30);
+        let oversized_record = terminal_path(&oversized_fixture).join(TERMINAL_RECORD_FILE);
+        OpenOptions::new()
+            .write(true)
+            .open(&oversized_record)
+            .unwrap()
+            .set_len(MAX_TERMINAL_RECORD_BYTES + 1)
+            .unwrap();
+        assert_eq!(
+            oversized_fixture.journal.inspect_structural().unwrap_err(),
+            PrivateOramOwnerJournalError::Corrupt
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminal_candidate_allows_partial_record_but_rejects_unknown_entry() {
+        use fs_err::os::unix::fs::OpenOptionsExt as _;
+
+        let fixture = fixture();
+        fixture
+            .journal
+            .prepare_validated(validated_fixture(31, false))
+            .unwrap();
+        let temp = active_path(&fixture).join(ACTIVE_TEMP_DIR);
+        let partial = temp.join(".terminal-candidate-partial");
+        create_private_directory(&partial).unwrap();
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(partial.join(TERMINAL_RECORD_FILE))
+            .unwrap();
+        assert!(
+            fixture
                 .journal
-                .inspect_prepared_structural()
-                .unwrap_err(),
+                .inspect_structural()
+                .unwrap()
+                .unwrap()
+                .terminal
+                .is_none()
+        );
+
+        let unknown = temp.join(".terminal-candidate-unknown");
+        create_private_directory(&unknown).unwrap();
+        fs::write(unknown.join("unexpected"), b"x").unwrap();
+        assert_eq!(
+            fixture.journal.inspect_structural().unwrap_err(),
             PrivateOramOwnerJournalError::Corrupt
         );
     }
@@ -2752,7 +4383,7 @@ mod tests {
         fs::write(fixture.journal.root.join("unexpected"), b"x").unwrap();
 
         assert_eq!(
-            fixture.journal.inspect_prepared_structural().unwrap_err(),
+            fixture.journal.inspect_structural().unwrap_err(),
             PrivateOramOwnerJournalError::Corrupt
         );
     }
