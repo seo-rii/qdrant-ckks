@@ -12,6 +12,10 @@ use crate::private_oram_append_client::{
     PrivateOramAppendClientCheckpointV2, PrivateOramAppendClientError,
     PrivateOramEncryptedAppendClientCheckpointV2, open_private_oram_append_client_checkpoint_v2,
 };
+use crate::private_oram_append_owner_prepare::{
+    PRIVATE_ORAM_APPEND_OWNER_PREPARE_V1_VERSION, PrivateOramAppendOwnerBucketBatchV1,
+    PrivateOramAppendOwnerIndexPrepareV1, PrivateOramAppendOwnerPrepareV1,
+};
 use crate::private_oram_append_result_transaction::{
     PrivateOramAppendResultTransactionOutputV2,
     validate_private_oram_append_result_transaction_output_v2,
@@ -174,6 +178,66 @@ impl Debug for PrivateOramAppendPairedFinalizationV1 {
             .field("mutation_bundle", &"[redacted]")
             .finish()
     }
+}
+
+pub fn project_private_oram_append_paired_owner_prepare_v1(
+    finalized: &PrivateOramAppendPairedFinalizationV1,
+) -> Result<PrivateOramAppendOwnerPrepareV1, PrivateOramAppendFinalizerError> {
+    let hnsw = &finalized.hnsw_output;
+    let result = &finalized.result_output;
+    let mut saw_hnsw = false;
+    let mut saw_result = false;
+    let indexes = finalized
+        .mutation_bundle
+        .mutation
+        .writebacks
+        .iter()
+        .map(|writeback| match writeback.kind {
+            PrivateOramIndexKindV2::Hnsw
+                if !saw_hnsw
+                    && hnsw.writeback == *writeback
+                    && hnsw.read_transcript.kind == writeback.kind
+                    && hnsw.read_transcript.index_name == writeback.index_name =>
+            {
+                saw_hnsw = true;
+                Ok(PrivateOramAppendOwnerIndexPrepareV1 {
+                    index_name: writeback.index_name.clone(),
+                    ordered_encrypted_buckets: PrivateOramAppendOwnerBucketBatchV1::Hnsw(
+                        hnsw.ordered_encrypted_buckets.clone(),
+                    ),
+                    merkle_patch_proof: hnsw.merkle_patch_proof.clone(),
+                })
+            }
+            PrivateOramIndexKindV2::Result
+                if !saw_result
+                    && result.writeback == *writeback
+                    && result.read_transcript.kind == writeback.kind
+                    && result.read_transcript.index_name == writeback.index_name =>
+            {
+                saw_result = true;
+                Ok(PrivateOramAppendOwnerIndexPrepareV1 {
+                    index_name: writeback.index_name.clone(),
+                    ordered_encrypted_buckets: PrivateOramAppendOwnerBucketBatchV1::Result(
+                        result.ordered_encrypted_buckets.clone(),
+                    ),
+                    merkle_patch_proof: result.merkle_patch_proof.clone(),
+                })
+            }
+            _ => Err(PrivateOramAppendFinalizerError::ContextMismatch(
+                "owner_prepare",
+            )),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if !saw_hnsw || !saw_result || indexes.len() != 2 {
+        return Err(PrivateOramAppendFinalizerError::ContextMismatch(
+            "owner_prepare",
+        ));
+    }
+    Ok(PrivateOramAppendOwnerPrepareV1 {
+        version: PRIVATE_ORAM_APPEND_OWNER_PREPARE_V1_VERSION,
+        mutation_bundle: finalized.mutation_bundle.clone(),
+        indexes,
+    })
 }
 
 pub fn finalize_private_oram_append_paired_mutation_v1(

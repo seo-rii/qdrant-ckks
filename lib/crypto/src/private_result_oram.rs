@@ -2599,6 +2599,53 @@ where
     })
 }
 
+pub(crate) fn validate_private_result_upload_bucket(
+    base_context: PrivateResultOramBucketAeadBaseContext<'_>,
+    bucket: &PrivateResultOramBucket,
+    expected_epoch: u64,
+    bucket_count: u64,
+    expected_ciphertext_bytes: usize,
+) -> Result<(), PrivateResultOramError> {
+    validate_private_result_oram_bucket_shape(
+        bucket,
+        PrivateResultOramBucketValidationContext {
+            expected_index_epoch: expected_epoch,
+            bucket_count,
+            max_ciphertext_bytes: expected_ciphertext_bytes,
+        },
+    )?;
+    let raw_ciphertext = BASE64URL_NOPAD
+        .decode(bucket.ciphertext.as_bytes())
+        .map_err(|_| PrivateResultOramError::InvalidBucketCiphertextEncoding)?;
+    if raw_ciphertext.len() != expected_ciphertext_bytes
+        || raw_ciphertext.len()
+            < 1 + PRIVATE_RESULT_ORAM_BUCKET_AEAD_NONCE_LEN
+                + PRIVATE_RESULT_ORAM_BUCKET_AEAD_TAG_LEN
+    {
+        return Err(PrivateResultOramError::InvalidBucketCiphertextEncoding);
+    }
+    if raw_ciphertext[0] != PRIVATE_RESULT_ORAM_BUCKET_AEAD_VERSION {
+        return Err(PrivateResultOramError::UnsupportedBucketCiphertextVersion(
+            raw_ciphertext[0],
+        ));
+    }
+    let expected_commitment = private_result_oram_bucket_commitment(
+        PrivateResultOramBucketCommitmentContext {
+            collection_id: base_context.collection_id,
+            key_id: base_context.key_id,
+            rk_id: base_context.rk_id,
+            rk_epoch: base_context.rk_epoch,
+            bucket_id: bucket.bucket_id,
+            index_epoch: bucket.index_epoch,
+        },
+        &bucket.ciphertext_sha256,
+    )?;
+    if bucket.bucket_commitment != expected_commitment {
+        return Err(PrivateResultOramError::InvalidBucketCommitment);
+    }
+    Ok(())
+}
+
 pub fn validate_private_result_oram_bucket_shape(
     bucket: &PrivateResultOramBucket,
     context: PrivateResultOramBucketValidationContext,
@@ -5425,6 +5472,49 @@ mod tests {
         assert_eq!(
             open_private_result_oram_bucket(&keys, context, &bucket).unwrap(),
             plaintext
+        );
+    }
+
+    #[test]
+    fn upload_bucket_validation_rejects_rehashed_unknown_aead_version() {
+        let keys = result_test_keys();
+        let context = result_bucket_context(3);
+        let mut bucket = seal_private_result_oram_bucket(&keys, context, &[9; 64]).unwrap();
+        let mut raw_ciphertext = BASE64URL_NOPAD
+            .decode(bucket.ciphertext.as_bytes())
+            .unwrap();
+        raw_ciphertext[0] = 77;
+        bucket.ciphertext = BASE64URL_NOPAD.encode(&raw_ciphertext);
+        bucket.ciphertext_sha256 = base64url_sha256(&raw_ciphertext);
+        bucket.bucket_commitment = private_result_oram_bucket_commitment(
+            PrivateResultOramBucketCommitmentContext {
+                collection_id: context.collection_id,
+                key_id: context.key_id,
+                rk_id: context.rk_id,
+                rk_epoch: context.rk_epoch,
+                bucket_id: context.bucket_id,
+                index_epoch: context.index_epoch,
+            },
+            &bucket.ciphertext_sha256,
+        )
+        .unwrap();
+
+        assert_eq!(
+            validate_private_result_upload_bucket(
+                PrivateResultOramBucketAeadBaseContext {
+                    collection_id: context.collection_id,
+                    key_id: context.key_id,
+                    rk_id: context.rk_id,
+                    rk_epoch: context.rk_epoch,
+                },
+                &bucket,
+                context.index_epoch,
+                8,
+                raw_ciphertext.len(),
+            ),
+            Err(PrivateResultOramError::UnsupportedBucketCiphertextVersion(
+                77
+            ))
         );
     }
 

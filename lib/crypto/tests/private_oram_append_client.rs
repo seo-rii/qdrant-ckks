@@ -854,6 +854,37 @@ fn paired_finalization_validation<'a>(
     }
 }
 
+fn server_read_evidence(
+    recorder: &PrivateOramServerReadEvidenceRecorderV1,
+    transcript: &PrivateOramObservedReadTranscriptV1,
+) -> PrivateOramServerReadEvidenceV1 {
+    let paths_per_window = usize::try_from(transcript.paths_per_window).unwrap();
+    let windows = transcript
+        .ordered_leaf_labels
+        .chunks(paths_per_window)
+        .enumerate()
+        .map(|(sequence, paths)| PrivateOramAppendReadWindowV1 {
+            sequence: u32::try_from(sequence).unwrap(),
+            paths: paths.to_vec(),
+        })
+        .collect::<Vec<_>>();
+    recorder
+        .record(PrivateOramAppendReadTranscriptDigestInput {
+            collection_id: &transcript.collection_id,
+            manifest_digest: &transcript.manifest_digest,
+            mutation_id: &transcript.mutation_id,
+            old_state_digest: &transcript.old_state_digest,
+            writer_lease_digest: &transcript.writer_lease_digest,
+            writer_fence: transcript.writer_fence,
+            paths_per_window: transcript.paths_per_window,
+            tree_height: transcript.tree_height,
+            kind: transcript.kind,
+            index_name: &transcript.index_name,
+            windows: &windows,
+        })
+        .unwrap()
+}
+
 #[test]
 fn hnsw_append_transaction_accepts_fixed_size_read_sequence_with_shared_ancestors() {
     let fixture = hnsw_append_transaction_fixture_with_path_batch_size(2);
@@ -3924,6 +3955,299 @@ fn paired_mutation_finalizer_signs_and_self_validates_the_exact_pending_artifact
         },
     )
     .unwrap();
+
+    let owner_prepare = project_private_oram_append_paired_owner_prepare_v1(&finalized).unwrap();
+    let owner_prepare_json = serde_json::to_string(&owner_prepare).unwrap();
+    let owner_prepare_value = serde_json::to_value(&owner_prepare).unwrap();
+    let top_level_keys = owner_prepare_value
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        top_level_keys,
+        std::collections::BTreeSet::from(["indexes", "mutation_bundle", "version"])
+    );
+    for index_value in owner_prepare_value["indexes"].as_array().unwrap() {
+        let index_keys = index_value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            index_keys,
+            std::collections::BTreeSet::from([
+                "index_name",
+                "merkle_patch_proof",
+                "ordered_encrypted_buckets",
+            ])
+        );
+        let bucket_batch_keys = index_value["ordered_encrypted_buckets"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            bucket_batch_keys,
+            std::collections::BTreeSet::from(["buckets", "kind"])
+        );
+        let proof_keys = index_value["merkle_patch_proof"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            proof_keys,
+            std::collections::BTreeSet::from([
+                "bucket_count",
+                "index_epoch",
+                "leaves",
+                "old_root_hash",
+                "version",
+            ])
+        );
+    }
+    for forbidden_field in [
+        "checkpoint",
+        "next_client_state",
+        "graph_delta",
+        "result_record",
+        "final_encrypted_buckets",
+        "recovery_marker",
+        "position_map",
+        "stash",
+        "read_transcript",
+    ] {
+        let forbidden_json_key = format!("\"{forbidden_field}\":");
+        assert!(
+            !owner_prepare_json.contains(&forbidden_json_key),
+            "{forbidden_field}: {owner_prepare_json}",
+        );
+    }
+    for forbidden_value in [
+        &fixture.old_encrypted_checkpoint.sealed.ciphertext,
+        &finalized.hnsw_output.recovery_marker.attempt_digest,
+        &finalized.result_output.recovery_marker.attempt_digest,
+    ] {
+        assert!(!owner_prepare_json.contains(forbidden_value));
+    }
+    let owner_server_read_evidence_recorder = PrivateOramServerReadEvidenceRecorderV1::new();
+    let owner_server_read_evidence = vec![
+        server_read_evidence(
+            &owner_server_read_evidence_recorder,
+            &finalized.hnsw_output.read_transcript,
+        ),
+        server_read_evidence(
+            &owner_server_read_evidence_recorder,
+            &finalized.result_output.read_transcript,
+        ),
+    ];
+    let owner_validation = PrivateOramAppendOwnerPrepareValidationContextV1 {
+        expected_collection_id: validation.expected_collection_id,
+        expected_manifest_digest: validation.expected_manifest_digest,
+        expected_owner_signing_key_id: validation.expected_owner_signing_key_id,
+        expected_layout_generation: validation.expected_layout_generation,
+        expected_layout_digest: validation.expected_layout_digest,
+        expected_writer_lease_digest: validation.expected_writer_lease_digest,
+        expected_writer_fence: validation.expected_writer_fence,
+        expected_state_sequence: validation.expected_state_sequence,
+        expected_old_state_digest: validation.expected_old_state_digest,
+        expected_visible_point_record: None,
+        server_read_evidence_recorder: &owner_server_read_evidence_recorder,
+        server_read_evidence: &owner_server_read_evidence,
+        now_unix: validation.now_unix,
+        max_mutation_ttl_secs: validation.max_mutation_ttl_secs,
+        public_key: validation.public_key,
+    };
+    let validated = validate_private_oram_append_owner_prepare_v1(
+        &manifest_bundle,
+        &owner_prepare,
+        owner_validation,
+    )
+    .unwrap();
+    assert_eq!(validated.mutation_bundle(), &owner_prepare.mutation_bundle);
+    assert_eq!(
+        validated.mutation_digest(),
+        private_oram_append_mutation_v1_digest(&owner_prepare.mutation_bundle.mutation).unwrap()
+    );
+    assert_eq!(validated.indexes().len(), 2);
+    for (index, writeback) in validated
+        .indexes()
+        .iter()
+        .zip(&owner_prepare.mutation_bundle.mutation.writebacks)
+    {
+        assert_eq!(index.kind(), index.final_buckets().kind());
+        assert_eq!(index.final_bucket_refs().len(), index.final_buckets().len());
+        assert!(index.final_bucket_refs().len() < index.ordered_bucket_refs().len());
+        assert_eq!(
+            index.ordered_bucket_refs(),
+            writeback.updated_buckets.as_slice()
+        );
+        let expected_last_refs = writeback
+            .updated_buckets
+            .iter()
+            .cloned()
+            .fold(std::collections::BTreeMap::new(), |mut refs, bucket| {
+                refs.insert(bucket.bucket_id, bucket);
+                refs
+            })
+            .into_values()
+            .collect::<Vec<_>>();
+        assert_eq!(index.final_bucket_refs(), expected_last_refs.as_slice());
+        assert_eq!(index.old_epoch() + 1, index.new_epoch());
+    }
+
+    assert!(
+        validate_private_oram_append_owner_prepare_v1(
+            &manifest_bundle,
+            &owner_prepare,
+            PrivateOramAppendOwnerPrepareValidationContextV1 {
+                server_read_evidence: &[],
+                ..owner_validation
+            },
+        )
+        .is_err()
+    );
+
+    let mut mismatched_server_evidence = owner_server_read_evidence.clone();
+    let mut mismatched_server_transcript = finalized.hnsw_output.read_transcript.clone();
+    mismatched_server_transcript.ordered_leaf_labels.swap(0, 1);
+    mismatched_server_evidence[0] = server_read_evidence(
+        &owner_server_read_evidence_recorder,
+        &mismatched_server_transcript,
+    );
+    assert!(
+        validate_private_oram_append_owner_prepare_v1(
+            &manifest_bundle,
+            &owner_prepare,
+            PrivateOramAppendOwnerPrepareValidationContextV1 {
+                server_read_evidence: &mismatched_server_evidence,
+                ..owner_validation
+            },
+        )
+        .is_err()
+    );
+
+    let foreign_server_read_evidence_recorder = PrivateOramServerReadEvidenceRecorderV1::new();
+    let foreign_server_read_evidence = vec![
+        server_read_evidence(
+            &foreign_server_read_evidence_recorder,
+            &finalized.hnsw_output.read_transcript,
+        ),
+        server_read_evidence(
+            &foreign_server_read_evidence_recorder,
+            &finalized.result_output.read_transcript,
+        ),
+    ];
+    assert!(
+        validate_private_oram_append_owner_prepare_v1(
+            &manifest_bundle,
+            &owner_prepare,
+            PrivateOramAppendOwnerPrepareValidationContextV1 {
+                server_read_evidence: &foreign_server_read_evidence,
+                ..owner_validation
+            },
+        )
+        .is_err()
+    );
+
+    let mut missing_occurrence = owner_prepare.clone();
+    let PrivateOramAppendOwnerBucketBatchV1::Hnsw(buckets) =
+        &mut missing_occurrence.indexes[0].ordered_encrypted_buckets
+    else {
+        unreachable!();
+    };
+    buckets.remove(0);
+    assert!(
+        validate_private_oram_append_owner_prepare_v1(
+            &manifest_bundle,
+            &missing_occurrence,
+            owner_validation,
+        )
+        .is_err()
+    );
+
+    let mut reordered_occurrences = owner_prepare.clone();
+    let PrivateOramAppendOwnerBucketBatchV1::Hnsw(buckets) =
+        &mut reordered_occurrences.indexes[0].ordered_encrypted_buckets
+    else {
+        unreachable!();
+    };
+    buckets.swap(0, 1);
+    assert!(
+        validate_private_oram_append_owner_prepare_v1(
+            &manifest_bundle,
+            &reordered_occurrences,
+            owner_validation,
+        )
+        .is_err()
+    );
+
+    let mut wrong_bucket_kind = owner_prepare.clone();
+    let result_buckets = match &wrong_bucket_kind.indexes[1].ordered_encrypted_buckets {
+        PrivateOramAppendOwnerBucketBatchV1::Result(buckets) => buckets.clone(),
+        PrivateOramAppendOwnerBucketBatchV1::Hnsw(_) => unreachable!(),
+    };
+    wrong_bucket_kind.indexes[0].ordered_encrypted_buckets =
+        PrivateOramAppendOwnerBucketBatchV1::Result(result_buckets);
+    assert!(
+        validate_private_oram_append_owner_prepare_v1(
+            &manifest_bundle,
+            &wrong_bucket_kind,
+            owner_validation,
+        )
+        .is_err()
+    );
+
+    let mut duplicate_proof_leaf = owner_prepare.clone();
+    let duplicate = duplicate_proof_leaf.indexes[0].merkle_patch_proof.leaves[0].clone();
+    duplicate_proof_leaf.indexes[0]
+        .merkle_patch_proof
+        .leaves
+        .insert(0, duplicate);
+    assert!(
+        validate_private_oram_append_owner_prepare_v1(
+            &manifest_bundle,
+            &duplicate_proof_leaf,
+            owner_validation,
+        )
+        .is_err()
+    );
+
+    let mut tampered_proof = owner_prepare.clone();
+    tampered_proof.indexes[0].merkle_patch_proof.old_root_hash = digest(252);
+    assert!(
+        validate_private_oram_append_owner_prepare_v1(
+            &manifest_bundle,
+            &tampered_proof,
+            owner_validation,
+        )
+        .is_err()
+    );
+
+    let mut invalid_signature = owner_prepare.clone();
+    invalid_signature.mutation_bundle.signature.sig = digest(253);
+    assert!(
+        validate_private_oram_append_owner_prepare_v1(
+            &manifest_bundle,
+            &invalid_signature,
+            owner_validation,
+        )
+        .is_err()
+    );
+
+    let mut unknown_client_field = serde_json::to_value(&owner_prepare).unwrap();
+    unknown_client_field["indexes"][0]
+        .as_object_mut()
+        .unwrap()
+        .insert("read_transcript".to_string(), serde_json::json!({}));
+    assert!(
+        serde_json::from_value::<PrivateOramAppendOwnerPrepareV1>(unknown_client_field).is_err()
+    );
 }
 
 #[test]

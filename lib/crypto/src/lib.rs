@@ -13,6 +13,7 @@ pub mod private_hnsw_oram;
 pub mod private_oram_append_checkpoint;
 pub mod private_oram_append_client;
 pub mod private_oram_append_finalizer;
+pub mod private_oram_append_owner_prepare;
 pub mod private_oram_append_result_transaction;
 pub mod private_oram_append_transaction;
 pub mod private_oram_mutation;
@@ -190,6 +191,15 @@ pub use private_oram_append_finalizer::{
     PrivateOramAppendFinalizerError, PrivateOramAppendPairedFinalizationContextV1,
     PrivateOramAppendPairedFinalizationInputV1, PrivateOramAppendPairedFinalizationV1,
     finalize_private_oram_append_paired_mutation_v1,
+    project_private_oram_append_paired_owner_prepare_v1,
+};
+pub use private_oram_append_owner_prepare::{
+    PRIVATE_ORAM_APPEND_OWNER_PREPARE_V1_VERSION, PrivateOramAppendOwnerBucketBatchV1,
+    PrivateOramAppendOwnerIndexPrepareV1, PrivateOramAppendOwnerPrepareError,
+    PrivateOramAppendOwnerPrepareV1, PrivateOramAppendOwnerPrepareValidationContextV1,
+    PrivateOramServerReadEvidenceRecorderV1, PrivateOramServerReadEvidenceV1,
+    PrivateOramValidatedOwnerFinalBucketsV1, PrivateOramValidatedOwnerIndexPrepareV1,
+    PrivateOramValidatedOwnerPrepareV1, validate_private_oram_append_owner_prepare_v1,
 };
 pub use private_oram_append_result_transaction::{
     PRIVATE_ORAM_APPEND_RESULT_ATTEMPT_V3_DIGEST_DOMAIN,
