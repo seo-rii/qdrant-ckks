@@ -789,6 +789,19 @@ impl Persistent {
         let key_digest = private_oram_mutation_key_digest(&operation.key);
         let current = self.private_oram_mutation_lease_slots.get(&key_digest);
         if current == Some(&operation.new) {
+            let state = self
+                .private_oram_mutation_state(&operation.key)
+                .ok_or_else(|| {
+                    StorageError::bad_request(
+                        "private ORAM mutation lease requires initialized collection state",
+                    )
+                })?;
+            self.validate_private_oram_mutation_state_bindings(&state)?;
+            validate_private_oram_mutation_slot_state_relationship(
+                &operation.new,
+                &state,
+                &operation.key,
+            )?;
             return Ok(());
         }
         if current != Some(&operation.expected) {
@@ -2326,16 +2339,26 @@ fn validate_private_oram_mutation_lease_cas(
                 && matches!(new.phase, PrivateOramMutationLeasePhase::Preparing)
         }
         (Some(expected), Some(new)) => {
-            operation.expected.generation == operation.new.generation
+            let shared_slot_is_unchanged = operation.expected.generation
+                == operation.new.generation
                 && operation.expected.max_writer_fence == operation.new.max_writer_fence
                 && operation.expected.last_clear == operation.new.last_clear
-                && private_oram_mutation_lease_has_same_identity(expected, new)
-                && expected.phase == new.phase
+                && private_oram_mutation_lease_has_same_identity(expected, new);
+            let renewal_is_valid = expected.phase == new.phase
                 && expected
                     .renewal_revision
                     .checked_add(1)
                     .is_some_and(|revision| revision == new.renewal_revision)
-                && new.expires_at_unix > expected.expires_at_unix
+                && new.expires_at_unix > expected.expires_at_unix;
+            let abort_decision_is_valid = matches!(
+                (&expected.phase, &new.phase),
+                (
+                    PrivateOramMutationLeasePhase::Preparing,
+                    PrivateOramMutationLeasePhase::AbortDecided
+                )
+            ) && new.renewal_revision == expected.renewal_revision
+                && new.expires_at_unix == expected.expires_at_unix;
+            shared_slot_is_unchanged && (renewal_is_valid || abort_decision_is_valid)
         }
         (Some(expected), None) => {
             let Some(clear) = operation.new.last_clear.as_ref() else {
@@ -2344,10 +2367,15 @@ fn validate_private_oram_mutation_lease_cas(
                 ));
             };
             let (expected_outcome, terminal_state_digest) = match &expected.phase {
-                PrivateOramMutationLeasePhase::Preparing => (
+                PrivateOramMutationLeasePhase::AbortDecided => (
                     PrivateOramMutationClearOutcome::AbortedBeforeConsensusCommit,
                     expected.base_record_digest.as_str(),
                 ),
+                PrivateOramMutationLeasePhase::Preparing => {
+                    return Err(StorageError::bad_request(
+                        "private ORAM mutation lease transition is invalid",
+                    ));
+                }
                 PrivateOramMutationLeasePhase::ConsensusCommitted {
                     committed_record_digest,
                     ..
@@ -2387,7 +2415,8 @@ fn validate_private_oram_mutation_slot_state_relationship(
             ));
         }
         match &lease.phase {
-            PrivateOramMutationLeasePhase::Preparing => {
+            PrivateOramMutationLeasePhase::Preparing
+            | PrivateOramMutationLeasePhase::AbortDecided => {
                 if lease.base_record_digest != state_record_digest
                     || lease.base_state_sequence != state.state_sequence
                 {
@@ -3776,6 +3805,17 @@ mod tests {
         }
     }
 
+    fn private_oram_mutation_abort_decided_slot(
+        fixture: &PrivateOramMutationFixture,
+    ) -> PrivateOramMutationLeaseSlotV2 {
+        let mut lease = fixture.preparing_slot.active.clone().unwrap();
+        lease.phase = PrivateOramMutationLeasePhase::AbortDecided;
+        PrivateOramMutationLeaseSlotV2 {
+            active: Some(lease),
+            ..fixture.preparing_slot.clone()
+        }
+    }
+
     fn private_oram_mutation_cleared_slot(
         active_slot: &PrivateOramMutationLeaseSlotV2,
         state: &PrivateOramConsensusCollectionStateV2,
@@ -3828,14 +3868,33 @@ mod tests {
             PrivateOramMutationClearOutcome::AbortedBeforeConsensusCommit,
             92,
         );
-        let clear = CompareAndSwapPrivateOramMutationLease {
+        let unsafe_clear = CompareAndSwapPrivateOramMutationLease {
             key: fixture.key.clone(),
             expected: fixture.preparing_slot.clone(),
             new: cleared.clone(),
         };
+        let unsafe_clear_error = persistent
+            .compare_and_swap_private_oram_mutation_lease(&unsafe_clear)
+            .unwrap_err();
+        assert!(
+            unsafe_clear_error
+                .to_string()
+                .contains("transition is invalid")
+        );
+
+        let abort_decided = private_oram_mutation_abort_decided_slot(&fixture);
         persistent
-            .compare_and_swap_private_oram_mutation_lease(&clear)
+            .compare_and_swap_private_oram_mutation_lease(&CompareAndSwapPrivateOramMutationLease {
+                key: fixture.key.clone(),
+                expected: fixture.preparing_slot.clone(),
+                new: abort_decided.clone(),
+            })
             .unwrap();
+        let clear = CompareAndSwapPrivateOramMutationLease {
+            key: fixture.key.clone(),
+            expected: abort_decided,
+            new: cleared.clone(),
+        };
         persistent
             .compare_and_swap_private_oram_mutation_lease(&clear)
             .unwrap();
@@ -3885,6 +3944,115 @@ mod tests {
             expired_takeover
                 .to_string()
                 .contains("transition is invalid")
+        );
+    }
+
+    #[test]
+    fn private_oram_abort_decision_and_mutation_apply_are_mutually_exclusive() {
+        let abort_first_temp = tempfile::tempdir().unwrap();
+        let fixture = private_oram_mutation_fixture();
+        let mut abort_first =
+            Persistent::load_or_init(abort_first_temp.path(), true, false, Some(7)).unwrap();
+        install_private_oram_mutation_fixture(&mut abort_first, &fixture);
+        abort_first
+            .compare_and_swap_private_oram_mutation_lease(&private_oram_mutation_acquire(&fixture))
+            .unwrap();
+        let abort_decided = private_oram_mutation_abort_decided_slot(&fixture);
+        let abort_operation = CompareAndSwapPrivateOramMutationLease {
+            key: fixture.key.clone(),
+            expected: fixture.preparing_slot.clone(),
+            new: abort_decided.clone(),
+        };
+        let mut renewal_smuggled_into_decision = abort_decided.clone();
+        let smuggled_lease = renewal_smuggled_into_decision.active.as_mut().unwrap();
+        smuggled_lease.expires_at_unix += 10;
+        smuggled_lease.renewal_revision += 1;
+        let smuggled_decision_error = abort_first
+            .compare_and_swap_private_oram_mutation_lease(&CompareAndSwapPrivateOramMutationLease {
+                key: fixture.key.clone(),
+                expected: fixture.preparing_slot.clone(),
+                new: renewal_smuggled_into_decision,
+            })
+            .unwrap_err();
+        assert!(
+            smuggled_decision_error
+                .to_string()
+                .contains("transition is invalid")
+        );
+        abort_first
+            .compare_and_swap_private_oram_mutation_lease(&abort_operation)
+            .unwrap();
+        drop(abort_first);
+
+        let mut abort_first =
+            Persistent::load_or_init(abort_first_temp.path(), true, false, None).unwrap();
+        abort_first
+            .compare_and_swap_private_oram_mutation_lease(&abort_operation)
+            .unwrap();
+        for invalid_new in [
+            fixture.preparing_slot.clone(),
+            fixture.committed_slot.clone(),
+        ] {
+            let terminal_escape_error = abort_first
+                .compare_and_swap_private_oram_mutation_lease(
+                    &CompareAndSwapPrivateOramMutationLease {
+                        key: fixture.key.clone(),
+                        expected: abort_decided.clone(),
+                        new: invalid_new,
+                    },
+                )
+                .unwrap_err();
+            assert!(
+                terminal_escape_error
+                    .to_string()
+                    .contains("transition is invalid")
+            );
+        }
+        let mut renewed_abort_decided = abort_decided.clone();
+        let renewed_lease = renewed_abort_decided.active.as_mut().unwrap();
+        renewed_lease.expires_at_unix += 10;
+        renewed_lease.renewal_revision += 1;
+        abort_first
+            .compare_and_swap_private_oram_mutation_lease(&CompareAndSwapPrivateOramMutationLease {
+                key: fixture.key.clone(),
+                expected: abort_decided,
+                new: renewed_abort_decided.clone(),
+            })
+            .unwrap();
+        assert_eq!(
+            abort_first.private_oram_mutation_lease_slot(&fixture.key),
+            Some(renewed_abort_decided)
+        );
+        let delayed_apply_error = abort_first
+            .apply_private_oram_mutation(&private_oram_mutation_apply(&fixture))
+            .unwrap_err();
+        assert!(
+            delayed_apply_error
+                .to_string()
+                .contains("lease transition is invalid")
+        );
+
+        let commit_first_temp = tempfile::tempdir().unwrap();
+        let mut commit_first =
+            Persistent::load_or_init(commit_first_temp.path(), true, false, Some(7)).unwrap();
+        install_private_oram_mutation_fixture(&mut commit_first, &fixture);
+        commit_first
+            .compare_and_swap_private_oram_mutation_lease(&private_oram_mutation_acquire(&fixture))
+            .unwrap();
+        commit_first
+            .apply_private_oram_mutation(&private_oram_mutation_apply(&fixture))
+            .unwrap();
+        let delayed_abort_error = commit_first
+            .compare_and_swap_private_oram_mutation_lease(&abort_operation)
+            .unwrap_err();
+        assert!(
+            delayed_abort_error
+                .to_string()
+                .contains("precondition failed")
+        );
+        assert_eq!(
+            commit_first.private_oram_mutation_lease_slot(&fixture.key),
+            Some(fixture.committed_slot.clone())
         );
     }
 
@@ -4354,6 +4522,20 @@ mod tests {
         )
         .unwrap();
 
+        let abort_decided_slots = HashMap::from([(
+            state_key.clone(),
+            private_oram_mutation_abort_decided_slot(&fixture),
+        )]);
+        Persistent::validate_private_oram_snapshot_state(
+            &epoch_maps,
+            &HashMap::new(),
+            &layouts,
+            &HashMap::new(),
+            &states,
+            &abort_decided_slots,
+        )
+        .unwrap();
+
         let missing_slot = Persistent::validate_private_oram_snapshot_state(
             &epoch_maps,
             &HashMap::new(),
@@ -4423,8 +4605,27 @@ mod tests {
         };
         let committed_states = HashMap::from([(
             private_oram_mutation_key_digest(&fixture.key),
-            fixture.new_state,
+            fixture.new_state.clone(),
         )]);
+        let committed_layouts = HashMap::from([(
+            private_oram_layout_key_digest(&fixture.layout_key),
+            committed_layout,
+        )]);
+        let abort_after_commit = Persistent::validate_private_oram_snapshot_state(
+            &committed_epochs,
+            &HashMap::new(),
+            &committed_layouts,
+            &HashMap::new(),
+            &committed_states,
+            &abort_decided_slots,
+        )
+        .unwrap_err();
+        assert!(
+            abort_after_commit
+                .to_string()
+                .contains("lease slot snapshot")
+        );
+
         let committed_slots = HashMap::from([(
             private_oram_mutation_key_digest(&fixture.key),
             fixture.committed_slot,
@@ -4432,10 +4633,7 @@ mod tests {
         Persistent::validate_private_oram_snapshot_state(
             &committed_epochs,
             &HashMap::new(),
-            &HashMap::from([(
-                private_oram_layout_key_digest(&fixture.layout_key),
-                committed_layout,
-            )]),
+            &committed_layouts,
             &HashMap::new(),
             &committed_states,
             &committed_slots,
@@ -4487,6 +4685,30 @@ mod tests {
             .insert("unexpected".to_string(), serde_json::Value::Bool(true));
         assert!(
             serde_json::from_value::<PrivateOramMutationLeasePhase>(unknown_phase_field).is_err()
+        );
+
+        let abort_decided = PrivateOramMutationLeasePhase::AbortDecided;
+        assert_eq!(
+            serde_json::to_value(&abort_decided).unwrap(),
+            serde_json::Value::String("abort_decided".to_string())
+        );
+        assert_eq!(
+            serde_json::from_value::<PrivateOramMutationLeasePhase>(serde_json::Value::String(
+                "abort_decided".to_string(),
+            ))
+            .unwrap(),
+            abort_decided
+        );
+        assert!(
+            serde_json::from_value::<PrivateOramMutationLeasePhase>(serde_json::json!({
+                "abort_decided": {}
+            }))
+            .is_err()
+        );
+        let abort_decided_cbor = serde_cbor::to_vec(&abort_decided).unwrap();
+        assert_eq!(
+            serde_cbor::from_slice::<PrivateOramMutationLeasePhase>(&abort_decided_cbor).unwrap(),
+            abort_decided
         );
     }
 

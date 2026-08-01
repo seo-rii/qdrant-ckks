@@ -292,6 +292,7 @@ pub mod consensus_ops {
     #[serde(rename_all = "snake_case", deny_unknown_fields)]
     pub enum PrivateOramMutationLeasePhase {
         Preparing,
+        AbortDecided,
         ConsensusCommitted {
             committed_record_digest: String,
             committed_state_sequence: u64,
@@ -304,6 +305,7 @@ pub mod consensus_ops {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             match self {
                 Self::Preparing => f.write_str("Preparing"),
+                Self::AbortDecided => f.write_str("AbortDecided"),
                 Self::ConsensusCommitted {
                     committed_state_sequence,
                     ..

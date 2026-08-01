@@ -325,6 +325,8 @@ impl Debug for PrivateOramMutationJournalSnapshotV1 {
 pub enum PrivateOramMutationReconcileDispositionV1 {
     /// Observation only. Owner or point abort requires a later consensus abort decision.
     ObservedOldNeedsAbortDecision,
+    /// Consensus has fenced mutation apply while the collection remains exact old.
+    ExactOldAbortDecided,
     ExactNew,
 }
 
@@ -555,11 +557,20 @@ impl PrivateOramMutationJournal {
         let disposition = if consensus_state == &snapshot.descriptor.expected_consensus_old_state {
             if snapshot.state.phase.sequence()
                 > PrivateOramMutationJournalPhaseV1::PointStageDurable.sequence()
-                || !matches!(active_lease.phase, PrivateOramMutationLeasePhase::Preparing)
             {
                 return Err(PrivateOramMutationJournalError::InvalidTransition);
             }
-            PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision
+            match &active_lease.phase {
+                PrivateOramMutationLeasePhase::Preparing => {
+                    PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision
+                }
+                PrivateOramMutationLeasePhase::AbortDecided => {
+                    PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided
+                }
+                PrivateOramMutationLeasePhase::ConsensusCommitted { .. } => {
+                    return Err(PrivateOramMutationJournalError::InvalidTransition);
+                }
+            }
         } else if consensus_state == &expected_new {
             if snapshot.state.phase.sequence()
                 < PrivateOramMutationJournalPhaseV1::PointStageDurable.sequence()
@@ -2779,7 +2790,7 @@ mod tests {
     }
 
     #[test]
-    fn reconciliation_context_classifies_exact_old_and_exact_new_only() {
+    fn reconciliation_context_classifies_only_valid_old_and_new_authority() {
         let temp = tempfile::tempdir().unwrap();
         let fixture = fixture(19, 20);
         let journal = journal(&temp, &fixture);
@@ -2810,6 +2821,20 @@ mod tests {
         let rendered = format!("{old:?}");
         assert!(!rendered.contains(&fixture.mutation_bundle.mutation.collection_id));
         assert!(!rendered.contains(&fixture.mutation_bundle.mutation.mutation_id));
+
+        let mut abort_decided = renewed_preparing.clone();
+        abort_decided.phase = PrivateOramMutationLeasePhase::AbortDecided;
+        let abort = journal
+            .validated_reconcile_context(
+                &fixture.old_consensus,
+                &active_lease_slot(abort_decided.clone()),
+            )
+            .unwrap();
+        assert_eq!(
+            abort.disposition(),
+            PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided
+        );
+        assert_eq!(abort.active_lease(), &abort_decided);
 
         let new = journal
             .validated_reconcile_context(
@@ -2883,6 +2908,16 @@ mod tests {
                 )
                 .is_err()
         );
+        let mut abort_decided = fixture.preparing_lease.clone();
+        abort_decided.phase = PrivateOramMutationLeasePhase::AbortDecided;
+        assert!(
+            journal
+                .validated_reconcile_context(
+                    &fixture.new_consensus,
+                    &active_lease_slot(abort_decided.clone()),
+                )
+                .is_err()
+        );
 
         let mut ambiguous_state = fixture.old_consensus.clone();
         ambiguous_state.state_sequence += 10;
@@ -2923,6 +2958,14 @@ mod tests {
                 .validated_reconcile_context(
                     &fixture.old_consensus,
                     &active_lease_slot(fixture.preparing_lease.clone()),
+                )
+                .is_err()
+        );
+        assert!(
+            journal
+                .validated_reconcile_context(
+                    &fixture.old_consensus,
+                    &active_lease_slot(abort_decided),
                 )
                 .is_err()
         );

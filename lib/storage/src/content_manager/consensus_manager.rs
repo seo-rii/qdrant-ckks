@@ -2947,11 +2947,48 @@ mod tests {
         target.apply_snapshot(&snapshot).unwrap().unwrap();
         assert_eq!(
             target.private_oram_mutation_state(&mutation_key),
-            Some(state)
+            Some(state.clone())
         );
         assert_eq!(
             target.private_oram_mutation_lease_slot(&mutation_key),
-            Some(preparing_slot)
+            Some(preparing_slot.clone())
+        );
+
+        let mut abort_decided_slot = preparing_slot.clone();
+        abort_decided_slot.active.as_mut().unwrap().phase =
+            PrivateOramMutationLeasePhase::AbortDecided;
+        let abort_decision = ConsensusOperations::CompareAndSwapPrivateOramMutationLease(
+            CompareAndSwapPrivateOramMutationLease {
+                key: mutation_key.clone(),
+                expected: preparing_slot,
+                new: abort_decided_slot.clone(),
+            },
+        );
+        assert!(
+            source
+                .apply_normal_entry(&Entry {
+                    data: serde_cbor::to_vec(&abort_decision).unwrap(),
+                    ..Default::default()
+                })
+                .unwrap()
+        );
+        let abort_snapshot = source.snapshot(0, 0).unwrap();
+        let abort_target_dir = Builder::new()
+            .prefix("private_oram_abort_decided_raft_target")
+            .tempdir()
+            .unwrap();
+        let (abort_target, _) = setup_storages(Vec::new(), abort_target_dir.path());
+        abort_target
+            .apply_snapshot(&abort_snapshot)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            abort_target.private_oram_mutation_state(&mutation_key),
+            Some(state)
+        );
+        assert_eq!(
+            abort_target.private_oram_mutation_lease_slot(&mutation_key),
+            Some(abort_decided_slot)
         );
     }
 
