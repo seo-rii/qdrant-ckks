@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::future::Future;
 use std::ops::Deref;
 use std::path::Path;
@@ -30,11 +30,13 @@ use tonic::transport::Uri;
 use super::CollectionContainer;
 use super::alias_mapping::AliasMapping;
 use super::consensus_ops::{
-    ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
-    PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramExternalRecoveryKey,
-    PrivateOramExternalRecoveryState, PrivateOramLayoutKey, PrivateOramLayoutTransitionState,
-    PrivateOramReshardingOperation, PrivateOramSessionLease, PrivateOramShardTransferFinish,
-    PrivateOramShardTransferStart, SnapshotStatus,
+    ConsensusOperations, PrivateOramCollectionLayoutTransition,
+    PrivateOramConsensusCollectionStateV2, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
+    PrivateOramEpochKey, PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryState,
+    PrivateOramLayoutKey, PrivateOramLayoutTransitionState, PrivateOramMutationKey,
+    PrivateOramMutationLease, PrivateOramMutationLeaseSlotV2, PrivateOramReshardingOperation,
+    PrivateOramSessionLease, PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
+    SnapshotStatus,
 };
 use super::errors::StorageError;
 use crate::content_manager::consensus::consensus_wal::ConsensusOpWal;
@@ -55,7 +57,7 @@ pub mod prelude {
 /// Allow us updating our peer metadata once every 60 seconds
 const CONSENSUS_PEER_METADATA_UPDATE_INTERVAL: Duration = Duration::from_secs(60);
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SnapshotData {
     pub collections_data: CollectionsSnapshot,
     #[serde(with = "crate::serialize_peer_addresses")]
@@ -72,6 +74,42 @@ pub struct SnapshotData {
     pub private_oram_layouts: HashMap<String, PrivateOramConsensusLayout>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub private_oram_external_recoveries: HashMap<String, PrivateOramExternalRecoveryState>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_oram_mutation_states: HashMap<String, PrivateOramConsensusCollectionStateV2>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_oram_mutation_lease_slots: HashMap<String, PrivateOramMutationLeaseSlotV2>,
+}
+
+impl fmt::Debug for SnapshotData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SnapshotData")
+            .field("collection_count", &self.collections_data.collections.len())
+            .field("peer_address_count", &self.address_by_id.len())
+            .field("peer_metadata_count", &self.metadata_by_id.len())
+            .field("cluster_metadata_count", &self.cluster_metadata.len())
+            .field("private_oram_epoch_count", &self.private_oram_epochs.len())
+            .field(
+                "private_oram_session_lease_count",
+                &self.private_oram_session_leases.len(),
+            )
+            .field(
+                "private_oram_layout_count",
+                &self.private_oram_layouts.len(),
+            )
+            .field(
+                "private_oram_external_recovery_count",
+                &self.private_oram_external_recoveries.len(),
+            )
+            .field(
+                "private_oram_mutation_state_count",
+                &self.private_oram_mutation_states.len(),
+            )
+            .field(
+                "private_oram_mutation_lease_slot_count",
+                &self.private_oram_mutation_lease_slots.len(),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -580,6 +618,21 @@ impl<C: CollectionContainer> ConsensusManager<C> {
                 .write()
                 .compare_and_swap_private_oram_session_lease(&operation)
                 .map(|()| true),
+            ConsensusOperations::InitializePrivateOramMutationState(operation) => self
+                .persistent
+                .write()
+                .initialize_private_oram_mutation_state(&operation)
+                .map(|()| true),
+            ConsensusOperations::CompareAndSwapPrivateOramMutationLease(operation) => self
+                .persistent
+                .write()
+                .compare_and_swap_private_oram_mutation_lease(&operation)
+                .map(|()| true),
+            ConsensusOperations::ApplyPrivateOramMutation(operation) => self
+                .persistent
+                .write()
+                .apply_private_oram_mutation(&operation)
+                .map(|()| true),
             ConsensusOperations::ApplyPrivateOramExternalRecovery(operation) => self
                 .persistent
                 .write()
@@ -820,6 +873,8 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             private_oram_session_leases,
             private_oram_layouts,
             private_oram_external_recoveries,
+            private_oram_mutation_states,
+            private_oram_mutation_lease_slots,
         } = snapshot.get_data().try_into()?;
 
         Persistent::validate_private_oram_snapshot_state(
@@ -827,6 +882,8 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             &private_oram_session_leases,
             &private_oram_layouts,
             &private_oram_external_recoveries,
+            &private_oram_mutation_states,
+            &private_oram_mutation_lease_slots,
         )?;
         let (
             current_private_oram_epochs,
@@ -866,6 +923,8 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             private_oram_session_leases,
             private_oram_layouts,
             private_oram_external_recoveries,
+            private_oram_mutation_states,
+            private_oram_mutation_lease_slots,
         )?;
 
         // Clear now obsolete WAL entries after persisting new Raft state
@@ -1109,6 +1168,27 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         key: &PrivateOramEpochKey,
     ) -> Option<PrivateOramSessionLease> {
         self.persistent.read().private_oram_session_lease(key)
+    }
+
+    pub fn private_oram_mutation_state(
+        &self,
+        key: &PrivateOramMutationKey,
+    ) -> Option<PrivateOramConsensusCollectionStateV2> {
+        self.persistent.read().private_oram_mutation_state(key)
+    }
+
+    pub fn private_oram_mutation_lease(
+        &self,
+        key: &PrivateOramMutationKey,
+    ) -> Option<PrivateOramMutationLease> {
+        self.persistent.read().private_oram_mutation_lease(key)
+    }
+
+    pub fn private_oram_mutation_lease_slot(
+        &self,
+        key: &PrivateOramMutationKey,
+    ) -> Option<PrivateOramMutationLeaseSlotV2> {
+        self.persistent.read().private_oram_mutation_lease_slot(key)
     }
 
     pub fn private_oram_external_recovery(
@@ -1364,7 +1444,6 @@ impl<C: CollectionContainer> Storage for ConsensusManager<C> {
                 raft::StorageError::SnapshotTemporarilyUnavailable,
             ));
         }
-
         let data = SnapshotData {
             collections_data,
             address_by_id: persistent.peer_address_by_id(),
@@ -1374,6 +1453,8 @@ impl<C: CollectionContainer> Storage for ConsensusManager<C> {
             private_oram_session_leases: persistent.private_oram_session_leases.clone(),
             private_oram_layouts: persistent.private_oram_layouts.clone(),
             private_oram_external_recoveries: persistent.private_oram_external_recoveries.clone(),
+            private_oram_mutation_states: persistent.private_oram_mutation_states.clone(),
+            private_oram_mutation_lease_slots: persistent.private_oram_mutation_lease_slots.clone(),
         };
 
         let raft_state = persistent.state();
@@ -1495,15 +1576,21 @@ mod tests {
     use crate::content_manager::consensus::persistent::Persistent;
     use crate::content_manager::consensus_ops::{
         CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramExternalRecovery,
-        CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramSessionLease,
-        ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
-        PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramExternalRecoveryKey,
-        PrivateOramExternalRecoveryLease, PrivateOramExternalRecoveryLeasePhase,
-        PrivateOramExternalRecoveryOperation, PrivateOramExternalRecoveryPhase,
-        PrivateOramExternalRecoveryState, PrivateOramIndexKind, PrivateOramLayoutIndexStateBinding,
-        PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding, PrivateOramLayoutTransitionState,
+        CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramMutationLease,
+        CompareAndSwapPrivateOramSessionLease, ConsensusOperations,
+        InitializePrivateOramMutationState, PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION,
+        PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION, PrivateOramCollectionLayoutTransition,
+        PrivateOramConsensusCollectionIndexStateV2, PrivateOramConsensusCollectionStateV2,
+        PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramConsensusTransitionV2,
+        PrivateOramEpochKey, PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryLease,
+        PrivateOramExternalRecoveryLeasePhase, PrivateOramExternalRecoveryOperation,
+        PrivateOramExternalRecoveryPhase, PrivateOramExternalRecoveryState, PrivateOramIndexKind,
+        PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding,
+        PrivateOramLayoutTransitionState, PrivateOramMutationKey, PrivateOramMutationLease,
+        PrivateOramMutationLeasePhase, PrivateOramMutationLeaseSlotV2,
         PrivateOramReshardingLayoutTransition, PrivateOramReshardingOperation,
         PrivateOramSessionLease, PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
+        canonical_private_oram_consensus_state_record_digest,
         canonical_private_oram_index_state_digest,
     };
 
@@ -2710,6 +2797,165 @@ mod tests {
     }
 
     #[test]
+    fn active_private_oram_mutation_slot_survives_raft_snapshot_restore() {
+        let source_dir = Builder::new()
+            .prefix("private_oram_mutation_raft_source")
+            .tempdir()
+            .unwrap();
+        let (source, _) = setup_storages(Vec::new(), source_dir.path());
+        let digest = |byte| BASE64URL_NOPAD.encode(&[byte; 32]);
+        let collection_id = "collection-uuid-mutation-snapshot".to_string();
+        let epoch_key = PrivateOramEpochKey {
+            collection_id: collection_id.clone(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let epoch = PrivateOramConsensusEpoch {
+            index_epoch: 7,
+            root_hash: digest(7),
+            writeback_digest: Some(digest(8)),
+        };
+        let layout = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![source.persistent.read().this_peer_id()],
+            layout_digest: digest(9),
+            index_state_digest: canonical_private_oram_index_state_digest(
+                &collection_id,
+                &[(epoch_key.clone(), epoch.clone())],
+            )
+            .unwrap(),
+        };
+        let state = PrivateOramConsensusCollectionStateV2 {
+            version: PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION,
+            collection_id: collection_id.clone(),
+            manifest_digest: digest(10),
+            layout_generation: layout.generation,
+            layout_digest: layout.layout_digest.clone(),
+            state_sequence: 0,
+            signed_state_digest: digest(11),
+            indexes: vec![PrivateOramConsensusCollectionIndexStateV2 {
+                index_kind: PrivateOramIndexKind::Hnsw,
+                index_name: "text".to_string(),
+                epoch: epoch.clone(),
+                logical_count: 4,
+                dummy_count: 6,
+            }],
+            client_state_digest: digest(12),
+            last_transition: PrivateOramConsensusTransitionV2::Genesis,
+        };
+        let mutation_key = PrivateOramMutationKey {
+            collection_id: collection_id.clone(),
+        };
+        let genesis_slot = PrivateOramMutationLeaseSlotV2 {
+            version: PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION,
+            generation: 0,
+            active: None,
+            last_clear: None,
+            max_writer_fence: 0,
+        };
+        let preparing_slot = PrivateOramMutationLeaseSlotV2 {
+            generation: 1,
+            active: Some(PrivateOramMutationLease {
+                generation: 1,
+                collection_id: collection_id.clone(),
+                owner_peer_id: layout.owner_peer_ids[0],
+                mutation_id: digest(13),
+                signed_mutation_digest: digest(14),
+                transition_digest: digest(15),
+                base_record_digest: canonical_private_oram_consensus_state_record_digest(&state)
+                    .unwrap(),
+                base_state_sequence: state.state_sequence,
+                writer_lease_digest: digest(16),
+                writer_fence: 1,
+                issued_at_unix: 100,
+                expires_at_unix: 200,
+                renewal_revision: 0,
+                phase: PrivateOramMutationLeasePhase::Preparing,
+            }),
+            max_writer_fence: 1,
+            ..genesis_slot.clone()
+        };
+
+        assert!(
+            source
+                .apply_normal_entry(&private_oram_epoch_entry(epoch_key.clone(), None, epoch,))
+                .unwrap()
+        );
+        assert!(
+            source
+                .apply_normal_entry(&private_oram_layout_entry(
+                    PrivateOramLayoutKey {
+                        collection_id: collection_id.clone(),
+                    },
+                    None,
+                    layout,
+                ))
+                .unwrap()
+        );
+        let initialize = ConsensusOperations::InitializePrivateOramMutationState(
+            InitializePrivateOramMutationState {
+                key: mutation_key.clone(),
+                state: state.clone(),
+            },
+        );
+        assert!(
+            source
+                .apply_normal_entry(&Entry {
+                    data: serde_cbor::to_vec(&initialize).unwrap(),
+                    ..Default::default()
+                })
+                .unwrap()
+        );
+        let acquire = ConsensusOperations::CompareAndSwapPrivateOramMutationLease(
+            CompareAndSwapPrivateOramMutationLease {
+                key: mutation_key.clone(),
+                expected: genesis_slot,
+                new: preparing_slot.clone(),
+            },
+        );
+        assert!(
+            source
+                .apply_normal_entry(&Entry {
+                    data: serde_cbor::to_vec(&acquire).unwrap(),
+                    ..Default::default()
+                })
+                .unwrap()
+        );
+
+        let snapshot = source.snapshot(0, 0).unwrap();
+        let snapshot_data: SnapshotData = snapshot.get_data().try_into().unwrap();
+        assert_eq!(snapshot_data.private_oram_mutation_states.len(), 1);
+        assert_eq!(snapshot_data.private_oram_mutation_lease_slots.len(), 1);
+        let snapshot_debug = format!("{snapshot_data:?}");
+        assert!(
+            snapshot_debug.contains("private_oram_mutation_state_count: 1"),
+            "{snapshot_debug}",
+        );
+        assert!(
+            snapshot_debug.contains("private_oram_mutation_lease_slot_count: 1"),
+            "{snapshot_debug}",
+        );
+        for secret in [&collection_id, &digest(13), &digest(14), &digest(15)] {
+            assert!(!snapshot_debug.contains(secret), "{snapshot_debug}");
+        }
+
+        let target_dir = Builder::new()
+            .prefix("private_oram_mutation_raft_target")
+            .tempdir()
+            .unwrap();
+        let (target, _) = setup_storages(Vec::new(), target_dir.path());
+        target.apply_snapshot(&snapshot).unwrap().unwrap();
+        assert_eq!(
+            target.private_oram_mutation_state(&mutation_key),
+            Some(state)
+        );
+        assert_eq!(
+            target.private_oram_mutation_lease_slot(&mutation_key),
+            Some(preparing_slot)
+        );
+    }
+
+    #[test]
     fn private_oram_external_recovery_survives_raft_snapshot_restore() {
         let source_dir = Builder::new()
             .prefix("private_oram_recovery_raft_source")
@@ -2934,6 +3180,8 @@ mod tests {
                 private_oram_session_leases: Default::default(),
                 private_oram_layouts: Default::default(),
                 private_oram_external_recoveries: Default::default(),
+                private_oram_mutation_states: Default::default(),
+                private_oram_mutation_lease_slots: Default::default(),
             },
             SnapshotData {
                 collections_data: Default::default(),
@@ -2947,6 +3195,8 @@ mod tests {
                 )]),
                 private_oram_layouts: Default::default(),
                 private_oram_external_recoveries: Default::default(),
+                private_oram_mutation_states: Default::default(),
+                private_oram_mutation_lease_slots: Default::default(),
             },
             SnapshotData {
                 collections_data: Default::default(),
@@ -2960,6 +3210,8 @@ mod tests {
                     layout,
                 )]),
                 private_oram_external_recoveries: Default::default(),
+                private_oram_mutation_states: Default::default(),
+                private_oram_mutation_lease_slots: Default::default(),
             },
             SnapshotData {
                 collections_data: Default::default(),
@@ -2973,6 +3225,8 @@ mod tests {
                     "invalid-recovery-key".to_string(),
                     recovery,
                 )]),
+                private_oram_mutation_states: Default::default(),
+                private_oram_mutation_lease_slots: Default::default(),
             },
         ];
 
@@ -3009,6 +3263,8 @@ mod tests {
             private_oram_session_leases: Default::default(),
             private_oram_layouts: Default::default(),
             private_oram_external_recoveries: Default::default(),
+            private_oram_mutation_states: Default::default(),
+            private_oram_mutation_lease_slots: Default::default(),
         };
         let mut legacy_value = serde_json::to_value(snapshot).unwrap();
         legacy_value
@@ -3019,6 +3275,14 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("private_oram_session_leases");
+        legacy_value
+            .as_object_mut()
+            .unwrap()
+            .remove("private_oram_mutation_states");
+        legacy_value
+            .as_object_mut()
+            .unwrap()
+            .remove("private_oram_mutation_lease_slots");
         legacy_value
             .as_object_mut()
             .unwrap()
@@ -3033,6 +3297,8 @@ mod tests {
         assert!(decoded.private_oram_session_leases.is_empty());
         assert!(decoded.private_oram_layouts.is_empty());
         assert!(decoded.private_oram_external_recoveries.is_empty());
+        assert!(decoded.private_oram_mutation_states.is_empty());
+        assert!(decoded.private_oram_mutation_lease_slots.is_empty());
     }
 
     #[test]

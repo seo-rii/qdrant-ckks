@@ -54,8 +54,20 @@ pub mod consensus_ops {
         b"qdrant-sec/private-oram-shard-layout-digest/v1";
     const PRIVATE_ORAM_INDEX_STATE_DIGEST_DOMAIN: &[u8] =
         b"qdrant-sec/private-oram-index-state-digest/v1";
+    const PRIVATE_ORAM_CONSENSUS_STATE_CORE_DIGEST_DOMAIN: &[u8] =
+        b"qdrant-sec/private-oram-consensus-state-core-digest/v2";
+    const PRIVATE_ORAM_CONSENSUS_STATE_RECORD_DIGEST_DOMAIN: &[u8] =
+        b"qdrant-sec/private-oram-consensus-state-record-digest/v2";
+    const PRIVATE_ORAM_MUTATION_RECEIPT_DIGEST_DOMAIN: &[u8] =
+        b"qdrant-sec/private-oram-mutation-receipt-digest/v2";
+    const PRIVATE_ORAM_MUTATION_TRANSITION_DIGEST_DOMAIN: &[u8] =
+        b"qdrant-sec/private-oram-mutation-transition-digest/v2";
     const PRIVATE_ORAM_CONSENSUS_MAX_RECORDS: usize = 1_000_000;
     const PRIVATE_ORAM_LAYOUT_MAX_OWNERS: usize = 10_000;
+    pub const PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION: u16 = 2;
+    pub const PRIVATE_ORAM_MUTATION_RECEIPT_VERSION: u16 = 2;
+    pub const PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION: u16 = 2;
+    pub const PRIVATE_ORAM_MUTATION_CLEAR_RECEIPT_VERSION: u16 = 1;
 
     #[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash, Clone, Copy)]
     #[serde(rename_all = "snake_case")]
@@ -139,6 +151,335 @@ pub mod consensus_ops {
                 .field("key", &self.key)
                 .field("has_expected", &self.expected.is_some())
                 .field("has_new", &self.new.is_some())
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    pub struct PrivateOramMutationKey {
+        pub collection_id: CollectionId,
+    }
+
+    impl fmt::Debug for PrivateOramMutationKey {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramMutationKey")
+                .field("collection_id", &"[redacted]")
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct PrivateOramConsensusCollectionIndexStateV2 {
+        pub index_kind: PrivateOramIndexKind,
+        pub index_name: String,
+        pub epoch: PrivateOramConsensusEpoch,
+        pub logical_count: u64,
+        pub dummy_count: u64,
+    }
+
+    impl fmt::Debug for PrivateOramConsensusCollectionIndexStateV2 {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramConsensusCollectionIndexStateV2")
+                .field("index_kind", &self.index_kind)
+                .field("index_name", &"[redacted]")
+                .field("index_epoch", &self.epoch.index_epoch)
+                .field("root_hash", &"[redacted]")
+                .field(
+                    "has_writeback_digest",
+                    &self.epoch.writeback_digest.is_some(),
+                )
+                .field("logical_count", &self.logical_count)
+                .field("dummy_count", &self.dummy_count)
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct PrivateOramMutationReceiptV2 {
+        pub version: u16,
+        pub mutation_id: String,
+        pub signed_mutation_digest: String,
+        pub transition_digest: String,
+        pub old_state_sequence: u64,
+        pub old_state_digest: String,
+        pub new_state_sequence: u64,
+        pub new_state_digest: String,
+        pub point_operation_digest: String,
+        pub writer_lease_digest: String,
+        pub writer_fence: u64,
+        pub mutation_lease_generation: u64,
+    }
+
+    impl fmt::Debug for PrivateOramMutationReceiptV2 {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramMutationReceiptV2")
+                .field("version", &self.version)
+                .field("mutation_id", &"[redacted]")
+                .field("signed_mutation_digest", &"[redacted]")
+                .field("transition_digest", &"[redacted]")
+                .field("old_state_sequence", &self.old_state_sequence)
+                .field("old_state_digest", &"[redacted]")
+                .field("new_state_sequence", &self.new_state_sequence)
+                .field("new_state_digest", &"[redacted]")
+                .field("point_operation_digest", &"[redacted]")
+                .field("writer_lease_digest", &"[redacted]")
+                .field("writer_fence", &self.writer_fence)
+                .field("mutation_lease_generation", &"[redacted]")
+                .finish()
+        }
+    }
+
+    // Mutation receipts are bounded, and direct value semantics keep consensus fixtures simple.
+    #[allow(clippy::large_enum_variant)]
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(
+        tag = "kind",
+        content = "receipt",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )]
+    pub enum PrivateOramConsensusTransitionV2 {
+        Genesis,
+        Mutation(PrivateOramMutationReceiptV2),
+    }
+
+    impl fmt::Debug for PrivateOramConsensusTransitionV2 {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Genesis => f.write_str("Genesis"),
+                Self::Mutation(_) => f.write_str("Mutation([redacted])"),
+            }
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct PrivateOramConsensusCollectionStateV2 {
+        pub version: u16,
+        pub collection_id: CollectionId,
+        pub manifest_digest: String,
+        pub layout_generation: u64,
+        pub layout_digest: String,
+        pub state_sequence: u64,
+        pub signed_state_digest: String,
+        pub indexes: Vec<PrivateOramConsensusCollectionIndexStateV2>,
+        pub client_state_digest: String,
+        pub last_transition: PrivateOramConsensusTransitionV2,
+    }
+
+    impl fmt::Debug for PrivateOramConsensusCollectionStateV2 {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramConsensusCollectionStateV2")
+                .field("version", &self.version)
+                .field("collection_id", &"[redacted]")
+                .field("manifest_digest", &"[redacted]")
+                .field("layout_generation", &self.layout_generation)
+                .field("layout_digest", &"[redacted]")
+                .field("state_sequence", &self.state_sequence)
+                .field("signed_state_digest", &"[redacted]")
+                .field("index_count", &self.indexes.len())
+                .field("client_state_digest", &"[redacted]")
+                .field("last_transition", &self.last_transition)
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(rename_all = "snake_case", deny_unknown_fields)]
+    pub enum PrivateOramMutationLeasePhase {
+        Preparing,
+        ConsensusCommitted {
+            committed_record_digest: String,
+            committed_state_sequence: u64,
+            committed_signed_state_digest: String,
+            receipt_digest: String,
+        },
+    }
+
+    impl fmt::Debug for PrivateOramMutationLeasePhase {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Preparing => f.write_str("Preparing"),
+                Self::ConsensusCommitted {
+                    committed_state_sequence,
+                    ..
+                } => f
+                    .debug_struct("ConsensusCommitted")
+                    .field("committed_state_sequence", committed_state_sequence)
+                    .field("committed_record_digest", &"[redacted]")
+                    .field("committed_signed_state_digest", &"[redacted]")
+                    .field("receipt_digest", &"[redacted]")
+                    .finish(),
+            }
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct PrivateOramMutationLease {
+        pub generation: u64,
+        pub collection_id: CollectionId,
+        pub owner_peer_id: PeerId,
+        pub mutation_id: String,
+        pub signed_mutation_digest: String,
+        pub transition_digest: String,
+        pub base_record_digest: String,
+        pub base_state_sequence: u64,
+        pub writer_lease_digest: String,
+        pub writer_fence: u64,
+        pub issued_at_unix: u64,
+        pub expires_at_unix: u64,
+        pub renewal_revision: u64,
+        pub phase: PrivateOramMutationLeasePhase,
+    }
+
+    impl fmt::Debug for PrivateOramMutationLease {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramMutationLease")
+                .field("generation", &"[redacted]")
+                .field("collection_id", &"[redacted]")
+                .field("owner_peer_id", &self.owner_peer_id)
+                .field("mutation_id", &"[redacted]")
+                .field("signed_mutation_digest", &"[redacted]")
+                .field("transition_digest", &"[redacted]")
+                .field("base_record_digest", &"[redacted]")
+                .field("base_state_sequence", &self.base_state_sequence)
+                .field("writer_lease_digest", &"[redacted]")
+                .field("writer_fence", &self.writer_fence)
+                .field("issued_at_unix", &self.issued_at_unix)
+                .field("expires_at_unix", &self.expires_at_unix)
+                .field("renewal_revision", &self.renewal_revision)
+                .field("phase", &self.phase)
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(rename_all = "snake_case")]
+    pub enum PrivateOramMutationClearOutcome {
+        AbortedBeforeConsensusCommit,
+        FinalizedOrReconciledAfterConsensusCommit,
+    }
+
+    impl fmt::Debug for PrivateOramMutationClearOutcome {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::AbortedBeforeConsensusCommit => f.write_str("AbortedBeforeConsensusCommit"),
+                Self::FinalizedOrReconciledAfterConsensusCommit => {
+                    f.write_str("FinalizedOrReconciledAfterConsensusCommit")
+                }
+            }
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct PrivateOramMutationClearReceiptV1 {
+        pub version: u16,
+        pub generation: u64,
+        pub mutation_id: String,
+        pub outcome: PrivateOramMutationClearOutcome,
+        pub terminal_state_digest: String,
+        pub reconciliation_digest: String,
+    }
+
+    impl fmt::Debug for PrivateOramMutationClearReceiptV1 {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramMutationClearReceiptV1")
+                .field("version", &self.version)
+                .field("generation", &"[redacted]")
+                .field("mutation_id", &"[redacted]")
+                .field("outcome", &self.outcome)
+                .field("terminal_state_digest", &"[redacted]")
+                .field("reconciliation_digest", &"[redacted]")
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct PrivateOramMutationLeaseSlotV2 {
+        pub version: u16,
+        pub generation: u64,
+        pub active: Option<PrivateOramMutationLease>,
+        pub last_clear: Option<PrivateOramMutationClearReceiptV1>,
+        pub max_writer_fence: u64,
+    }
+
+    impl fmt::Debug for PrivateOramMutationLeaseSlotV2 {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("PrivateOramMutationLeaseSlotV2")
+                .field("version", &self.version)
+                .field("generation", &"[redacted]")
+                .field("has_active", &self.active.is_some())
+                .field(
+                    "active_phase",
+                    &self.active.as_ref().map(|lease| &lease.phase),
+                )
+                .field("has_last_clear", &self.last_clear.is_some())
+                .field("max_writer_fence", &"[redacted]")
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct InitializePrivateOramMutationState {
+        pub key: PrivateOramMutationKey,
+        pub state: PrivateOramConsensusCollectionStateV2,
+    }
+
+    impl fmt::Debug for InitializePrivateOramMutationState {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("InitializePrivateOramMutationState")
+                .field("key", &self.key)
+                .field("state_sequence", &self.state.state_sequence)
+                .field("index_count", &self.state.indexes.len())
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct CompareAndSwapPrivateOramMutationLease {
+        pub key: PrivateOramMutationKey,
+        pub expected: PrivateOramMutationLeaseSlotV2,
+        pub new: PrivateOramMutationLeaseSlotV2,
+    }
+
+    impl fmt::Debug for CompareAndSwapPrivateOramMutationLease {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("CompareAndSwapPrivateOramMutationLease")
+                .field("key", &self.key)
+                .field("expected", &self.expected)
+                .field("new", &self.new)
+                .finish()
+        }
+    }
+
+    #[derive(Deserialize, Serialize, PartialEq, Eq, Hash, Clone)]
+    #[serde(deny_unknown_fields)]
+    pub struct ApplyPrivateOramMutation {
+        pub key: PrivateOramMutationKey,
+        pub mutation_lease_generation: u64,
+        pub expected_state: PrivateOramConsensusCollectionStateV2,
+        pub new_state: PrivateOramConsensusCollectionStateV2,
+    }
+
+    impl fmt::Debug for ApplyPrivateOramMutation {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("ApplyPrivateOramMutation")
+                .field("key", &self.key)
+                .field("mutation_lease_generation", &"[redacted]")
+                .field("layout_generation", &self.expected_state.layout_generation)
+                .field(
+                    "expected_state_sequence",
+                    &self.expected_state.state_sequence,
+                )
+                .field("new_state_sequence", &self.new_state.state_sequence)
+                .field("index_count", &self.new_state.indexes.len())
                 .finish()
         }
     }
@@ -1236,6 +1577,185 @@ pub mod consensus_ops {
         Ok(entries)
     }
 
+    pub fn canonical_private_oram_consensus_state_core_digest(
+        state: &PrivateOramConsensusCollectionStateV2,
+    ) -> Result<String, StorageError> {
+        let mut hasher = Sha256::new();
+        hasher.update(PRIVATE_ORAM_CONSENSUS_STATE_CORE_DIGEST_DOMAIN);
+        update_private_oram_consensus_state_core(&mut hasher, state)?;
+        Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+    }
+
+    pub fn canonical_private_oram_consensus_state_record_digest(
+        state: &PrivateOramConsensusCollectionStateV2,
+    ) -> Result<String, StorageError> {
+        let mut hasher = Sha256::new();
+        hasher.update(PRIVATE_ORAM_CONSENSUS_STATE_RECORD_DIGEST_DOMAIN);
+        update_private_oram_consensus_state_core(&mut hasher, state)?;
+        match &state.last_transition {
+            PrivateOramConsensusTransitionV2::Genesis => hasher.update([0]),
+            PrivateOramConsensusTransitionV2::Mutation(receipt) => {
+                hasher.update([1]);
+                update_private_oram_mutation_receipt(&mut hasher, receipt, true)?;
+            }
+        }
+        Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+    }
+
+    pub fn canonical_private_oram_mutation_receipt_digest(
+        receipt: &PrivateOramMutationReceiptV2,
+    ) -> Result<String, StorageError> {
+        let mut hasher = Sha256::new();
+        hasher.update(PRIVATE_ORAM_MUTATION_RECEIPT_DIGEST_DOMAIN);
+        update_private_oram_mutation_receipt(&mut hasher, receipt, true)?;
+        Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+    }
+
+    pub fn canonical_private_oram_mutation_transition_digest(
+        old_state: &PrivateOramConsensusCollectionStateV2,
+        new_state: &PrivateOramConsensusCollectionStateV2,
+    ) -> Result<String, StorageError> {
+        let PrivateOramConsensusTransitionV2::Mutation(receipt) = &new_state.last_transition else {
+            return Err(invalid_private_oram_mutation_consensus_digest_input());
+        };
+        let old_record_digest = canonical_private_oram_consensus_state_record_digest(old_state)?;
+        let new_state_core_digest = canonical_private_oram_consensus_state_core_digest(new_state)?;
+        let mut hasher = Sha256::new();
+        hasher.update(PRIVATE_ORAM_MUTATION_TRANSITION_DIGEST_DOMAIN);
+        hasher.update(
+            decode_private_oram_sha256_digest(&old_record_digest)
+                .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+        );
+        hasher.update(
+            decode_private_oram_sha256_digest(&new_state_core_digest)
+                .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+        );
+        update_private_oram_mutation_receipt(&mut hasher, receipt, false)?;
+        Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+    }
+
+    fn update_private_oram_consensus_state_core(
+        hasher: &mut Sha256,
+        state: &PrivateOramConsensusCollectionStateV2,
+    ) -> Result<(), StorageError> {
+        if state.version != PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION
+            || !valid_private_oram_collection_id(&state.collection_id)
+            || state.layout_generation == 0
+            || state.indexes.is_empty()
+            || state.indexes.len() > PRIVATE_ORAM_CONSENSUS_MAX_RECORDS
+        {
+            return Err(invalid_private_oram_mutation_consensus_digest_input());
+        }
+        hasher.update(state.version.to_be_bytes());
+        update_private_oram_length_prefixed(hasher, state.collection_id.as_bytes());
+        hasher.update(
+            decode_private_oram_sha256_digest(&state.manifest_digest)
+                .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+        );
+        hasher.update(state.layout_generation.to_be_bytes());
+        hasher.update(
+            decode_private_oram_sha256_digest(&state.layout_digest)
+                .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+        );
+        hasher.update(state.state_sequence.to_be_bytes());
+        hasher.update(
+            decode_private_oram_sha256_digest(&state.signed_state_digest)
+                .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+        );
+        hasher.update((state.indexes.len() as u64).to_be_bytes());
+        let mut previous_order = None;
+        for index in &state.indexes {
+            let order = (
+                private_oram_index_kind_tag(index.index_kind),
+                index.index_name.as_bytes(),
+            );
+            let valid_name = match index.index_kind {
+                PrivateOramIndexKind::Hnsw => {
+                    !index.index_name.is_empty() && index.index_name.len() <= 128
+                }
+                PrivateOramIndexKind::ResultPayload => index.index_name.is_empty(),
+            };
+            if !valid_name
+                || previous_order
+                    .as_ref()
+                    .is_some_and(|previous| previous >= &order)
+                || index.logical_count.checked_add(index.dummy_count).is_none()
+            {
+                return Err(invalid_private_oram_mutation_consensus_digest_input());
+            }
+            hasher.update([order.0]);
+            update_private_oram_length_prefixed(hasher, order.1);
+            hasher.update(index.epoch.index_epoch.to_be_bytes());
+            hasher.update(
+                decode_private_oram_sha256_digest(&index.epoch.root_hash)
+                    .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+            );
+            match &index.epoch.writeback_digest {
+                Some(digest) => {
+                    hasher.update([1]);
+                    hasher.update(
+                        decode_private_oram_sha256_digest(digest)
+                            .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+                    );
+                }
+                None => hasher.update([0]),
+            }
+            hasher.update(index.logical_count.to_be_bytes());
+            hasher.update(index.dummy_count.to_be_bytes());
+            previous_order = Some(order);
+        }
+        hasher.update(
+            decode_private_oram_sha256_digest(&state.client_state_digest)
+                .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+        );
+        Ok(())
+    }
+
+    fn update_private_oram_mutation_receipt(
+        hasher: &mut Sha256,
+        receipt: &PrivateOramMutationReceiptV2,
+        include_transition_digest: bool,
+    ) -> Result<(), StorageError> {
+        if receipt.version != PRIVATE_ORAM_MUTATION_RECEIPT_VERSION
+            || receipt.writer_fence == 0
+            || receipt.mutation_lease_generation == 0
+        {
+            return Err(invalid_private_oram_mutation_consensus_digest_input());
+        }
+        hasher.update(receipt.version.to_be_bytes());
+        for digest in [&receipt.mutation_id, &receipt.signed_mutation_digest] {
+            hasher.update(
+                decode_private_oram_sha256_digest(digest)
+                    .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+            );
+        }
+        if include_transition_digest {
+            hasher.update(
+                decode_private_oram_sha256_digest(&receipt.transition_digest)
+                    .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+            );
+        }
+        hasher.update(receipt.old_state_sequence.to_be_bytes());
+        hasher.update(
+            decode_private_oram_sha256_digest(&receipt.old_state_digest)
+                .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+        );
+        hasher.update(receipt.new_state_sequence.to_be_bytes());
+        for digest in [
+            &receipt.new_state_digest,
+            &receipt.point_operation_digest,
+            &receipt.writer_lease_digest,
+        ] {
+            hasher.update(
+                decode_private_oram_sha256_digest(digest)
+                    .ok_or_else(invalid_private_oram_mutation_consensus_digest_input)?,
+            );
+        }
+        hasher.update(receipt.writer_fence.to_be_bytes());
+        hasher.update(receipt.mutation_lease_generation.to_be_bytes());
+        Ok(())
+    }
+
     pub fn canonical_private_oram_index_state_digest(
         collection_id: &str,
         states: &[(PrivateOramEpochKey, PrivateOramConsensusEpoch)],
@@ -1372,6 +1892,10 @@ pub mod consensus_ops {
         StorageError::bad_request("private ORAM consensus index-state digest input is invalid")
     }
 
+    fn invalid_private_oram_mutation_consensus_digest_input() -> StorageError {
+        StorageError::bad_request("private ORAM mutation consensus digest input is invalid")
+    }
+
     fn private_oram_layout_topology_matches(
         layout: &PrivateOramConsensusLayout,
         owner_peer_ids: &[PeerId],
@@ -1423,6 +1947,9 @@ pub mod consensus_ops {
         },
         CompareAndSwapPrivateOramEpoch(CompareAndSwapPrivateOramEpoch),
         CompareAndSwapPrivateOramSessionLease(CompareAndSwapPrivateOramSessionLease),
+        InitializePrivateOramMutationState(InitializePrivateOramMutationState),
+        CompareAndSwapPrivateOramMutationLease(CompareAndSwapPrivateOramMutationLease),
+        ApplyPrivateOramMutation(ApplyPrivateOramMutation),
         CompareAndSwapPrivateOramLayout(CompareAndSwapPrivateOramLayout),
         RequestSnapshot,
         ReportSnapshot {
@@ -1613,6 +2140,29 @@ pub mod consensus_ops {
                     .field("has_expected", &operation.expected.is_some())
                     .field("has_new", &operation.new.is_some())
                     .finish(),
+                ConsensusOperations::InitializePrivateOramMutationState(operation) => f
+                    .debug_struct("InitializePrivateOramMutationState")
+                    .field("state_sequence", &operation.state.state_sequence)
+                    .field("index_count", &operation.state.indexes.len())
+                    .finish(),
+                ConsensusOperations::CompareAndSwapPrivateOramMutationLease(operation) => f
+                    .debug_struct("CompareAndSwapPrivateOramMutationLease")
+                    .field("expected_has_active", &operation.expected.active.is_some())
+                    .field("new_has_active", &operation.new.active.is_some())
+                    .finish(),
+                ConsensusOperations::ApplyPrivateOramMutation(operation) => f
+                    .debug_struct("ApplyPrivateOramMutation")
+                    .field(
+                        "layout_generation",
+                        &operation.expected_state.layout_generation,
+                    )
+                    .field(
+                        "expected_state_sequence",
+                        &operation.expected_state.state_sequence,
+                    )
+                    .field("new_state_sequence", &operation.new_state.state_sequence)
+                    .field("index_count", &operation.new_state.indexes.len())
+                    .finish(),
                 ConsensusOperations::ApplyPrivateOramExternalRecovery(operation) => f
                     .debug_tuple("ApplyPrivateOramExternalRecovery")
                     .field(operation)
@@ -1775,17 +2325,24 @@ mod test {
 
     use super::collection_meta_ops::CollectionMetaOperations;
     use super::consensus_ops::{
-        CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramExternalRecovery,
-        CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramSessionLease,
-        ConsensusOperations, PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch,
-        PrivateOramConsensusLayout, PrivateOramEpochKey, PrivateOramExternalRecoveryKey,
-        PrivateOramExternalRecoveryLease, PrivateOramExternalRecoveryLeasePhase,
-        PrivateOramExternalRecoveryOperation, PrivateOramExternalRecoveryPhase,
-        PrivateOramExternalRecoveryState, PrivateOramIndexKind, PrivateOramLayoutIndexStateBinding,
-        PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding, PrivateOramLayoutTransitionState,
-        PrivateOramReshardingLayoutTransition, PrivateOramSessionLease,
-        PrivateOramShardKeyLayoutChange, PrivateOramShardKeyLayoutChangeKind,
-        PrivateOramShardLayoutEntry, canonical_private_oram_index_state_digest,
+        ApplyPrivateOramMutation, CompareAndSwapPrivateOramEpoch,
+        CompareAndSwapPrivateOramExternalRecovery, CompareAndSwapPrivateOramLayout,
+        CompareAndSwapPrivateOramMutationLease, CompareAndSwapPrivateOramSessionLease,
+        ConsensusOperations, InitializePrivateOramMutationState,
+        PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION, PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION,
+        PRIVATE_ORAM_MUTATION_RECEIPT_VERSION, PrivateOramCollectionLayoutTransition,
+        PrivateOramConsensusCollectionIndexStateV2, PrivateOramConsensusCollectionStateV2,
+        PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramConsensusTransitionV2,
+        PrivateOramEpochKey, PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryLease,
+        PrivateOramExternalRecoveryLeasePhase, PrivateOramExternalRecoveryOperation,
+        PrivateOramExternalRecoveryPhase, PrivateOramExternalRecoveryState, PrivateOramIndexKind,
+        PrivateOramLayoutIndexStateBinding, PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding,
+        PrivateOramLayoutTransitionState, PrivateOramMutationKey, PrivateOramMutationLease,
+        PrivateOramMutationLeasePhase, PrivateOramMutationLeaseSlotV2,
+        PrivateOramMutationReceiptV2, PrivateOramReshardingLayoutTransition,
+        PrivateOramSessionLease, PrivateOramShardKeyLayoutChange,
+        PrivateOramShardKeyLayoutChangeKind, PrivateOramShardLayoutEntry,
+        canonical_private_oram_index_state_digest,
         canonical_private_oram_resharding_post_layout_digest,
         canonical_private_oram_shard_layout_digest,
         classify_private_oram_replica_removal_layout_transition,
@@ -2012,6 +2569,130 @@ mod test {
                 "{rendered}"
             );
             assert!(!rendered.contains("lease-vector-sentinel"), "{rendered}");
+        }
+    }
+
+    #[test]
+    fn private_oram_mutation_operations_redact_consensus_state_and_receipts() {
+        let secret = "qdrant-sec-private-oram-mutation-secret-sentinel";
+        let collection_id = "qdrant-sec-private-oram-mutation-collection-sentinel";
+        let index_name = "qdrant-sec-private-oram-mutation-index-sentinel";
+        let old_state = PrivateOramConsensusCollectionStateV2 {
+            version: PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION,
+            collection_id: collection_id.to_string(),
+            manifest_digest: secret.to_string(),
+            layout_generation: 1,
+            layout_digest: secret.to_string(),
+            state_sequence: 0,
+            signed_state_digest: secret.to_string(),
+            indexes: vec![PrivateOramConsensusCollectionIndexStateV2 {
+                index_kind: PrivateOramIndexKind::Hnsw,
+                index_name: index_name.to_string(),
+                epoch: PrivateOramConsensusEpoch {
+                    index_epoch: 7,
+                    root_hash: secret.to_string(),
+                    writeback_digest: Some(secret.to_string()),
+                },
+                logical_count: 4,
+                dummy_count: 6,
+            }],
+            client_state_digest: secret.to_string(),
+            last_transition: PrivateOramConsensusTransitionV2::Genesis,
+        };
+        let new_state = PrivateOramConsensusCollectionStateV2 {
+            state_sequence: 1,
+            indexes: vec![PrivateOramConsensusCollectionIndexStateV2 {
+                epoch: PrivateOramConsensusEpoch {
+                    index_epoch: 8,
+                    ..old_state.indexes[0].epoch.clone()
+                },
+                ..old_state.indexes[0].clone()
+            }],
+            last_transition: PrivateOramConsensusTransitionV2::Mutation(
+                PrivateOramMutationReceiptV2 {
+                    version: PRIVATE_ORAM_MUTATION_RECEIPT_VERSION,
+                    mutation_id: secret.to_string(),
+                    signed_mutation_digest: secret.to_string(),
+                    transition_digest: secret.to_string(),
+                    old_state_sequence: 0,
+                    old_state_digest: secret.to_string(),
+                    new_state_sequence: 1,
+                    new_state_digest: secret.to_string(),
+                    point_operation_digest: secret.to_string(),
+                    writer_lease_digest: secret.to_string(),
+                    writer_fence: 1,
+                    mutation_lease_generation: 1,
+                },
+            ),
+            ..old_state.clone()
+        };
+        let key = PrivateOramMutationKey {
+            collection_id: collection_id.to_string(),
+        };
+        let vacant_slot = PrivateOramMutationLeaseSlotV2 {
+            version: PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION,
+            generation: 0,
+            active: None,
+            last_clear: None,
+            max_writer_fence: 0,
+        };
+        let active_slot = PrivateOramMutationLeaseSlotV2 {
+            generation: 1,
+            active: Some(PrivateOramMutationLease {
+                generation: 1,
+                collection_id: collection_id.to_string(),
+                owner_peer_id: 7,
+                mutation_id: secret.to_string(),
+                signed_mutation_digest: secret.to_string(),
+                transition_digest: secret.to_string(),
+                base_record_digest: secret.to_string(),
+                base_state_sequence: 0,
+                writer_lease_digest: secret.to_string(),
+                writer_fence: 1,
+                issued_at_unix: 100,
+                expires_at_unix: 200,
+                renewal_revision: 0,
+                phase: PrivateOramMutationLeasePhase::ConsensusCommitted {
+                    committed_record_digest: secret.to_string(),
+                    committed_state_sequence: 1,
+                    committed_signed_state_digest: secret.to_string(),
+                    receipt_digest: secret.to_string(),
+                },
+            }),
+            max_writer_fence: 1,
+            ..vacant_slot.clone()
+        };
+        let operations = [
+            ConsensusOperations::InitializePrivateOramMutationState(
+                InitializePrivateOramMutationState {
+                    key: key.clone(),
+                    state: old_state.clone(),
+                },
+            ),
+            ConsensusOperations::CompareAndSwapPrivateOramMutationLease(
+                CompareAndSwapPrivateOramMutationLease {
+                    key: key.clone(),
+                    expected: vacant_slot,
+                    new: active_slot,
+                },
+            ),
+            ConsensusOperations::ApplyPrivateOramMutation(ApplyPrivateOramMutation {
+                key,
+                mutation_lease_generation: 1,
+                expected_state: old_state,
+                new_state,
+            }),
+        ];
+
+        for operation in operations {
+            for rendered in [
+                format!("{operation:?}"),
+                format!("{:?}", operation.redacted_log()),
+            ] {
+                assert!(!rendered.contains(secret), "{rendered}");
+                assert!(!rendered.contains(collection_id), "{rendered}");
+                assert!(!rendered.contains(index_name), "{rendered}");
+            }
         }
     }
 

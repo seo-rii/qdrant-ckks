@@ -316,12 +316,21 @@ fn main() -> anyhow::Result<()> {
         private_oram_external_recovery_install_is_pending(&settings.storage.storage_path)?;
     let private_oram_external_recovery_active =
         persistent_consensus_state.has_active_private_oram_external_recovery();
+    let private_oram_mutation_active =
+        persistent_consensus_state.has_active_private_oram_mutation();
     if (args.storage_snapshot.is_some() || args.snapshot.is_some())
         && (private_oram_recovery_install_pending || private_oram_external_recovery_active)
     {
         anyhow::bail!("Snapshot recovery is blocked by an active private ORAM external recovery");
     }
-    if private_oram_recovery_install_pending || private_oram_external_recovery_active {
+    if (args.storage_snapshot.is_some() || args.snapshot.is_some()) && private_oram_mutation_active
+    {
+        anyhow::bail!("Snapshot recovery is blocked by an active private ORAM mutation");
+    }
+    if private_oram_recovery_install_pending
+        || private_oram_external_recovery_active
+        || private_oram_mutation_active
+    {
         settings.storage.handle_collection_load_errors = false;
     }
 

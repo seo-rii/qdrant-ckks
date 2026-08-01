@@ -25,16 +25,25 @@ use crate::content_manager::collection_meta_ops::{
 };
 use crate::content_manager::consensus::entry_queue::{EntryApplyProgressQueue, EntryId};
 use crate::content_manager::consensus_ops::{
-    CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramExternalRecovery,
-    CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramSessionLease,
-    PrivateOramCollectionLayoutTransition, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
+    ApplyPrivateOramMutation, CompareAndSwapPrivateOramEpoch,
+    CompareAndSwapPrivateOramExternalRecovery, CompareAndSwapPrivateOramLayout,
+    CompareAndSwapPrivateOramMutationLease, CompareAndSwapPrivateOramSessionLease,
+    InitializePrivateOramMutationState, PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION,
+    PRIVATE_ORAM_MUTATION_CLEAR_RECEIPT_VERSION, PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION,
+    PRIVATE_ORAM_MUTATION_RECEIPT_VERSION, PrivateOramCollectionLayoutTransition,
+    PrivateOramConsensusCollectionIndexStateV2, PrivateOramConsensusCollectionStateV2,
+    PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramConsensusTransitionV2,
     PrivateOramEpochKey, PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryLease,
     PrivateOramExternalRecoveryLeasePhase, PrivateOramExternalRecoveryOperation,
     PrivateOramExternalRecoveryPhase, PrivateOramExternalRecoveryState, PrivateOramIndexKind,
-    PrivateOramLayoutKey, PrivateOramReshardingOperation, PrivateOramSessionLease,
-    PrivateOramShardKeyLayoutChange, PrivateOramShardKeyLayoutChangeKind,
+    PrivateOramLayoutKey, PrivateOramMutationClearOutcome, PrivateOramMutationClearReceiptV1,
+    PrivateOramMutationKey, PrivateOramMutationLease, PrivateOramMutationLeasePhase,
+    PrivateOramMutationLeaseSlotV2, PrivateOramMutationReceiptV2, PrivateOramReshardingOperation,
+    PrivateOramSessionLease, PrivateOramShardKeyLayoutChange, PrivateOramShardKeyLayoutChangeKind,
     PrivateOramShardTransferFinish, PrivateOramShardTransferStart,
-    canonical_private_oram_index_state_digest,
+    canonical_private_oram_consensus_state_record_digest,
+    canonical_private_oram_index_state_digest, canonical_private_oram_mutation_receipt_digest,
+    canonical_private_oram_mutation_transition_digest,
     private_oram_layout_is_precommitted_transfer_recovery, private_oram_transfer_consensus_layouts,
     private_oram_transfer_consensus_states,
 };
@@ -48,11 +57,14 @@ const PRIVATE_ORAM_EPOCH_KEY_DOMAIN: &[u8] = b"qdrant-sec/private-oram-consensus
 const PRIVATE_ORAM_LAYOUT_KEY_DOMAIN: &[u8] = b"qdrant-sec/private-oram-consensus-layout-key/v1";
 const PRIVATE_ORAM_EXTERNAL_RECOVERY_KEY_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-external-recovery-consensus-key/v1";
+const PRIVATE_ORAM_MUTATION_KEY_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-mutation-consensus-key/v1";
 const PRIVATE_ORAM_EPOCH_MAX_RECORDS: usize = 1_000_000;
 const PRIVATE_ORAM_LAYOUT_MAX_OWNERS: usize = 10_000;
 const PRIVATE_ORAM_SHA256_BASE64URL_LEN: usize = 43;
 const PRIVATE_ORAM_SESSION_LEASE_MAX_SECS: u64 = 3_600;
 const PRIVATE_ORAM_EXTERNAL_RECOVERY_LEASE_MAX_SECS: u64 = 3_600;
+const PRIVATE_ORAM_MUTATION_LEASE_MAX_SECS: u64 = 3_600;
 
 /// State of the Raft consensus, which should be saved between restarts.
 /// State of the collections, aliases and transfers are stored as regular storage.
@@ -85,6 +97,10 @@ pub struct Persistent {
     pub private_oram_layouts: HashMap<String, PrivateOramConsensusLayout>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub private_oram_external_recoveries: HashMap<String, PrivateOramExternalRecoveryState>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_oram_mutation_states: HashMap<String, PrivateOramConsensusCollectionStateV2>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub private_oram_mutation_lease_slots: HashMap<String, PrivateOramMutationLeaseSlotV2>,
     pub this_peer_id: PeerId,
     #[serde(skip)]
     pub path: PathBuf,
@@ -130,6 +146,14 @@ impl fmt::Debug for Persistent {
                 "private_oram_external_recovery_count",
                 &self.private_oram_external_recoveries.len(),
             )
+            .field(
+                "private_oram_mutation_state_count",
+                &self.private_oram_mutation_states.len(),
+            )
+            .field(
+                "private_oram_mutation_lease_slot_count",
+                &self.private_oram_mutation_lease_slots.len(),
+            )
             .field("this_peer_id", &self.this_peer_id)
             .field("path", &self.path)
             .field("dirty", &self.dirty.load(Ordering::Relaxed))
@@ -143,11 +167,26 @@ impl Persistent {
         private_oram_session_leases: &HashMap<String, PrivateOramSessionLease>,
         private_oram_layouts: &HashMap<String, PrivateOramConsensusLayout>,
         private_oram_external_recoveries: &HashMap<String, PrivateOramExternalRecoveryState>,
+        private_oram_mutation_states: &HashMap<String, PrivateOramConsensusCollectionStateV2>,
+        private_oram_mutation_lease_slots: &HashMap<String, PrivateOramMutationLeaseSlotV2>,
     ) -> Result<(), StorageError> {
         validate_private_oram_epoch_snapshot(private_oram_epochs)?;
         validate_private_oram_session_lease_snapshot(private_oram_session_leases)?;
         validate_private_oram_layout_snapshot(private_oram_layouts)?;
-        validate_private_oram_external_recovery_snapshot(private_oram_external_recoveries)
+        validate_private_oram_external_recovery_snapshot(private_oram_external_recoveries)?;
+        validate_private_oram_mutation_state_snapshot(
+            private_oram_mutation_states,
+            private_oram_epochs,
+            private_oram_layouts,
+        )?;
+        validate_private_oram_mutation_lease_slot_snapshot(
+            private_oram_mutation_lease_slots,
+            private_oram_mutation_states,
+            private_oram_layouts,
+            private_oram_epochs,
+            private_oram_session_leases,
+            private_oram_external_recoveries,
+        )
     }
 
     pub fn state(&self) -> &RaftState {
@@ -168,18 +207,39 @@ impl Persistent {
         new_private_oram_session_leases: HashMap<String, PrivateOramSessionLease>,
         new_private_oram_layouts: HashMap<String, PrivateOramConsensusLayout>,
         new_private_oram_external_recoveries: HashMap<String, PrivateOramExternalRecoveryState>,
+        new_private_oram_mutation_states: HashMap<String, PrivateOramConsensusCollectionStateV2>,
+        new_private_oram_mutation_lease_slots: HashMap<String, PrivateOramMutationLeaseSlotV2>,
     ) -> Result<(), StorageError> {
         validate_private_oram_epoch_snapshot(&new_private_oram_epochs)?;
         validate_private_oram_session_lease_snapshot(&new_private_oram_session_leases)?;
         validate_private_oram_layout_snapshot(&new_private_oram_layouts)?;
         validate_private_oram_external_recovery_snapshot(&new_private_oram_external_recoveries)?;
+        validate_private_oram_mutation_state_snapshot(
+            &new_private_oram_mutation_states,
+            &new_private_oram_epochs,
+            &new_private_oram_layouts,
+        )?;
+        validate_private_oram_mutation_lease_slot_snapshot(
+            &new_private_oram_mutation_lease_slots,
+            &new_private_oram_mutation_states,
+            &new_private_oram_layouts,
+            &new_private_oram_epochs,
+            &new_private_oram_session_leases,
+            &new_private_oram_external_recoveries,
+        )?;
         validate_private_oram_external_recovery_snapshot_transition_for_peer(
             &self.private_oram_external_recoveries,
             &new_private_oram_external_recoveries,
             self.this_peer_id,
         )?;
+        let previous_private_oram_epochs = self.private_oram_epochs.clone();
+        let previous_private_oram_session_leases = self.private_oram_session_leases.clone();
+        let previous_private_oram_layouts = self.private_oram_layouts.clone();
         let previous_private_oram_external_recoveries =
             self.private_oram_external_recoveries.clone();
+        let previous_private_oram_mutation_states = self.private_oram_mutation_states.clone();
+        let previous_private_oram_mutation_lease_slots =
+            self.private_oram_mutation_lease_slots.clone();
         // IF YOU ADD NEW DATA INTO `PERSISTENT` STATE, DON'T FORGET TO ALSO ADD IT INTO RAFT SNAPSHOT!
         let Self {
             state,
@@ -193,6 +253,8 @@ impl Persistent {
             private_oram_session_leases,
             private_oram_layouts,
             private_oram_external_recoveries,
+            private_oram_mutation_states,
+            private_oram_mutation_lease_slots,
             this_peer_id: _,
             path: _,
             dirty: _,
@@ -214,6 +276,8 @@ impl Persistent {
         *private_oram_session_leases = new_private_oram_session_leases;
         *private_oram_layouts = new_private_oram_layouts;
         *private_oram_external_recoveries = new_private_oram_external_recoveries;
+        *private_oram_mutation_states = new_private_oram_mutation_states;
+        *private_oram_mutation_lease_slots = new_private_oram_mutation_lease_slots;
 
         // Last Raft commit and last snapshot index must be equal and persisted in one operation
         // Our `ConsensusManager::new` function relies on this for reconciling WAL clears
@@ -223,7 +287,12 @@ impl Persistent {
         );
 
         if let Err(error) = self.save() {
+            self.private_oram_epochs = previous_private_oram_epochs;
+            self.private_oram_session_leases = previous_private_oram_session_leases;
+            self.private_oram_layouts = previous_private_oram_layouts;
             self.private_oram_external_recoveries = previous_private_oram_external_recoveries;
+            self.private_oram_mutation_states = previous_private_oram_mutation_states;
+            self.private_oram_mutation_lease_slots = previous_private_oram_mutation_lease_slots;
             return Err(error);
         }
         Ok(())
@@ -414,15 +483,25 @@ impl Persistent {
         operation: &CompareAndSwapPrivateOramEpoch,
     ) -> Result<(), StorageError> {
         validate_private_oram_epoch_cas(operation)?;
+        let key = private_oram_epoch_key_digest(&operation.key);
+        let current = self.private_oram_epochs.get(&key);
+        if current == Some(&operation.new) {
+            return Ok(());
+        }
         if self.private_oram_external_recovery_is_active(&operation.key.collection_id) {
             return Err(StorageError::bad_request(
                 "private ORAM epoch/root CAS conflicts with active external recovery",
             ));
         }
-        let key = private_oram_epoch_key_digest(&operation.key);
-        let current = self.private_oram_epochs.get(&key);
-        if current == Some(&operation.new) {
-            return Ok(());
+        if self.private_oram_mutation_is_active(&operation.key.collection_id) {
+            return Err(StorageError::bad_request(
+                "private ORAM epoch/root CAS conflicts with active mutation",
+            ));
+        }
+        if self.private_oram_mutation_is_enrolled(&operation.key.collection_id) {
+            return Err(StorageError::bad_request(
+                "standalone private ORAM epoch/root CAS conflicts with enrolled v2 mutation state",
+            ));
         }
         if current != operation.expected.as_ref() {
             return Err(StorageError::bad_request(
@@ -468,6 +547,11 @@ impl Persistent {
         operation: &CompareAndSwapPrivateOramSessionLease,
     ) -> Result<(), StorageError> {
         validate_private_oram_session_lease_cas(operation)?;
+        let key = private_oram_epoch_key_digest(&operation.key);
+        let current = self.private_oram_session_leases.get(&key);
+        if current == operation.new.as_ref() {
+            return Ok(());
+        }
         if operation.new.is_some()
             && self.private_oram_external_recovery_is_active(&operation.key.collection_id)
         {
@@ -475,10 +559,19 @@ impl Persistent {
                 "private ORAM session lease conflicts with active external recovery",
             ));
         }
-        let key = private_oram_epoch_key_digest(&operation.key);
-        let current = self.private_oram_session_leases.get(&key);
-        if current == operation.new.as_ref() {
-            return Ok(());
+        if operation.new.is_some()
+            && self.private_oram_mutation_is_active(&operation.key.collection_id)
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM session lease conflicts with active mutation",
+            ));
+        }
+        if operation.new.is_some()
+            && self.private_oram_mutation_is_enrolled(&operation.key.collection_id)
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM session lease conflicts with enrolled v2 mutation state",
+            ));
         }
         if current != operation.expected.as_ref() {
             return Err(StorageError::bad_request(
@@ -514,6 +607,361 @@ impl Persistent {
         Ok(())
     }
 
+    pub fn private_oram_mutation_state(
+        &self,
+        key: &PrivateOramMutationKey,
+    ) -> Option<PrivateOramConsensusCollectionStateV2> {
+        self.private_oram_mutation_states
+            .get(&private_oram_mutation_key_digest(key))
+            .cloned()
+    }
+
+    pub fn private_oram_mutation_lease_slot(
+        &self,
+        key: &PrivateOramMutationKey,
+    ) -> Option<PrivateOramMutationLeaseSlotV2> {
+        self.private_oram_mutation_lease_slots
+            .get(&private_oram_mutation_key_digest(key))
+            .cloned()
+    }
+
+    pub fn private_oram_mutation_lease(
+        &self,
+        key: &PrivateOramMutationKey,
+    ) -> Option<PrivateOramMutationLease> {
+        self.private_oram_mutation_lease_slot(key)
+            .and_then(|slot| slot.active)
+    }
+
+    pub fn has_active_private_oram_mutation(&self) -> bool {
+        self.private_oram_mutation_lease_slots
+            .values()
+            .any(|slot| slot.active.is_some())
+    }
+
+    fn private_oram_mutation_is_active(&self, collection_id: &str) -> bool {
+        self.private_oram_mutation_lease(&PrivateOramMutationKey {
+            collection_id: collection_id.to_string(),
+        })
+        .is_some()
+    }
+
+    fn private_oram_mutation_is_enrolled(&self, collection_id: &str) -> bool {
+        self.private_oram_mutation_state(&PrivateOramMutationKey {
+            collection_id: collection_id.to_string(),
+        })
+        .is_some()
+    }
+
+    pub fn initialize_private_oram_mutation_state(
+        &mut self,
+        operation: &InitializePrivateOramMutationState,
+    ) -> Result<(), StorageError> {
+        validate_initialize_private_oram_mutation_state(operation)?;
+        let key_digest = private_oram_mutation_key_digest(&operation.key);
+        let genesis_slot = PrivateOramMutationLeaseSlotV2 {
+            version: PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION,
+            generation: 0,
+            active: None,
+            last_clear: None,
+            max_writer_fence: 0,
+        };
+        let current_state = self.private_oram_mutation_states.get(&key_digest);
+        let current_slot = self.private_oram_mutation_lease_slots.get(&key_digest);
+        if current_state == Some(&operation.state) && current_slot == Some(&genesis_slot) {
+            return Ok(());
+        }
+        if current_state.is_some() || current_slot.is_some() {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation state initialization precondition failed",
+            ));
+        }
+        if self.private_oram_external_recovery_is_active(&operation.key.collection_id) {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation state initialization conflicts with active external recovery",
+            ));
+        }
+        self.validate_private_oram_mutation_state_bindings(&operation.state)?;
+        if self.private_oram_state_has_active_session(&operation.state) {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation state initialization conflicts with active session lease",
+            ));
+        }
+        if self.private_oram_mutation_states.len() >= PRIVATE_ORAM_EPOCH_MAX_RECORDS {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation state capacity exceeded",
+            ));
+        }
+
+        self.private_oram_mutation_states
+            .insert(key_digest.clone(), operation.state.clone());
+        self.private_oram_mutation_lease_slots
+            .insert(key_digest.clone(), genesis_slot);
+        if let Err(error) = self.save() {
+            self.private_oram_mutation_lease_slots.remove(&key_digest);
+            self.private_oram_mutation_states.remove(&key_digest);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub fn compare_and_swap_private_oram_mutation_lease(
+        &mut self,
+        operation: &CompareAndSwapPrivateOramMutationLease,
+    ) -> Result<(), StorageError> {
+        validate_private_oram_mutation_lease_cas(operation)?;
+        let key_digest = private_oram_mutation_key_digest(&operation.key);
+        let current = self.private_oram_mutation_lease_slots.get(&key_digest);
+        if current == Some(&operation.new) {
+            return Ok(());
+        }
+        if current != Some(&operation.expected) {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation lease CAS precondition failed",
+            ));
+        }
+        let state = self
+            .private_oram_mutation_state(&operation.key)
+            .ok_or_else(|| {
+                StorageError::bad_request(
+                    "private ORAM mutation lease requires initialized collection state",
+                )
+            })?;
+        self.validate_private_oram_mutation_state_bindings(&state)?;
+        let acquiring = operation.expected.active.is_none() && operation.new.active.is_some();
+        if acquiring {
+            if self.private_oram_external_recovery_is_active(&operation.key.collection_id) {
+                return Err(StorageError::bad_request(
+                    "private ORAM mutation lease conflicts with active external recovery",
+                ));
+            }
+            if self.private_oram_state_has_active_session(&state) {
+                return Err(StorageError::bad_request(
+                    "private ORAM mutation lease conflicts with active session lease",
+                ));
+            }
+            let lease = operation
+                .new
+                .active
+                .as_ref()
+                .expect("acquire transition must contain a lease");
+            let layout = self.private_oram_layout(&PrivateOramLayoutKey {
+                collection_id: state.collection_id.clone(),
+            });
+            if !layout
+                .as_ref()
+                .is_some_and(|layout| layout.owner_peer_ids.contains(&lease.owner_peer_id))
+                || lease.base_record_digest
+                    != canonical_private_oram_consensus_state_record_digest(&state)?
+                || lease.base_state_sequence != state.state_sequence
+                || private_oram_state_last_mutation_id(&state)
+                    .is_some_and(|mutation_id| mutation_id == lease.mutation_id)
+                || operation
+                    .expected
+                    .last_clear
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.mutation_id == lease.mutation_id)
+            {
+                return Err(StorageError::bad_request(
+                    "private ORAM mutation lease acquisition is invalid",
+                ));
+            }
+        }
+        validate_private_oram_mutation_slot_state_relationship(
+            &operation.expected,
+            &state,
+            &operation.key,
+        )?;
+        validate_private_oram_mutation_slot_state_relationship(
+            &operation.new,
+            &state,
+            &operation.key,
+        )?;
+
+        let previous = self
+            .private_oram_mutation_lease_slots
+            .insert(key_digest.clone(), operation.new.clone());
+        if let Err(err) = self.save() {
+            match previous {
+                Some(previous) => {
+                    self.private_oram_mutation_lease_slots
+                        .insert(key_digest, previous);
+                }
+                None => {
+                    self.private_oram_mutation_lease_slots.remove(&key_digest);
+                }
+            }
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    pub fn apply_private_oram_mutation(
+        &mut self,
+        operation: &ApplyPrivateOramMutation,
+    ) -> Result<(), StorageError> {
+        validate_apply_private_oram_mutation(operation)?;
+        let state_key_digest = private_oram_mutation_key_digest(&operation.key);
+        let current_state = self.private_oram_mutation_states.get(&state_key_digest);
+        if current_state == Some(&operation.new_state) {
+            self.validate_private_oram_mutation_state_bindings(&operation.new_state)?;
+            let slot = self
+                .private_oram_mutation_lease_slot(&operation.key)
+                .ok_or_else(|| {
+                    StorageError::bad_request("private ORAM mutation lease slot is missing")
+                })?;
+            validate_private_oram_mutation_slot_state_relationship(
+                &slot,
+                &operation.new_state,
+                &operation.key,
+            )?;
+            return Ok(());
+        }
+        if current_state != Some(&operation.expected_state) {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation CAS precondition failed",
+            ));
+        }
+        if self.private_oram_external_recovery_is_active(&operation.key.collection_id)
+            || self.private_oram_state_has_active_session(&operation.expected_state)
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation conflicts with another collection operation",
+            ));
+        }
+        self.validate_private_oram_mutation_state_bindings(&operation.expected_state)?;
+        let previous_slot = self
+            .private_oram_mutation_lease_slot(&operation.key)
+            .ok_or_else(|| {
+                StorageError::bad_request("private ORAM mutation lease slot is missing")
+            })?;
+        let preparing_lease = previous_slot.active.as_ref().ok_or_else(|| {
+            StorageError::bad_request("private ORAM mutation lease is not active")
+        })?;
+        validate_apply_private_oram_mutation_lease(
+            operation,
+            &operation.expected_state,
+            preparing_lease,
+        )?;
+        let PrivateOramConsensusTransitionV2::Mutation(receipt) =
+            &operation.new_state.last_transition
+        else {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation transition is invalid",
+            ));
+        };
+        let committed_record_digest =
+            canonical_private_oram_consensus_state_record_digest(&operation.new_state)?;
+        let receipt_digest = canonical_private_oram_mutation_receipt_digest(receipt)?;
+        let mut committed_lease = preparing_lease.clone();
+        committed_lease.phase = PrivateOramMutationLeasePhase::ConsensusCommitted {
+            committed_record_digest,
+            committed_state_sequence: operation.new_state.state_sequence,
+            committed_signed_state_digest: operation.new_state.signed_state_digest.clone(),
+            receipt_digest,
+        };
+        let mut new_slot = previous_slot.clone();
+        new_slot.active = Some(committed_lease);
+
+        let layout_key = PrivateOramLayoutKey {
+            collection_id: operation.key.collection_id.clone(),
+        };
+        let layout_key_digest = private_oram_layout_key_digest(&layout_key);
+        let previous_layout = self
+            .private_oram_layouts
+            .get(&layout_key_digest)
+            .cloned()
+            .ok_or_else(|| StorageError::bad_request("private ORAM mutation layout is missing"))?;
+        let mut new_layout = previous_layout.clone();
+        new_layout.index_state_digest =
+            private_oram_consensus_state_index_digest(&operation.new_state)?;
+
+        let mut previous_epochs = Vec::with_capacity(operation.new_state.indexes.len());
+        for index in &operation.new_state.indexes {
+            let epoch_key =
+                private_oram_mutation_index_epoch_key(&operation.new_state.collection_id, index);
+            let epoch_key_digest = private_oram_epoch_key_digest(&epoch_key);
+            let previous = self
+                .private_oram_epochs
+                .insert(epoch_key_digest.clone(), index.epoch.clone());
+            previous_epochs.push((epoch_key_digest, previous));
+        }
+        let previous_state = self
+            .private_oram_mutation_states
+            .insert(state_key_digest.clone(), operation.new_state.clone());
+        self.private_oram_layouts
+            .insert(layout_key_digest.clone(), new_layout);
+        self.private_oram_mutation_lease_slots
+            .insert(state_key_digest.clone(), new_slot);
+        if let Err(err) = self.save() {
+            self.private_oram_mutation_lease_slots
+                .insert(state_key_digest.clone(), previous_slot);
+            self.private_oram_layouts
+                .insert(layout_key_digest, previous_layout);
+            match previous_state {
+                Some(previous) => {
+                    self.private_oram_mutation_states
+                        .insert(state_key_digest, previous);
+                }
+                None => {
+                    self.private_oram_mutation_states.remove(&state_key_digest);
+                }
+            }
+            for (epoch_key_digest, previous) in previous_epochs.into_iter().rev() {
+                match previous {
+                    Some(previous) => {
+                        self.private_oram_epochs.insert(epoch_key_digest, previous);
+                    }
+                    None => {
+                        self.private_oram_epochs.remove(&epoch_key_digest);
+                    }
+                }
+            }
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn validate_private_oram_mutation_state_bindings(
+        &self,
+        state: &PrivateOramConsensusCollectionStateV2,
+    ) -> Result<(), StorageError> {
+        let layout = self.private_oram_layout(&PrivateOramLayoutKey {
+            collection_id: state.collection_id.clone(),
+        });
+        let expected_index_state_digest = private_oram_consensus_state_index_digest(state)?;
+        if !layout.as_ref().is_some_and(|layout| {
+            layout.generation == state.layout_generation
+                && layout.layout_digest == state.layout_digest
+                && layout.index_state_digest == expected_index_state_digest
+        }) || state.indexes.iter().any(|index| {
+            self.private_oram_epoch(&private_oram_mutation_index_epoch_key(
+                &state.collection_id,
+                index,
+            ))
+            .as_ref()
+                != Some(&index.epoch)
+        }) {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation state bindings are inconsistent",
+            ));
+        }
+        Ok(())
+    }
+
+    fn private_oram_state_has_active_session(
+        &self,
+        state: &PrivateOramConsensusCollectionStateV2,
+    ) -> bool {
+        state.indexes.iter().any(|index| {
+            self.private_oram_session_lease(&private_oram_mutation_index_epoch_key(
+                &state.collection_id,
+                index,
+            ))
+            .is_some()
+        })
+    }
+
     pub fn private_oram_external_recovery(
         &self,
         key: &PrivateOramExternalRecoveryKey,
@@ -542,6 +990,11 @@ impl Persistent {
         operation: &CompareAndSwapPrivateOramExternalRecovery,
     ) -> Result<(), StorageError> {
         validate_private_oram_external_recovery_cas(operation)?;
+        if self.private_oram_mutation_is_active(&operation.key.collection_id) {
+            return Err(StorageError::bad_request(
+                "private ORAM external recovery conflicts with active mutation",
+            ));
+        }
         let key = private_oram_external_recovery_key_digest(&operation.key);
         let current = self.private_oram_external_recoveries.get(&key);
         if current == operation.new.as_ref() {
@@ -1020,15 +1473,25 @@ impl Persistent {
         operation: &CompareAndSwapPrivateOramLayout,
     ) -> Result<(), StorageError> {
         validate_private_oram_layout_cas(operation)?;
+        let key = private_oram_layout_key_digest(&operation.key);
+        let current = self.private_oram_layouts.get(&key);
+        if current == Some(&operation.new) {
+            return Ok(());
+        }
         if self.private_oram_external_recovery_is_active(&operation.key.collection_id) {
             return Err(StorageError::bad_request(
                 "private ORAM layout CAS conflicts with active external recovery",
             ));
         }
-        let key = private_oram_layout_key_digest(&operation.key);
-        let current = self.private_oram_layouts.get(&key);
-        if current == Some(&operation.new) {
-            return Ok(());
+        if self.private_oram_mutation_is_active(&operation.key.collection_id) {
+            return Err(StorageError::bad_request(
+                "private ORAM layout CAS conflicts with active mutation",
+            ));
+        }
+        if self.private_oram_mutation_is_enrolled(&operation.key.collection_id) {
+            return Err(StorageError::bad_request(
+                "standalone private ORAM layout CAS conflicts with enrolled v2 mutation state",
+            ));
         }
         if current != operation.expected.as_ref() {
             return Err(StorageError::bad_request(
@@ -1139,6 +1602,8 @@ impl Persistent {
             private_oram_session_leases: Default::default(),
             private_oram_layouts: Default::default(),
             private_oram_external_recoveries: Default::default(),
+            private_oram_mutation_states: Default::default(),
+            private_oram_mutation_lease_slots: Default::default(),
             this_peer_id,
             path,
             latest_snapshot_meta: Default::default(),
@@ -1155,6 +1620,19 @@ impl Persistent {
         validate_private_oram_session_lease_snapshot(&state.private_oram_session_leases)?;
         validate_private_oram_layout_snapshot(&state.private_oram_layouts)?;
         validate_private_oram_external_recovery_snapshot(&state.private_oram_external_recoveries)?;
+        validate_private_oram_mutation_state_snapshot(
+            &state.private_oram_mutation_states,
+            &state.private_oram_epochs,
+            &state.private_oram_layouts,
+        )?;
+        validate_private_oram_mutation_lease_slot_snapshot(
+            &state.private_oram_mutation_lease_slots,
+            &state.private_oram_mutation_states,
+            &state.private_oram_layouts,
+            &state.private_oram_epochs,
+            &state.private_oram_session_leases,
+            &state.private_oram_external_recoveries,
+        )?;
         state.path = path;
         Ok(state)
     }
@@ -1166,6 +1644,19 @@ impl Persistent {
         validate_private_oram_session_lease_snapshot(&state.private_oram_session_leases)?;
         validate_private_oram_layout_snapshot(&state.private_oram_layouts)?;
         validate_private_oram_external_recovery_snapshot(&state.private_oram_external_recoveries)?;
+        validate_private_oram_mutation_state_snapshot(
+            &state.private_oram_mutation_states,
+            &state.private_oram_epochs,
+            &state.private_oram_layouts,
+        )?;
+        validate_private_oram_mutation_lease_slot_snapshot(
+            &state.private_oram_mutation_lease_slots,
+            &state.private_oram_mutation_states,
+            &state.private_oram_layouts,
+            &state.private_oram_epochs,
+            &state.private_oram_session_leases,
+            &state.private_oram_external_recoveries,
+        )?;
         state.path = path;
         Ok(state)
     }
@@ -1231,6 +1722,24 @@ pub(crate) fn private_oram_external_recovery_key_digest(
     BASE64URL_NOPAD.encode(&hasher.finalize())
 }
 
+pub(crate) fn private_oram_mutation_key_digest(key: &PrivateOramMutationKey) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(PRIVATE_ORAM_MUTATION_KEY_DOMAIN);
+    update_length_prefixed(&mut hasher, key.collection_id.as_bytes());
+    BASE64URL_NOPAD.encode(&hasher.finalize())
+}
+
+fn private_oram_mutation_index_epoch_key(
+    collection_id: &str,
+    index: &PrivateOramConsensusCollectionIndexStateV2,
+) -> PrivateOramEpochKey {
+    PrivateOramEpochKey {
+        collection_id: collection_id.to_string(),
+        index_kind: index.index_kind,
+        index_name: index.index_name.clone(),
+    }
+}
+
 fn update_length_prefixed(hasher: &mut Sha256, value: &[u8]) {
     hasher.update((value.len() as u64).to_be_bytes());
     hasher.update(value);
@@ -1268,6 +1777,571 @@ fn validate_private_oram_epoch_key(key: &PrivateOramEpochKey) -> Result<(), Stor
         ));
     }
 
+    Ok(())
+}
+
+fn validate_private_oram_mutation_key(key: &PrivateOramMutationKey) -> Result<(), StorageError> {
+    if key.collection_id.is_empty() || key.collection_id.len() > 1024 {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation key is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_oram_mutation_receipt(
+    receipt: &PrivateOramMutationReceiptV2,
+) -> Result<(), StorageError> {
+    if receipt.version != PRIVATE_ORAM_MUTATION_RECEIPT_VERSION
+        || receipt.writer_fence == 0
+        || receipt.mutation_lease_generation == 0
+        || receipt
+            .old_state_sequence
+            .checked_add(1)
+            .is_none_or(|sequence| sequence != receipt.new_state_sequence)
+        || receipt.old_state_digest == receipt.new_state_digest
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation receipt is invalid",
+        ));
+    }
+    for digest in [
+        &receipt.mutation_id,
+        &receipt.signed_mutation_digest,
+        &receipt.transition_digest,
+        &receipt.old_state_digest,
+        &receipt.new_state_digest,
+        &receipt.point_operation_digest,
+        &receipt.writer_lease_digest,
+    ] {
+        validate_private_oram_consensus_digest(digest)
+            .map_err(|_| StorageError::bad_request("private ORAM mutation receipt is invalid"))?;
+    }
+    Ok(())
+}
+
+fn validate_private_oram_consensus_collection_state(
+    state: &PrivateOramConsensusCollectionStateV2,
+) -> Result<(), StorageError> {
+    if state.version != PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION
+        || state.collection_id.is_empty()
+        || state.collection_id.len() > 1024
+        || state.layout_generation == 0
+        || state.indexes.is_empty()
+        || state.indexes.len() > PRIVATE_ORAM_EPOCH_MAX_RECORDS
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM consensus collection state is invalid",
+        ));
+    }
+    for digest in [
+        &state.manifest_digest,
+        &state.layout_digest,
+        &state.signed_state_digest,
+        &state.client_state_digest,
+    ] {
+        validate_private_oram_consensus_digest(digest).map_err(|_| {
+            StorageError::bad_request("private ORAM consensus collection state is invalid")
+        })?;
+    }
+    match &state.last_transition {
+        PrivateOramConsensusTransitionV2::Genesis if state.state_sequence == 0 => {}
+        PrivateOramConsensusTransitionV2::Mutation(receipt) if state.state_sequence > 0 => {
+            validate_private_oram_mutation_receipt(receipt)?;
+            if receipt.new_state_sequence != state.state_sequence
+                || receipt.new_state_digest != state.signed_state_digest
+            {
+                return Err(StorageError::bad_request(
+                    "private ORAM consensus collection state is invalid",
+                ));
+            }
+        }
+        _ => {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus collection state is invalid",
+            ));
+        }
+    }
+
+    let mut previous_order = None;
+    for index in &state.indexes {
+        let key = private_oram_mutation_index_epoch_key(&state.collection_id, index);
+        validate_private_oram_epoch_key(&key).map_err(|_| {
+            StorageError::bad_request("private ORAM consensus collection state is invalid")
+        })?;
+        validate_private_oram_consensus_root_hash(&index.epoch.root_hash).map_err(|_| {
+            StorageError::bad_request("private ORAM consensus collection state is invalid")
+        })?;
+        validate_private_oram_consensus_writeback_digest(index.epoch.writeback_digest.as_deref())
+            .map_err(|_| {
+            StorageError::bad_request("private ORAM consensus collection state is invalid")
+        })?;
+        let order = (private_oram_epoch_key_order(&key).0, key.index_name.clone());
+        if previous_order
+            .as_ref()
+            .is_some_and(|previous| previous >= &order)
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM consensus collection state is invalid",
+            ));
+        }
+        index
+            .logical_count
+            .checked_add(index.dummy_count)
+            .ok_or_else(|| {
+                StorageError::bad_request("private ORAM consensus collection state is invalid")
+            })?;
+        previous_order = Some(order);
+    }
+    canonical_private_oram_consensus_state_record_digest(state).map_err(|_| {
+        StorageError::bad_request("private ORAM consensus collection state is invalid")
+    })?;
+    Ok(())
+}
+
+fn validate_initialize_private_oram_mutation_state(
+    operation: &InitializePrivateOramMutationState,
+) -> Result<(), StorageError> {
+    validate_private_oram_mutation_key(&operation.key)?;
+    validate_private_oram_consensus_collection_state(&operation.state)?;
+    if operation.state.collection_id != operation.key.collection_id
+        || operation.state.state_sequence != 0
+        || !matches!(
+            operation.state.last_transition,
+            PrivateOramConsensusTransitionV2::Genesis
+        )
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation state initialization is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn private_oram_state_last_mutation_id(
+    state: &PrivateOramConsensusCollectionStateV2,
+) -> Option<&str> {
+    match &state.last_transition {
+        PrivateOramConsensusTransitionV2::Genesis => None,
+        PrivateOramConsensusTransitionV2::Mutation(receipt) => Some(&receipt.mutation_id),
+    }
+}
+
+fn private_oram_consensus_state_index_digest(
+    state: &PrivateOramConsensusCollectionStateV2,
+) -> Result<String, StorageError> {
+    let indexes = state
+        .indexes
+        .iter()
+        .map(|index| {
+            (
+                private_oram_mutation_index_epoch_key(&state.collection_id, index),
+                index.epoch.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    canonical_private_oram_index_state_digest(&state.collection_id, &indexes)
+}
+
+fn validate_private_oram_mutation_lease(
+    lease: &PrivateOramMutationLease,
+) -> Result<(), StorageError> {
+    if lease.generation == 0
+        || lease.collection_id.is_empty()
+        || lease.collection_id.len() > 1024
+        || lease.writer_fence == 0
+        || lease.expires_at_unix <= lease.issued_at_unix
+        || lease.expires_at_unix - lease.issued_at_unix > PRIVATE_ORAM_MUTATION_LEASE_MAX_SECS
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation lease is invalid",
+        ));
+    }
+    for digest in [
+        &lease.mutation_id,
+        &lease.signed_mutation_digest,
+        &lease.transition_digest,
+        &lease.base_record_digest,
+        &lease.writer_lease_digest,
+    ] {
+        validate_private_oram_consensus_digest(digest)
+            .map_err(|_| StorageError::bad_request("private ORAM mutation lease is invalid"))?;
+    }
+    if let PrivateOramMutationLeasePhase::ConsensusCommitted {
+        committed_record_digest,
+        committed_signed_state_digest,
+        receipt_digest,
+        ..
+    } = &lease.phase
+    {
+        for digest in [
+            committed_record_digest,
+            committed_signed_state_digest,
+            receipt_digest,
+        ] {
+            validate_private_oram_consensus_digest(digest)
+                .map_err(|_| StorageError::bad_request("private ORAM mutation lease is invalid"))?;
+        }
+    }
+    Ok(())
+}
+
+fn private_oram_mutation_lease_has_same_identity(
+    expected: &PrivateOramMutationLease,
+    new: &PrivateOramMutationLease,
+) -> bool {
+    expected.generation == new.generation
+        && expected.collection_id == new.collection_id
+        && expected.owner_peer_id == new.owner_peer_id
+        && expected.mutation_id == new.mutation_id
+        && expected.signed_mutation_digest == new.signed_mutation_digest
+        && expected.transition_digest == new.transition_digest
+        && expected.base_record_digest == new.base_record_digest
+        && expected.base_state_sequence == new.base_state_sequence
+        && expected.writer_lease_digest == new.writer_lease_digest
+        && expected.writer_fence == new.writer_fence
+        && expected.issued_at_unix == new.issued_at_unix
+}
+
+fn validate_private_oram_mutation_clear_receipt(
+    receipt: &PrivateOramMutationClearReceiptV1,
+) -> Result<(), StorageError> {
+    if receipt.version != PRIVATE_ORAM_MUTATION_CLEAR_RECEIPT_VERSION || receipt.generation == 0 {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation clear receipt is invalid",
+        ));
+    }
+    for digest in [
+        &receipt.mutation_id,
+        &receipt.terminal_state_digest,
+        &receipt.reconciliation_digest,
+    ] {
+        validate_private_oram_consensus_digest(digest).map_err(|_| {
+            StorageError::bad_request("private ORAM mutation clear receipt is invalid")
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_private_oram_mutation_lease_slot(
+    slot: &PrivateOramMutationLeaseSlotV2,
+) -> Result<(), StorageError> {
+    if slot.version != PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION
+        || slot.generation != slot.max_writer_fence
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation lease slot is invalid",
+        ));
+    }
+    if let Some(receipt) = &slot.last_clear {
+        validate_private_oram_mutation_clear_receipt(receipt)?;
+        if receipt.generation > slot.generation {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation lease slot is invalid",
+            ));
+        }
+    }
+    match &slot.active {
+        Some(lease) => {
+            validate_private_oram_mutation_lease(lease)?;
+            if lease.generation != slot.generation
+                || lease.writer_fence != slot.max_writer_fence
+                || slot
+                    .last_clear
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.generation >= lease.generation)
+            {
+                return Err(StorageError::bad_request(
+                    "private ORAM mutation lease slot is invalid",
+                ));
+            }
+        }
+        None if slot.generation == 0 => {
+            if slot.last_clear.is_some() {
+                return Err(StorageError::bad_request(
+                    "private ORAM mutation lease slot is invalid",
+                ));
+            }
+        }
+        None => {
+            if slot
+                .last_clear
+                .as_ref()
+                .is_none_or(|receipt| receipt.generation != slot.generation)
+            {
+                return Err(StorageError::bad_request(
+                    "private ORAM mutation lease slot is invalid",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_private_oram_mutation_lease_cas(
+    operation: &CompareAndSwapPrivateOramMutationLease,
+) -> Result<(), StorageError> {
+    validate_private_oram_mutation_key(&operation.key)?;
+    validate_private_oram_mutation_lease_slot(&operation.expected)?;
+    validate_private_oram_mutation_lease_slot(&operation.new)?;
+    for lease in [
+        operation.expected.active.as_ref(),
+        operation.new.active.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if lease.collection_id != operation.key.collection_id {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation lease CAS is invalid",
+            ));
+        }
+    }
+    let transition_is_valid = match (&operation.expected.active, &operation.new.active) {
+        (None, Some(new)) => {
+            operation.expected.generation.checked_add(1) == Some(operation.new.generation)
+                && operation.expected.max_writer_fence.checked_add(1)
+                    == Some(operation.new.max_writer_fence)
+                && operation.expected.last_clear == operation.new.last_clear
+                && new.generation == operation.new.generation
+                && new.writer_fence == operation.new.max_writer_fence
+                && new.renewal_revision == 0
+                && matches!(new.phase, PrivateOramMutationLeasePhase::Preparing)
+        }
+        (Some(expected), Some(new)) => {
+            operation.expected.generation == operation.new.generation
+                && operation.expected.max_writer_fence == operation.new.max_writer_fence
+                && operation.expected.last_clear == operation.new.last_clear
+                && private_oram_mutation_lease_has_same_identity(expected, new)
+                && expected.phase == new.phase
+                && expected
+                    .renewal_revision
+                    .checked_add(1)
+                    .is_some_and(|revision| revision == new.renewal_revision)
+                && new.expires_at_unix > expected.expires_at_unix
+        }
+        (Some(expected), None) => {
+            let Some(clear) = operation.new.last_clear.as_ref() else {
+                return Err(StorageError::bad_request(
+                    "private ORAM mutation lease transition is invalid",
+                ));
+            };
+            let (expected_outcome, terminal_state_digest) = match &expected.phase {
+                PrivateOramMutationLeasePhase::Preparing => (
+                    PrivateOramMutationClearOutcome::AbortedBeforeConsensusCommit,
+                    expected.base_record_digest.as_str(),
+                ),
+                PrivateOramMutationLeasePhase::ConsensusCommitted {
+                    committed_record_digest,
+                    ..
+                } => (
+                    PrivateOramMutationClearOutcome::FinalizedOrReconciledAfterConsensusCommit,
+                    committed_record_digest.as_str(),
+                ),
+            };
+            operation.expected.generation == operation.new.generation
+                && operation.expected.max_writer_fence == operation.new.max_writer_fence
+                && clear.generation == expected.generation
+                && clear.mutation_id == expected.mutation_id
+                && clear.outcome == expected_outcome
+                && clear.terminal_state_digest == terminal_state_digest
+        }
+        (None, None) => false,
+    };
+    if !transition_is_valid {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation lease transition is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_private_oram_mutation_slot_state_relationship(
+    slot: &PrivateOramMutationLeaseSlotV2,
+    state: &PrivateOramConsensusCollectionStateV2,
+    key: &PrivateOramMutationKey,
+) -> Result<(), StorageError> {
+    validate_private_oram_mutation_lease_slot(slot)?;
+    let state_record_digest = canonical_private_oram_consensus_state_record_digest(state)?;
+    if let Some(lease) = &slot.active {
+        if lease.collection_id != key.collection_id {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation lease state relationship is invalid",
+            ));
+        }
+        match &lease.phase {
+            PrivateOramMutationLeasePhase::Preparing => {
+                if lease.base_record_digest != state_record_digest
+                    || lease.base_state_sequence != state.state_sequence
+                {
+                    return Err(StorageError::bad_request(
+                        "private ORAM mutation lease state relationship is invalid",
+                    ));
+                }
+            }
+            PrivateOramMutationLeasePhase::ConsensusCommitted {
+                committed_record_digest,
+                committed_state_sequence,
+                committed_signed_state_digest,
+                receipt_digest,
+            } => {
+                let PrivateOramConsensusTransitionV2::Mutation(receipt) = &state.last_transition
+                else {
+                    return Err(StorageError::bad_request(
+                        "private ORAM mutation lease state relationship is invalid",
+                    ));
+                };
+                if committed_record_digest != &state_record_digest
+                    || *committed_state_sequence != state.state_sequence
+                    || committed_signed_state_digest != &state.signed_state_digest
+                    || receipt_digest != &canonical_private_oram_mutation_receipt_digest(receipt)?
+                    || receipt.mutation_lease_generation != lease.generation
+                    || receipt.mutation_id != lease.mutation_id
+                    || receipt.signed_mutation_digest != lease.signed_mutation_digest
+                    || receipt.transition_digest != lease.transition_digest
+                    || receipt.writer_lease_digest != lease.writer_lease_digest
+                    || receipt.writer_fence != lease.writer_fence
+                {
+                    return Err(StorageError::bad_request(
+                        "private ORAM mutation lease state relationship is invalid",
+                    ));
+                }
+            }
+        }
+    } else if let Some(clear) = &slot.last_clear {
+        if clear.terminal_state_digest != state_record_digest {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation lease state relationship is invalid",
+            ));
+        }
+        if clear.outcome
+            == PrivateOramMutationClearOutcome::FinalizedOrReconciledAfterConsensusCommit
+        {
+            let PrivateOramConsensusTransitionV2::Mutation(receipt) = &state.last_transition else {
+                return Err(StorageError::bad_request(
+                    "private ORAM mutation lease state relationship is invalid",
+                ));
+            };
+            if receipt.mutation_lease_generation != clear.generation
+                || receipt.mutation_id != clear.mutation_id
+            {
+                return Err(StorageError::bad_request(
+                    "private ORAM mutation lease state relationship is invalid",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_apply_private_oram_mutation(
+    operation: &ApplyPrivateOramMutation,
+) -> Result<(), StorageError> {
+    validate_private_oram_mutation_key(&operation.key)?;
+    if operation.mutation_lease_generation == 0 {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation transition is invalid",
+        ));
+    }
+    validate_private_oram_consensus_collection_state(&operation.expected_state)?;
+    validate_private_oram_consensus_collection_state(&operation.new_state)?;
+
+    let expected = &operation.expected_state;
+    let new = &operation.new_state;
+    let PrivateOramConsensusTransitionV2::Mutation(receipt) = &new.last_transition else {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation transition is invalid",
+        ));
+    };
+    let state_identity_is_valid = expected.collection_id == operation.key.collection_id
+        && new.collection_id == operation.key.collection_id
+        && expected.version == new.version
+        && expected.manifest_digest == new.manifest_digest
+        && expected.layout_generation == new.layout_generation
+        && expected.layout_digest == new.layout_digest
+        && expected
+            .state_sequence
+            .checked_add(1)
+            .is_some_and(|sequence| sequence == new.state_sequence)
+        && expected.signed_state_digest != new.signed_state_digest
+        && expected.client_state_digest != new.client_state_digest
+        && receipt.old_state_sequence == expected.state_sequence
+        && receipt.old_state_digest == expected.signed_state_digest
+        && receipt.new_state_sequence == new.state_sequence
+        && receipt.new_state_digest == new.signed_state_digest
+        && receipt.mutation_lease_generation == operation.mutation_lease_generation
+        && receipt.writer_fence == operation.mutation_lease_generation
+        && private_oram_state_last_mutation_id(expected)
+            .is_none_or(|previous| previous != receipt.mutation_id)
+        && canonical_private_oram_mutation_transition_digest(expected, new)
+            .is_ok_and(|digest| digest == receipt.transition_digest);
+    if !state_identity_is_valid || expected.indexes.len() != new.indexes.len() {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation transition is invalid",
+        ));
+    }
+    for (old_index, new_index) in expected.indexes.iter().zip(&new.indexes) {
+        let same_capacity = old_index
+            .logical_count
+            .checked_add(old_index.dummy_count)
+            .zip(new_index.logical_count.checked_add(new_index.dummy_count))
+            .is_some_and(|(old_capacity, new_capacity)| old_capacity == new_capacity);
+        if old_index.index_kind != new_index.index_kind
+            || old_index.index_name != new_index.index_name
+            || old_index
+                .epoch
+                .index_epoch
+                .checked_add(1)
+                .is_none_or(|epoch| epoch != new_index.epoch.index_epoch)
+            || old_index.epoch.root_hash == new_index.epoch.root_hash
+            || new_index.epoch.writeback_digest.is_none()
+            || old_index.epoch.writeback_digest == new_index.epoch.writeback_digest
+            || old_index
+                .logical_count
+                .checked_add(1)
+                .is_none_or(|count| count != new_index.logical_count)
+            || new_index
+                .dummy_count
+                .checked_add(1)
+                .is_none_or(|count| count != old_index.dummy_count)
+            || !same_capacity
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation transition is invalid",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_apply_private_oram_mutation_lease(
+    operation: &ApplyPrivateOramMutation,
+    expected_state: &PrivateOramConsensusCollectionStateV2,
+    lease: &PrivateOramMutationLease,
+) -> Result<(), StorageError> {
+    validate_private_oram_mutation_lease(lease)?;
+    let PrivateOramConsensusTransitionV2::Mutation(receipt) = &operation.new_state.last_transition
+    else {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation lease transition is invalid",
+        ));
+    };
+    if !matches!(lease.phase, PrivateOramMutationLeasePhase::Preparing)
+        || lease.generation != operation.mutation_lease_generation
+        || lease.collection_id != operation.key.collection_id
+        || lease.base_record_digest
+            != canonical_private_oram_consensus_state_record_digest(expected_state)?
+        || lease.base_state_sequence != expected_state.state_sequence
+        || lease.mutation_id != receipt.mutation_id
+        || lease.signed_mutation_digest != receipt.signed_mutation_digest
+        || lease.transition_digest != receipt.transition_digest
+        || lease.writer_lease_digest != receipt.writer_lease_digest
+        || lease.writer_fence != receipt.writer_fence
+    {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation lease transition is invalid",
+        ));
+    }
     Ok(())
 }
 
@@ -1776,6 +2850,119 @@ fn validate_private_oram_external_recovery_snapshot(
     Ok(())
 }
 
+fn validate_private_oram_mutation_state_snapshot(
+    states: &HashMap<String, PrivateOramConsensusCollectionStateV2>,
+    epochs: &HashMap<String, PrivateOramConsensusEpoch>,
+    layouts: &HashMap<String, PrivateOramConsensusLayout>,
+) -> Result<(), StorageError> {
+    if states.len() > PRIVATE_ORAM_EPOCH_MAX_RECORDS {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation state snapshot is invalid",
+        ));
+    }
+    for (key_digest, state) in states {
+        validate_private_oram_consensus_collection_state(state).map_err(|_| {
+            StorageError::bad_request("private ORAM mutation state snapshot is invalid")
+        })?;
+        let key = PrivateOramMutationKey {
+            collection_id: state.collection_id.clone(),
+        };
+        if key_digest != &private_oram_mutation_key_digest(&key) {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation state snapshot is invalid",
+            ));
+        }
+        let layout_key = PrivateOramLayoutKey {
+            collection_id: state.collection_id.clone(),
+        };
+        let layout = layouts
+            .get(&private_oram_layout_key_digest(&layout_key))
+            .ok_or_else(|| {
+                StorageError::bad_request("private ORAM mutation state snapshot is invalid")
+            })?;
+        if layout.generation != state.layout_generation
+            || layout.layout_digest != state.layout_digest
+            || layout.index_state_digest
+                != private_oram_consensus_state_index_digest(state).map_err(|_| {
+                    StorageError::bad_request("private ORAM mutation state snapshot is invalid")
+                })?
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation state snapshot is invalid",
+            ));
+        }
+        for index in &state.indexes {
+            let epoch_key = private_oram_mutation_index_epoch_key(&state.collection_id, index);
+            if epochs.get(&private_oram_epoch_key_digest(&epoch_key)) != Some(&index.epoch) {
+                return Err(StorageError::bad_request(
+                    "private ORAM mutation state snapshot is invalid",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_private_oram_mutation_lease_slot_snapshot(
+    slots: &HashMap<String, PrivateOramMutationLeaseSlotV2>,
+    states: &HashMap<String, PrivateOramConsensusCollectionStateV2>,
+    layouts: &HashMap<String, PrivateOramConsensusLayout>,
+    epochs: &HashMap<String, PrivateOramConsensusEpoch>,
+    session_leases: &HashMap<String, PrivateOramSessionLease>,
+    recoveries: &HashMap<String, PrivateOramExternalRecoveryState>,
+) -> Result<(), StorageError> {
+    if slots.len() != states.len() || slots.len() > PRIVATE_ORAM_EPOCH_MAX_RECORDS {
+        return Err(StorageError::bad_request(
+            "private ORAM mutation lease slot snapshot is invalid",
+        ));
+    }
+    for (key_digest, slot) in slots {
+        let state = states.get(key_digest).ok_or_else(|| {
+            StorageError::bad_request("private ORAM mutation lease slot snapshot is invalid")
+        })?;
+        let key = PrivateOramMutationKey {
+            collection_id: state.collection_id.clone(),
+        };
+        let layout_key = PrivateOramLayoutKey {
+            collection_id: state.collection_id.clone(),
+        };
+        let layout = layouts
+            .get(&private_oram_layout_key_digest(&layout_key))
+            .ok_or_else(|| {
+                StorageError::bad_request("private ORAM mutation lease slot snapshot is invalid")
+            })?;
+        validate_private_oram_mutation_slot_state_relationship(slot, state, &key).map_err(
+            |_| StorageError::bad_request("private ORAM mutation lease slot snapshot is invalid"),
+        )?;
+        let recovery_key = PrivateOramExternalRecoveryKey {
+            collection_id: state.collection_id.clone(),
+        };
+        let has_active_recovery = recoveries
+            .get(&private_oram_external_recovery_key_digest(&recovery_key))
+            .and_then(|recovery| recovery.active_lease.as_ref())
+            .is_some();
+        let has_session = state.indexes.iter().any(|index| {
+            let epoch_key = private_oram_mutation_index_epoch_key(&state.collection_id, index);
+            let epoch_key_digest = private_oram_epoch_key_digest(&epoch_key);
+            session_leases.contains_key(&epoch_key_digest)
+                || epochs.get(&epoch_key_digest) != Some(&index.epoch)
+        });
+        if key_digest != &private_oram_mutation_key_digest(&key)
+            || slot
+                .active
+                .as_ref()
+                .is_some_and(|lease| !layout.owner_peer_ids.contains(&lease.owner_peer_id))
+            || (has_active_recovery && slot.active.is_some())
+            || has_session
+        {
+            return Err(StorageError::bad_request(
+                "private ORAM mutation lease slot snapshot is invalid",
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) fn validate_private_oram_external_recovery_snapshot_transition(
     current: &HashMap<String, PrivateOramExternalRecoveryState>,
@@ -1940,6 +3127,237 @@ mod tests {
         PrivateOramShardLayoutEntry,
     };
 
+    struct PrivateOramMutationFixture {
+        key: PrivateOramMutationKey,
+        layout_key: PrivateOramLayoutKey,
+        layout: PrivateOramConsensusLayout,
+        hnsw_key: PrivateOramEpochKey,
+        result_key: PrivateOramEpochKey,
+        old_state: PrivateOramConsensusCollectionStateV2,
+        new_state: PrivateOramConsensusCollectionStateV2,
+        genesis_slot: PrivateOramMutationLeaseSlotV2,
+        preparing_slot: PrivateOramMutationLeaseSlotV2,
+        committed_slot: PrivateOramMutationLeaseSlotV2,
+    }
+
+    fn test_digest(byte: u8) -> String {
+        BASE64URL_NOPAD.encode(&[byte; 32])
+    }
+
+    fn private_oram_mutation_fixture() -> PrivateOramMutationFixture {
+        let collection_id = "collection-uuid-private-oram-mutation".to_string();
+        let key = PrivateOramMutationKey {
+            collection_id: collection_id.clone(),
+        };
+        let layout_key = PrivateOramLayoutKey {
+            collection_id: collection_id.clone(),
+        };
+        let layout_digest = test_digest(50);
+        let hnsw_key = PrivateOramEpochKey {
+            collection_id: collection_id.clone(),
+            index_kind: PrivateOramIndexKind::Hnsw,
+            index_name: "text".to_string(),
+        };
+        let result_key = PrivateOramEpochKey {
+            collection_id: collection_id.clone(),
+            index_kind: PrivateOramIndexKind::ResultPayload,
+            index_name: String::new(),
+        };
+        let old_hnsw_epoch = PrivateOramConsensusEpoch {
+            index_epoch: 11,
+            root_hash: test_digest(11),
+            writeback_digest: Some(test_digest(12)),
+        };
+        let old_result_epoch = PrivateOramConsensusEpoch {
+            index_epoch: 21,
+            root_hash: test_digest(21),
+            writeback_digest: Some(test_digest(22)),
+        };
+        let old_state = PrivateOramConsensusCollectionStateV2 {
+            version: PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION,
+            collection_id: collection_id.clone(),
+            manifest_digest: test_digest(60),
+            layout_generation: 1,
+            layout_digest: layout_digest.clone(),
+            state_sequence: 0,
+            signed_state_digest: test_digest(10),
+            indexes: vec![
+                PrivateOramConsensusCollectionIndexStateV2 {
+                    index_kind: PrivateOramIndexKind::Hnsw,
+                    index_name: "text".to_string(),
+                    epoch: old_hnsw_epoch,
+                    logical_count: 4,
+                    dummy_count: 6,
+                },
+                PrivateOramConsensusCollectionIndexStateV2 {
+                    index_kind: PrivateOramIndexKind::ResultPayload,
+                    index_name: String::new(),
+                    epoch: old_result_epoch,
+                    logical_count: 4,
+                    dummy_count: 6,
+                },
+            ],
+            client_state_digest: test_digest(30),
+            last_transition: PrivateOramConsensusTransitionV2::Genesis,
+        };
+        let layout = PrivateOramConsensusLayout {
+            generation: 1,
+            owner_peer_ids: vec![7, 9],
+            layout_digest,
+            index_state_digest: private_oram_consensus_state_index_digest(&old_state).unwrap(),
+        };
+        let mutation_receipt = PrivateOramMutationReceiptV2 {
+            version: PRIVATE_ORAM_MUTATION_RECEIPT_VERSION,
+            mutation_id: test_digest(20),
+            signed_mutation_digest: test_digest(40),
+            transition_digest: test_digest(99),
+            old_state_sequence: old_state.state_sequence,
+            old_state_digest: old_state.signed_state_digest.clone(),
+            new_state_sequence: old_state.state_sequence + 1,
+            new_state_digest: test_digest(31),
+            point_operation_digest: test_digest(41),
+            writer_lease_digest: test_digest(42),
+            writer_fence: 1,
+            mutation_lease_generation: 1,
+        };
+        let mut new_state = PrivateOramConsensusCollectionStateV2 {
+            state_sequence: old_state.state_sequence + 1,
+            signed_state_digest: mutation_receipt.new_state_digest.clone(),
+            indexes: vec![
+                PrivateOramConsensusCollectionIndexStateV2 {
+                    index_kind: PrivateOramIndexKind::Hnsw,
+                    index_name: "text".to_string(),
+                    epoch: PrivateOramConsensusEpoch {
+                        index_epoch: 12,
+                        root_hash: test_digest(13),
+                        writeback_digest: Some(test_digest(14)),
+                    },
+                    logical_count: 5,
+                    dummy_count: 5,
+                },
+                PrivateOramConsensusCollectionIndexStateV2 {
+                    index_kind: PrivateOramIndexKind::ResultPayload,
+                    index_name: String::new(),
+                    epoch: PrivateOramConsensusEpoch {
+                        index_epoch: 22,
+                        root_hash: test_digest(23),
+                        writeback_digest: Some(test_digest(24)),
+                    },
+                    logical_count: 5,
+                    dummy_count: 5,
+                },
+            ],
+            client_state_digest: test_digest(32),
+            last_transition: PrivateOramConsensusTransitionV2::Mutation(mutation_receipt),
+            ..old_state.clone()
+        };
+        let transition_digest =
+            canonical_private_oram_mutation_transition_digest(&old_state, &new_state).unwrap();
+        let mutation_receipt = match &mut new_state.last_transition {
+            PrivateOramConsensusTransitionV2::Mutation(receipt) => {
+                receipt.transition_digest = transition_digest;
+                receipt.clone()
+            }
+            PrivateOramConsensusTransitionV2::Genesis => unreachable!(),
+        };
+        let preparing_lease = PrivateOramMutationLease {
+            generation: 1,
+            collection_id,
+            owner_peer_id: 7,
+            mutation_id: mutation_receipt.mutation_id.clone(),
+            signed_mutation_digest: mutation_receipt.signed_mutation_digest.clone(),
+            transition_digest: mutation_receipt.transition_digest.clone(),
+            base_record_digest: canonical_private_oram_consensus_state_record_digest(&old_state)
+                .unwrap(),
+            base_state_sequence: old_state.state_sequence,
+            writer_lease_digest: mutation_receipt.writer_lease_digest.clone(),
+            writer_fence: mutation_receipt.writer_fence,
+            issued_at_unix: 100,
+            expires_at_unix: 200,
+            renewal_revision: 0,
+            phase: PrivateOramMutationLeasePhase::Preparing,
+        };
+        let committed_lease = PrivateOramMutationLease {
+            phase: PrivateOramMutationLeasePhase::ConsensusCommitted {
+                committed_record_digest: canonical_private_oram_consensus_state_record_digest(
+                    &new_state,
+                )
+                .unwrap(),
+                committed_state_sequence: new_state.state_sequence,
+                committed_signed_state_digest: new_state.signed_state_digest.clone(),
+                receipt_digest: canonical_private_oram_mutation_receipt_digest(&mutation_receipt)
+                    .unwrap(),
+            },
+            ..preparing_lease.clone()
+        };
+        let genesis_slot = PrivateOramMutationLeaseSlotV2 {
+            version: PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION,
+            generation: 0,
+            active: None,
+            last_clear: None,
+            max_writer_fence: 0,
+        };
+        let preparing_slot = PrivateOramMutationLeaseSlotV2 {
+            generation: 1,
+            active: Some(preparing_lease),
+            max_writer_fence: 1,
+            ..genesis_slot.clone()
+        };
+        let committed_slot = PrivateOramMutationLeaseSlotV2 {
+            active: Some(committed_lease),
+            ..preparing_slot.clone()
+        };
+        PrivateOramMutationFixture {
+            key,
+            layout_key,
+            layout,
+            hnsw_key,
+            result_key,
+            old_state,
+            new_state,
+            genesis_slot,
+            preparing_slot,
+            committed_slot,
+        }
+    }
+
+    fn install_private_oram_mutation_fixture(
+        persistent: &mut Persistent,
+        fixture: &PrivateOramMutationFixture,
+    ) {
+        for (key, epoch) in [
+            (
+                fixture.hnsw_key.clone(),
+                fixture.old_state.indexes[0].epoch.clone(),
+            ),
+            (
+                fixture.result_key.clone(),
+                fixture.old_state.indexes[1].epoch.clone(),
+            ),
+        ] {
+            persistent
+                .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                    key,
+                    expected: None,
+                    new: epoch,
+                })
+                .unwrap();
+        }
+        persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: fixture.layout_key.clone(),
+                expected: None,
+                new: fixture.layout.clone(),
+            })
+            .unwrap();
+        persistent
+            .initialize_private_oram_mutation_state(&InitializePrivateOramMutationState {
+                key: fixture.key.clone(),
+                state: fixture.old_state.clone(),
+            })
+            .unwrap();
+    }
+
     #[test]
     fn persistent_debug_redacts_peer_and_cluster_metadata_values() {
         let mut peer_address_by_id = PeerAddressById::new();
@@ -2005,6 +3423,8 @@ mod tests {
             private_oram_session_leases: Default::default(),
             private_oram_layouts,
             private_oram_external_recoveries: Default::default(),
+            private_oram_mutation_states: Default::default(),
+            private_oram_mutation_lease_slots: Default::default(),
             this_peer_id: 7,
             path: PathBuf::from("/tmp/qdrant-sec-persistent-state"),
             dirty: AtomicBool::new(false),
@@ -2059,6 +3479,610 @@ mod tests {
             !rendered.contains("qdrant-sec-private-oram-layout-collection-sentinel"),
             "{rendered}"
         );
+    }
+
+    fn private_oram_mutation_acquire(
+        fixture: &PrivateOramMutationFixture,
+    ) -> CompareAndSwapPrivateOramMutationLease {
+        CompareAndSwapPrivateOramMutationLease {
+            key: fixture.key.clone(),
+            expected: fixture.genesis_slot.clone(),
+            new: fixture.preparing_slot.clone(),
+        }
+    }
+
+    fn private_oram_mutation_apply(
+        fixture: &PrivateOramMutationFixture,
+    ) -> ApplyPrivateOramMutation {
+        ApplyPrivateOramMutation {
+            key: fixture.key.clone(),
+            mutation_lease_generation: 1,
+            expected_state: fixture.old_state.clone(),
+            new_state: fixture.new_state.clone(),
+        }
+    }
+
+    fn private_oram_mutation_cleared_slot(
+        active_slot: &PrivateOramMutationLeaseSlotV2,
+        state: &PrivateOramConsensusCollectionStateV2,
+        outcome: PrivateOramMutationClearOutcome,
+        reconciliation_byte: u8,
+    ) -> PrivateOramMutationLeaseSlotV2 {
+        let lease = active_slot.active.as_ref().unwrap();
+        PrivateOramMutationLeaseSlotV2 {
+            active: None,
+            last_clear: Some(PrivateOramMutationClearReceiptV1 {
+                version: PRIVATE_ORAM_MUTATION_CLEAR_RECEIPT_VERSION,
+                generation: lease.generation,
+                mutation_id: lease.mutation_id.clone(),
+                outcome,
+                terminal_state_digest: canonical_private_oram_consensus_state_record_digest(state)
+                    .unwrap(),
+                reconciliation_digest: test_digest(reconciliation_byte),
+            }),
+            ..active_slot.clone()
+        }
+    }
+
+    #[test]
+    fn private_oram_mutation_lease_slot_prevents_aba_and_requires_clear_tombstone() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = private_oram_mutation_fixture();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        install_private_oram_mutation_fixture(&mut persistent, &fixture);
+        let acquire = private_oram_mutation_acquire(&fixture);
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&acquire)
+            .unwrap();
+
+        let invalid_clear = PrivateOramMutationLeaseSlotV2 {
+            active: None,
+            ..fixture.preparing_slot.clone()
+        };
+        let missing_tombstone = persistent
+            .compare_and_swap_private_oram_mutation_lease(&CompareAndSwapPrivateOramMutationLease {
+                key: fixture.key.clone(),
+                expected: fixture.preparing_slot.clone(),
+                new: invalid_clear,
+            })
+            .unwrap_err();
+        assert!(missing_tombstone.to_string().contains("slot is invalid"));
+
+        let cleared = private_oram_mutation_cleared_slot(
+            &fixture.preparing_slot,
+            &fixture.old_state,
+            PrivateOramMutationClearOutcome::AbortedBeforeConsensusCommit,
+            92,
+        );
+        let clear = CompareAndSwapPrivateOramMutationLease {
+            key: fixture.key.clone(),
+            expected: fixture.preparing_slot.clone(),
+            new: cleared.clone(),
+        };
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&clear)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&clear)
+            .unwrap();
+
+        let delayed_acquire = persistent
+            .compare_and_swap_private_oram_mutation_lease(&acquire)
+            .unwrap_err();
+        assert!(delayed_acquire.to_string().contains("precondition failed"));
+
+        let mut next_lease = fixture.preparing_slot.active.clone().unwrap();
+        next_lease.generation = 2;
+        next_lease.mutation_id = test_digest(90);
+        next_lease.signed_mutation_digest = test_digest(91);
+        next_lease.transition_digest = test_digest(93);
+        next_lease.writer_lease_digest = test_digest(94);
+        next_lease.writer_fence = 2;
+        next_lease.issued_at_unix = 300;
+        next_lease.expires_at_unix = 400;
+        let next_preparing = PrivateOramMutationLeaseSlotV2 {
+            generation: 2,
+            active: Some(next_lease.clone()),
+            max_writer_fence: 2,
+            ..cleared.clone()
+        };
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&CompareAndSwapPrivateOramMutationLease {
+                key: fixture.key.clone(),
+                expected: cleared,
+                new: next_preparing.clone(),
+            })
+            .unwrap();
+
+        next_lease.owner_peer_id = 9;
+        next_lease.issued_at_unix = 401;
+        next_lease.expires_at_unix = 500;
+        let expired_takeover = persistent
+            .compare_and_swap_private_oram_mutation_lease(&CompareAndSwapPrivateOramMutationLease {
+                key: fixture.key,
+                expected: next_preparing.clone(),
+                new: PrivateOramMutationLeaseSlotV2 {
+                    active: Some(next_lease),
+                    ..next_preparing
+                },
+            })
+            .unwrap_err();
+        assert!(
+            expired_takeover
+                .to_string()
+                .contains("transition is invalid")
+        );
+    }
+
+    #[test]
+    fn private_oram_mutation_enrollment_fences_standalone_index_operations() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = private_oram_mutation_fixture();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        install_private_oram_mutation_fixture(&mut persistent, &fixture);
+
+        let session_error = persistent
+            .compare_and_swap_private_oram_session_lease(&CompareAndSwapPrivateOramSessionLease {
+                key: fixture.hnsw_key.clone(),
+                expected: None,
+                new: Some(PrivateOramSessionLease {
+                    owner_peer_id: 7,
+                    lease_id_hash: test_digest(70),
+                    issued_at_unix: 100,
+                    expires_at_unix: 160,
+                }),
+            })
+            .unwrap_err();
+        assert!(
+            session_error
+                .to_string()
+                .contains("enrolled v2 mutation state")
+        );
+
+        let epoch_error = persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: fixture.hnsw_key.clone(),
+                expected: Some(fixture.old_state.indexes[0].epoch.clone()),
+                new: fixture.new_state.indexes[0].epoch.clone(),
+            })
+            .unwrap_err();
+        assert!(epoch_error.to_string().contains("enrolled v2"));
+        persistent
+            .compare_and_swap_private_oram_epoch(&CompareAndSwapPrivateOramEpoch {
+                key: fixture.hnsw_key.clone(),
+                expected: None,
+                new: fixture.old_state.indexes[0].epoch.clone(),
+            })
+            .unwrap();
+
+        let layout_error = persistent
+            .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
+                key: fixture.layout_key.clone(),
+                expected: Some(fixture.layout.clone()),
+                new: PrivateOramConsensusLayout {
+                    generation: fixture.layout.generation + 1,
+                    layout_digest: test_digest(71),
+                    ..fixture.layout.clone()
+                },
+            })
+            .unwrap_err();
+        assert!(layout_error.to_string().contains("enrolled v2"));
+
+        let recovery_key = PrivateOramExternalRecoveryKey {
+            collection_id: fixture.key.collection_id.clone(),
+        };
+        let recovery_state = PrivateOramExternalRecoveryState {
+            committed_backup_generation: 0,
+            committed_checkpoint_digest: None,
+            committed_install_intent_digest: None,
+            active_lease: Some(PrivateOramExternalRecoveryLease {
+                owner_peer_id: 7,
+                operation_id_hash: test_digest(72),
+                checkpoint_digest: test_digest(73),
+                backup_generation: 1,
+                issued_at_unix: 100,
+                expires_at_unix: 160,
+                install_intent_digest: None,
+                phase: PrivateOramExternalRecoveryLeasePhase::Staging,
+            }),
+        };
+        persistent
+            .compare_and_swap_private_oram_external_recovery(
+                &CompareAndSwapPrivateOramExternalRecovery {
+                    key: recovery_key.clone(),
+                    expected: None,
+                    new: Some(recovery_state.clone()),
+                },
+            )
+            .unwrap();
+        let mutation_during_recovery = persistent
+            .compare_and_swap_private_oram_mutation_lease(&private_oram_mutation_acquire(&fixture))
+            .unwrap_err();
+        assert!(
+            mutation_during_recovery
+                .to_string()
+                .contains("active external recovery")
+        );
+        persistent
+            .compare_and_swap_private_oram_external_recovery(
+                &CompareAndSwapPrivateOramExternalRecovery {
+                    key: recovery_key.clone(),
+                    expected: Some(recovery_state.clone()),
+                    new: None,
+                },
+            )
+            .unwrap();
+
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&private_oram_mutation_acquire(&fixture))
+            .unwrap();
+        let recovery_error = persistent
+            .compare_and_swap_private_oram_external_recovery(
+                &CompareAndSwapPrivateOramExternalRecovery {
+                    key: recovery_key,
+                    expected: None,
+                    new: Some(recovery_state),
+                },
+            )
+            .unwrap_err();
+        assert!(recovery_error.to_string().contains("active mutation"));
+    }
+
+    #[test]
+    fn private_oram_mutation_atomically_advances_and_replays_after_clear() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = private_oram_mutation_fixture();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        install_private_oram_mutation_fixture(&mut persistent, &fixture);
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&private_oram_mutation_acquire(&fixture))
+            .unwrap();
+        let operation = private_oram_mutation_apply(&fixture);
+
+        persistent.apply_private_oram_mutation(&operation).unwrap();
+        persistent.apply_private_oram_mutation(&operation).unwrap();
+        assert_eq!(
+            persistent.private_oram_mutation_state(&fixture.key),
+            Some(fixture.new_state.clone())
+        );
+        assert_eq!(
+            persistent.private_oram_mutation_lease_slot(&fixture.key),
+            Some(fixture.committed_slot.clone())
+        );
+        assert_eq!(
+            persistent.private_oram_epoch(&fixture.hnsw_key),
+            Some(fixture.new_state.indexes[0].epoch.clone())
+        );
+        assert_eq!(
+            persistent.private_oram_epoch(&fixture.result_key),
+            Some(fixture.new_state.indexes[1].epoch.clone())
+        );
+        assert_eq!(
+            persistent
+                .private_oram_layout(&fixture.layout_key)
+                .unwrap()
+                .index_state_digest,
+            private_oram_consensus_state_index_digest(&fixture.new_state).unwrap()
+        );
+
+        let cleared = private_oram_mutation_cleared_slot(
+            &fixture.committed_slot,
+            &fixture.new_state,
+            PrivateOramMutationClearOutcome::FinalizedOrReconciledAfterConsensusCommit,
+            95,
+        );
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&CompareAndSwapPrivateOramMutationLease {
+                key: fixture.key.clone(),
+                expected: fixture.committed_slot.clone(),
+                new: cleared.clone(),
+            })
+            .unwrap();
+        persistent.apply_private_oram_mutation(&operation).unwrap();
+        assert_eq!(
+            persistent.private_oram_mutation_lease_slot(&fixture.key),
+            Some(cleared.clone())
+        );
+        drop(persistent);
+
+        let reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        assert_eq!(
+            reloaded.private_oram_mutation_state(&fixture.key),
+            Some(fixture.new_state)
+        );
+        assert_eq!(
+            reloaded.private_oram_mutation_lease_slot(&fixture.key),
+            Some(cleared)
+        );
+    }
+
+    #[test]
+    fn private_oram_mutation_rejects_tampered_writeback_and_fence() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = private_oram_mutation_fixture();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        install_private_oram_mutation_fixture(&mut persistent, &fixture);
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&private_oram_mutation_acquire(&fixture))
+            .unwrap();
+
+        let mut unchanged_writeback = private_oram_mutation_apply(&fixture);
+        unchanged_writeback.new_state.indexes[0]
+            .epoch
+            .writeback_digest = unchanged_writeback.expected_state.indexes[0]
+            .epoch
+            .writeback_digest
+            .clone();
+        let transition_digest = canonical_private_oram_mutation_transition_digest(
+            &unchanged_writeback.expected_state,
+            &unchanged_writeback.new_state,
+        )
+        .unwrap();
+        let PrivateOramConsensusTransitionV2::Mutation(receipt) =
+            &mut unchanged_writeback.new_state.last_transition
+        else {
+            unreachable!();
+        };
+        receipt.transition_digest = transition_digest;
+        let writeback_error = persistent
+            .apply_private_oram_mutation(&unchanged_writeback)
+            .unwrap_err();
+        assert!(
+            writeback_error
+                .to_string()
+                .contains("transition is invalid")
+        );
+
+        let mut stale_fence = private_oram_mutation_apply(&fixture);
+        stale_fence.mutation_lease_generation = 2;
+        let fence_error = persistent
+            .apply_private_oram_mutation(&stale_fence)
+            .unwrap_err();
+        assert!(fence_error.to_string().contains("transition is invalid"));
+
+        let mut different_receipt = private_oram_mutation_apply(&fixture);
+        if let PrivateOramConsensusTransitionV2::Mutation(receipt) =
+            &mut different_receipt.new_state.last_transition
+        {
+            receipt.point_operation_digest = test_digest(98);
+        }
+        let transition_digest = canonical_private_oram_mutation_transition_digest(
+            &different_receipt.expected_state,
+            &different_receipt.new_state,
+        )
+        .unwrap();
+        if let PrivateOramConsensusTransitionV2::Mutation(receipt) =
+            &mut different_receipt.new_state.last_transition
+        {
+            receipt.transition_digest = transition_digest;
+        }
+        let receipt_error = persistent
+            .apply_private_oram_mutation(&different_receipt)
+            .unwrap_err();
+        assert!(
+            receipt_error
+                .to_string()
+                .contains("lease transition is invalid")
+        );
+    }
+
+    #[test]
+    fn private_oram_mutation_save_failure_restores_every_consensus_map() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = private_oram_mutation_fixture();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        install_private_oram_mutation_fixture(&mut persistent, &fixture);
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&private_oram_mutation_acquire(&fixture))
+            .unwrap();
+        let previous_states = persistent.private_oram_mutation_states.clone();
+        let previous_slots = persistent.private_oram_mutation_lease_slots.clone();
+        let previous_epochs = persistent.private_oram_epochs.clone();
+        let previous_layouts = persistent.private_oram_layouts.clone();
+        persistent.path = temp.path().join("missing-parent").join("raft_state.json");
+
+        persistent
+            .apply_private_oram_mutation(&private_oram_mutation_apply(&fixture))
+            .unwrap_err();
+        assert_eq!(persistent.private_oram_mutation_states, previous_states);
+        assert_eq!(persistent.private_oram_mutation_lease_slots, previous_slots);
+        assert_eq!(persistent.private_oram_epochs, previous_epochs);
+        assert_eq!(persistent.private_oram_layouts, previous_layouts);
+    }
+
+    #[test]
+    fn private_oram_mutation_snapshot_requires_exact_state_slot_and_epochs() {
+        let fixture = private_oram_mutation_fixture();
+        let state_key = private_oram_mutation_key_digest(&fixture.key);
+        let layout_key = private_oram_layout_key_digest(&fixture.layout_key);
+        let epoch_maps = HashMap::from([
+            (
+                private_oram_epoch_key_digest(&fixture.hnsw_key),
+                fixture.old_state.indexes[0].epoch.clone(),
+            ),
+            (
+                private_oram_epoch_key_digest(&fixture.result_key),
+                fixture.old_state.indexes[1].epoch.clone(),
+            ),
+        ]);
+        let states = HashMap::from([(state_key.clone(), fixture.old_state.clone())]);
+        let layouts = HashMap::from([(layout_key, fixture.layout.clone())]);
+        let genesis_slots = HashMap::from([(state_key.clone(), fixture.genesis_slot.clone())]);
+        Persistent::validate_private_oram_snapshot_state(
+            &epoch_maps,
+            &HashMap::new(),
+            &layouts,
+            &HashMap::new(),
+            &states,
+            &genesis_slots,
+        )
+        .unwrap();
+
+        let missing_slot = Persistent::validate_private_oram_snapshot_state(
+            &epoch_maps,
+            &HashMap::new(),
+            &layouts,
+            &HashMap::new(),
+            &states,
+            &HashMap::new(),
+        )
+        .unwrap_err();
+        assert!(missing_slot.to_string().contains("lease slot snapshot"));
+
+        let mut mixed_epochs = epoch_maps.clone();
+        mixed_epochs.insert(
+            private_oram_epoch_key_digest(&fixture.hnsw_key),
+            fixture.new_state.indexes[0].epoch.clone(),
+        );
+        let mixed_epoch = Persistent::validate_private_oram_snapshot_state(
+            &mixed_epochs,
+            &HashMap::new(),
+            &layouts,
+            &HashMap::new(),
+            &states,
+            &genesis_slots,
+        )
+        .unwrap_err();
+        assert!(mixed_epoch.to_string().contains("mutation state snapshot"));
+
+        let active_slots = HashMap::from([(state_key.clone(), fixture.preparing_slot.clone())]);
+        Persistent::validate_private_oram_snapshot_state(
+            &epoch_maps,
+            &HashMap::new(),
+            &layouts,
+            &HashMap::new(),
+            &states,
+            &active_slots,
+        )
+        .unwrap();
+
+        let mut rogue_owner_slot = fixture.preparing_slot;
+        rogue_owner_slot.active.as_mut().unwrap().owner_peer_id = 99;
+        let rogue_owner_slots = HashMap::from([(state_key, rogue_owner_slot)]);
+        let rogue_owner = Persistent::validate_private_oram_snapshot_state(
+            &epoch_maps,
+            &HashMap::new(),
+            &layouts,
+            &HashMap::new(),
+            &states,
+            &rogue_owner_slots,
+        )
+        .unwrap_err();
+        assert!(rogue_owner.to_string().contains("lease slot snapshot"));
+
+        let committed_epochs = HashMap::from([
+            (
+                private_oram_epoch_key_digest(&fixture.hnsw_key),
+                fixture.new_state.indexes[0].epoch.clone(),
+            ),
+            (
+                private_oram_epoch_key_digest(&fixture.result_key),
+                fixture.new_state.indexes[1].epoch.clone(),
+            ),
+        ]);
+        let committed_layout = PrivateOramConsensusLayout {
+            index_state_digest: private_oram_consensus_state_index_digest(&fixture.new_state)
+                .unwrap(),
+            ..fixture.layout
+        };
+        let committed_states = HashMap::from([(
+            private_oram_mutation_key_digest(&fixture.key),
+            fixture.new_state,
+        )]);
+        let committed_slots = HashMap::from([(
+            private_oram_mutation_key_digest(&fixture.key),
+            fixture.committed_slot,
+        )]);
+        Persistent::validate_private_oram_snapshot_state(
+            &committed_epochs,
+            &HashMap::new(),
+            &HashMap::from([(
+                private_oram_layout_key_digest(&fixture.layout_key),
+                committed_layout,
+            )]),
+            &HashMap::new(),
+            &committed_states,
+            &committed_slots,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn private_oram_mutation_v2_nested_schema_is_strict() {
+        let fixture = private_oram_mutation_fixture();
+
+        let mut missing_transition = serde_json::to_value(&fixture.new_state).unwrap();
+        missing_transition
+            .as_object_mut()
+            .unwrap()
+            .remove("last_transition");
+        assert!(
+            serde_json::from_value::<PrivateOramConsensusCollectionStateV2>(missing_transition)
+                .is_err()
+        );
+
+        let mut unknown_index_field = serde_json::to_value(&fixture.new_state).unwrap();
+        unknown_index_field["indexes"][0]
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".to_string(), serde_json::Value::Bool(true));
+        assert!(
+            serde_json::from_value::<PrivateOramConsensusCollectionStateV2>(unknown_index_field)
+                .is_err()
+        );
+
+        let mut unknown_transition_field = serde_json::to_value(&fixture.new_state).unwrap();
+        unknown_transition_field["last_transition"]
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".to_string(), serde_json::Value::Bool(true));
+        assert!(
+            serde_json::from_value::<PrivateOramConsensusCollectionStateV2>(
+                unknown_transition_field,
+            )
+            .is_err()
+        );
+
+        let committed_phase = fixture.committed_slot.active.unwrap().phase;
+        let mut unknown_phase_field = serde_json::to_value(&committed_phase).unwrap();
+        unknown_phase_field["consensus_committed"]
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".to_string(), serde_json::Value::Bool(true));
+        assert!(
+            serde_json::from_value::<PrivateOramMutationLeasePhase>(unknown_phase_field).is_err()
+        );
+    }
+
+    #[test]
+    fn private_oram_mutation_consensus_digests_match_known_answer() {
+        let fixture = private_oram_mutation_fixture();
+        let PrivateOramConsensusTransitionV2::Mutation(receipt) =
+            &fixture.new_state.last_transition
+        else {
+            unreachable!();
+        };
+        let old_record =
+            canonical_private_oram_consensus_state_record_digest(&fixture.old_state).unwrap();
+        let new_core =
+            crate::content_manager::consensus_ops::canonical_private_oram_consensus_state_core_digest(
+                &fixture.new_state,
+            )
+            .unwrap();
+        let transition = canonical_private_oram_mutation_transition_digest(
+            &fixture.old_state,
+            &fixture.new_state,
+        )
+        .unwrap();
+        let receipt = canonical_private_oram_mutation_receipt_digest(receipt).unwrap();
+        let new_record =
+            canonical_private_oram_consensus_state_record_digest(&fixture.new_state).unwrap();
+
+        assert_eq!(old_record, "LvW2Zp_Bli40rzOYerpyVv5r7mA_orFhFsQoyU-c1vg");
+        assert_eq!(new_core, "p1Oei5zjwOqaw6lr7INVHoUAkUvJcZecoGNcAuXwFWI");
+        assert_eq!(transition, "3RJ_qZ_CBzLkctDMQOKd-jUFA_Yesx2g2h9E_j93XQY");
+        assert_eq!(receipt, "RnlVSq33mERZh9WH874pHc1YW3DXe9ahLQdx5bIZ83g");
+        assert_eq!(new_record, "4156xu4D3H6HOWeywE2nRBusgZVQplLSaRxz_ch-XJc");
     }
 
     #[test]
@@ -3046,6 +5070,8 @@ mod tests {
                 Default::default(),
                 HashMap::from([(invalid_key_sentinel.to_string(), initial.clone())]),
                 Default::default(),
+                Default::default(),
+                Default::default(),
             )
             .unwrap_err()
             .to_string();
@@ -3072,6 +5098,8 @@ mod tests {
                         ..initial.clone()
                     },
                 )]),
+                Default::default(),
+                Default::default(),
                 Default::default(),
             )
             .unwrap_err()
@@ -3802,9 +5830,7 @@ mod tests {
         assert!(blocked_epoch.contains("conflicts with active external recovery"));
         let blocked_layout = persistent
             .compare_and_swap_private_oram_layout(&CompareAndSwapPrivateOramLayout {
-                key: PrivateOramLayoutKey {
-                    collection_id: collection_id,
-                },
+                key: PrivateOramLayoutKey { collection_id },
                 expected: Some(layout.clone()),
                 new: PrivateOramConsensusLayout {
                     generation: 2,
@@ -4223,6 +6249,8 @@ mod tests {
                     Default::default(),
                     Default::default(),
                     HashMap::from([(key_digest, committed)]),
+                    Default::default(),
+                    Default::default(),
                 )
                 .is_err()
         );
@@ -4273,6 +6301,8 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 Default::default(),
+                Default::default(),
+                Default::default(),
             )
             .unwrap_err();
         assert!(
@@ -4307,6 +6337,8 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 Default::default(),
+                Default::default(),
+                Default::default(),
             )
             .unwrap_err();
         assert!(
@@ -4337,6 +6369,8 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 malformed_root,
+                Default::default(),
+                Default::default(),
                 Default::default(),
                 Default::default(),
                 Default::default(),

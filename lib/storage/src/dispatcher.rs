@@ -35,13 +35,15 @@ use crate::content_manager::collection_meta_ops::AliasOperations;
 use crate::content_manager::consensus_ops::{
     CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramLayout,
     CompareAndSwapPrivateOramSessionLease, PrivateOramCollectionLayoutTransition,
-    PrivateOramConsensusEpoch, PrivateOramConsensusLayout, PrivateOramEpochKey,
-    PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryOperation,
+    PrivateOramConsensusCollectionStateV2, PrivateOramConsensusEpoch, PrivateOramConsensusLayout,
+    PrivateOramEpochKey, PrivateOramExternalRecoveryKey, PrivateOramExternalRecoveryOperation,
     PrivateOramExternalRecoveryState, PrivateOramIndexKind, PrivateOramLayoutIndexStateBinding,
-    PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding, PrivateOramReshardingLayoutTransition,
-    PrivateOramReshardingOperation, PrivateOramSessionLease, PrivateOramShardKeyLayoutChange,
-    PrivateOramShardKeyLayoutChangeKind, PrivateOramShardLayoutEntry,
-    PrivateOramShardTransferStart, canonical_private_oram_index_state_digest,
+    PrivateOramLayoutKey, PrivateOramLayoutLeaseBinding, PrivateOramMutationKey,
+    PrivateOramMutationLease, PrivateOramMutationLeaseSlotV2,
+    PrivateOramReshardingLayoutTransition, PrivateOramReshardingOperation, PrivateOramSessionLease,
+    PrivateOramShardKeyLayoutChange, PrivateOramShardKeyLayoutChangeKind,
+    PrivateOramShardLayoutEntry, PrivateOramShardTransferStart,
+    canonical_private_oram_index_state_digest,
     canonical_private_oram_resharding_post_layout_digest,
     canonical_private_oram_shard_layout_digest,
     canonical_private_oram_shard_transfer_post_layout_digest,
@@ -2113,6 +2115,38 @@ impl Dispatcher {
             )
         })?;
         Ok(consensus_state.private_oram_session_lease(key))
+    }
+
+    pub fn private_oram_consensus_mutation_state(
+        &self,
+        key: &PrivateOramMutationKey,
+    ) -> Result<Option<PrivateOramConsensusCollectionStateV2>, StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error("private ORAM mutation state requires distributed mode")
+        })?;
+        Ok(consensus_state.private_oram_mutation_state(key))
+    }
+
+    pub fn private_oram_consensus_mutation_lease(
+        &self,
+        key: &PrivateOramMutationKey,
+    ) -> Result<Option<PrivateOramMutationLease>, StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error("private ORAM mutation lease requires distributed mode")
+        })?;
+        Ok(consensus_state.private_oram_mutation_lease(key))
+    }
+
+    pub fn private_oram_consensus_mutation_lease_slot(
+        &self,
+        key: &PrivateOramMutationKey,
+    ) -> Result<Option<PrivateOramMutationLeaseSlotV2>, StorageError> {
+        let consensus_state = self.consensus_state.as_ref().ok_or_else(|| {
+            StorageError::service_error(
+                "private ORAM mutation lease slot requires distributed mode",
+            )
+        })?;
+        Ok(consensus_state.private_oram_mutation_lease_slot(key))
     }
 
     pub fn private_oram_consensus_layout(
