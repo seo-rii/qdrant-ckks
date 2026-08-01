@@ -7698,6 +7698,7 @@ dependencies = [
  "raft",
  "rand 0.10.0",
  "reqwest 0.13.2",
+ "ring",
  "schemars 0.8.22",
  "segment",
  "semver",
