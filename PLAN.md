@@ -1161,10 +1161,10 @@ Signed fields:
   preparing lease, complete old consensus record와 canonical owner/index requirement를
   immutable descriptor로 고정한다. 아래 7단계 증거는 previous-record-linked current
   state로 저장하며 exact retry만 허용한다.
-- 활성화 전 남음: D3-B2/B3가 전용 point staging과 실제 child owner journal의
-  signature/proof/durability evidence를 검증하고, D4 state-aware search writeback 및
-  consensus snapshot/lifecycle reservation이 모든 race를 닫은 뒤에만 proposal
-  admission을 추가한다 (`ARCH-022`).
+- 활성화 전 남음: D3-B3가 실제 child owner journal의
+  signature/proof/durability evidence를 검증하고 point stage를 publish/abort/reconcile한
+  뒤, D4 state-aware search writeback 및 consensus snapshot/lifecycle reservation이
+  모든 race를 닫은 경우에만 proposal admission을 추가한다 (`ARCH-022`).
 
 #### V2-D3: Durable prepare/finalize
 
@@ -1182,22 +1182,37 @@ Signed fields:
   digest, preparing D2 lease, non-genesis receipt를 포함한 exact old consensus record,
   coordinator와 canonical owner/index cross-product를 묶는다. Descriptor/state
   digest encoding은 known-answer test로 고정한다.
-- 완료(D3-B1): Parent state는 `LeaseAcquired -> OwnersPrepared -> PointWalDurable ->
+- 완료(D3-B1/D3-B2-B): Parent state는 `LeaseAcquired -> OwnersPrepared -> PointStageDurable ->
   ConsensusCommitted -> RemotesFinalized -> LocalFinalized -> Complete`의 exact
   7단계만 허용한다. Point-operation digest와 committed receipt/record/transition은
   signed mutation 및 D2 state에서 재계산하며 remote-before-local 순서를 강제한다.
   State publish는 file fsync, atomic replace, parent fsync 순서이고 pre/post-publish
   오류와 exhausted parent-fsync를 definitive/indeterminate로 분류한다. Owner-only
   non-symlink layout, bounded files, same-file 검사와 redacted Debug/Error를 적용했다.
-- 남음(D3-B2): 기존 일반 point WAL은 append 즉시 update worker에 노출되고 explicit
-  flush 전에는 durability 경계가 부족하므로 재사용하지 않는다. Exact canonical
-  InsertOnly operation과 routing identity를 보관하되 CAS 전에는 보이지 않는 private
-  mutation point staging WAL을 추가한다 (`DUR-002`).
+- 완료(D3-B2-A): `qdrant-sec` canonical InsertOnly frame은 collection/mutation/state,
+  writer lease/fence, canonical shard route, point id, payload와 empty server-vector set을
+  strict binary codec으로 묶는다. 64 MiB hard limit, exact decode/re-encode, frame digest,
+  mutation point-operation digest와 known-answer vectors를 고정했다.
+- 완료(D3-B2-B): Collection-local `private_oram_point_staging/active`에 descriptor,
+  canonical frame과 Prepared-only state를 owner-only bounded files로 fsync한다. Child
+  descriptor는 exact parent descriptor와 `OwnersPrepared` record digest를 묶고,
+  parent는 child가 발급한 opaque durable token으로만 `PointStageDurable`에 CAS한다.
+  Linux `renameat2(RENAME_NOREPLACE)`, pinned root-directory fsync, post-install reopen,
+  no-follow/same-inode/link-count/mode 검증을 사용한다. Rename 전 crash가 남긴 private
+  sibling candidate는 채택하거나 삭제하지 않고 무시하며 unknown/symlink entry는
+  fail closed 한다 (`DUR-002`).
+- 유지 조건(D3-B2): Frame file은 자체 AEAD store가 아니며 visible point id/payload
+  bytes를 포함할 수 있다. D4 admission이 collection payload policy를 적용한 뒤에만
+  호출해야 하고 host filesystem은 owner-only local Linux storage, durable file/directory
+  fsync와 `RENAME_NOREPLACE`를 제공해야 한다. Private vector bytes는 항상 거부하며,
+  D3-B3/D4 전까지 이 primitive는 dormant다.
 - 남음(D3-B3): Parent의 owner prepare/finalize digest를 실제 child journal의
   signature/proof/durable state와 대조하고, point staging을 publish/abort한다.
   Consensus가 exact old면 모든 prepared child와 point stage를 abort하고, exact new면
-  remote-before-local finalize를 재개한다. Lease clear 이후에만 parent를 제거하며,
-  submit ambiguity의 제3 상태는 fail closed 한다.
+  remote-before-local finalize를 재개한다. 완료/abort 뒤 child와 point-stage artifact,
+  parent journal을 순서대로 durable removal한 다음 consensus mutation lease를 마지막에
+  clear해 새 admission이 stale local artifact와 겹치지 않게 한다. Submit ambiguity의
+  제3 상태는 fail closed 한다.
 
 #### V2-D4: Dedicated API activation
 
