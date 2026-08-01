@@ -405,13 +405,37 @@ return the same token; unknown entries, symlinks, hard links, unsafe modes, and
 same-inode content changes fail closed.
 
 Structural inspection deliberately returns only a self-consistent untrusted
-snapshot and cannot mint evidence. Token issuance remains crate-private and
-dormant until D3-B3-B3 rebinds it to typed parent state, the signed mutation,
-canonical old stores, manifests, and authenticated local or destination peer
-identity. D3-B3-B2 still needs domain-separated `Finalized` and `AbortedOld`
-terminal records plus restart recovery adapters. Parent prepare/finalize
-transitions will ultimately accept only opaque tokens produced by those
-validated records, not caller-selected digest strings.
+snapshot and cannot mint evidence. It takes a shared root advisory lock, so a
+terminal publish cannot be misclassified as structural corruption midway
+through inspection. Token issuance remains crate-private and dormant until
+D3-B3-B3 rebinds it to typed parent state, the signed mutation, canonical
+stores, manifests, and authenticated local or destination peer identity.
+
+The journal now also supports an append-only sequence-2 `Finalized` or
+`AbortedOld` terminal record without replacing the Prepared state. The two
+phases use distinct canonical domains and bind the immutable owner descriptor,
+Prepared-state digest, parent descriptor, authenticated owner peer, stable
+consensus-authority record, reconciliation authority, and one ordered
+canonical-state digest for every descriptor index. They do not use the mutable
+parent current-record digest as replay identity. Exact replay returns the same
+terminal token; phase, authority, owner, index identity, order, or canonical
+state substitution is rejected.
+
+Terminal publication writes a randomized candidate below the active temp
+directory, fsyncs its record and directory, and installs the candidate across
+directories with `RENAME_NOREPLACE`. It then verifies candidate/installed inode
+continuity, rereads the exact canonical bytes, and fsyncs the terminal, temp,
+active, and root directories before returning. Partial stranded candidates are
+preserved but never adopted. Unknown entries, symlinks, hard links, unsafe
+modes, oversized records, and terminal tampering fail closed.
+
+This terminal primitive does not yet establish that canonical HNSW/result
+stores are exact new or exact old. Its raw contexts and recording methods are
+module-private, so no production caller can mint terminal evidence from digest
+strings. D3-B3-B2 still needs phase-specific store verification tokens and a
+restart recovery adapter; D3-B3-B3 must then bind those tokens to typed parent
+authority and authenticated peer identity. Parent prepare/finalize transitions
+will ultimately accept only opaque tokens produced through that path.
 
 The parent descriptor and current-state digest formats have known-answer
 tests. Journal files live below a private non-symlink directory, use bounded
@@ -423,9 +447,10 @@ post-publish parent fsync are indeterminate. An exact retry can reconcile a
 candidate that was already exposed. The typed point-stage token proves the
 Prepared child point artifact, and the paired owner journal can now prove a
 structurally and durably installed Prepared artifact to crate-private callers.
-Parent owner prepare/finalize digests remain coordination evidence until
-D3-B3-B3 performs typed parent and authenticated peer binding and the terminal
-owner records exist. Cleanup
+It can also persist a terminal record once the future typed store adapter
+supplies exact canonical-state authority. Parent owner prepare/finalize digests
+remain coordination evidence until D3-B3-B3 performs typed parent and
+authenticated peer binding through that adapter. Cleanup
 must durably remove mutable child/point artifacts, compact the parent into an
 immutable reconciliation witness, and clear the consensus mutation lease as
 the final authority release. The witness makes a crash before or after lease
@@ -443,12 +468,12 @@ finalizer. D2 provides a dormant consensus state machine; D3-B1 provides the
 parent mutation journal; and D3-B2 provides the canonical invisible Prepared
 point stage. D3-B3-A2 provides the dormant `AbortDecided` consensus barrier,
 D3-B3-B1 provides the server-safe owner-prepare validation contract, and the
-D3-B3-B2 Prepared slice provides the paired durable owner journal without
-external evidence wiring. None adds a dispatcher proposal method or public
-route. Terminal child-owner records and typed inspection, abort/finalize
-execution, reconciliation-witness cleanup, state-aware search and lifecycle
-admission, and public APIs remain D3-B3/D4 gates. Normal Qdrant upsert and update
-APIs remain rejected throughout.
+D3-B3-B2 slices provide the paired durable owner journal and dormant terminal
+record primitive without external evidence wiring. None adds a dispatcher
+proposal method or public route. Canonical-store recovery adapters, typed owner
+inspection, abort/finalize execution, reconciliation-witness cleanup,
+state-aware search and lifecycle admission, and public APIs remain D3-B3/D4
+gates. Normal Qdrant upsert and update APIs remain rejected throughout.
 
 The append contract carries ciphertext hashes and commitments, not raw bucket
 bodies. The owner-prepare wire package supplies those encrypted bodies, and the

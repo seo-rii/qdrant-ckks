@@ -1255,11 +1255,23 @@ Signed fields:
   mounted procfs fd-relative access, durable file/directory fsync와 모든 journal writer의
   advisory-lock 준수를 요구한다. Token minting API는 D3-B3-B3의 typed parent state,
   authenticated peer identity와 연결될 때까지 crate-private/dormant다.
-- 남음(D3-B3-B2-Terminal): 같은 journal에 domain-separated `Finalized | AbortedOld`
-  terminal record와 restart recovery adapter를 추가한다. Finalized는 prepared digest,
-  exact new epoch/root와 canonical final refs를 묶고, AbortedOld는 consensus-linearized
-  exact-old authority를 묶어야 한다. Legacy HNSW/result pending journal은 digest domain,
-  duplicate-bucket model과 signature contract가 달라 직접 증거로 재사용하지 않는다.
+- 완료(D3-B3-B2-TerminalRecord): Prepared state를 덮어쓰지 않는 sequence-2
+  `Finalized | AbortedOld` terminal record를 phase별 canonical domain으로 추가했다. Record는
+  owner descriptor와 Prepared state digest, immutable parent descriptor, authenticated owner
+  peer, stable consensus/reconciliation authority digest, descriptor 순서의 per-index canonical
+  state digest를 함께 묶는다. Terminal candidate는 active temp 아래에서 file/directory fsync
+  후 cross-directory `RENAME_NOREPLACE`로 설치하며 candidate/installed inode continuity,
+  terminal/temp/active/root fsync, exact reread와 replay equality를 검증한다. Structural
+  inspection은 shared root lock으로 writer와 직렬화되고 terminal token을 발급하지 않는다.
+- 유지 조건(D3-B3-B2-TerminalRecord): Raw terminal context와 record method는 module-private라
+  production caller가 임의 authority digest로 terminal token을 만들 수 없다. Stable
+  consensus authority를 사용하며 전진하는 parent current-record digest는 replay identity로
+  사용하지 않는다.
+- 남음(D3-B3-B2-StoreAdapter): HNSW/result canonical store가 모두 exact-new 또는 모두
+  exact-old임을 검증하고 phase별 opaque store token과 restart recovery context를 만드는 V2
+  adapter가 필요하다. 그 adapter만 terminal record method를 호출할 수 있게 visibility를
+  열어야 한다. Legacy HNSW/result pending journal은 digest domain, duplicate-bucket model과
+  signature contract가 달라 V2 authority나 evidence로 재사용하지 않는다.
 - 남음(D3-B3-B3): HNSW/result owner record를 pair로 inspect하고 peer/parent requirement와
   exact terminal authority를 검증해 parent journal에 opaque evidence를 공급하는 internal
   RPC와 adapter가 필요하다.
