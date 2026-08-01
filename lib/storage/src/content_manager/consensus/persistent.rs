@@ -1,11 +1,12 @@
 use std::collections::HashMap;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{cmp, fmt};
 
-use atomicwrites::{AllowOverwrite, AtomicFile};
+#[cfg(not(unix))]
+use atomicwrites::replace_atomic;
 use collection::operations::types::PeerMetadata;
 use collection::shards::replica_set::replica_set_state::ReplicaState;
 use collection::shards::shard::PeerId;
@@ -65,6 +66,82 @@ const PRIVATE_ORAM_SHA256_BASE64URL_LEN: usize = 43;
 const PRIVATE_ORAM_SESSION_LEASE_MAX_SECS: u64 = 3_600;
 const PRIVATE_ORAM_EXTERNAL_RECOVERY_LEASE_MAX_SECS: u64 = 3_600;
 const PRIVATE_ORAM_MUTATION_LEASE_MAX_SECS: u64 = 3_600;
+const PERSISTENT_PARENT_SYNC_ATTEMPTS: usize = 3;
+const PERSISTENT_SAVE_INDETERMINATE_MESSAGE: &str = "Raft persistent state durability is indeterminate; restart this peer before applying more consensus operations";
+
+#[derive(Debug)]
+enum PersistentSaveError {
+    Definitive(StorageError),
+    Indeterminate,
+}
+
+impl PersistentSaveError {
+    fn is_definitive(&self) -> bool {
+        matches!(self, Self::Definitive(_))
+    }
+
+    fn into_storage_error(self) -> StorageError {
+        match self {
+            Self::Definitive(error) => error,
+            Self::Indeterminate => {
+                StorageError::service_error(PERSISTENT_SAVE_INDETERMINATE_MESSAGE)
+            }
+        }
+    }
+}
+
+trait PersistentSaveBackend {
+    fn publish(&self, candidate: tempfile::NamedTempFile, destination: &Path) -> io::Result<()>;
+
+    fn sync_parent(&self, parent: &Path) -> io::Result<()>;
+}
+
+struct FilesystemPersistentSaveBackend;
+
+impl PersistentSaveBackend for FilesystemPersistentSaveBackend {
+    fn publish(&self, candidate: tempfile::NamedTempFile, destination: &Path) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            candidate
+                .persist(destination)
+                .map(|_| ())
+                .map_err(|error| error.error)
+        }
+        #[cfg(not(unix))]
+        {
+            replace_atomic(candidate.path(), destination)
+        }
+    }
+
+    fn sync_parent(&self, parent: &Path) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            File::open(parent)?.sync_all()
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = parent;
+            Ok(())
+        }
+    }
+}
+
+struct Sha256Writer<'a, W> {
+    inner: W,
+    hasher: &'a mut Sha256,
+}
+
+impl<W: Write> Write for Sha256Writer<'_, W> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(buffer)?;
+        self.hasher.update(&buffer[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
 
 /// State of the Raft consensus, which should be saved between restarts.
 /// State of the collections, aliases and transfers are stored as regular storage.
@@ -107,6 +184,9 @@ pub struct Persistent {
     /// Tracks if there are some unsaved changes due to the failure on save
     #[serde(skip)]
     pub dirty: AtomicBool,
+    /// A published state could not be made durably discoverable. Consensus must stop until restart.
+    #[serde(skip)]
+    pub(crate) save_indeterminate: AtomicBool,
 }
 
 impl fmt::Debug for Persistent {
@@ -157,6 +237,10 @@ impl fmt::Debug for Persistent {
             .field("this_peer_id", &self.this_peer_id)
             .field("path", &self.path)
             .field("dirty", &self.dirty.load(Ordering::Relaxed))
+            .field(
+                "save_indeterminate",
+                &self.save_indeterminate.load(Ordering::Relaxed),
+            )
             .finish()
     }
 }
@@ -258,6 +342,7 @@ impl Persistent {
             this_peer_id: _,
             path: _,
             dirty: _,
+            save_indeterminate: _,
         } = self;
 
         state.conf_state = meta.get_conf_state().clone();
@@ -286,16 +371,15 @@ impl Persistent {
             "applied Raft commit and last snapshot index must be equal",
         );
 
-        if let Err(error) = self.save() {
-            self.private_oram_epochs = previous_private_oram_epochs;
-            self.private_oram_session_leases = previous_private_oram_session_leases;
-            self.private_oram_layouts = previous_private_oram_layouts;
-            self.private_oram_external_recoveries = previous_private_oram_external_recoveries;
-            self.private_oram_mutation_states = previous_private_oram_mutation_states;
-            self.private_oram_mutation_lease_slots = previous_private_oram_mutation_lease_slots;
-            return Err(error);
-        }
-        Ok(())
+        self.save_or_rollback_on_definitive(move |persistent| {
+            persistent.private_oram_epochs = previous_private_oram_epochs;
+            persistent.private_oram_session_leases = previous_private_oram_session_leases;
+            persistent.private_oram_layouts = previous_private_oram_layouts;
+            persistent.private_oram_external_recoveries = previous_private_oram_external_recoveries;
+            persistent.private_oram_mutation_states = previous_private_oram_mutation_states;
+            persistent.private_oram_mutation_lease_slots =
+                previous_private_oram_mutation_lease_slots;
+        })
     }
 
     /// Returns state and if it was initialized for the first time
@@ -519,18 +603,14 @@ impl Persistent {
         let previous = self
             .private_oram_epochs
             .insert(key.clone(), operation.new.clone());
-        if let Err(err) = self.save() {
-            match previous {
-                Some(previous) => {
-                    self.private_oram_epochs.insert(key, previous);
-                }
-                None => {
-                    self.private_oram_epochs.remove(&key);
-                }
+        self.save_or_rollback_on_definitive(move |persistent| match previous {
+            Some(previous) => {
+                persistent.private_oram_epochs.insert(key, previous);
             }
-            return Err(err);
-        }
-        Ok(())
+            None => {
+                persistent.private_oram_epochs.remove(&key);
+            }
+        })
     }
 
     pub fn private_oram_session_lease(
@@ -593,18 +673,14 @@ impl Persistent {
                 .insert(key.clone(), new.clone()),
             None => self.private_oram_session_leases.remove(&key),
         };
-        if let Err(err) = self.save() {
-            match previous {
-                Some(previous) => {
-                    self.private_oram_session_leases.insert(key, previous);
-                }
-                None => {
-                    self.private_oram_session_leases.remove(&key);
-                }
+        self.save_or_rollback_on_definitive(move |persistent| match previous {
+            Some(previous) => {
+                persistent.private_oram_session_leases.insert(key, previous);
             }
-            return Err(err);
-        }
-        Ok(())
+            None => {
+                persistent.private_oram_session_leases.remove(&key);
+            }
+        })
     }
 
     pub fn private_oram_mutation_state(
@@ -697,12 +773,12 @@ impl Persistent {
             .insert(key_digest.clone(), operation.state.clone());
         self.private_oram_mutation_lease_slots
             .insert(key_digest.clone(), genesis_slot);
-        if let Err(error) = self.save() {
-            self.private_oram_mutation_lease_slots.remove(&key_digest);
-            self.private_oram_mutation_states.remove(&key_digest);
-            return Err(error);
-        }
-        Ok(())
+        self.save_or_rollback_on_definitive(move |persistent| {
+            persistent
+                .private_oram_mutation_lease_slots
+                .remove(&key_digest);
+            persistent.private_oram_mutation_states.remove(&key_digest);
+        })
     }
 
     pub fn compare_and_swap_private_oram_mutation_lease(
@@ -781,24 +857,31 @@ impl Persistent {
         let previous = self
             .private_oram_mutation_lease_slots
             .insert(key_digest.clone(), operation.new.clone());
-        if let Err(err) = self.save() {
-            match previous {
-                Some(previous) => {
-                    self.private_oram_mutation_lease_slots
-                        .insert(key_digest, previous);
-                }
-                None => {
-                    self.private_oram_mutation_lease_slots.remove(&key_digest);
-                }
+        self.save_or_rollback_on_definitive(move |persistent| match previous {
+            Some(previous) => {
+                persistent
+                    .private_oram_mutation_lease_slots
+                    .insert(key_digest, previous);
             }
-            return Err(err);
-        }
-        Ok(())
+            None => {
+                persistent
+                    .private_oram_mutation_lease_slots
+                    .remove(&key_digest);
+            }
+        })
     }
 
     pub fn apply_private_oram_mutation(
         &mut self,
         operation: &ApplyPrivateOramMutation,
+    ) -> Result<(), StorageError> {
+        self.apply_private_oram_mutation_with_backend(operation, &FilesystemPersistentSaveBackend)
+    }
+
+    fn apply_private_oram_mutation_with_backend(
+        &mut self,
+        operation: &ApplyPrivateOramMutation,
+        backend: &impl PersistentSaveBackend,
     ) -> Result<(), StorageError> {
         validate_apply_private_oram_mutation(operation)?;
         let state_key_digest = private_oram_mutation_key_digest(&operation.key);
@@ -893,33 +976,38 @@ impl Persistent {
             .insert(layout_key_digest.clone(), new_layout);
         self.private_oram_mutation_lease_slots
             .insert(state_key_digest.clone(), new_slot);
-        if let Err(err) = self.save() {
-            self.private_oram_mutation_lease_slots
+        self.save_or_rollback_on_definitive_with_backend(backend, move |persistent| {
+            persistent
+                .private_oram_mutation_lease_slots
                 .insert(state_key_digest.clone(), previous_slot);
-            self.private_oram_layouts
+            persistent
+                .private_oram_layouts
                 .insert(layout_key_digest, previous_layout);
             match previous_state {
                 Some(previous) => {
-                    self.private_oram_mutation_states
+                    persistent
+                        .private_oram_mutation_states
                         .insert(state_key_digest, previous);
                 }
                 None => {
-                    self.private_oram_mutation_states.remove(&state_key_digest);
+                    persistent
+                        .private_oram_mutation_states
+                        .remove(&state_key_digest);
                 }
             }
             for (epoch_key_digest, previous) in previous_epochs.into_iter().rev() {
                 match previous {
                     Some(previous) => {
-                        self.private_oram_epochs.insert(epoch_key_digest, previous);
+                        persistent
+                            .private_oram_epochs
+                            .insert(epoch_key_digest, previous);
                     }
                     None => {
-                        self.private_oram_epochs.remove(&epoch_key_digest);
+                        persistent.private_oram_epochs.remove(&epoch_key_digest);
                     }
                 }
             }
-            return Err(err);
-        }
-        Ok(())
+        })
     }
 
     fn validate_private_oram_mutation_state_bindings(
@@ -1020,18 +1108,16 @@ impl Persistent {
                 .insert(key.clone(), new.clone()),
             None => self.private_oram_external_recoveries.remove(&key),
         };
-        if let Err(err) = self.save() {
-            match previous {
-                Some(previous) => {
-                    self.private_oram_external_recoveries.insert(key, previous);
-                }
-                None => {
-                    self.private_oram_external_recoveries.remove(&key);
-                }
+        self.save_or_rollback_on_definitive(move |persistent| match previous {
+            Some(previous) => {
+                persistent
+                    .private_oram_external_recoveries
+                    .insert(key, previous);
             }
-            return Err(err);
-        }
-        Ok(())
+            None => {
+                persistent.private_oram_external_recoveries.remove(&key);
+            }
+        })
     }
 
     pub fn apply_private_oram_external_recovery(
@@ -1509,18 +1595,14 @@ impl Persistent {
         let previous = self
             .private_oram_layouts
             .insert(key.clone(), operation.new.clone());
-        if let Err(err) = self.save() {
-            match previous {
-                Some(previous) => {
-                    self.private_oram_layouts.insert(key, previous);
-                }
-                None => {
-                    self.private_oram_layouts.remove(&key);
-                }
+        self.save_or_rollback_on_definitive(move |persistent| match previous {
+            Some(previous) => {
+                persistent.private_oram_layouts.insert(key, previous);
             }
-            return Err(err);
-        }
-        Ok(())
+            None => {
+                persistent.private_oram_layouts.remove(&key);
+            }
+        })
     }
 
     pub fn last_applied_entry(&self) -> Option<u64> {
@@ -1608,6 +1690,7 @@ impl Persistent {
             path,
             latest_snapshot_meta: Default::default(),
             dirty: AtomicBool::new(false),
+            save_indeterminate: AtomicBool::new(false),
         };
         state.save()?;
         Ok(state)
@@ -1661,15 +1744,135 @@ impl Persistent {
         Ok(state)
     }
 
+    fn save_classified(&self) -> Result<(), PersistentSaveError> {
+        self.save_classified_with_backend(&FilesystemPersistentSaveBackend)
+    }
+
+    fn save_classified_with_backend(
+        &self,
+        backend: &impl PersistentSaveBackend,
+    ) -> Result<(), PersistentSaveError> {
+        if self.save_indeterminate.load(Ordering::Acquire) {
+            return Err(PersistentSaveError::Indeterminate);
+        }
+
+        let result = self.persist_state_image(backend);
+        match result {
+            Ok(()) => {
+                self.dirty.store(false, Ordering::Release);
+                log::trace!("Saved state: {self:?}");
+                Ok(())
+            }
+            Err(error @ PersistentSaveError::Definitive(_)) => {
+                self.dirty.store(true, Ordering::Release);
+                Err(error)
+            }
+            Err(PersistentSaveError::Indeterminate) => {
+                self.dirty.store(true, Ordering::Release);
+                self.save_indeterminate.store(true, Ordering::Release);
+                log::error!(
+                    "Raft persistent state durability is indeterminate; stopping consensus until restart"
+                );
+                Err(PersistentSaveError::Indeterminate)
+            }
+        }
+    }
+
+    fn persist_state_image(
+        &self,
+        backend: &impl PersistentSaveBackend,
+    ) -> Result<(), PersistentSaveError> {
+        let parent = self
+            .path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let mut candidate = tempfile::Builder::new()
+            .prefix(".raft-state-")
+            .tempfile_in(parent)
+            .map_err(|error| PersistentSaveError::Definitive(error.into()))?;
+        let mut candidate_hasher = Sha256::new();
+        {
+            let writer = BufWriter::new(candidate.as_file_mut());
+            let mut writer = Sha256Writer {
+                inner: writer,
+                hasher: &mut candidate_hasher,
+            };
+            serde_json::to_writer(&mut writer, self)
+                .map_err(|error| PersistentSaveError::Definitive(error.into()))?;
+            writer
+                .flush()
+                .map_err(|error| PersistentSaveError::Definitive(error.into()))?;
+        }
+        let candidate_path = candidate.path().to_path_buf();
+        File::from_parts(
+            candidate
+                .reopen()
+                .map_err(|error| PersistentSaveError::Definitive(error.into()))?,
+            candidate_path,
+        )
+        .sync_all()
+        .map_err(|error| PersistentSaveError::Definitive(error.into()))?;
+        let candidate_digest: [u8; 32] = candidate_hasher.finalize().into();
+
+        if let Err(error) = backend.publish(candidate, &self.path) {
+            if persistent_state_file_digest(&self.path).ok() != Some(candidate_digest) {
+                log::error!("Raft persistent state publish outcome is indeterminate: {error}");
+                return Err(PersistentSaveError::Indeterminate);
+            }
+            log::warn!(
+                "Raft persistent state publish returned an error after exposing the candidate image; retrying parent-directory sync"
+            );
+        }
+
+        let mut last_sync_error = None;
+        for _ in 0..PERSISTENT_PARENT_SYNC_ATTEMPTS {
+            match backend.sync_parent(parent) {
+                Ok(()) => return Ok(()),
+                Err(error) => last_sync_error = Some(error),
+            }
+            if persistent_state_file_digest(&self.path).ok() != Some(candidate_digest) {
+                log::error!(
+                    "Raft persistent state image changed while recovering a parent-directory sync failure"
+                );
+                return Err(PersistentSaveError::Indeterminate);
+            }
+        }
+
+        if let Some(error) = last_sync_error {
+            log::error!(
+                "Raft persistent state parent-directory sync failed after publish and retry: {error}"
+            );
+        }
+        Err(PersistentSaveError::Indeterminate)
+    }
+
+    fn save_or_rollback_on_definitive(
+        &mut self,
+        rollback: impl FnOnce(&mut Self),
+    ) -> Result<(), StorageError> {
+        self.save_or_rollback_on_definitive_with_backend(&FilesystemPersistentSaveBackend, rollback)
+    }
+
+    fn save_or_rollback_on_definitive_with_backend(
+        &mut self,
+        backend: &impl PersistentSaveBackend,
+        rollback: impl FnOnce(&mut Self),
+    ) -> Result<(), StorageError> {
+        match self.save_classified_with_backend(backend) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                if error.is_definitive() {
+                    rollback(self);
+                }
+                Err(error.into_storage_error())
+            }
+        }
+    }
+
     pub fn save(&self) -> Result<(), StorageError> {
-        let result = AtomicFile::new(&self.path, AllowOverwrite).write(|file| {
-            let mut writer = BufWriter::new(file);
-            serde_json::to_writer(&mut writer, self)?;
-            writer.flush()
-        });
-        log::trace!("Saved state: {self:?}");
-        self.dirty.store(result.is_err(), Ordering::Relaxed);
-        Ok(result?)
+        self.save_classified()
+            .map_err(PersistentSaveError::into_storage_error)
     }
 
     pub fn save_if_dirty(&mut self) -> Result<(), StorageError> {
@@ -1678,6 +1881,20 @@ impl Persistent {
         }
         Ok(())
     }
+}
+
+fn persistent_state_file_digest(path: &Path) -> io::Result<[u8; 32]> {
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().into())
 }
 
 pub(crate) fn private_oram_epoch_key_digest(key: &PrivateOramEpochKey) -> String {
@@ -3140,6 +3357,62 @@ mod tests {
         committed_slot: PrivateOramMutationLeaseSlotV2,
     }
 
+    struct ParentSyncFaultBackend {
+        remaining_failures: std::sync::atomic::AtomicUsize,
+    }
+
+    struct PublishFaultBackend {
+        expose_candidate: bool,
+    }
+
+    impl ParentSyncFaultBackend {
+        fn new(remaining_failures: usize) -> Self {
+            Self {
+                remaining_failures: std::sync::atomic::AtomicUsize::new(remaining_failures),
+            }
+        }
+    }
+
+    impl PersistentSaveBackend for ParentSyncFaultBackend {
+        fn publish(
+            &self,
+            candidate: tempfile::NamedTempFile,
+            destination: &Path,
+        ) -> io::Result<()> {
+            FilesystemPersistentSaveBackend.publish(candidate, destination)
+        }
+
+        fn sync_parent(&self, parent: &Path) -> io::Result<()> {
+            let injected = self
+                .remaining_failures
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok();
+            if injected {
+                return Err(io::Error::other("injected parent-directory sync failure"));
+            }
+            FilesystemPersistentSaveBackend.sync_parent(parent)
+        }
+    }
+
+    impl PersistentSaveBackend for PublishFaultBackend {
+        fn publish(
+            &self,
+            candidate: tempfile::NamedTempFile,
+            destination: &Path,
+        ) -> io::Result<()> {
+            if self.expose_candidate {
+                FilesystemPersistentSaveBackend.publish(candidate, destination)?;
+            }
+            Err(io::Error::other("injected atomic publish failure"))
+        }
+
+        fn sync_parent(&self, parent: &Path) -> io::Result<()> {
+            FilesystemPersistentSaveBackend.sync_parent(parent)
+        }
+    }
+
     fn test_digest(byte: u8) -> String {
         BASE64URL_NOPAD.encode(&[byte; 32])
     }
@@ -3428,6 +3701,7 @@ mod tests {
             this_peer_id: 7,
             path: PathBuf::from("/tmp/qdrant-sec-persistent-state"),
             dirty: AtomicBool::new(false),
+            save_indeterminate: AtomicBool::new(false),
         };
 
         let rendered = format!("{persistent:?}");
@@ -3888,6 +4162,168 @@ mod tests {
         assert_eq!(persistent.private_oram_mutation_lease_slots, previous_slots);
         assert_eq!(persistent.private_oram_epochs, previous_epochs);
         assert_eq!(persistent.private_oram_layouts, previous_layouts);
+        assert!(!persistent.save_indeterminate.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn private_oram_mutation_publish_failure_keeps_new_memory_and_replays_old_disk_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = private_oram_mutation_fixture();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        install_private_oram_mutation_fixture(&mut persistent, &fixture);
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&private_oram_mutation_acquire(&fixture))
+            .unwrap();
+        let operation = private_oram_mutation_apply(&fixture);
+
+        let error = persistent
+            .apply_private_oram_mutation_with_backend(
+                &operation,
+                &PublishFaultBackend {
+                    expose_candidate: false,
+                },
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains(PERSISTENT_SAVE_INDETERMINATE_MESSAGE)
+        );
+        assert!(persistent.save_indeterminate.load(Ordering::Acquire));
+        assert_eq!(
+            persistent.private_oram_mutation_state(&fixture.key),
+            Some(fixture.new_state.clone())
+        );
+        drop(persistent);
+
+        let mut reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        assert_eq!(
+            reloaded.private_oram_mutation_state(&fixture.key),
+            Some(fixture.old_state.clone())
+        );
+        assert_eq!(
+            reloaded.private_oram_mutation_lease_slot(&fixture.key),
+            Some(fixture.preparing_slot.clone())
+        );
+        reloaded.apply_private_oram_mutation(&operation).unwrap();
+        assert_eq!(
+            reloaded.private_oram_mutation_state(&fixture.key),
+            Some(fixture.new_state)
+        );
+    }
+
+    #[test]
+    fn private_oram_mutation_publish_error_after_rename_recovers_with_parent_sync() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = private_oram_mutation_fixture();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        install_private_oram_mutation_fixture(&mut persistent, &fixture);
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&private_oram_mutation_acquire(&fixture))
+            .unwrap();
+
+        persistent
+            .apply_private_oram_mutation_with_backend(
+                &private_oram_mutation_apply(&fixture),
+                &PublishFaultBackend {
+                    expose_candidate: true,
+                },
+            )
+            .unwrap();
+
+        assert!(!persistent.dirty.load(Ordering::Acquire));
+        assert!(!persistent.save_indeterminate.load(Ordering::Acquire));
+        drop(persistent);
+        let reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        assert_eq!(
+            reloaded.private_oram_mutation_state(&fixture.key),
+            Some(fixture.new_state)
+        );
+    }
+
+    #[test]
+    fn private_oram_mutation_retries_parent_sync_before_reporting_success() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = private_oram_mutation_fixture();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        install_private_oram_mutation_fixture(&mut persistent, &fixture);
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&private_oram_mutation_acquire(&fixture))
+            .unwrap();
+
+        persistent
+            .apply_private_oram_mutation_with_backend(
+                &private_oram_mutation_apply(&fixture),
+                &ParentSyncFaultBackend::new(1),
+            )
+            .unwrap();
+
+        assert!(!persistent.dirty.load(Ordering::Acquire));
+        assert!(!persistent.save_indeterminate.load(Ordering::Acquire));
+        drop(persistent);
+        let reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        assert_eq!(
+            reloaded.private_oram_mutation_state(&fixture.key),
+            Some(fixture.new_state)
+        );
+        assert_eq!(
+            reloaded.private_oram_mutation_lease_slot(&fixture.key),
+            Some(fixture.committed_slot)
+        );
+    }
+
+    #[test]
+    fn private_oram_mutation_indeterminate_save_keeps_published_state_and_stops_consensus() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = private_oram_mutation_fixture();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        install_private_oram_mutation_fixture(&mut persistent, &fixture);
+        persistent
+            .compare_and_swap_private_oram_mutation_lease(&private_oram_mutation_acquire(&fixture))
+            .unwrap();
+        let operation = private_oram_mutation_apply(&fixture);
+
+        let error = persistent
+            .apply_private_oram_mutation_with_backend(
+                &operation,
+                &ParentSyncFaultBackend::new(PERSISTENT_PARENT_SYNC_ATTEMPTS),
+            )
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains(PERSISTENT_SAVE_INDETERMINATE_MESSAGE)
+        );
+        assert!(persistent.dirty.load(Ordering::Acquire));
+        assert!(persistent.save_indeterminate.load(Ordering::Acquire));
+        assert_eq!(
+            persistent.private_oram_mutation_state(&fixture.key),
+            Some(fixture.new_state.clone())
+        );
+        assert_eq!(
+            persistent.private_oram_mutation_lease_slot(&fixture.key),
+            Some(fixture.committed_slot.clone())
+        );
+        let retry_error = persistent.save_if_dirty().unwrap_err();
+        assert!(
+            retry_error
+                .to_string()
+                .contains(PERSISTENT_SAVE_INDETERMINATE_MESSAGE)
+        );
+        drop(persistent);
+
+        let mut reloaded = Persistent::load_or_init(temp.path(), true, false, None).unwrap();
+        assert_eq!(
+            reloaded.private_oram_mutation_state(&fixture.key),
+            Some(fixture.new_state)
+        );
+        assert_eq!(
+            reloaded.private_oram_mutation_lease_slot(&fixture.key),
+            Some(fixture.committed_slot)
+        );
+        reloaded.apply_private_oram_mutation(&operation).unwrap();
     }
 
     #[test]
