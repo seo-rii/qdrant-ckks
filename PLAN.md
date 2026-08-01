@@ -1112,8 +1112,9 @@ Signed fields:
   output, randomized encrypted checkpoint와 mutation bundle을 하나의 aggregate로
   반환한다. CAS retry는 이 aggregate를 durable하게 저장하고 그대로 재사용한다.
 - 현재 self-check의 observed transcript는 prepared client output에서 온다.
-  Authoritative admission은 D4에서 client DTO가 아니라 server session record로
-  transcript를 다시 구성해 검증한다.
+  D3-B3-B1 owner-prepare admission은 raw transcript DTO를 받지 않고, server append
+  session의 non-serializable capability recorder가 실제 accepted read window에서 발급한
+  evidence만 받는다. D4는 그 recorder를 실제 read handler/session registry에 연결한다.
 - Storage/consensus/public route는 D2-D4 전까지 dormant 상태를 유지한다.
 
 #### V2-D2: Dormant collection-wide consensus primitive
@@ -1227,12 +1228,28 @@ Signed fields:
   남아 있는 동안 downgrade를 금지한다 (`ARCH-024`). Proposal timeout 뒤 local getter만
   보고 abort하지 않으며 같은 CAS의 Raft apply barrier와 한 read guard의 state-slot
   snapshot을 거친다.
-- 남음(D3-B3-B): Parent의 owner prepare/finalize digest를 실제 V2 child journal의
+- 완료(D3-B3-B1): Client aggregate에서 server-safe owner-prepare wire package를 투영한다.
+  Wire에는 signed mutation bundle, manifest-order ordered encrypted bucket bodies와 sparse
+  Merkle patch proof만 들어가며 checkpoint, position map/stash, graph delta, result record,
+  recovery marker, final client state와 read transcript claim은 들어가지 않는다. Validator는
+  server append session의 non-serializable capability recorder와 같은 identity의 read
+  evidence만 수락하고 foreign recorder evidence를 거부한다. Signed occurrence와 body를
+  collapse 전에 순서대로 대조하고 HNSW/result fixed ciphertext size, hash, commitment와
+  inner AEAD version, proof의 exact sorted unique leaf set, old-to-new sparse Merkle transition을
+  검사한 뒤 bucket-id 순 last-occurrence final image를 opaque validated token으로 만든다.
+- 유지 조건(D3-B3-B1): Recorder/evidence는 wire나 durable DTO가 아니며 server process의
+  append session에서만 산다. Restart로 capability가 사라지면 owner prepare 전 read를 다시
+  수행한다. D4가 recorder를 실제 accepted read-window log에 연결하기 전에는 public
+  admission을 열지 않는다. Transport hard body limit도 deserialization 전에 별도로 필요하다.
+- 남음(D3-B3-B2): Parent의 owner prepare/finalize digest를 실제 V2 child journal의
   signature/proof/durable state에서만 생성되는 opaque token으로 교체한다. Legacy
   HNSW/result pending journal은 digest domain, duplicate-bucket model과 signature contract가
   V2 ordered append와 다르므로 직접 증거로 재사용하지 않는다. Signed ordered occurrence를
   검증하고 last-occurrence canonical final image를 보존하는 V2 전용 Prepared/Finalized/
-  AbortedOld child record와 paired inspect RPC가 필요하다 (`ARCH-023`).
+  AbortedOld child record가 필요하다 (`ARCH-023`).
+- 남음(D3-B3-B3): HNSW/result owner record를 pair로 inspect하고 peer/parent requirement와
+  exact terminal authority를 검증해 parent journal에 opaque evidence를 공급하는 internal
+  RPC와 adapter가 필요하다.
 - 남음(D3-B3-C): Exact new면 remote-before-local finalize와 point publish를 재개하고,
   `AbortDecided`면 remote/local owner와 point stage를 exact-old로 abort한다. Mutable child와
   point artifact를 durable cleanup한 뒤 parent를 immutable reconciliation witness로

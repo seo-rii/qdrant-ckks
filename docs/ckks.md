@@ -361,11 +361,35 @@ read guard before using the classifier.
 The legacy per-index HNSW/result pending journals also cannot directly supply
 V2 parent evidence. Their digest/signature domains use a unique bucket set,
 while V2 append signs ordered Path ORAM occurrences and allows repeated bucket
-IDs whose last occurrence forms the final image. D3-B3-B therefore needs V2
-owner records that retain the signed ordered contract, canonical final image,
-prepared journal digest, and finalized or exact-old-aborted proof. Parent
-prepare/finalize transitions will accept only opaque tokens produced by those
-validated records, not caller-selected digest strings.
+IDs whose last occurrence forms the final image.
+
+D3-B3-B1 now provides a server-safe owner-prepare wire package. It contains the
+signed mutation bundle, each manifest-order sequence of encrypted bucket bodies,
+and the corresponding sparse Merkle patch proof. It omits the encrypted client
+checkpoint, position map, stash, graph delta, result record, recovery marker,
+final client state, and any client-claimed read transcript. The owner validator
+matches every body to the signed occurrence before duplicate collapse, checks
+the fixed ciphertext size, hash, commitment, and inner AEAD version for both
+HNSW and result buckets, requires the proof leaves to be the exact sorted unique
+updated bucket IDs, and verifies the old-to-new sparse Merkle transition. Its
+opaque output retains the signed ordered references and the bucket-ID-sorted
+last-occurrence final image; it does not expose the raw prepare request.
+
+Authoritative read evidence is also a non-serializable capability. A server
+append session creates an in-memory recorder, records the exact accepted read
+windows through it, and passes both that recorder and its evidence to owner
+validation. Evidence issued by a different recorder is rejected even when its
+transcript bytes are identical. The capability is intentionally not durable:
+after a server restart, reads that had not reached durable owner prepare must be
+performed again. D4 must connect the recorder to the actual read handler and
+session registry before enabling admission; client SDK output cannot mint the
+server session capability.
+
+D3-B3-B2 still needs V2 owner records that retain the signed ordered contract,
+canonical final image, prepared journal digest, and finalized or
+exact-old-aborted proof. Parent prepare/finalize transitions will accept only
+opaque tokens produced by those validated records, not caller-selected digest
+strings. D3-B3-B3 then adds paired owner inspection and internal evidence RPCs.
 
 The parent descriptor and current-state digest formats have known-answer
 tests. Journal files live below a private non-symlink directory, use bounded
@@ -393,16 +417,18 @@ the immutable manifest, signed state, ordered read transcript, append mutation,
 encrypted checkpoint, fixed-window Path ORAM transactions, and signed paired
 finalizer. D2 provides a dormant consensus state machine; D3-B1 provides the
 parent mutation journal; and D3-B2 provides the canonical invisible Prepared
-point stage. D3-B3-A2 provides the dormant `AbortDecided` consensus barrier.
-None adds a dispatcher proposal method or public route. Durable child-owner
-verification, abort/finalize execution, reconciliation-witness cleanup,
-state-aware search and lifecycle admission, and public APIs remain D3-B3/D4
-gates. Normal Qdrant upsert and update APIs remain rejected throughout.
+point stage. D3-B3-A2 provides the dormant `AbortDecided` consensus barrier,
+and D3-B3-B1 provides the server-safe owner-prepare validation contract. None
+adds a dispatcher proposal method or public route. Durable child-owner journal
+installation and inspection, abort/finalize execution, reconciliation-witness
+cleanup, state-aware search and lifecycle admission, and public APIs remain
+D3-B3/D4 gates. Normal Qdrant upsert and update APIs remain rejected throughout.
 
 The append contract carries ciphertext hashes and commitments, not raw bucket
-bodies. When the route is activated, the transport layer must enforce a hard
-body and total-bucket limit before deserialization, hash each supplied
-ciphertext body, and match it to the signed reference before owner prepare.
+bodies. The owner-prepare wire package supplies those encrypted bodies, and the
+crypto validator hashes and matches each one to its signed ordered reference.
+When the route is activated, the transport layer must additionally enforce a
+hard body and total-bucket limit before deserialization.
 
 The first D1 client slice adds a dormant encrypted checkpoint contract.
 `PrivateOramAppendClientCheckpointV2` contains collection, immutable manifest,
