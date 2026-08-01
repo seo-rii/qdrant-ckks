@@ -1267,11 +1267,30 @@ Signed fields:
   production caller가 임의 authority digest로 terminal token을 만들 수 없다. Stable
   consensus authority를 사용하며 전진하는 parent current-record digest는 replay identity로
   사용하지 않는다.
+- 완료(D3-B3-B2-StoreInspector): HNSW/result canonical store에 module-private exact-old와
+  exact-new verifier를 추가했다. Signed store manifest/runtime context, current epoch, 전체
+  Merkle leaf vector/root/count, epoch directory와 target commit, mutation-affected bucket body의
+  fixed size/hash/commitment/leaf를 root exclusive lock 아래 두 번 읽어 검증한다. Exact-old는
+  new commit 부재와 digest-bound old commit 또는 signed initial-manifest anchor를 요구하고,
+  exact-new는 digest-bound new commit과 expected final bucket full-body equality를 요구한다.
+  Phase별 domain의 canonical-state digest는 owner journal descriptor, Prepared digest,
+  immutable-manifest digest, index kind/name, signed store-manifest message, old/new state, commit
+  kind, final refs와 observed affected bodies를 묶는다. Token 수명은 held lock보다 길 수 없고
+  raw context, lock과 verifier entry point는 module-private다. Legacy pending, future/malformed
+  commit entry, hardlink/symlink/inode drift와 bounded-read 초과는 fail closed 한다.
+- 유지 조건(D3-B3-B2-StoreInspector): 이 token은 complete Merkle leaf state와
+  mutation-affected bucket body의 canonical logical-state evidence이며 unrelated bucket body의
+  availability proof는 아니다. Initial upload/restore가 전체 store를 검증하고 이후 모든 V2
+  writer가 full bucket/Merkle invariant를 보존한다는 귀납 조건이 필요하다. Paired typed
+  adapter, writer-wide 동일 lock, immutable-manifest compatibility와 fd-relative pinned
+  namespace가 연결될 때까지 production minting 경로를 열지 않는다.
 - 남음(D3-B3-B2-StoreAdapter): HNSW/result canonical store가 모두 exact-new 또는 모두
-  exact-old임을 검증하고 phase별 opaque store token과 restart recovery context를 만드는 V2
-  adapter가 필요하다. 그 adapter만 terminal record method를 호출할 수 있게 visibility를
-  열어야 한다. Legacy HNSW/result pending journal은 digest domain, duplicate-bucket model과
-  signature contract가 달라 V2 authority나 evidence로 재사용하지 않는다.
+  exact-old임을 한 쌍의 typed parent/Prepared/manifest authority에서 검증하고 phase별 opaque
+  pair token과 restart recovery context를 만드는 V2 adapter가 필요하다. Adapter는 두 store
+  lock과 writer namespace를 직렬화하고 StoreInspector token을 소비한 뒤에만 terminal record
+  method를 호출할 수 있어야 한다. Legacy HNSW/result pending journal은 digest domain,
+  duplicate-bucket model과 signature contract가 달라 V2 authority나 evidence로 재사용하지
+  않는다.
 - 남음(D3-B3-B3): HNSW/result owner record를 pair로 inspect하고 peer/parent requirement와
   exact terminal authority를 검증해 parent journal에 opaque evidence를 공급하는 internal
   RPC와 adapter가 필요하다.

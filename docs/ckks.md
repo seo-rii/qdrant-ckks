@@ -429,13 +429,36 @@ active, and root directories before returning. Partial stranded candidates are
 preserved but never adopted. Unknown entries, symlinks, hard links, unsafe
 modes, oversized records, and terminal tampering fail closed.
 
-This terminal primitive does not yet establish that canonical HNSW/result
-stores are exact new or exact old. Its raw contexts and recording methods are
-module-private, so no production caller can mint terminal evidence from digest
-strings. D3-B3-B2 still needs phase-specific store verification tokens and a
-restart recovery adapter; D3-B3-B3 must then bind those tokens to typed parent
-authority and authenticated peer identity. Parent prepare/finalize transitions
-will ultimately accept only opaque tokens produced through that path.
+The D3-B3-B2 StoreInspector sub-slice now adds phase-specific exact-old and
+exact-new verification inside both canonical stores. Under a nonblocking root
+exclusive lock it validates the signed store manifest and runtime context,
+current epoch, complete Merkle leaf vector/root/count, epoch-directory shape,
+target commit, and each mutation-affected bucket's fixed ciphertext size,
+commitment, and Merkle leaf. Exact-old additionally requires the new commit to
+be absent and accepts only a digest-bound old commit or the signed initial
+manifest anchor. Exact-new requires the digest-bound new commit and exact
+full-structure equality with every expected final bucket.
+
+Each verifier rereads the protected state before issuing an opaque canonical
+state token. The phase-separated digest binds the owner journal descriptor,
+Prepared digest, immutable-manifest digest, index kind and name, signed store
+manifest message, old and new states, complete Merkle leaf-array digest, commit
+kind, final references, and observed affected bucket bodies. Token lifetimes
+are tied to the held lock. Raw contexts, lock acquisition, and verifier entry
+points remain module-private. Legacy pending state, future or malformed commit
+entries, hard links, symlink or inode drift, and oversized reads fail closed.
+
+This token is canonical logical-state and affected-set evidence, not proof that
+every unrelated bucket body remains available. Initial upload or restore must
+validate the whole store, and every later V2 writer must preserve the full
+bucket/Merkle invariant. A malicious storage host can still cause denial of
+service by deleting an unrelated body; its eventual read fails closed. Before
+production activation, the paired StoreAdapter must derive contexts from typed
+parent, Prepared, and immutable-manifest authority, hold both store locks,
+integrate every V2 writer with the same lock and fd-relative pinned namespace,
+and consume both tokens before calling the terminal recorder. D3-B3-B3 must
+then bind paired terminal evidence to authenticated peer identity. No current
+production caller can mint store or terminal evidence from raw digest strings.
 
 The parent descriptor and current-state digest formats have known-answer
 tests. Journal files live below a private non-symlink directory, use bounded
@@ -468,12 +491,13 @@ finalizer. D2 provides a dormant consensus state machine; D3-B1 provides the
 parent mutation journal; and D3-B2 provides the canonical invisible Prepared
 point stage. D3-B3-A2 provides the dormant `AbortDecided` consensus barrier,
 D3-B3-B1 provides the server-safe owner-prepare validation contract, and the
-D3-B3-B2 slices provide the paired durable owner journal and dormant terminal
-record primitive without external evidence wiring. None adds a dispatcher
-proposal method or public route. Canonical-store recovery adapters, typed owner
-inspection, abort/finalize execution, reconciliation-witness cleanup,
-state-aware search and lifecycle admission, and public APIs remain D3-B3/D4
-gates. Normal Qdrant upsert and update APIs remain rejected throughout.
+D3-B3-B2 slices provide the paired durable owner journal, dormant terminal
+record primitive, and module-private canonical StoreInspector without external
+evidence wiring. None adds a dispatcher proposal method or public route. The
+paired typed StoreAdapter, owner RPC evidence, abort/finalize execution,
+reconciliation-witness cleanup, state-aware search and lifecycle admission,
+and public APIs remain D3-B3/D4 gates. Normal Qdrant upsert and update APIs
+remain rejected throughout.
 
 The append contract carries ciphertext hashes and commitments, not raw bucket
 bodies. The owner-prepare wire package supplies those encrypted bodies, and the
