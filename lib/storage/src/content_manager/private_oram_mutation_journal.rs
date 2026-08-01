@@ -34,6 +34,7 @@ use super::consensus_ops::{
     canonical_private_oram_mutation_receipt_digest,
     canonical_private_oram_mutation_transition_digest,
 };
+use super::private_oram_point_staging::PrivateOramDurablePointStageTokenV1;
 
 pub const PRIVATE_ORAM_MUTATION_JOURNAL_DIR: &str = "private_oram_mutations";
 pub const PRIVATE_ORAM_MUTATION_JOURNAL_VERSION: u16 = 1;
@@ -50,6 +51,7 @@ const MAX_OWNER_REQUIREMENTS: usize = 65_536;
 const PARENT_SYNC_ATTEMPTS: usize = 3;
 const DESCRIPTOR_DIGEST_DOMAIN: &[u8] = b"qdrant-sec/private-oram-mutation-parent-descriptor/v1";
 const STATE_DIGEST_DOMAIN: &[u8] = b"qdrant-sec/private-oram-mutation-parent-state/v1";
+const POINT_ID_DIGEST_DOMAIN: &[u8] = b"qdrant-sec/private-oram-staged-point-id-digest/v1";
 
 #[derive(Error)]
 pub enum PrivateOramMutationJournalError {
@@ -167,18 +169,25 @@ impl Debug for PrivateOramMutationOwnerFinalizeEvidenceV1 {
     deny_unknown_fields
 )]
 pub enum PrivateOramMutationPointStageEvidenceV1 {
-    VisiblePointRecord {
+    PrivateOramPointStaging {
         point_id: String,
         staged_insert_sha256: String,
+        canonical_point_id_digest: String,
+        child_descriptor_digest: String,
+        parent_owners_prepared_record_digest: String,
     },
-    NoServerPointRecord,
+    NoServerPointRecord {
+        parent_owners_prepared_record_digest: String,
+    },
 }
 
 impl Debug for PrivateOramMutationPointStageEvidenceV1 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            Self::VisiblePointRecord { .. } => f.write_str("VisiblePointRecord([redacted])"),
-            Self::NoServerPointRecord => f.write_str("NoServerPointRecord"),
+            Self::PrivateOramPointStaging { .. } => {
+                f.write_str("PrivateOramPointStaging([redacted])")
+            }
+            Self::NoServerPointRecord { .. } => f.write_str("NoServerPointRecord([redacted])"),
         }
     }
 }
@@ -212,7 +221,7 @@ impl Debug for PrivateOramMutationConsensusEvidenceV1 {
 pub enum PrivateOramMutationJournalPhaseV1 {
     LeaseAcquired,
     OwnersPrepared,
-    PointWalDurable,
+    PointStageDurable,
     ConsensusCommitted,
     RemotesFinalized,
     LocalFinalized,
@@ -224,7 +233,7 @@ impl PrivateOramMutationJournalPhaseV1 {
         match self {
             Self::LeaseAcquired => 1,
             Self::OwnersPrepared => 2,
-            Self::PointWalDurable => 3,
+            Self::PointStageDurable => 3,
             Self::ConsensusCommitted => 4,
             Self::RemotesFinalized => 5,
             Self::LocalFinalized => 6,
@@ -308,6 +317,52 @@ impl Debug for PrivateOramMutationJournalSnapshotV1 {
             .field("descriptor", &self.descriptor)
             .field("state", &self.state)
             .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PrivateOramValidatedPointStageParentPhaseV1 {
+    OwnersPrepared,
+    PointStageDurable,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramValidatedPointStageParentV1 {
+    descriptor: PrivateOramMutationJournalDescriptorV1,
+    owners_prepared_record_digest: String,
+    phase: PrivateOramValidatedPointStageParentPhaseV1,
+    expected_child_descriptor_digest: Option<String>,
+}
+
+impl Debug for PrivateOramValidatedPointStageParentV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramValidatedPointStageParentV1")
+            .field("descriptor", &"[redacted]")
+            .field("owners_prepared_record_digest", &"[redacted]")
+            .field("phase", &self.phase)
+            .field(
+                "has_expected_child_descriptor_digest",
+                &self.expected_child_descriptor_digest.is_some(),
+            )
+            .finish()
+    }
+}
+
+impl PrivateOramValidatedPointStageParentV1 {
+    pub(super) fn descriptor(&self) -> &PrivateOramMutationJournalDescriptorV1 {
+        &self.descriptor
+    }
+
+    pub(super) fn owners_prepared_record_digest(&self) -> &str {
+        &self.owners_prepared_record_digest
+    }
+
+    pub(super) fn permits_new_child_install(&self) -> bool {
+        self.phase == PrivateOramValidatedPointStageParentPhaseV1::OwnersPrepared
+    }
+
+    pub(super) fn expected_child_descriptor_digest(&self) -> Option<&str> {
+        self.expected_child_descriptor_digest.as_deref()
     }
 }
 
@@ -468,27 +523,110 @@ impl PrivateOramMutationJournal {
         })
     }
 
-    pub fn mark_point_wal_durable(
+    pub fn validated_point_stage_parent(
         &self,
+    ) -> Result<PrivateOramValidatedPointStageParentV1, PrivateOramMutationJournalError> {
+        let snapshot = self
+            .load()?
+            .ok_or(PrivateOramMutationJournalError::Corrupt)?;
+        let (phase, owners_prepared_record_digest, expected_child_descriptor_digest) =
+            match (&snapshot.state.phase, snapshot.state.point_stage.as_ref()) {
+                (PrivateOramMutationJournalPhaseV1::OwnersPrepared, None) => (
+                    PrivateOramValidatedPointStageParentPhaseV1::OwnersPrepared,
+                    snapshot.state.record_digest.clone(),
+                    None,
+                ),
+                (
+                    PrivateOramMutationJournalPhaseV1::PointStageDurable,
+                    Some(PrivateOramMutationPointStageEvidenceV1::PrivateOramPointStaging {
+                        child_descriptor_digest,
+                        parent_owners_prepared_record_digest,
+                        ..
+                    }),
+                ) => (
+                    PrivateOramValidatedPointStageParentPhaseV1::PointStageDurable,
+                    parent_owners_prepared_record_digest.clone(),
+                    Some(child_descriptor_digest.clone()),
+                ),
+                (
+                    PrivateOramMutationJournalPhaseV1::PointStageDurable,
+                    Some(PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord {
+                        parent_owners_prepared_record_digest,
+                    }),
+                ) => (
+                    PrivateOramValidatedPointStageParentPhaseV1::PointStageDurable,
+                    parent_owners_prepared_record_digest.clone(),
+                    None,
+                ),
+                _ => return Err(PrivateOramMutationJournalError::InvalidTransition),
+            };
+        Ok(PrivateOramValidatedPointStageParentV1 {
+            descriptor: snapshot.descriptor,
+            owners_prepared_record_digest,
+            phase,
+            expected_child_descriptor_digest,
+        })
+    }
+
+    pub fn mark_private_point_stage_durable(
+        &self,
+        durable_stage: &PrivateOramDurablePointStageTokenV1,
+    ) -> Result<PrivateOramMutationJournalSnapshotV1, PrivateOramMutationJournalError> {
+        let point_stage = PrivateOramMutationPointStageEvidenceV1::PrivateOramPointStaging {
+            point_id: durable_stage.point_id().to_string(),
+            staged_insert_sha256: durable_stage.frame_sha256().to_string(),
+            canonical_point_id_digest: durable_stage.canonical_point_id_digest().to_string(),
+            child_descriptor_digest: durable_stage.child_descriptor_digest().to_string(),
+            parent_owners_prepared_record_digest: durable_stage
+                .parent_owners_prepared_record_digest()
+                .to_string(),
+        };
+        self.mark_point_stage_durable_from_tip(
+            durable_stage.parent_descriptor_digest(),
+            durable_stage.parent_owners_prepared_record_digest(),
+            point_stage,
+        )
+    }
+
+    pub fn mark_no_server_point_stage_durable(
+        &self,
+        parent: &PrivateOramValidatedPointStageParentV1,
+    ) -> Result<PrivateOramMutationJournalSnapshotV1, PrivateOramMutationJournalError> {
+        self.mark_point_stage_durable_from_tip(
+            &parent.descriptor.descriptor_digest,
+            &parent.owners_prepared_record_digest,
+            PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord {
+                parent_owners_prepared_record_digest: parent.owners_prepared_record_digest.clone(),
+            },
+        )
+    }
+
+    fn mark_point_stage_durable_from_tip(
+        &self,
+        expected_parent_descriptor_digest: &str,
+        expected_owners_prepared_record_digest: &str,
         point_stage: PrivateOramMutationPointStageEvidenceV1,
     ) -> Result<PrivateOramMutationJournalSnapshotV1, PrivateOramMutationJournalError> {
         self.transition(|descriptor, current| {
-            validate_point_stage(descriptor, &point_stage)?;
-            if current.phase.sequence()
-                >= PrivateOramMutationJournalPhaseV1::PointWalDurable.sequence()
-            {
+            if descriptor.descriptor_digest != expected_parent_descriptor_digest {
+                return Err(PrivateOramMutationJournalError::InvalidTransition);
+            }
+            validate_point_stage(descriptor, &current.owner_prepares, &point_stage)?;
+            if current.phase == PrivateOramMutationJournalPhaseV1::PointStageDurable {
                 return (current.point_stage.as_ref() == Some(&point_stage))
                     .then_some(None)
                     .ok_or(PrivateOramMutationJournalError::InvalidTransition);
             }
-            if current.phase != PrivateOramMutationJournalPhaseV1::OwnersPrepared {
+            if current.phase != PrivateOramMutationJournalPhaseV1::OwnersPrepared
+                || current.record_digest != expected_owners_prepared_record_digest
+            {
                 return Err(PrivateOramMutationJournalError::InvalidTransition);
             }
             let mut next = current.clone();
             next.point_stage = Some(point_stage);
             Ok(Some((
                 next,
-                PrivateOramMutationJournalPhaseV1::PointWalDurable,
+                PrivateOramMutationJournalPhaseV1::PointStageDurable,
             )))
         })
     }
@@ -508,7 +646,7 @@ impl PrivateOramMutationJournal {
                     .then_some(None)
                     .ok_or(PrivateOramMutationJournalError::InvalidTransition);
             }
-            if current.phase != PrivateOramMutationJournalPhaseV1::PointWalDurable {
+            if current.phase != PrivateOramMutationJournalPhaseV1::PointStageDurable {
                 return Err(PrivateOramMutationJournalError::InvalidTransition);
             }
             let mut next = current.clone();
@@ -1054,7 +1192,7 @@ fn validate_state(
         validate_owner_prepares(descriptor, &state.owner_prepares)?;
     }
     if let Some(point_stage) = &state.point_stage {
-        validate_point_stage(descriptor, point_stage)?;
+        validate_point_stage(descriptor, &state.owner_prepares, point_stage)?;
     }
     if let Some(consensus) = &state.consensus {
         validate_consensus_evidence_shape(descriptor, consensus)?;
@@ -1097,38 +1235,104 @@ fn validate_owner_prepares(
 
 fn validate_point_stage(
     descriptor: &PrivateOramMutationJournalDescriptorV1,
+    owner_prepares: &[PrivateOramMutationOwnerPrepareEvidenceV1],
     evidence: &PrivateOramMutationPointStageEvidenceV1,
 ) -> Result<(), PrivateOramMutationJournalError> {
     let mutation = &descriptor.mutation_bundle.mutation;
+    let expected_parent_record_digest = owners_prepared_record_digest(descriptor, owner_prepares)?;
     let (kind, digest) = match evidence {
-        PrivateOramMutationPointStageEvidenceV1::VisiblePointRecord {
+        PrivateOramMutationPointStageEvidenceV1::PrivateOramPointStaging {
             point_id,
             staged_insert_sha256,
-        } => (
-            PrivateOramPointOperationKindV1::VisiblePointRecord,
-            private_oram_visible_point_record_v1_digest(
-                &mutation.collection_id,
-                &mutation.manifest_digest,
-                &mutation.mutation_id,
-                PrivateOramVisiblePointRecordV1 {
-                    point_id,
-                    staged_insert_sha256,
-                },
-            )?,
-        ),
-        PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord => (
-            PrivateOramPointOperationKindV1::NoServerPointRecord,
-            private_oram_no_server_point_record_v1_digest(
-                &mutation.collection_id,
-                &mutation.manifest_digest,
-                &mutation.mutation_id,
-            )?,
-        ),
+            canonical_point_id_digest,
+            child_descriptor_digest,
+            parent_owners_prepared_record_digest,
+        } => {
+            if parent_owners_prepared_record_digest != &expected_parent_record_digest
+                || !is_sha256_digest(staged_insert_sha256)
+                || !is_sha256_digest(canonical_point_id_digest)
+                || !is_sha256_digest(child_descriptor_digest)
+                || canonical_point_id_digest != &private_oram_point_id_digest(point_id)?
+            {
+                return Err(PrivateOramMutationJournalError::InvalidTransition);
+            }
+            (
+                PrivateOramPointOperationKindV1::VisiblePointRecord,
+                private_oram_visible_point_record_v1_digest(
+                    &mutation.collection_id,
+                    &mutation.manifest_digest,
+                    &mutation.mutation_id,
+                    PrivateOramVisiblePointRecordV1 {
+                        point_id,
+                        staged_insert_sha256,
+                    },
+                )?,
+            )
+        }
+        PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord {
+            parent_owners_prepared_record_digest,
+        } => {
+            if parent_owners_prepared_record_digest != &expected_parent_record_digest {
+                return Err(PrivateOramMutationJournalError::InvalidTransition);
+            }
+            (
+                PrivateOramPointOperationKindV1::NoServerPointRecord,
+                private_oram_no_server_point_record_v1_digest(
+                    &mutation.collection_id,
+                    &mutation.manifest_digest,
+                    &mutation.mutation_id,
+                )?,
+            )
+        }
     };
     if mutation.point_operation_kind != kind || mutation.point_operation_digest != digest {
         return Err(PrivateOramMutationJournalError::InvalidTransition);
     }
     Ok(())
+}
+
+fn owners_prepared_record_digest(
+    descriptor: &PrivateOramMutationJournalDescriptorV1,
+    owner_prepares: &[PrivateOramMutationOwnerPrepareEvidenceV1],
+) -> Result<String, PrivateOramMutationJournalError> {
+    let mut lease_acquired = PrivateOramMutationJournalStateV1 {
+        version: PRIVATE_ORAM_MUTATION_JOURNAL_VERSION,
+        sequence: PrivateOramMutationJournalPhaseV1::LeaseAcquired.sequence(),
+        phase: PrivateOramMutationJournalPhaseV1::LeaseAcquired,
+        previous_record_digest: None,
+        owner_prepares: Vec::new(),
+        point_stage: None,
+        consensus: None,
+        remote_finalizations: Vec::new(),
+        local_finalizations: Vec::new(),
+        record_digest: String::new(),
+    };
+    lease_acquired.record_digest =
+        state_record_digest(&descriptor.descriptor_digest, &lease_acquired)?;
+    let mut owners_prepared = PrivateOramMutationJournalStateV1 {
+        version: PRIVATE_ORAM_MUTATION_JOURNAL_VERSION,
+        sequence: PrivateOramMutationJournalPhaseV1::OwnersPrepared.sequence(),
+        phase: PrivateOramMutationJournalPhaseV1::OwnersPrepared,
+        previous_record_digest: Some(lease_acquired.record_digest),
+        owner_prepares: owner_prepares.to_vec(),
+        point_stage: None,
+        consensus: None,
+        remote_finalizations: Vec::new(),
+        local_finalizations: Vec::new(),
+        record_digest: String::new(),
+    };
+    owners_prepared.record_digest =
+        state_record_digest(&descriptor.descriptor_digest, &owners_prepared)?;
+    Ok(owners_prepared.record_digest)
+}
+
+pub(super) fn private_oram_point_id_digest(
+    point_id: &str,
+) -> Result<String, PrivateOramMutationJournalError> {
+    let mut hasher = Sha256::new();
+    hasher.update(POINT_ID_DIGEST_DOMAIN);
+    hash_string(&mut hasher, point_id)?;
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
 }
 
 fn derive_consensus_evidence(
@@ -1370,16 +1574,25 @@ fn state_record_digest(
     }
     match &state.point_stage {
         None => hasher.update([0]),
-        Some(PrivateOramMutationPointStageEvidenceV1::VisiblePointRecord {
+        Some(PrivateOramMutationPointStageEvidenceV1::PrivateOramPointStaging {
             point_id,
             staged_insert_sha256,
+            canonical_point_id_digest,
+            child_descriptor_digest,
+            parent_owners_prepared_record_digest,
         }) => {
             hasher.update([1]);
             hash_string(&mut hasher, point_id)?;
             hash_digest(&mut hasher, staged_insert_sha256)?;
+            hash_digest(&mut hasher, canonical_point_id_digest)?;
+            hash_digest(&mut hasher, child_descriptor_digest)?;
+            hash_digest(&mut hasher, parent_owners_prepared_record_digest)?;
         }
-        Some(PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord) => {
+        Some(PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord {
+            parent_owners_prepared_record_digest,
+        }) => {
             hasher.update([2]);
+            hash_digest(&mut hasher, parent_owners_prepared_record_digest)?;
         }
     }
     match &state.consensus {
@@ -1707,7 +1920,7 @@ impl<W: Write> Write for Sha256Writer<'_, W> {
     }
 }
 
-fn create_private_directory(path: &Path) -> Result<(), PrivateOramMutationJournalError> {
+pub(super) fn create_private_directory(path: &Path) -> Result<(), PrivateOramMutationJournalError> {
     match fs::symlink_metadata(path) {
         Ok(_) => validate_private_directory(path),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -1723,7 +1936,7 @@ fn create_private_directory(path: &Path) -> Result<(), PrivateOramMutationJourna
     }
 }
 
-fn path_entry_exists(path: &Path) -> Result<bool, PrivateOramMutationJournalError> {
+pub(super) fn path_entry_exists(path: &Path) -> Result<bool, PrivateOramMutationJournalError> {
     match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -1731,7 +1944,9 @@ fn path_entry_exists(path: &Path) -> Result<bool, PrivateOramMutationJournalErro
     }
 }
 
-fn set_private_directory_permissions(path: &Path) -> Result<(), PrivateOramMutationJournalError> {
+pub(super) fn set_private_directory_permissions(
+    path: &Path,
+) -> Result<(), PrivateOramMutationJournalError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -1741,7 +1956,9 @@ fn set_private_directory_permissions(path: &Path) -> Result<(), PrivateOramMutat
     Ok(())
 }
 
-fn validate_private_directory(path: &Path) -> Result<(), PrivateOramMutationJournalError> {
+pub(super) fn validate_private_directory(
+    path: &Path,
+) -> Result<(), PrivateOramMutationJournalError> {
     let metadata = fs::symlink_metadata(path).map_err(PrivateOramMutationJournalError::Io)?;
     if !metadata.file_type().is_dir() {
         return Err(PrivateOramMutationJournalError::Corrupt);
@@ -1750,7 +1967,7 @@ fn validate_private_directory(path: &Path) -> Result<(), PrivateOramMutationJour
     {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
         if metadata.uid() != nix::unistd::Uid::effective().as_raw()
-            || metadata.permissions().mode() & 0o077 != 0
+            || metadata.permissions().mode() & 0o7077 != 0
         {
             return Err(PrivateOramMutationJournalError::Corrupt);
         }
@@ -1758,7 +1975,7 @@ fn validate_private_directory(path: &Path) -> Result<(), PrivateOramMutationJour
     Ok(())
 }
 
-fn write_new_json_private<T: Serialize>(
+pub(super) fn write_new_json_private<T: Serialize>(
     path: &Path,
     value: &T,
     max_bytes: u64,
@@ -1779,7 +1996,7 @@ fn write_new_json_private<T: Serialize>(
     file.sync_all().map_err(PrivateOramMutationJournalError::Io)
 }
 
-fn read_json_private<T: DeserializeOwned>(
+pub(super) fn read_json_private<T: DeserializeOwned>(
     path: &Path,
     max_bytes: u64,
 ) -> Result<T, PrivateOramMutationJournalError> {
@@ -1787,7 +2004,10 @@ fn read_json_private<T: DeserializeOwned>(
     serde_json::from_reader(&mut file).map_err(|_| PrivateOramMutationJournalError::Corrupt)
 }
 
-fn file_sha256(path: &Path, max_bytes: u64) -> Result<[u8; 32], PrivateOramMutationJournalError> {
+pub(super) fn file_sha256(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<[u8; 32], PrivateOramMutationJournalError> {
     let mut file = open_private_file(path, max_bytes)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
@@ -1803,7 +2023,10 @@ fn file_sha256(path: &Path, max_bytes: u64) -> Result<[u8; 32], PrivateOramMutat
     Ok(hasher.finalize().into())
 }
 
-fn open_private_file(path: &Path, max_bytes: u64) -> Result<File, PrivateOramMutationJournalError> {
+pub(super) fn open_private_file(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<File, PrivateOramMutationJournalError> {
     let before = fs::symlink_metadata(path).map_err(PrivateOramMutationJournalError::Io)?;
     validate_private_file_metadata(&before, max_bytes)?;
     let mut options = OpenOptions::new();
@@ -1820,7 +2043,7 @@ fn open_private_file(path: &Path, max_bytes: u64) -> Result<File, PrivateOramMut
     Ok(file)
 }
 
-fn secure_open_options(options: &mut OpenOptions, create_private: bool) {
+pub(super) fn secure_open_options(options: &mut OpenOptions, create_private: bool) {
     #[cfg(unix)]
     {
         use fs_err::os::unix::fs::OpenOptionsExt as _;
@@ -1831,7 +2054,7 @@ fn secure_open_options(options: &mut OpenOptions, create_private: bool) {
     }
 }
 
-fn validate_private_file_metadata(
+pub(super) fn validate_private_file_metadata(
     metadata: &std::fs::Metadata,
     max_bytes: u64,
 ) -> Result<(), PrivateOramMutationJournalError> {
@@ -1842,7 +2065,8 @@ fn validate_private_file_metadata(
     {
         use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
         if metadata.uid() != nix::unistd::Uid::effective().as_raw()
-            || metadata.permissions().mode() & 0o077 != 0
+            || metadata.permissions().mode() & 0o7177 != 0
+            || metadata.nlink() != 1
         {
             return Err(PrivateOramMutationJournalError::Corrupt);
         }
@@ -1850,7 +2074,7 @@ fn validate_private_file_metadata(
     Ok(())
 }
 
-fn ensure_same_file(
+pub(super) fn ensure_same_file(
     before: &std::fs::Metadata,
     after: &std::fs::Metadata,
 ) -> Result<(), PrivateOramMutationJournalError> {
@@ -1867,7 +2091,7 @@ fn ensure_same_file(
     Ok(())
 }
 
-fn sync_directory(path: &Path) -> Result<(), PrivateOramMutationJournalError> {
+pub(super) fn sync_directory(path: &Path) -> Result<(), PrivateOramMutationJournalError> {
     #[cfg(unix)]
     {
         File::open(path)
@@ -1887,10 +2111,12 @@ mod tests {
 
     use qdrant_sec::{
         PRIVATE_ORAM_APPEND_MUTATION_V1_VERSION, PRIVATE_ORAM_SIGNED_STATE_V2_VERSION,
-        PrivateOramAppendBucketRefV1, PrivateOramAppendIndexWritebackV1,
-        PrivateOramAppendMutationV1, PrivateOramIndexStateV2, PrivateOramSignedStateV2,
+        PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_VERSION, PrivateOramAppendBucketRefV1,
+        PrivateOramAppendIndexWritebackV1, PrivateOramAppendMutationV1, PrivateOramIndexStateV2,
+        PrivateOramSignedStateV2, PrivateOramStagedInsertFrameV1, PrivateOramStagedPointIdV1,
+        PrivateOramStagedPointV1, encode_private_oram_staged_insert_frame_v1,
         package_private_oram_append_mutation_v1, package_private_oram_signed_state_v2,
-        private_oram_no_server_point_record_v1_digest,
+        private_oram_no_server_point_record_v1_digest, private_oram_staged_insert_frame_v1_digest,
     };
     use ring::signature::{Ed25519KeyPair, KeyPair};
     use serde_json::json;
@@ -1902,6 +2128,7 @@ mod tests {
         PrivateOramConsensusCollectionIndexStateV2, PrivateOramConsensusEpoch,
         PrivateOramIndexKind, PrivateOramMutationReceiptV2,
     };
+    use crate::content_manager::private_oram_point_staging::PrivateOramPointStagingStore;
 
     struct Fixture {
         public_key: Vec<u8>,
@@ -1910,6 +2137,7 @@ mod tests {
         committed_lease: PrivateOramMutationLease,
         old_consensus: PrivateOramConsensusCollectionStateV2,
         new_consensus: PrivateOramConsensusCollectionStateV2,
+        staged_frame_bytes: Option<Vec<u8>>,
     }
 
     fn digest(fill: u8) -> String {
@@ -2003,8 +2231,35 @@ mod tests {
         };
         let old_state_bundle = package_private_oram_signed_state_v2(&key_pair, old_state).unwrap();
         let new_state_bundle = package_private_oram_signed_state_v2(&key_pair, new_state).unwrap();
-        let staged_insert_sha256 = digest(marker.wrapping_add(19));
+        let staged_frame = visible.then(|| PrivateOramStagedInsertFrameV1 {
+            version: PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_VERSION,
+            collection_id: collection_id.clone(),
+            manifest_digest: manifest_digest.clone(),
+            mutation_id: mutation_id.clone(),
+            old_state_digest: private_oram_signed_state_v2_digest(&old_state_bundle.state).unwrap(),
+            new_state_digest: private_oram_signed_state_v2_digest(&new_state_bundle.state).unwrap(),
+            layout_generation: 5,
+            layout_digest: layout_digest.clone(),
+            old_state_sequence: old_sequence,
+            new_state_sequence: old_sequence + 1,
+            writer_lease_digest: writer_lease_digest.clone(),
+            writer_fence: 9,
+            target_shard_ids: vec![11],
+            shard_key: None,
+            point: PrivateOramStagedPointV1 {
+                id: PrivateOramStagedPointIdV1::Numeric { value: 42 },
+                vectors: Vec::new(),
+                payload: None,
+            },
+        });
+        let staged_frame_bytes = staged_frame
+            .as_ref()
+            .map(encode_private_oram_staged_insert_frame_v1)
+            .transpose()
+            .unwrap();
         let (point_operation_kind, point_operation_digest) = if visible {
+            let staged_insert_sha256 =
+                private_oram_staged_insert_frame_v1_digest(staged_frame.as_ref().unwrap()).unwrap();
             (
                 PrivateOramPointOperationKindV1::VisiblePointRecord,
                 private_oram_visible_point_record_v1_digest(
@@ -2012,7 +2267,7 @@ mod tests {
                     &manifest_digest,
                     &mutation_id,
                     PrivateOramVisiblePointRecordV1 {
-                        point_id: "point-42",
+                        point_id: "42",
                         staged_insert_sha256: &staged_insert_sha256,
                     },
                 )
@@ -2186,6 +2441,7 @@ mod tests {
             committed_lease,
             old_consensus,
             new_consensus,
+            staged_frame_bytes,
         }
     }
 
@@ -2261,6 +2517,13 @@ mod tests {
             .collect()
     }
 
+    fn mark_no_server_point_stage(
+        journal: &PrivateOramMutationJournal,
+    ) -> PrivateOramMutationJournalSnapshotV1 {
+        let parent = journal.validated_point_stage_parent().unwrap();
+        journal.mark_no_server_point_stage_durable(&parent).unwrap()
+    }
+
     #[test]
     fn parent_journal_persists_exact_seven_phase_progression() {
         let temp = tempfile::tempdir().unwrap();
@@ -2272,9 +2535,7 @@ mod tests {
             PrivateOramMutationJournalPhaseV1::LeaseAcquired
         );
         assert!(matches!(
-            journal.mark_point_wal_durable(
-                PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord
-            ),
+            journal.validated_point_stage_parent(),
             Err(PrivateOramMutationJournalError::InvalidTransition)
         ));
 
@@ -2296,9 +2557,7 @@ mod tests {
                 .sequence,
             2
         );
-        let point = journal
-            .mark_point_wal_durable(PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord)
-            .unwrap();
+        let point = mark_no_server_point_stage(&journal);
         assert_eq!(point.state.sequence, 3);
         let committed = journal
             .mark_consensus_committed(&fixture.committed_lease, &fixture.new_consensus)
@@ -2324,6 +2583,58 @@ mod tests {
         assert!(!rendered.contains("collection-uuid-1"));
         assert!(!rendered.contains("secret-index"));
         assert!(!rendered.contains(&fixture.mutation_bundle.mutation.mutation_id));
+    }
+
+    #[test]
+    fn no_server_stage_binds_exact_owners_prepared_chain_tip() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(18, 10);
+        let journal = journal(&temp, &fixture);
+        let initial = begin(&journal, &fixture, &[11]);
+        let prepared = journal
+            .mark_owners_prepared(owner_prepares(&initial))
+            .unwrap();
+        let parent = journal.validated_point_stage_parent().unwrap();
+        assert_eq!(
+            parent.owners_prepared_record_digest(),
+            prepared.state.record_digest
+        );
+
+        let staged = journal.mark_no_server_point_stage_durable(&parent).unwrap();
+        let Some(PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord {
+            parent_owners_prepared_record_digest,
+        }) = staged.state.point_stage.as_ref()
+        else {
+            panic!("expected no-server point-stage evidence");
+        };
+        assert_eq!(
+            parent_owners_prepared_record_digest,
+            &prepared.state.record_digest
+        );
+        let replay_parent = journal.validated_point_stage_parent().unwrap();
+        assert!(!replay_parent.permits_new_child_install());
+        assert_eq!(replay_parent.expected_child_descriptor_digest(), None);
+        assert_eq!(
+            journal.mark_no_server_point_stage_durable(&parent).unwrap(),
+            staged
+        );
+
+        let mut tampered = staged;
+        let Some(PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord {
+            parent_owners_prepared_record_digest,
+        }) = tampered.state.point_stage.as_mut()
+        else {
+            unreachable!();
+        };
+        *parent_owners_prepared_record_digest = digest(252);
+        tampered.state.record_digest =
+            state_record_digest(&tampered.descriptor.descriptor_digest, &tampered.state).unwrap();
+        fs::write(
+            journal.state_path(),
+            serde_json::to_vec(&tampered.state).unwrap(),
+        )
+        .unwrap();
+        assert!(journal.load().is_err());
     }
 
     #[test]
@@ -2393,9 +2704,7 @@ mod tests {
         let prepared = journal
             .mark_owners_prepared(owner_prepares(&initial))
             .unwrap();
-        journal
-            .mark_point_wal_durable(PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord)
-            .unwrap();
+        mark_no_server_point_stage(&journal);
         let committed = journal
             .mark_consensus_committed(&fixture.committed_lease, &fixture.new_consensus)
             .unwrap();
@@ -2423,9 +2732,7 @@ mod tests {
         journal
             .mark_owners_prepared(owner_prepares(&initial))
             .unwrap();
-        journal
-            .mark_point_wal_durable(PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord)
-            .unwrap();
+        mark_no_server_point_stage(&journal);
         let committed = journal
             .mark_consensus_committed(&fixture.committed_lease, &fixture.new_consensus)
             .unwrap();
@@ -2436,42 +2743,71 @@ mod tests {
     }
 
     #[test]
-    fn visible_point_phase_requires_exact_staged_insert_digest() {
+    fn visible_point_phase_requires_private_staging_token() {
         let temp = tempfile::tempdir().unwrap();
         let fixture = fixture_at_sequence(28, 75, 0, true);
         let journal = journal(&temp, &fixture);
         let initial = begin(&journal, &fixture, &[11]);
-        journal
+        let prepared = journal
             .mark_owners_prepared(owner_prepares(&initial))
             .unwrap();
-        assert!(
-            journal
-                .mark_point_wal_durable(
-                    PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord,
-                )
-                .is_err()
+        let parent = journal.validated_point_stage_parent().unwrap();
+        assert!(parent.permits_new_child_install());
+        assert_eq!(
+            parent.owners_prepared_record_digest(),
+            prepared.state.record_digest
         );
-        assert!(
-            journal
-                .mark_point_wal_durable(
-                    PrivateOramMutationPointStageEvidenceV1::VisiblePointRecord {
-                        point_id: "point-42".to_string(),
-                        staged_insert_sha256: digest(250),
-                    },
-                )
-                .is_err()
-        );
+        assert!(journal.mark_no_server_point_stage_durable(&parent).is_err());
+
+        let point_store = PrivateOramPointStagingStore::new(&temp.path().join("collection"));
+        let (point_stage, durable_token) = point_store
+            .prepare(fixture.staged_frame_bytes.as_deref().unwrap(), &parent)
+            .unwrap();
         let staged = journal
-            .mark_point_wal_durable(
-                PrivateOramMutationPointStageEvidenceV1::VisiblePointRecord {
-                    point_id: "point-42".to_string(),
-                    staged_insert_sha256: digest(94),
-                },
-            )
+            .mark_private_point_stage_durable(&durable_token)
             .unwrap();
         assert_eq!(
             staged.state.phase,
-            PrivateOramMutationJournalPhaseV1::PointWalDurable
+            PrivateOramMutationJournalPhaseV1::PointStageDurable
+        );
+        let Some(PrivateOramMutationPointStageEvidenceV1::PrivateOramPointStaging {
+            point_id,
+            staged_insert_sha256,
+            canonical_point_id_digest,
+            child_descriptor_digest,
+            parent_owners_prepared_record_digest,
+        }) = staged.state.point_stage.as_ref()
+        else {
+            panic!("expected private point-staging evidence");
+        };
+        assert_eq!(point_id, durable_token.point_id());
+        assert_eq!(staged_insert_sha256, durable_token.frame_sha256());
+        assert_eq!(
+            canonical_point_id_digest,
+            durable_token.canonical_point_id_digest()
+        );
+        assert_eq!(
+            child_descriptor_digest,
+            &point_stage.descriptor.descriptor_digest
+        );
+        assert_eq!(
+            parent_owners_prepared_record_digest,
+            &prepared.state.record_digest
+        );
+
+        let replay_parent = journal.validated_point_stage_parent().unwrap();
+        assert!(!replay_parent.permits_new_child_install());
+        assert_eq!(
+            replay_parent.expected_child_descriptor_digest(),
+            Some(point_stage.descriptor.descriptor_digest.as_str())
+        );
+        let (_, replay_token) = point_store.load(&replay_parent).unwrap().unwrap();
+        assert_eq!(replay_token, durable_token);
+        assert_eq!(
+            journal
+                .mark_private_point_stage_durable(&replay_token)
+                .unwrap(),
+            staged
         );
     }
 
@@ -2490,9 +2826,7 @@ mod tests {
         journal
             .mark_owners_prepared(owner_prepares(&initial))
             .unwrap();
-        journal
-            .mark_point_wal_durable(PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord)
-            .unwrap();
+        mark_no_server_point_stage(&journal);
         let mut changed = fixture.new_consensus.clone();
         let PrivateOramConsensusTransitionV2::Mutation(receipt) = &mut changed.last_transition
         else {
@@ -2514,9 +2848,7 @@ mod tests {
         journal
             .mark_owners_prepared(owner_prepares(&initial))
             .unwrap();
-        journal
-            .mark_point_wal_durable(PrivateOramMutationPointStageEvidenceV1::NoServerPointRecord)
-            .unwrap();
+        mark_no_server_point_stage(&journal);
         let mut committed = journal
             .mark_consensus_committed(&fixture.committed_lease, &fixture.new_consensus)
             .unwrap();
