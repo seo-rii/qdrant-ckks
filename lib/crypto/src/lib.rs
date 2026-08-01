@@ -16,6 +16,7 @@ pub mod private_oram_append_finalizer;
 pub mod private_oram_append_result_transaction;
 pub mod private_oram_append_transaction;
 pub mod private_oram_mutation;
+pub mod private_oram_point_staging;
 pub mod private_oram_recovery;
 pub mod private_result_oram;
 pub mod vector;
@@ -268,6 +269,27 @@ pub use private_oram_mutation::{
     validate_private_oram_immutable_manifest_v2_shape,
     validate_private_oram_immutable_manifest_v2_signature, validate_private_oram_signature_shape,
     validate_private_oram_signed_state_v2_shape, validate_private_oram_signed_state_v2_signature,
+};
+pub use private_oram_point_staging::{
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_DOMAIN, PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_BYTES,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_JSON_CONTAINER_ENTRIES,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_JSON_DEPTH,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_JSON_STRING_BYTES,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_JSON_VALUES,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_MULTI_DENSE_VECTORS,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_NAMED_VECTORS,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_SHARD_KEYWORD_BYTES,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_TARGET_SHARDS,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_TOTAL_VECTOR_VALUES,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_VECTOR_DIMENSION,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_VECTOR_NAME_BYTES,
+    PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_VERSION, PrivateOramStagedInsertFrameV1,
+    PrivateOramStagedNamedVectorV1, PrivateOramStagedPointIdV1, PrivateOramStagedPointV1,
+    PrivateOramStagedShardKeyV1, PrivateOramStagedVectorV1, PrivateOramStagingError,
+    decode_private_oram_staged_insert_frame_v1, encode_private_oram_staged_insert_frame_v1,
+    private_oram_staged_insert_frame_v1_digest, private_oram_staged_point_id_canonical_string,
+    validate_private_oram_staged_insert_frame_v1_against_mutation,
+    validate_private_oram_staged_insert_frame_v1_against_mutation_bundle,
 };
 pub use private_oram_recovery::{
     PRIVATE_ORAM_EXTERNAL_RECOVERY_CHECKPOINT_SIGNATURE_DOMAIN,
