@@ -2377,6 +2377,9 @@ fn private_hnsw_client_error(err: qdrant_sec::PrivateHnswClientError) -> Collect
         PrivateHnswClientError::MissingBlock => {
             "private HNSW ORAM path did not contain requested node"
         }
+        PrivateHnswClientError::InvalidAppendRewrite => {
+            "private HNSW ORAM append rewrite is invalid"
+        }
         PrivateHnswClientError::DuplicateBlock => {
             "private HNSW ORAM path contains duplicate node blocks"
         }
@@ -3588,6 +3591,10 @@ mod tests {
             ),
             (
                 private_hnsw_client_error(PrivateHnswClientError::DuplicatePayloadFetchToken),
+                vec![],
+            ),
+            (
+                private_hnsw_client_error(PrivateHnswClientError::InvalidAppendRewrite),
                 vec![],
             ),
             (
