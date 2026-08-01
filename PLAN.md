@@ -1157,9 +1157,14 @@ Signed fields:
   success로 복구한다. 그 외에는 memory rollback 없이 process-local poison을 세우고
   fixed `ServiceError`로 consensus loop를 중단한다. Restart는 미적용 committed-entry
   queue에서 old/new durable image 모두 exact replay한다 (`DUR-003`).
-- 활성화 전 남음: D3 owner/point journal이 signature/proof/durability evidence를 검증하고,
-  D4 state-aware search writeback 및 consensus snapshot/lifecycle reservation이 모든
-  race를 닫은 뒤에만 proposal admission을 추가한다 (`ARCH-022`).
+- 완료(D3-B1): Collection-local parent mutation journal이 exact signed mutation,
+  preparing lease, complete old consensus record와 canonical owner/index requirement를
+  immutable descriptor로 고정한다. 아래 7단계 증거는 previous-record-linked current
+  state로 저장하며 exact retry만 허용한다.
+- 활성화 전 남음: D3-B2/B3가 전용 point staging과 실제 child owner journal의
+  signature/proof/durability evidence를 검증하고, D4 state-aware search writeback 및
+  consensus snapshot/lifecycle reservation이 모든 race를 닫은 뒤에만 proposal
+  admission을 추가한다 (`ARCH-022`).
 
 #### V2-D3: Durable prepare/finalize
 
@@ -1172,16 +1177,27 @@ Signed fields:
   in-memory maps를 복원한다. Indeterminate outcome은 new memory image를 유지하고 entry를
   applied 처리하지 않는다. Fault fixture는 old-disk/new-memory restart replay,
   rename-ahead recovery, parent-fsync retry/exhaustion을 고정한다.
-- 기존 일반 point WAL은 append 즉시 update worker에 노출되고 explicit flush 전에는
-  durability 경계가 부족하므로 재사용하지 않는다. Exact InsertOnly point operation을
-  위한 private mutation staging WAL과 collection-level parent journal을 추가한다.
-- Coordinator 순서는 `LeaseAcquired -> OwnersPrepared -> PointWalDurable ->
-  ConsensusCommitted -> RemotesFinalized -> LocalFinalized -> Complete`로 고정한다.
-  모든 owner prepare와 point staging fsync 뒤 collection-wide CAS를 수행하고,
-  remote-before-local finalize한다.
-- Consensus가 old면 prepared index/point journal 전체를 abort하고, new면 모든
-  owner finalize를 재개한다. Submit ambiguity는 exact old/new state와 mutation
-  digest로만 판정하며 제3 상태는 fail closed 한다.
+- 완료(D3-B1): `private_oram_mutations/{active,temp,journal.lock}` parent journal을
+  추가했다. Immutable descriptor는 exact signed mutation bundle, canonical mutation
+  digest, preparing D2 lease, non-genesis receipt를 포함한 exact old consensus record,
+  coordinator와 canonical owner/index cross-product를 묶는다. Descriptor/state
+  digest encoding은 known-answer test로 고정한다.
+- 완료(D3-B1): Parent state는 `LeaseAcquired -> OwnersPrepared -> PointWalDurable ->
+  ConsensusCommitted -> RemotesFinalized -> LocalFinalized -> Complete`의 exact
+  7단계만 허용한다. Point-operation digest와 committed receipt/record/transition은
+  signed mutation 및 D2 state에서 재계산하며 remote-before-local 순서를 강제한다.
+  State publish는 file fsync, atomic replace, parent fsync 순서이고 pre/post-publish
+  오류와 exhausted parent-fsync를 definitive/indeterminate로 분류한다. Owner-only
+  non-symlink layout, bounded files, same-file 검사와 redacted Debug/Error를 적용했다.
+- 남음(D3-B2): 기존 일반 point WAL은 append 즉시 update worker에 노출되고 explicit
+  flush 전에는 durability 경계가 부족하므로 재사용하지 않는다. Exact canonical
+  InsertOnly operation과 routing identity를 보관하되 CAS 전에는 보이지 않는 private
+  mutation point staging WAL을 추가한다 (`DUR-002`).
+- 남음(D3-B3): Parent의 owner prepare/finalize digest를 실제 child journal의
+  signature/proof/durable state와 대조하고, point staging을 publish/abort한다.
+  Consensus가 exact old면 모든 prepared child와 point stage를 abort하고, exact new면
+  remote-before-local finalize를 재개한다. Lease clear 이후에만 parent를 제거하며,
+  submit ambiguity의 제3 상태는 fail closed 한다.
 
 #### V2-D4: Dedicated API activation
 

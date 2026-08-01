@@ -278,23 +278,49 @@ allowed inside the signed fixed budget. Updating or deleting an existing
 point, standalone graph rewiring or compaction, capacity resize, and rebuild
 swap remain unsupported.
 
-The server implementation uses a dedicated private mutation staging WAL
-instead of the ordinary point WAL. The ordinary update path can enqueue an
-operation before the collection-wide crypto CAS and does not provide the
-required explicit pre-CAS fsync boundary. The coordinator therefore prepares
-all index owners, fsyncs the exact InsertOnly point operation in staging,
-performs one consensus CAS, then finalizes remote owners before the local
-owner. A live or expired-but-unreconciled mutation lease fences search,
-external recovery, snapshots, transfer/resharding, and collection lifecycle
-changes.
+The activated server implementation will use a dedicated private mutation
+point-staging WAL instead of the ordinary point WAL. The ordinary update path
+can enqueue an operation before the collection-wide crypto CAS and does not
+provide the required explicit pre-CAS fsync boundary. The coordinator will
+therefore prepare all index owners, fsync the exact InsertOnly point operation
+in invisible staging, perform one consensus CAS, then finalize remote owners
+before the local owner. A live or expired-but-unreconciled mutation lease
+fences search, external recovery, snapshots, transfer/resharding, and
+collection lifecycle changes.
+
+D3-B1 provides the collection-local parent mutation journal used to recover
+that sequence. Its immutable descriptor binds the exact signed mutation,
+canonical mutation digest, preparing D2 lease, complete expected old consensus
+record, coordinator, and canonical owner/index cross-product. This explicit old
+record is required for non-genesis transitions because the signed client state
+does not contain the prior consensus receipt. The mutable record permits only
+`LeaseAcquired`, `OwnersPrepared`, `PointWalDurable`, `ConsensusCommitted`,
+`RemotesFinalized`, `LocalFinalized`, and `Complete`, in that order. It derives
+point-operation and consensus receipt/record/transition evidence from the
+signed mutation instead of trusting caller-selected digests, and records remote
+finalization before local finalization.
+
+The parent descriptor and current-state digest formats have known-answer
+tests. Journal files live below a private non-symlink directory, use bounded
+owner-only files and same-file checks, and redact identity and digest values
+from errors and debug output. State publication fsyncs the candidate, replaces
+the current file atomically, then fsyncs the parent directory. A failure that
+leaves the old file is definitive; a changed or unknown target and exhausted
+post-publish parent fsync are indeterminate. An exact retry can reconcile a
+candidate that was already exposed. These parent records are coordination
+evidence, not proof that an owner child journal or point frame exists: D3-B2/B3
+must inspect those durable artifacts before consensus commit or finalization,
+and must clear the consensus lease before deleting the parent journal.
 
 All v2 implementation slices remain deliberately dormant. D0 and D1 provide
 the immutable manifest, signed state, ordered read transcript, append mutation,
 encrypted checkpoint, fixed-window Path ORAM transactions, and signed paired
-finalizer. D2 provides a dormant consensus state machine, but no dispatcher
-proposal method or public route. Durable owner/point journals, state-aware
-search and lifecycle admission, and public APIs are D3/D4 gates. Normal Qdrant
-upsert and update APIs remain rejected throughout.
+finalizer. D2 provides a dormant consensus state machine, and D3-B1 provides
+the dormant parent mutation journal, but neither adds a dispatcher proposal
+method or public route. Durable child-owner verification, invisible point
+staging, reconciliation, state-aware search and lifecycle admission, and public
+APIs remain D3-B2/B3/D4 gates. Normal Qdrant upsert and update APIs remain
+rejected throughout.
 
 The append contract carries ciphertext hashes and commitments, not raw bucket
 bodies. When the route is activated, the transport layer must enforce a hard
@@ -583,12 +609,18 @@ pre-publish rollback, old-disk/new-memory replay, rename-ahead recovery, and
 parent-fsync retry and exhaustion. A real power-loss/process crash matrix
 remains a D5 release gate.
 
-D3 must still add durable owner/point journals. D3/D4 must also add V2-aware
-search writeback and consensus lifecycle reservations so search, external
-snapshots, delete/restore, transfer, and reshard cannot race mutation
-acquisition. State and mutation signatures, runtime authorization, ORAM
-proofs, staged point durability, and owner-finalization evidence are not
-inferred by D2 structural validation.
+D3-B1 adds a durable collection-level parent journal for the exact seven-phase
+mutation sequence. It binds the signed mutation and old consensus record,
+validates derived point and committed-consensus evidence, and classifies parent
+record publication outcomes. It intentionally does not treat structurally
+valid child digests as proof of owner preparation or finalization. D3-B2/B3
+must still add invisible point staging, inspect exact owner child journals and
+proofs, reconcile old/new consensus outcomes, clear the mutation lease, and
+remove completed or aborted parent state. D3/D4 must also add V2-aware search
+writeback and consensus lifecycle reservations so search, external snapshots,
+delete/restore, transfer, and reshard cannot race mutation acquisition. Runtime
+authorization and durable artifact evidence are not inferred by D2 or the
+parent journal alone.
 
 The external recovery primitive is
 `PrivateOramExternalRecoveryCheckpoint`, signed under
