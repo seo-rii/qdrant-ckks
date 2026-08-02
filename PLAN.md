@@ -1281,14 +1281,23 @@ Signed fields:
 - 유지 조건(D3-B3-B2-StoreInspector): 이 token은 complete Merkle leaf state와
   mutation-affected bucket body의 canonical logical-state evidence이며 unrelated bucket body의
   availability proof는 아니다. Initial upload/restore가 전체 store를 검증하고 이후 모든 V2
-  writer가 full bucket/Merkle invariant를 보존한다는 귀납 조건이 필요하다. Paired typed
-  adapter, writer-wide 동일 lock, immutable-manifest compatibility와 fd-relative pinned
-  namespace가 연결될 때까지 production minting 경로를 열지 않는다.
-- 남음(D3-B3-B2-StoreAdapter): HNSW/result canonical store가 모두 exact-new 또는 모두
-  exact-old임을 한 쌍의 typed parent/Prepared/manifest authority에서 검증하고 phase별 opaque
-  pair token과 restart recovery context를 만드는 V2 adapter가 필요하다. Adapter는 두 store
-  lock과 writer namespace를 직렬화하고 StoreInspector token을 소비한 뒤에만 terminal record
-  method를 호출할 수 있어야 한다. Legacy HNSW/result pending journal은 digest domain,
+  writer가 full bucket/Merkle invariant를 보존한다는 귀납 조건이 필요하다. Live paired
+  adapter는 연결됐지만 writer-wide 동일 lock과 fd-relative pinned namespace가 완성될 때까지
+  production minting 경로를 열지 않는다.
+- 완료(D3-B3-B2-StoreAdapter-LivePair): 진짜 durable Prepared token을 현재 journal의 exact
+  Prepared snapshot에 다시 결합하고, immutable manifest, append mutation, old/new state의
+  signature와 digest/identity/order를 재검증한 뒤 signed V2 immutable index를 physical V1
+  HNSW/result manifest에 의미적으로 매핑하는 crate-private adapter를 추가했다. Adapter는
+  HNSW -> result -> journal shared lock 순서 아래 두 StoreInspector를 소비하고 all-old 또는
+  all-new일 때만 callback-scoped opaque pair token을 발급한다. Mixed old/new, foreign
+  journal/collection path, signature substitution, signed/physical manifest mismatch는 callback
+  전에 fail closed 한다. 7개 집중 test가 exact-old/new, mixed state, substitution과 debug
+  redaction을 고정한다. Production call site와 terminal 호출은 아직 없다.
+- 남음(D3-B3-B2-StoreAdapter-RestartTerminal): Restart에서 typed parent/consensus authority로
+  Prepared token을 재구성하고 `AllOld | AllNew | PartialNew | ThirdState`를 분류해야 한다.
+  Partial-new는 fixed roll-forward만 허용하고, 모든 V2 writer를 같은 store lock과 fd-relative
+  pinned collection namespace에 편입한 뒤 pair token을 module-private terminal recorder에
+  직접 소비시키는 bridge가 필요하다. Legacy HNSW/result pending journal은 digest domain,
   duplicate-bucket model과 signature contract가 달라 V2 authority나 evidence로 재사용하지
   않는다.
 - 남음(D3-B3-B3): HNSW/result owner record를 pair로 inspect하고 peer/parent requirement와

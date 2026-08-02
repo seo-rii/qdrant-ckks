@@ -452,13 +452,35 @@ This token is canonical logical-state and affected-set evidence, not proof that
 every unrelated bucket body remains available. Initial upload or restore must
 validate the whole store, and every later V2 writer must preserve the full
 bucket/Merkle invariant. A malicious storage host can still cause denial of
-service by deleting an unrelated body; its eventual read fails closed. Before
-production activation, the paired StoreAdapter must derive contexts from typed
-parent, Prepared, and immutable-manifest authority, hold both store locks,
-integrate every V2 writer with the same lock and fd-relative pinned namespace,
-and consume both tokens before calling the terminal recorder. D3-B3-B3 must
-then bind paired terminal evidence to authenticated peer identity. No current
-production caller can mint store or terminal evidence from raw digest strings.
+service by deleting an unrelated body; its eventual read fails closed.
+
+The D3-B3-B2 live-pair StoreAdapter now rebinds a genuine durable Prepared
+token to the journal's current exact Prepared snapshot. It independently
+validates the immutable-manifest, append-mutation, old-state, and new-state
+signatures, then checks every digest, collection and writer identity, canonical
+index order, descriptor transition, writeback transcript, and final bucket
+reference. The signed V2 immutable index is also mapped semantically to the
+physical V1 HNSW or result manifest instead of treating their provider strings
+as directly interchangeable.
+
+The adapter acquires the HNSW store, result store, and journal shared locks in
+that fixed order. It invokes its callback only while both exact-state tokens and
+the live Prepared binding remain valid. A pair token is issued only when both
+stores are exact-old or both are exact-new; a mixed physical state issues
+neither. Cross-journal or cross-collection path substitution, signed mutation
+substitution, and either signed/physical manifest mismatch fail before the
+callback. Seven focused tests cover those cases, both successful phases, and
+debug redaction.
+
+This slice is still dormant and has no production caller or terminal call.
+Before production activation, restart must reconstruct Prepared authority from
+typed parent and consensus evidence, classify all-old, all-new, partial-new, and
+third-state outcomes, and roll a partial-new pair forward without exposing a
+mixed terminal state. Every V2 writer must also use the same store locks and an
+fd-relative pinned collection namespace. A terminal bridge must consume the
+pair token directly, and D3-B3-B3 must bind its evidence to authenticated peer
+identity. No current production caller can mint store or terminal evidence from
+raw digest strings.
 
 The parent descriptor and current-state digest formats have known-answer
 tests. Journal files live below a private non-symlink directory, use bounded
@@ -470,10 +492,10 @@ post-publish parent fsync are indeterminate. An exact retry can reconcile a
 candidate that was already exposed. The typed point-stage token proves the
 Prepared child point artifact, and the paired owner journal can now prove a
 structurally and durably installed Prepared artifact to crate-private callers.
-It can also persist a terminal record once the future typed store adapter
-supplies exact canonical-state authority. Parent owner prepare/finalize digests
-remain coordination evidence until D3-B3-B3 performs typed parent and
-authenticated peer binding through that adapter. Cleanup
+It can also persist a terminal record once the future restart/terminal bridge
+consumes the live adapter's exact paired canonical-state authority. Parent owner
+prepare/finalize digests remain coordination evidence until D3-B3-B3 performs
+typed parent and authenticated peer binding through that bridge. Cleanup
 must durably remove mutable child/point artifacts, compact the parent into an
 immutable reconciliation witness, and clear the consensus mutation lease as
 the final authority release. The witness makes a crash before or after lease
@@ -492,9 +514,10 @@ parent mutation journal; and D3-B2 provides the canonical invisible Prepared
 point stage. D3-B3-A2 provides the dormant `AbortDecided` consensus barrier,
 D3-B3-B1 provides the server-safe owner-prepare validation contract, and the
 D3-B3-B2 slices provide the paired durable owner journal, dormant terminal
-record primitive, and module-private canonical StoreInspector without external
-evidence wiring. None adds a dispatcher proposal method or public route. The
-paired typed StoreAdapter, owner RPC evidence, abort/finalize execution,
+record primitive, module-private canonical StoreInspector, and dormant live
+paired StoreAdapter without external evidence wiring. None adds a dispatcher
+proposal method or public route. The restart-capable typed parent/terminal
+adapter, owner RPC evidence, abort/finalize execution,
 reconciliation-witness cleanup, state-aware search and lifecycle admission,
 and public APIs remain D3-B3/D4 gates. Normal Qdrant upsert and update APIs
 remain rejected throughout.
