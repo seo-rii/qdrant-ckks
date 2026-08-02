@@ -11,6 +11,7 @@ pub mod operations;
 pub mod optimizers_builder;
 pub mod private_hnsw_oram_store;
 pub mod private_oram_owner_journal;
+pub(crate) mod private_oram_owner_store_adapter;
 pub mod private_result_oram_store;
 pub mod problems;
 pub mod recommendations;

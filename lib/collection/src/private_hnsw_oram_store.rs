@@ -20,9 +20,11 @@ use qdrant_sec::{
     PrivateHnswBucketAeadContext, PrivateHnswManifestValidationContext, PrivateHnswOramBucket,
     PrivateHnswOramCommitBucketRef, PrivateHnswOramCommitSignatureInput, PrivateHnswOramManifest,
     PrivateHnswOramSignature, PrivateHnswOramUploadBundle, PrivateHnswSignatureVerification,
-    PrivateOramAppendBucketRefV1, PrivateOramIndexKindV2, PrivateOramIndexStateV2,
+    PrivateOramAppendBucketRefV1, PrivateOramImmutableIndexParamsV2, PrivateOramImmutableIndexV2,
+    PrivateOramImmutableManifestV2, PrivateOramIndexKindV2, PrivateOramIndexStateV2,
     private_hnsw_bucket_commitment, private_hnsw_oram_bucket_ciphertext_bytes,
     private_hnsw_oram_bucket_count, private_hnsw_oram_writeback_digest,
+    private_oram_immutable_manifest_v2_digest,
     server_private_hnsw_oram_fixed_writeback_bucket_budget,
     try_private_hnsw_oram_manifest_signature_message, validate_private_hnsw_oram_commit_signature,
     validate_private_hnsw_oram_manifest, validate_private_hnsw_oram_manifest_shape,
@@ -33,6 +35,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::operations::types::{CollectionError, CollectionResult};
+use crate::private_oram_owner_store_adapter::PrivateOramOwnerIndexStoreInspectionAuthorityV1;
 
 pub const PRIVATE_HNSW_ORAM_DIR: &str = "private_hnsw_oram";
 const MANIFEST_FILE: &str = "manifest.json";
@@ -302,6 +305,8 @@ struct PrivateHnswOwnerStoreVerificationContextV1<'a> {
     journal_descriptor_digest: &'a str,
     prepared_state_digest: &'a str,
     immutable_manifest_digest: &'a str,
+    immutable_manifest: &'a PrivateOramImmutableManifestV2,
+    immutable_index: &'a PrivateOramImmutableIndexV2,
     index_name: &'a str,
     old_state: &'a PrivateOramIndexStateV2,
     new_state: &'a PrivateOramIndexStateV2,
@@ -515,6 +520,102 @@ impl PrivateHnswOramStore {
                 directory,
             })
         }
+    }
+
+    pub(crate) fn with_owner_exact_old_store_v1<R>(
+        &self,
+        authority: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'_>,
+        max_ciphertext_bytes: usize,
+        manifest_validation: PrivateHnswManifestValidationContext<'_>,
+        action: impl for<'lock> FnOnce(
+            PrivateHnswOwnerExactOldStoreTokenV1<'lock>,
+        ) -> CollectionResult<R>,
+    ) -> CollectionResult<R> {
+        let final_buckets = authority
+            .hnsw_final_buckets()
+            .ok_or_else(owner_store_state_mismatch)?;
+        let lock = self.lock_owner_store_v1()?;
+        let token = lock.verify_exact_old(PrivateHnswOwnerStoreVerificationContextV1 {
+            journal_descriptor_digest: authority.journal_descriptor_digest(),
+            prepared_state_digest: authority.prepared_state_digest(),
+            immutable_manifest_digest: authority.immutable_manifest_digest(),
+            immutable_manifest: authority.immutable_manifest(),
+            immutable_index: authority.immutable_index(),
+            index_name: authority.index_name(),
+            old_state: authority.old_state(),
+            new_state: authority.new_state(),
+            final_bucket_refs: authority.final_bucket_refs(),
+            final_buckets,
+            max_ciphertext_bytes,
+            manifest_validation,
+        })?;
+        action(token)
+    }
+
+    pub(crate) fn with_owner_exact_new_store_v1<R>(
+        &self,
+        authority: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'_>,
+        max_ciphertext_bytes: usize,
+        manifest_validation: PrivateHnswManifestValidationContext<'_>,
+        action: impl for<'lock> FnOnce(
+            PrivateHnswOwnerExactNewStoreTokenV1<'lock>,
+        ) -> CollectionResult<R>,
+    ) -> CollectionResult<R> {
+        let final_buckets = authority
+            .hnsw_final_buckets()
+            .ok_or_else(owner_store_state_mismatch)?;
+        let lock = self.lock_owner_store_v1()?;
+        let token = lock.verify_exact_new(PrivateHnswOwnerStoreVerificationContextV1 {
+            journal_descriptor_digest: authority.journal_descriptor_digest(),
+            prepared_state_digest: authority.prepared_state_digest(),
+            immutable_manifest_digest: authority.immutable_manifest_digest(),
+            immutable_manifest: authority.immutable_manifest(),
+            immutable_index: authority.immutable_index(),
+            index_name: authority.index_name(),
+            old_state: authority.old_state(),
+            new_state: authority.new_state(),
+            final_bucket_refs: authority.final_bucket_refs(),
+            final_buckets,
+            max_ciphertext_bytes,
+            manifest_validation,
+        })?;
+        action(token)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn apply_owner_exact_new_test_fixture_v1(
+        &self,
+        old: &PrivateOramIndexStateV2,
+        new: &PrivateOramIndexStateV2,
+        final_buckets: &[PrivateHnswOramBucket],
+        bucket_count: u64,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<()> {
+        let old_epoch = PrivateHnswOramEpochState {
+            index_epoch: old.index_epoch,
+            root_hash: old.root_hash.clone(),
+        };
+        let new_epoch = PrivateHnswOramEpochState {
+            index_epoch: new.index_epoch,
+            root_hash: new.root_hash.clone(),
+        };
+        let prepared = self.prepare_merkle_commit(
+            old.index_epoch,
+            &old.root_hash,
+            new.index_epoch,
+            &new.root_hash,
+            bucket_count,
+            final_buckets,
+        )?;
+        for bucket in final_buckets {
+            self.write_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
+        }
+        prepared.write()?;
+        self.compare_and_swap_epoch_with_writeback_digest(
+            &old_epoch,
+            &new_epoch,
+            Some(&new.last_writeback_digest),
+        )
     }
 
     pub fn ensure_layout(&self) -> CollectionResult<()> {
@@ -2169,6 +2270,7 @@ fn validate_owner_store_context(
     context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
     phase: OwnerStorePhase,
 ) -> CollectionResult<()> {
+    validate_owner_store_immutable_manifest(manifest, context)?;
     for (value, field) in [
         (
             context.journal_descriptor_digest,
@@ -2276,6 +2378,58 @@ fn validate_owner_store_context(
             bucket.index_epoch,
             std::slice::from_ref(bucket),
         )?;
+    }
+    Ok(())
+}
+
+fn validate_owner_store_immutable_manifest(
+    manifest: &PrivateHnswOramManifest,
+    context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
+) -> CollectionResult<()> {
+    let immutable_digest = private_oram_immutable_manifest_v2_digest(context.immutable_manifest)
+        .map_err(|_| owner_store_state_mismatch())?;
+    let occupancy = manifest
+        .logical_node_count
+        .checked_add(manifest.dummy_node_count)
+        .ok_or_else(owner_store_state_mismatch)?;
+    let PrivateOramImmutableIndexParamsV2::Hnsw {
+        key_id,
+        rk_id,
+        rk_epoch,
+        dim,
+        distance,
+        hnsw,
+        oram,
+        fixed_search_budget,
+        ..
+    } = &context.immutable_index.params
+    else {
+        return Err(owner_store_state_mismatch());
+    };
+    if immutable_digest != context.immutable_manifest_digest
+        || !context
+            .immutable_manifest
+            .indexes
+            .iter()
+            .any(|index| index == context.immutable_index)
+        || context.immutable_manifest.collection_id != manifest.collection_id
+        || context.immutable_manifest.result_privacy != manifest.result_privacy
+        || context.immutable_manifest.owner_signing_key_id != manifest.owner_signing_key_id
+        || context.immutable_manifest.created_at_unix != manifest.created_at_unix
+        || context.immutable_index.index_name != context.index_name
+        || manifest.vector_name != context.index_name
+        || key_id != &manifest.key_id
+        || rk_id != &manifest.rk_id
+        || *rk_epoch != manifest.rk_epoch
+        || *dim != manifest.dim
+        || distance != &manifest.distance
+        || hnsw != &manifest.hnsw
+        || oram != &manifest.oram
+        || fixed_search_budget != &manifest.fixed_budget
+        || context.immutable_index.capacity.bucket_count != manifest.bucket_count
+        || context.immutable_index.capacity.logical_capacity != occupancy
+    {
+        return Err(owner_store_state_mismatch());
     }
     Ok(())
 }
@@ -3715,14 +3869,18 @@ mod tests {
 
     use qdrant_sec::{
         DistanceKind, EncryptionError, FixedBudgetParams, OramKind, OramParams,
-        PRIVATE_HNSW_ORAM_BINDING, PrivateHnswBucketAeadBaseContext, PrivateHnswBucketAeadContext,
-        PrivateHnswBuildPoint, PrivateHnswClientCommitBucketRef, PrivateHnswClientCommitPlan,
-        PrivateHnswClientError, PrivateHnswClientKeys, PrivateHnswCommitSignatureContext,
-        PrivateHnswEncryptedPathBatch, PrivateHnswManifestBuildContext,
-        PrivateHnswManifestValidationContext, PrivateHnswNodeBlockPlaintext,
-        PrivateHnswOramClientConfig, PrivateHnswOramError, PrivateHnswOramPlaintextBucket,
-        PrivateHnswParams, PrivateHnswSearchParams, PrivateHnswSignatureVerification,
-        PrivateHnswVectorEncoding, ResultPrivacyMode, SecretKey, VECTOR_PRIVATE_HNSW_ORAM_PROVIDER,
+        PRIVATE_HNSW_ORAM_BINDING, PRIVATE_HNSW_ORAM_V2_BINDING,
+        PRIVATE_ORAM_IMMUTABLE_MANIFEST_V2_VERSION, PrivateHnswBucketAeadBaseContext,
+        PrivateHnswBucketAeadContext, PrivateHnswBuildPoint, PrivateHnswClientCommitBucketRef,
+        PrivateHnswClientCommitPlan, PrivateHnswClientError, PrivateHnswClientKeys,
+        PrivateHnswCommitSignatureContext, PrivateHnswEncryptedPathBatch,
+        PrivateHnswManifestBuildContext, PrivateHnswManifestValidationContext,
+        PrivateHnswNodeBlockPlaintext, PrivateHnswOramClientConfig, PrivateHnswOramError,
+        PrivateHnswOramPlaintextBucket, PrivateHnswParams, PrivateHnswSearchParams,
+        PrivateHnswSignatureVerification, PrivateHnswVectorEncoding,
+        PrivateOramImmutableIndexParamsV2, PrivateOramImmutableIndexV2,
+        PrivateOramImmutableManifestV2, PrivateOramIndexCapacityV2, ResultPrivacyMode, SecretKey,
+        VECTOR_PRIVATE_HNSW_ORAM_PROVIDER, VECTOR_PRIVATE_HNSW_ORAM_V2_PROVIDER,
         build_private_hnsw_oram_manifest_from_encrypted_index,
         build_private_hnsw_oram_plaintext_index_from_auto_layered_f32_points,
         decode_private_hnsw_oram_bucket_plaintext, empty_private_hnsw_oram_plaintext_bucket,
@@ -4741,6 +4899,22 @@ mod tests {
         (bundle, updated_bucket, new_epoch, signature)
     }
 
+    fn fixture_owner_signed_commit_update(
+        key_pair: &Ed25519KeyPair,
+    ) -> (
+        PrivateHnswOramUploadBundle,
+        PrivateHnswOramBucket,
+        PrivateHnswOramEpochState,
+        PrivateHnswOramSignature,
+    ) {
+        let (mut bundle, updated_bucket, new_epoch, signature) =
+            fixture_signed_commit_update(key_pair);
+        bundle.manifest.dummy_node_count -= 1;
+        bundle.manifest_signature =
+            sign_private_hnsw_oram_manifest(key_pair, &bundle.manifest).unwrap();
+        (bundle, updated_bucket, new_epoch, signature)
+    }
+
     fn fixture_validation_context<'a>(
         public_key: &'a [u8],
     ) -> PrivateHnswManifestValidationContext<'a> {
@@ -4785,6 +4959,49 @@ mod tests {
         (old, new)
     }
 
+    fn fixture_owner_immutable_manifest(
+        manifest: &PrivateHnswOramManifest,
+    ) -> PrivateOramImmutableManifestV2 {
+        let logical_capacity = manifest.logical_node_count + manifest.dummy_node_count;
+        let physical_slots = manifest.bucket_count * u64::from(manifest.oram.bucket_size);
+        assert!(logical_capacity < physical_slots);
+        let fixed_append_read_path_count = manifest.oram.path_batch_size * 2;
+        PrivateOramImmutableManifestV2 {
+            version: PRIVATE_ORAM_IMMUTABLE_MANIFEST_V2_VERSION,
+            collection_id: manifest.collection_id.clone(),
+            manifest_nonce: root_hash(69),
+            indexes: vec![PrivateOramImmutableIndexV2 {
+                index_name: manifest.vector_name.clone(),
+                params: PrivateOramImmutableIndexParamsV2::Hnsw {
+                    provider: VECTOR_PRIVATE_HNSW_ORAM_V2_PROVIDER.to_string(),
+                    binding: PRIVATE_HNSW_ORAM_V2_BINDING.to_string(),
+                    key_id: manifest.key_id.clone(),
+                    rk_id: manifest.rk_id.clone(),
+                    rk_epoch: manifest.rk_epoch,
+                    dim: manifest.dim,
+                    vector_encoding: PrivateHnswVectorEncoding::F32Le,
+                    distance: manifest.distance,
+                    hnsw: manifest.hnsw.clone(),
+                    oram: manifest.oram.clone(),
+                    fixed_search_budget: manifest.fixed_budget.clone(),
+                    max_neighbor_rewrites: 1,
+                },
+                capacity: PrivateOramIndexCapacityV2 {
+                    bucket_count: manifest.bucket_count,
+                    logical_capacity,
+                    reserved_physical_slots: physical_slots - logical_capacity,
+                    max_client_stash_blocks: 1,
+                    fixed_append_read_path_count,
+                    fixed_append_write_bucket_count: fixed_append_read_path_count
+                        * (manifest.oram.tree_height + 1),
+                },
+            }],
+            result_privacy: manifest.result_privacy,
+            owner_signing_key_id: manifest.owner_signing_key_id.clone(),
+            created_at_unix: manifest.created_at_unix,
+        }
+    }
+
     fn fixture_owner_bucket_refs(
         buckets: &[PrivateHnswOramBucket],
     ) -> Vec<PrivateOramAppendBucketRefV1> {
@@ -4802,6 +5019,7 @@ mod tests {
         journal_descriptor_digest: &'a str,
         prepared_state_digest: &'a str,
         immutable_manifest_digest: &'a str,
+        immutable_manifest: &'a PrivateOramImmutableManifestV2,
         old_state: &'a PrivateOramIndexStateV2,
         new_state: &'a PrivateOramIndexStateV2,
         final_bucket_refs: &'a [PrivateOramAppendBucketRefV1],
@@ -4812,6 +5030,8 @@ mod tests {
             journal_descriptor_digest,
             prepared_state_digest,
             immutable_manifest_digest,
+            immutable_manifest,
+            immutable_index: &immutable_manifest.indexes[0],
             index_name: "text",
             old_state,
             new_state,
@@ -7731,7 +7951,7 @@ mod tests {
     fn owner_store_tokens_require_exact_old_or_exact_new_canonical_state() {
         let key_pair = Ed25519KeyPair::from_seed_unchecked(&[23; 32]).unwrap();
         let public_key = key_pair.public_key();
-        let (bundle, updated_bucket, new_epoch, _) = fixture_signed_commit_update(&key_pair);
+        let (bundle, updated_bucket, new_epoch, _) = fixture_owner_signed_commit_update(&key_pair);
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
         let old_epoch = store
@@ -7746,11 +7966,14 @@ mod tests {
         let final_bucket_refs = fixture_owner_bucket_refs(&final_buckets);
         let journal_descriptor_digest = root_hash(72);
         let prepared_state_digest = root_hash(73);
-        let immutable_manifest_digest = root_hash(74);
+        let immutable_manifest = fixture_owner_immutable_manifest(&bundle.manifest);
+        let immutable_manifest_digest =
+            private_oram_immutable_manifest_v2_digest(&immutable_manifest).unwrap();
         let context = fixture_owner_store_context(
             &journal_descriptor_digest,
             &prepared_state_digest,
             &immutable_manifest_digest,
+            &immutable_manifest,
             &old_state,
             &new_state,
             &final_bucket_refs,
@@ -7810,7 +8033,7 @@ mod tests {
     fn owner_store_exact_old_rejects_legacy_pending_and_concurrent_verifier() {
         let key_pair = Ed25519KeyPair::from_seed_unchecked(&[23; 32]).unwrap();
         let public_key = key_pair.public_key();
-        let (bundle, updated_bucket, new_epoch, _) = fixture_signed_commit_update(&key_pair);
+        let (bundle, updated_bucket, new_epoch, _) = fixture_owner_signed_commit_update(&key_pair);
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
         store
@@ -7825,11 +8048,14 @@ mod tests {
         let final_bucket_refs = fixture_owner_bucket_refs(&final_buckets);
         let journal_descriptor_digest = root_hash(72);
         let prepared_state_digest = root_hash(73);
-        let immutable_manifest_digest = root_hash(74);
+        let immutable_manifest = fixture_owner_immutable_manifest(&bundle.manifest);
+        let immutable_manifest_digest =
+            private_oram_immutable_manifest_v2_digest(&immutable_manifest).unwrap();
         let context = fixture_owner_store_context(
             &journal_descriptor_digest,
             &prepared_state_digest,
             &immutable_manifest_digest,
+            &immutable_manifest,
             &old_state,
             &new_state,
             &final_bucket_refs,
@@ -7889,7 +8115,7 @@ mod tests {
     fn owner_store_exact_new_rejects_missing_digest_commit_and_bucket_mismatch() {
         let key_pair = Ed25519KeyPair::from_seed_unchecked(&[23; 32]).unwrap();
         let public_key = key_pair.public_key();
-        let (bundle, updated_bucket, new_epoch, _) = fixture_signed_commit_update(&key_pair);
+        let (bundle, updated_bucket, new_epoch, _) = fixture_owner_signed_commit_update(&key_pair);
         let temp = TempDir::new().unwrap();
         let store = fixture_store(&temp);
         let old_epoch = store
@@ -7904,11 +8130,14 @@ mod tests {
         let final_bucket_refs = fixture_owner_bucket_refs(&final_buckets);
         let journal_descriptor_digest = root_hash(72);
         let prepared_state_digest = root_hash(73);
-        let immutable_manifest_digest = root_hash(74);
+        let immutable_manifest = fixture_owner_immutable_manifest(&bundle.manifest);
+        let immutable_manifest_digest =
+            private_oram_immutable_manifest_v2_digest(&immutable_manifest).unwrap();
         let context = fixture_owner_store_context(
             &journal_descriptor_digest,
             &prepared_state_digest,
             &immutable_manifest_digest,
+            &immutable_manifest,
             &old_state,
             &new_state,
             &final_bucket_refs,

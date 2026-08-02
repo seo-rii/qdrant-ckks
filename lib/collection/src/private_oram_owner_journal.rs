@@ -475,6 +475,25 @@ pub(crate) struct PrivateOramDurableOwnerPreparedTokenV1 {
     indexes: Vec<PrivateOramOwnerPreparedIndexEvidenceV1>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct PrivateOramOwnerPreparedStoreBindingV1 {
+    snapshot: PrivateOramOwnerJournalSnapshotV1,
+}
+
+impl Debug for PrivateOramOwnerPreparedStoreBindingV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerPreparedStoreBindingV1")
+            .field("snapshot", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerPreparedStoreBindingV1 {
+    pub(crate) fn snapshot(&self) -> &PrivateOramOwnerJournalSnapshotV1 {
+        &self.snapshot
+    }
+}
+
 impl Debug for PrivateOramDurableOwnerPreparedTokenV1 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateOramDurableOwnerPreparedTokenV1")
@@ -772,6 +791,165 @@ impl PrivateOramOwnerJournal {
         };
         validate_open_directory_at_path(&root_file, &self.root)?;
         Ok(output)
+    }
+
+    pub(crate) fn bind_live_prepared_store_adapter_v1(
+        &self,
+        prepared: &PrivateOramDurableOwnerPreparedTokenV1,
+    ) -> Result<PrivateOramOwnerPreparedStoreBindingV1, PrivateOramOwnerJournalError> {
+        let snapshot = self
+            .inspect_structural()?
+            .ok_or(PrivateOramOwnerJournalError::InvalidTransition)?;
+        prepared_store_binding(snapshot, prepared)
+    }
+
+    pub(crate) fn with_live_prepared_store_binding_v1<R>(
+        &self,
+        prepared: &PrivateOramDurableOwnerPreparedTokenV1,
+        action: impl FnOnce(&PrivateOramOwnerPreparedStoreBindingV1) -> R,
+    ) -> Result<R, PrivateOramOwnerJournalError> {
+        #[cfg(not(target_os = "linux"))]
+        ensure_supported_platform()?;
+        if !path_entry_exists(&self.root)? {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let root_file = open_private_directory(&self.root)?;
+        let _root_lock = lock_private_journal_root_shared(&root_file)?;
+        let snapshot = match Self::stable_root_entry_from(&root_file)? {
+            StableRootEntry::Empty => {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            StableRootEntry::Active => {
+                self.load_active_structural_from(&root_file, false, None)?
+                    .snapshot
+            }
+        };
+        let binding = prepared_store_binding(snapshot, prepared)?;
+        let output = action(&binding);
+        validate_open_directory_at_path(&root_file, &self.root)?;
+        Ok(output)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn prepare_store_adapter_test_fixture_v1(
+        &self,
+        mutation_bundle: &qdrant_sec::PrivateOramAppendMutationBundleV1,
+        owner_peer_id: u64,
+        parent_descriptor_digest: &str,
+        parent_lease_acquired_record_digest: &str,
+        final_buckets: Vec<PrivateOramOwnerFinalBucketIndexV1>,
+    ) -> Result<
+        (
+            PrivateOramOwnerJournalSnapshotV1,
+            PrivateOramDurableOwnerPreparedTokenV1,
+        ),
+        PrivateOramOwnerJournalError,
+    > {
+        let mutation = &mutation_bundle.mutation;
+        let old = &mutation.old_state.state.indexes;
+        let new = &mutation.new_state.state.indexes;
+        if old.len() != new.len()
+            || old.len() != mutation.writebacks.len()
+            || old.len() != final_buckets.len()
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidInput(
+                "test_fixture_indexes",
+            ));
+        }
+        let indexes = old
+            .iter()
+            .zip(new)
+            .zip(&mutation.writebacks)
+            .zip(&final_buckets)
+            .map(|(((old, new), writeback), final_buckets)| {
+                if old.kind != new.kind
+                    || old.kind != writeback.kind
+                    || old.kind != final_buckets.buckets.kind()
+                    || old.index_name != new.index_name
+                    || old.index_name != writeback.index_name
+                    || old.index_name != final_buckets.index_name
+                {
+                    return Err(PrivateOramOwnerJournalError::InvalidInput(
+                        "test_fixture_index",
+                    ));
+                }
+                let final_bucket_refs = match &final_buckets.buckets {
+                    PrivateOramOwnerFinalBucketBatchV1::Hnsw(buckets) => buckets
+                        .iter()
+                        .map(|bucket| PrivateOramAppendBucketRefV1 {
+                            bucket_id: bucket.bucket_id,
+                            ciphertext_sha256: bucket.ciphertext_sha256.clone(),
+                            bucket_commitment: bucket.bucket_commitment.clone(),
+                        })
+                        .collect(),
+                    PrivateOramOwnerFinalBucketBatchV1::Result(buckets) => buckets
+                        .iter()
+                        .map(|bucket| PrivateOramAppendBucketRefV1 {
+                            bucket_id: bucket.bucket_id,
+                            ciphertext_sha256: bucket.ciphertext_sha256.clone(),
+                            bucket_commitment: bucket.bucket_commitment.clone(),
+                        })
+                        .collect(),
+                };
+                Ok(PrivateOramOwnerJournalIndexDescriptorV1 {
+                    kind: old.kind,
+                    index_name: old.index_name.clone(),
+                    old_epoch: old.index_epoch,
+                    new_epoch: new.index_epoch,
+                    old_root_hash: old.root_hash.clone(),
+                    new_root_hash: new.root_hash.clone(),
+                    writeback_digest: new.last_writeback_digest.clone(),
+                    read_path_count: writeback.read_path_count,
+                    read_transcript_digest: writeback.read_transcript_digest.clone(),
+                    ordered_bucket_refs: writeback.updated_buckets.clone(),
+                    final_bucket_refs,
+                })
+            })
+            .collect::<Result<Vec<_>, PrivateOramOwnerJournalError>>()?;
+        let final_bucket_bytes = encode_final_bucket_frame(&indexes, &final_buckets)?;
+        let mut descriptor = PrivateOramOwnerJournalDescriptorV1 {
+            version: PRIVATE_ORAM_OWNER_JOURNAL_DESCRIPTOR_VERSION,
+            parent_descriptor_digest: parent_descriptor_digest.to_string(),
+            parent_lease_acquired_record_digest: parent_lease_acquired_record_digest.to_string(),
+            owner_peer_id,
+            collection_id: mutation.collection_id.clone(),
+            mutation_id: mutation.mutation_id.clone(),
+            signed_mutation_digest: qdrant_sec::private_oram_append_mutation_v1_digest(mutation)
+                .map_err(|_| PrivateOramOwnerJournalError::InvalidInput("test_fixture_mutation"))?,
+            writer_lease_digest: mutation.writer_lease_digest.clone(),
+            writer_fence: mutation.writer_fence,
+            indexes,
+            final_bucket_frame_version: PRIVATE_ORAM_OWNER_FINAL_BUCKET_FRAME_VERSION,
+            final_bucket_frame_length: final_bucket_bytes.len() as u64,
+            final_bucket_frame_sha256: digest_string(&final_bucket_bytes),
+            descriptor_digest: String::new(),
+        };
+        descriptor.descriptor_digest = descriptor_digest(&descriptor)?;
+        let descriptor_bytes = encode_descriptor(&descriptor)?;
+        let mut state = PrivateOramOwnerJournalStateV1 {
+            version: PRIVATE_ORAM_OWNER_JOURNAL_STATE_VERSION,
+            sequence: 1,
+            descriptor_digest: descriptor.descriptor_digest.clone(),
+            previous_record_digest: None,
+            phase: PrivateOramOwnerJournalPhaseV1::Prepared,
+            state_digest: String::new(),
+        };
+        state.state_digest = state_digest(&state)?;
+        let state_bytes = encode_state(&state)?;
+        let snapshot = PrivateOramOwnerJournalSnapshotV1 {
+            descriptor,
+            state,
+            terminal: None,
+            final_buckets,
+        };
+        validate_snapshot(&snapshot, &final_bucket_bytes)?;
+        self.prepare_validated(ValidatedOwnerJournal {
+            snapshot,
+            descriptor_bytes,
+            final_bucket_bytes,
+            state_bytes,
+            terminal_bytes: None,
+        })
     }
 
     #[deprecated(note = "use inspect_structural, which also describes terminal snapshots")]
@@ -1496,6 +1674,19 @@ fn prepared_token(
         parent_lease_acquired_record_digest: descriptor.parent_lease_acquired_record_digest.clone(),
         indexes,
     })
+}
+
+fn prepared_store_binding(
+    snapshot: PrivateOramOwnerJournalSnapshotV1,
+    prepared: &PrivateOramDurableOwnerPreparedTokenV1,
+) -> Result<PrivateOramOwnerPreparedStoreBindingV1, PrivateOramOwnerJournalError> {
+    if snapshot.terminal.is_some()
+        || snapshot.state.phase != PrivateOramOwnerJournalPhaseV1::Prepared
+        || prepared_token(&snapshot.descriptor)? != *prepared
+    {
+        return Err(PrivateOramOwnerJournalError::InvalidTransition);
+    }
+    Ok(PrivateOramOwnerPreparedStoreBindingV1 { snapshot })
 }
 
 fn index_prepared_evidence_digest(
@@ -3883,6 +4074,75 @@ mod tests {
         assert_eq!(
             pinned.validate_exact_contents(&expected).unwrap_err(),
             PrivateOramOwnerJournalError::Corrupt
+        );
+    }
+
+    #[test]
+    fn live_prepared_store_binding_requires_exact_token_and_holds_shared_lock() {
+        let fixture = fixture();
+        let desired = validated_fixture(18, true);
+        let descriptor_digest = desired.snapshot.descriptor.descriptor_digest.clone();
+        let parent_descriptor_digest = desired.snapshot.descriptor.parent_descriptor_digest.clone();
+        let consensus_authority_record_digest = digest(91);
+        let reconciliation_authority_digest = digest(92);
+        let canonical_index_states = canonical_index_states(&desired, 107);
+        let (_, prepared) = fixture.journal.prepare_validated(desired.clone()).unwrap();
+
+        let binding = fixture
+            .journal
+            .bind_live_prepared_store_adapter_v1(&prepared)
+            .unwrap();
+        assert_eq!(binding.snapshot(), &desired.snapshot);
+
+        let mut forged = prepared.clone();
+        forged.owner_peer_id += 1;
+        assert_eq!(
+            fixture
+                .journal
+                .bind_live_prepared_store_adapter_v1(&forged)
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+
+        let concurrent_terminal = fixture
+            .journal
+            .with_live_prepared_store_binding_v1(&prepared, |live_binding| {
+                assert_eq!(live_binding, &binding);
+                fixture
+                    .journal
+                    .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                        expected_journal_descriptor_digest: &descriptor_digest,
+                        parent_descriptor_digest: &parent_descriptor_digest,
+                        authenticated_owner_peer_id: 7,
+                        consensus_authority_record_digest: &consensus_authority_record_digest,
+                        reconciliation_authority_digest: &reconciliation_authority_digest,
+                        canonical_index_states: &canonical_index_states,
+                    })
+            })
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            concurrent_terminal,
+            PrivateOramOwnerJournalError::ConcurrentMutation
+        );
+
+        fixture
+            .journal
+            .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                expected_journal_descriptor_digest: &descriptor_digest,
+                parent_descriptor_digest: &parent_descriptor_digest,
+                authenticated_owner_peer_id: 7,
+                consensus_authority_record_digest: &consensus_authority_record_digest,
+                reconciliation_authority_digest: &reconciliation_authority_digest,
+                canonical_index_states: &canonical_index_states,
+            })
+            .unwrap();
+        assert_eq!(
+            fixture
+                .journal
+                .bind_live_prepared_store_adapter_v1(&prepared)
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
         );
     }
 
