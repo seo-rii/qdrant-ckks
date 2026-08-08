@@ -1360,6 +1360,29 @@ Signed fields:
 - 남음(D3-B3-B3): HNSW/result owner record를 pair로 inspect하고 peer/parent requirement와
   exact terminal authority를 검증해 parent journal에 opaque evidence를 공급하는 internal
   RPC와 adapter가 필요하다.
+- 완료(D3-C2-ParentStateWriter): V1과 wire-compatible하게 섞지 않는 fresh V2 parent writer를
+  추가했다. `format.json`, sequence별 immutable record, current pointer를 분리하고 immutable
+  record의 no-clobber publish와 directory fsync 뒤에만 pointer를 전진시킨다. Pointer 이전 crash로
+  next record 하나가 남아도 structural load는 자동 채택하지 않으며 같은 phase-specific typed
+  evidence를 다시 제출한 경우에만 roll-forward한다. V1-only active는 explicit legacy recovery로
+  분리하고 mixed layout, history gap, pointer-ahead, 다른 pending evidence는 fail closed한다.
+  Decision token은 한 consensus read guard에서 캡처한 state/lease와 실제 durable
+  `PointStageDurable` predecessor digest에 묶인다. Test-only visible-point validator는 non-Clone
+  durable token을 exact 비교하지만 token 자체는 live guard가 아니므로 production 연결 시 staged
+  child store를 같은 lock window에서 다시 열어야 한다. Decision 기록은 그 phase record에
+  묶인 별도 non-Clone token을, remote terminal 기록은 다시 `RemotesTerminal` record에 묶인 token을
+  반환하며 다음 writer는 바로 이전 phase token만 받는다. Empty remote batch도 decoded disk state를
+  authority로 사용하지 않는다. Pending/history 파일은 레코드별 structural validation, 7-entry
+  iteration cap, 256 MiB aggregate cap, race-growth bounded read를 통과해야 한다. Exact pending
+  retry도 immutable publisher를 다시 실행해 records/temp directory fsync를 재확립한 뒤 pointer를
+  전진시킨다.
+- 남음(D3-C2-ParentStateWriter): Positive local terminal은 실제 local paired recovery outcome과
+  같은 coordinator transaction에서 기록하고, remote terminal은 authenticated peer identity를
+  결합한 internal RPC evidence를 소비해야 한다. Typed live owner-prepare bridge가 없어서 raw
+  OwnersPrepared writer, V2 point-stage parent mint, decision-authority mint는 production build에
+  노출하지 않는다. Point-stage live reopen/lock, consensus에 monotonic parent-history watermark를
+  넣는 rollback pin,
+  active/records/temp의 fd-relative namespace pinning, point resolved phase는 아직 activation gate다.
 - 남음(D3-B3-C): Exact new면 remote-before-local finalize와 point publish를 재개하고,
   `AbortDecided`면 remote/local owner와 point stage를 exact-old로 abort한다. Mutable child와
   point artifact를 durable cleanup한 뒤 parent를 immutable reconciliation witness로

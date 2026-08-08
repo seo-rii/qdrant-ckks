@@ -560,6 +560,48 @@ activation gate. The terminal bridge must also bind authenticated transport
 identity. No current production caller can mint store or terminal evidence from
 raw digest strings.
 
+The dormant D3-C2 parent writer now persists fresh V2 progress as an explicit
+format marker, one immutable sequence-numbered record per phase, and a
+replaceable current-state pointer. It fsyncs and installs the next record with
+no-clobber semantics before advancing the pointer. A crash may therefore leave
+exactly one pending successor record. Structural load reports that record but
+does not adopt it; only a retry carrying the same phase-specific typed evidence
+can advance the pointer. A different successor, a history gap, a pointer ahead
+of its immutable record, a missing V2 marker, or a mixed V1/V2 layout fails
+closed. Active V1 journals require a separate explicit recovery path and are
+never translated to V2 terminal state.
+
+Decision records are created only from a collection-state and lease-slot pair
+captured under one consensus read guard. The test-only visible-point validator
+additionally requires an exact non-Clone durable token, so structural
+`PointStageDurable` bytes alone are insufficient in that dormant path. The token
+is still a value snapshot, not a live store guard. Production activation must
+reopen and pin the staged child in the same authority window. The resulting
+non-Clone decision token binds the parent descriptor and the actual durable
+predecessor.
+Publishing `DecisionDurable` returns a different token bound to that record,
+and publishing `RemotesTerminal` returns another token bound to the immediate
+remote-terminal record. Thus no earlier token can skip a phase or authorize a
+later writer. Typed paired-owner outcomes remain mandatory, and an empty remote
+batch derives its kind from live decision authority rather than decoded disk
+state.
+
+Every immutable record, including an unpointed successor, is structurally
+validated. Directory iteration stops after the eighth entry and rejects it,
+aggregate V2 history is capped at 256 MiB, and file reads enforce their bound
+while reading so concurrent growth cannot force an unbounded allocation.
+Generic JSON decoding remains streaming to avoid a second descriptor-sized raw
+buffer. An exact pending retry always re-runs immutable record publication,
+including destination and source-directory fsync, before moving the pointer.
+The writer remains inactive. Raw `OwnersPrepared`, V2 parent, and decision-authority
+minting entry points are test-only until typed live owner prepare evidence is
+connected. A consensus-persisted monotonic history watermark is required to
+detect rollback of an otherwise valid local prefix, and `active`,
+`state_records`, and `temp` must be pinned and accessed relative to directory
+descriptors. Positive local terminal integration, point publish/abort with
+all-replica readback, staged-child live reopening, cleanup, and typed lease
+clear are also activation gates.
+
 The parent descriptor and current-state digest formats have known-answer
 tests. Journal files live below a private non-symlink directory, use bounded
 owner-only files and same-file checks, and redact identity and digest values
