@@ -18,6 +18,7 @@ use std::marker::PhantomData;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use data_encoding::BASE64URL_NOPAD;
 use fs_err as fs;
@@ -696,7 +697,8 @@ impl PrivateOramOwnerRecoveryPreparedBindingV1<'_> {
 pub(crate) struct PrivateOramOwnerRecoveryExclusiveBindingV1<'lock> {
     state: PrivateOramOwnerRecoveryExclusiveStateV1,
     snapshot: PrivateOramOwnerJournalSnapshotV1,
-    lock_lifetime: PhantomData<&'lock mut ()>,
+    lock_lifetime: RecoveryTransactionBrand<'lock>,
+    not_send_or_sync: PhantomData<Rc<()>>,
 }
 
 impl Debug for PrivateOramOwnerRecoveryExclusiveBindingV1<'_> {
@@ -708,7 +710,7 @@ impl Debug for PrivateOramOwnerRecoveryExclusiveBindingV1<'_> {
     }
 }
 
-impl PrivateOramOwnerRecoveryExclusiveBindingV1<'_> {
+impl<'lock> PrivateOramOwnerRecoveryExclusiveBindingV1<'lock> {
     /// Returns structural data only. A terminal record in this view is not authority until exact
     /// phase-specific replay succeeds while this binding still holds the exclusive root lock.
     pub(crate) fn untrusted_snapshot_view(&self) -> &PrivateOramOwnerJournalSnapshotV1 {
@@ -722,7 +724,8 @@ impl PrivateOramOwnerRecoveryExclusiveBindingV1<'_> {
     fn finalize_action(
         &self,
         context: PrivateOramOwnerJournalFinalizeContextV1<'_>,
-    ) -> Result<PrivateOramOwnerRecoveryExclusiveActionV1, PrivateOramOwnerJournalError> {
+    ) -> Result<PrivateOramOwnerRecoveryExclusiveActionV1<'lock>, PrivateOramOwnerJournalError>
+    {
         self.terminal_action(TerminalTransition {
             phase: PrivateOramOwnerJournalPhaseV1::Finalized,
             expected_journal_descriptor_digest: context.expected_journal_descriptor_digest,
@@ -737,7 +740,8 @@ impl PrivateOramOwnerRecoveryExclusiveBindingV1<'_> {
     fn abort_old_action(
         &self,
         context: PrivateOramOwnerJournalAbortOldContextV1<'_>,
-    ) -> Result<PrivateOramOwnerRecoveryExclusiveActionV1, PrivateOramOwnerJournalError> {
+    ) -> Result<PrivateOramOwnerRecoveryExclusiveActionV1<'lock>, PrivateOramOwnerJournalError>
+    {
         self.terminal_action(TerminalTransition {
             phase: PrivateOramOwnerJournalPhaseV1::AbortedOld,
             expected_journal_descriptor_digest: context.expected_journal_descriptor_digest,
@@ -752,7 +756,8 @@ impl PrivateOramOwnerRecoveryExclusiveBindingV1<'_> {
     fn terminal_action(
         &self,
         transition: TerminalTransition<'_>,
-    ) -> Result<PrivateOramOwnerRecoveryExclusiveActionV1, PrivateOramOwnerJournalError> {
+    ) -> Result<PrivateOramOwnerRecoveryExclusiveActionV1<'lock>, PrivateOramOwnerJournalError>
+    {
         validate_terminal_transition(transition)?;
         let desired = build_terminal_record(&self.snapshot, transition)?;
         if self
@@ -778,8 +783,23 @@ impl PrivateOramOwnerRecoveryExclusiveBindingV1<'_> {
                     .reconciliation_authority_digest
                     .to_string(),
                 canonical_index_states: transition.canonical_index_states.to_vec(),
+                lock_lifetime: PhantomData,
+                not_send_or_sync: PhantomData,
             }),
+            lock_lifetime: PhantomData,
+            not_send_or_sync: PhantomData,
         })
+    }
+
+    pub(crate) const fn no_terminal_action(
+        &self,
+    ) -> PrivateOramOwnerRecoveryExclusiveActionV1<'lock> {
+        let _ = self.state;
+        PrivateOramOwnerRecoveryExclusiveActionV1 {
+            terminal: None,
+            lock_lifetime: PhantomData,
+            not_send_or_sync: PhantomData,
+        }
     }
 }
 
@@ -790,17 +810,15 @@ pub(crate) enum PrivateOramOwnerRecoveryExclusiveStateV1 {
     AbortedOldReplay,
 }
 
-pub(crate) struct PrivateOramOwnerRecoveryExclusiveActionV1 {
-    terminal: Option<PrivateOramOwnerRecoveryTerminalIntentV1>,
+type RecoveryTransactionBrand<'lock> = PhantomData<fn(&'lock mut ()) -> &'lock mut ()>;
+
+pub(crate) struct PrivateOramOwnerRecoveryExclusiveActionV1<'lock> {
+    terminal: Option<PrivateOramOwnerRecoveryTerminalIntentV1<'lock>>,
+    lock_lifetime: RecoveryTransactionBrand<'lock>,
+    not_send_or_sync: PhantomData<Rc<()>>,
 }
 
-impl PrivateOramOwnerRecoveryExclusiveActionV1 {
-    pub(crate) const fn no_terminal() -> Self {
-        Self { terminal: None }
-    }
-}
-
-struct PrivateOramOwnerRecoveryTerminalIntentV1 {
+struct PrivateOramOwnerRecoveryTerminalIntentV1<'lock> {
     phase: PrivateOramOwnerJournalPhaseV1,
     expected_journal_descriptor_digest: String,
     parent_descriptor_digest: String,
@@ -808,9 +826,11 @@ struct PrivateOramOwnerRecoveryTerminalIntentV1 {
     consensus_authority_record_digest: String,
     reconciliation_authority_digest: String,
     canonical_index_states: Vec<PrivateOramOwnerJournalTerminalIndexStateV1>,
+    lock_lifetime: RecoveryTransactionBrand<'lock>,
+    not_send_or_sync: PhantomData<Rc<()>>,
 }
 
-impl PrivateOramOwnerRecoveryTerminalIntentV1 {
+impl PrivateOramOwnerRecoveryTerminalIntentV1<'_> {
     fn transition(&self) -> TerminalTransition<'_> {
         TerminalTransition {
             phase: self.phase,
@@ -1245,7 +1265,8 @@ impl PrivateOramOwnerJournal {
         projection: &PrivateOramOwnerRecoveryProjectionV1,
         action: impl for<'lock> FnOnce(
             &PrivateOramOwnerRecoveryExclusiveBindingV1<'lock>,
-        ) -> Result<PrivateOramOwnerRecoveryExclusiveActionV1, E>,
+        )
+            -> Result<PrivateOramOwnerRecoveryExclusiveActionV1<'lock>, E>,
     ) -> Result<Result<PrivateOramOwnerRecoveryExclusiveOutcomeV1, E>, PrivateOramOwnerJournalError>
     {
         #[cfg(not(target_os = "linux"))]
@@ -1272,6 +1293,7 @@ impl PrivateOramOwnerJournal {
                 return Ok(Err(error));
             }
         };
+        validate_open_directory_at_path(&root_file, &self.root)?;
         let terminal = match action.terminal {
             Some(intent) => {
                 let phase = intent.phase;
@@ -2206,6 +2228,7 @@ fn recovery_exclusive_binding<'lock>(
         state,
         snapshot,
         lock_lifetime: PhantomData,
+        not_send_or_sync: PhantomData,
     })
 }
 
@@ -5023,14 +5046,14 @@ mod tests {
         let callback_result = fixture
             .journal
             .with_revalidated_recovery_exclusive_v1(&projection, |_| {
-                Err::<PrivateOramOwnerRecoveryExclusiveActionV1, _>("sentinel")
+                Err::<PrivateOramOwnerRecoveryExclusiveActionV1<'_>, _>("sentinel")
             })
             .unwrap();
         assert_eq!(callback_result.unwrap_err(), "sentinel");
         let outcome = fixture
             .journal
-            .with_revalidated_recovery_exclusive_v1(&projection, |_| {
-                Ok::<_, ()>(PrivateOramOwnerRecoveryExclusiveActionV1::no_terminal())
+            .with_revalidated_recovery_exclusive_v1(&projection, |binding| {
+                Ok::<_, ()>(binding.no_terminal_action())
             })
             .unwrap()
             .unwrap();
