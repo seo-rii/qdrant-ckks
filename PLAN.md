@@ -1228,6 +1228,21 @@ Signed fields:
   남아 있는 동안 downgrade를 금지한다 (`ARCH-024`). Proposal timeout 뒤 local getter만
   보고 abort하지 않으며 같은 CAS의 Raft apply barrier와 한 read guard의 state-slot
   snapshot을 거친다.
+- 완료(D3-B3-A3-ParentOwnerRecoveryAuthority): ConsensusManager가 collection state와 mutation
+  lease slot을 하나의 persistent read guard 아래 opaque snapshot으로 캡처하고, parent journal은
+  이 provenance 타입만 받아 per-owner restart authority를 만든다. Raw state/slot validator는
+  module-private로 좁혔다. Authority는 parent descriptor, stable LeaseAcquired/OwnersPrepared
+  record, exact old 또는 committed-new consensus record, immutable lease identity와 phase,
+  authenticated owner peer, canonical owner requirement/Prepared digest, signed mutation bundle을
+  domain-separated digest로 묶는다. Mutable parent tip, lease expiry와 renewal revision은 replay
+  identity에서 제외하되 mint 시 monotonic validation은 유지하므로 same-phase renewal과 parent
+  phase 진전 뒤에도 digest가 안정적이다. Unknown owner와 OwnersPrepared 이전 parent는
+  fail closed 하고 KAT/debug-redaction test를 고정했다.
+- 유지 조건(D3-B3-A3): `authenticated_owner_peer_id`는 request body가 아니라 local receiver
+  identity 또는 인증된 transport destination에서 주입해야 한다. Parent의 raw
+  `prepared_journal_digest`는 child durability proof가 아니므로 이 authority만으로 owner
+  token이나 terminal record를 발급하지 않는다. Exact child structural snapshot과 모든
+  per-index prepared evidence를 callback-scoped로 재결합하는 bridge가 다음 단계다.
 - 완료(D3-B3-B1): Client aggregate에서 server-safe owner-prepare wire package를 투영한다.
   Wire에는 signed mutation bundle, manifest-order ordered encrypted bucket bodies와 sparse
   Merkle patch proof만 들어가며 checkpoint, position map/stash, graph delta, result record,
@@ -1293,13 +1308,14 @@ Signed fields:
   journal/collection path, signature substitution, signed/physical manifest mismatch는 callback
   전에 fail closed 한다. 7개 집중 test가 exact-old/new, mixed state, substitution과 debug
   redaction을 고정한다. Production call site와 terminal 호출은 아직 없다.
-- 남음(D3-B3-B2-StoreAdapter-RestartTerminal): Restart에서 typed parent/consensus authority로
-  Prepared token을 재구성하고 `AllOld | AllNew | PartialNew | ThirdState`를 분류해야 한다.
-  Partial-new는 fixed roll-forward만 허용하고, 모든 V2 writer를 같은 store lock과 fd-relative
-  pinned collection namespace에 편입한 뒤 pair token을 module-private terminal recorder에
-  직접 소비시키는 bridge가 필요하다. Legacy HNSW/result pending journal은 digest domain,
-  duplicate-bucket model과 signature contract가 달라 V2 authority나 evidence로 재사용하지
-  않는다.
+- 남음(D3-B3-B2-StoreAdapter-RestartTerminal): D3-B3-A3 parent authority를 exact child
+  structural snapshot과 모든 per-index Prepared digest에 재결합해 callback-scoped Prepared
+  token을 복원하고 `AllOld | AllNew | PartialNew | ThirdState`를 한 store-lock 구간에서
+  분류해야 한다. Partial-new는 fixed roll-forward만 허용하고, 모든 V2 writer를 같은 store
+  lock과 fd-relative pinned collection namespace에 편입한 뒤 pair token을 module-private
+  terminal recorder에 직접 소비시키는 bridge가 필요하다. Legacy HNSW/result pending
+  journal은 digest domain, duplicate-bucket model과 signature contract가 달라 V2 authority나
+  evidence로 재사용하지 않는다.
 - 남음(D3-B3-B3): HNSW/result owner record를 pair로 inspect하고 peer/parent requirement와
   exact terminal authority를 검증해 parent journal에 opaque evidence를 공급하는 internal
   RPC와 adapter가 필요하다.

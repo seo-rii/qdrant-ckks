@@ -358,6 +358,30 @@ After proposal timeout, a local state getter is not an apply barrier: recovery
 must resubmit the exact CAS through Raft and inspect state plus slot under one
 read guard before using the classifier.
 
+The D3-B3-A3 parent-owner recovery slice now makes that read-guard requirement
+structural. `ConsensusManager` captures the collection consensus state and
+mutation lease slot into an opaque snapshot while holding one persistent read
+guard. The parent journal's raw state/slot validator is module-private, and the
+restart authority path accepts only this paired snapshot plus an owner peer
+identity supplied by a future authenticated local or transport boundary.
+
+The resulting content-manager-only authority binds the parent descriptor,
+stable LeaseAcquired and OwnersPrepared records, exact old or committed-new
+consensus record, immutable lease identity and phase, selected owner, canonical
+per-index requirement and Prepared digest, and signed mutation bundle. Its
+domain-separated digest deliberately excludes the mutable parent tip, lease
+expiry, and renewal revision after validating renewal monotonicity. Exact replay
+therefore remains stable across same-phase lease renewal and later parent phase
+progress. Unknown owners and parents that have not reached OwnersPrepared fail
+closed, and a known-answer test pins the digest encoding.
+
+This remains parent coordination authority, not child durability evidence.
+Parent Prepared digests are still untrusted strings until an owner reopens the
+exact child journal under its shared lock and recomputes every per-index
+Prepared evidence value. `ObservedOldNeedsAbortDecision` remains observation
+only and cannot authorize an abort terminal. No production caller, RPC, store
+classifier, terminal recorder, or public route consumes this authority yet.
+
 The legacy per-index HNSW/result pending journals also cannot directly supply
 V2 parent evidence. Their digest/signature domains use a unique bucket set,
 while V2 append signs ordered Path ORAM occurrences and allows repeated bucket
@@ -512,12 +536,14 @@ encrypted checkpoint, fixed-window Path ORAM transactions, and signed paired
 finalizer. D2 provides a dormant consensus state machine; D3-B1 provides the
 parent mutation journal; and D3-B2 provides the canonical invisible Prepared
 point stage. D3-B3-A2 provides the dormant `AbortDecided` consensus barrier,
+D3-B3-A3 provides the atomic parent-owner recovery authority foundation,
 D3-B3-B1 provides the server-safe owner-prepare validation contract, and the
 D3-B3-B2 slices provide the paired durable owner journal, dormant terminal
 record primitive, module-private canonical StoreInspector, and dormant live
 paired StoreAdapter without external evidence wiring. None adds a dispatcher
-proposal method or public route. The restart-capable typed parent/terminal
-adapter, owner RPC evidence, abort/finalize execution,
+proposal method or public route. Exact child Prepared rebinding, the atomic
+four-state store classifier, the typed terminal adapter, owner RPC evidence,
+abort/finalize execution,
 reconciliation-witness cleanup, state-aware search and lifecycle admission,
 and public APIs remain D3-B3/D4 gates. Normal Qdrant upsert and update APIs
 remain rejected throughout.
