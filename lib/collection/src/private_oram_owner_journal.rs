@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CString, OsStr};
 use std::fmt::{self, Debug, Formatter};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::marker::PhantomData;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
@@ -23,8 +24,9 @@ use fs_err as fs;
 use fs_err::{File, OpenOptions};
 use qdrant_sec::{
     PRIVATE_ORAM_APPEND_MAX_TOTAL_BUCKET_REFS, PrivateHnswOramBucket, PrivateOramAppendBucketRefV1,
-    PrivateOramIndexKindV2, PrivateOramValidatedOwnerFinalBucketsV1,
-    PrivateOramValidatedOwnerPrepareV1, PrivateResultOramBucket,
+    PrivateOramAppendMutationBundleV1, PrivateOramIndexKindV2,
+    PrivateOramValidatedOwnerFinalBucketsV1, PrivateOramValidatedOwnerPrepareV1,
+    PrivateResultOramBucket, private_oram_append_mutation_v1_digest,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -466,6 +468,218 @@ impl PrivateOramOwnerPreparedIndexEvidenceV1 {
     }
 }
 
+/// Untrusted parent projection used to match one owner-journal index during restart recovery.
+///
+/// Construction validates shape only. This type does not carry parent consensus authority.
+#[doc(hidden)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct PrivateOramOwnerRecoveryIndexProjectionInputV1<'a> {
+    pub kind: PrivateOramIndexKindV2,
+    pub index_name: &'a str,
+    pub old_epoch: u64,
+    pub new_epoch: u64,
+    pub old_root_hash: &'a str,
+    pub new_root_hash: &'a str,
+    pub writeback_digest: &'a str,
+    pub prepared_journal_digest: &'a str,
+}
+
+impl Debug for PrivateOramOwnerRecoveryIndexProjectionInputV1<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerRecoveryIndexProjectionInputV1")
+            .field("kind", &self.kind)
+            .field("index_name", &"[redacted]")
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("writeback_digest", &"[redacted]")
+            .field("prepared_journal_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerRecoveryIndexProjectionV1 {
+    kind: PrivateOramIndexKindV2,
+    index_name: String,
+    old_epoch: u64,
+    new_epoch: u64,
+    old_root_hash: String,
+    new_root_hash: String,
+    writeback_digest: String,
+    prepared_journal_digest: String,
+}
+
+impl Debug for PrivateOramOwnerRecoveryIndexProjectionV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerRecoveryIndexProjectionV1")
+            .field("kind", &self.kind)
+            .field("index_name", &"[redacted]")
+            .field("old_epoch", &self.old_epoch)
+            .field("new_epoch", &self.new_epoch)
+            .field("old_root_hash", &"[redacted]")
+            .field("new_root_hash", &"[redacted]")
+            .field("writeback_digest", &"[redacted]")
+            .field("prepared_journal_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerRecoveryIndexProjectionV1 {
+    pub fn try_from_input(
+        input: PrivateOramOwnerRecoveryIndexProjectionInputV1<'_>,
+    ) -> Result<Self, PrivateOramOwnerJournalError> {
+        validate_resource_id(input.index_name, "index_name")?;
+        validate_digest(input.old_root_hash, "old_root_hash")?;
+        validate_digest(input.new_root_hash, "new_root_hash")?;
+        validate_digest(input.writeback_digest, "writeback_digest")?;
+        validate_digest(input.prepared_journal_digest, "prepared_journal_digest")?;
+        if input.new_epoch <= input.old_epoch {
+            return Err(PrivateOramOwnerJournalError::InvalidInput("index_epoch"));
+        }
+        Ok(Self {
+            kind: input.kind,
+            index_name: input.index_name.to_string(),
+            old_epoch: input.old_epoch,
+            new_epoch: input.new_epoch,
+            old_root_hash: input.old_root_hash.to_string(),
+            new_root_hash: input.new_root_hash.to_string(),
+            writeback_digest: input.writeback_digest.to_string(),
+            prepared_journal_digest: input.prepared_journal_digest.to_string(),
+        })
+    }
+}
+
+/// Untrusted, immutable projection of typed parent recovery evidence.
+///
+/// The storage coordinator must build this from its validated parent authority. Reopening the
+/// child journal below recomputes every Prepared digest; possession of this projection alone does
+/// not authorize canonical writes or a terminal transition.
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerRecoveryProjectionV1 {
+    expected_owner_peer_id: u64,
+    parent_descriptor_digest: String,
+    parent_lease_acquired_record_digest: String,
+    collection_id: String,
+    mutation_id: String,
+    signed_mutation_digest: String,
+    writer_lease_digest: String,
+    writer_fence: u64,
+    indexes: Vec<PrivateOramOwnerRecoveryIndexProjectionV1>,
+}
+
+impl Debug for PrivateOramOwnerRecoveryProjectionV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerRecoveryProjectionV1")
+            .field("expected_owner_peer_id", &self.expected_owner_peer_id)
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field("parent_lease_acquired_record_digest", &"[redacted]")
+            .field("collection_id", &"[redacted]")
+            .field("mutation_id", &"[redacted]")
+            .field("signed_mutation_digest", &"[redacted]")
+            .field("writer_lease_digest", &"[redacted]")
+            .field("writer_fence", &self.writer_fence)
+            .field("index_count", &self.indexes.len())
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerRecoveryProjectionV1 {
+    pub fn try_new(
+        expected_owner_peer_id: u64,
+        parent_descriptor_digest: &str,
+        parent_lease_acquired_record_digest: &str,
+        mutation_bundle: &PrivateOramAppendMutationBundleV1,
+        indexes: Vec<PrivateOramOwnerRecoveryIndexProjectionV1>,
+    ) -> Result<Self, PrivateOramOwnerJournalError> {
+        validate_digest(parent_descriptor_digest, "parent_descriptor_digest")?;
+        validate_digest(
+            parent_lease_acquired_record_digest,
+            "parent_lease_acquired_record_digest",
+        )?;
+        if indexes.len() != MAX_PAIRED_OWNER_INDEXES
+            || indexes[0].kind != PrivateOramIndexKindV2::Hnsw
+            || indexes[1].kind != PrivateOramIndexKindV2::Result
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidInput("indexes"));
+        }
+
+        let mutation = &mutation_bundle.mutation;
+        validate_resource_id(&mutation.collection_id, "collection_id")?;
+        validate_digest(&mutation.mutation_id, "mutation_id")?;
+        validate_digest(&mutation.writer_lease_digest, "writer_lease_digest")?;
+        let signed_mutation_digest = private_oram_append_mutation_v1_digest(mutation)
+            .map_err(|_| PrivateOramOwnerJournalError::InvalidInput("mutation_bundle"))?;
+        validate_digest(&signed_mutation_digest, "signed_mutation_digest")?;
+        if mutation.old_state.state.indexes.len() != indexes.len()
+            || mutation.new_state.state.indexes.len() != indexes.len()
+            || mutation.writebacks.len() != indexes.len()
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidInput(
+                "mutation_indexes",
+            ));
+        }
+        for (((projection, old), new), writeback) in indexes
+            .iter()
+            .zip(&mutation.old_state.state.indexes)
+            .zip(&mutation.new_state.state.indexes)
+            .zip(&mutation.writebacks)
+        {
+            if projection.kind != old.kind
+                || projection.kind != new.kind
+                || projection.kind != writeback.kind
+                || projection.index_name != old.index_name
+                || projection.index_name != new.index_name
+                || projection.index_name != writeback.index_name
+                || projection.old_epoch != old.index_epoch
+                || projection.new_epoch != new.index_epoch
+                || projection.old_root_hash != old.root_hash
+                || projection.new_root_hash != new.root_hash
+                || projection.writeback_digest != new.last_writeback_digest
+            {
+                return Err(PrivateOramOwnerJournalError::InvalidInput(
+                    "mutation_indexes",
+                ));
+            }
+        }
+
+        Ok(Self {
+            expected_owner_peer_id,
+            parent_descriptor_digest: parent_descriptor_digest.to_string(),
+            parent_lease_acquired_record_digest: parent_lease_acquired_record_digest.to_string(),
+            collection_id: mutation.collection_id.clone(),
+            mutation_id: mutation.mutation_id.clone(),
+            signed_mutation_digest,
+            writer_lease_digest: mutation.writer_lease_digest.clone(),
+            writer_fence: mutation.writer_fence,
+            indexes,
+        })
+    }
+}
+
+/// Opaque evidence that a live Prepared child matched an untrusted parent projection while the
+/// child journal remained under a shared lock.
+///
+/// The value is exposed only by reference inside `with_revalidated_recovery_prepared_v1`, so safe
+/// callers cannot retain it after the lock is released.
+pub(crate) struct PrivateOramOwnerRecoveryPreparedBindingV1<'lock> {
+    prepared: PrivateOramDurableOwnerPreparedTokenV1,
+    store_binding: PrivateOramOwnerPreparedStoreBindingV1,
+    lock_lifetime: PhantomData<&'lock mut ()>,
+}
+
+impl Debug for PrivateOramOwnerRecoveryPreparedBindingV1<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerRecoveryPreparedBindingV1")
+            .field("prepared", &"[redacted]")
+            .field("store_binding", &"[redacted]")
+            .finish()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PrivateOramDurableOwnerPreparedTokenV1 {
     owner_peer_id: u64,
@@ -825,6 +1039,37 @@ impl PrivateOramOwnerJournal {
             }
         };
         let binding = prepared_store_binding(snapshot, prepared)?;
+        let output = action(&binding);
+        validate_open_directory_at_path(&root_file, &self.root)?;
+        Ok(output)
+    }
+
+    /// Reopens and revalidates the exact paired child Prepared evidence under one shared lock.
+    ///
+    /// The projection is deliberately not authority-bearing. A storage-layer caller must retain
+    /// its typed parent recovery authority while consuming the callback-scoped binding.
+    pub(crate) fn with_revalidated_recovery_prepared_v1<R>(
+        &self,
+        projection: &PrivateOramOwnerRecoveryProjectionV1,
+        action: impl for<'lock> FnOnce(&PrivateOramOwnerRecoveryPreparedBindingV1<'lock>) -> R,
+    ) -> Result<R, PrivateOramOwnerJournalError> {
+        #[cfg(not(target_os = "linux"))]
+        ensure_supported_platform()?;
+        if !path_entry_exists(&self.root)? {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+        let root_file = open_private_directory(&self.root)?;
+        let root_lock = lock_private_journal_root_shared(&root_file)?;
+        let snapshot = match Self::stable_root_entry_from(&root_file)? {
+            StableRootEntry::Empty => {
+                return Err(PrivateOramOwnerJournalError::InvalidTransition);
+            }
+            StableRootEntry::Active => {
+                self.load_active_structural_from(&root_file, false, None)?
+                    .snapshot
+            }
+        };
+        let binding = recovery_prepared_binding(snapshot, projection, &root_lock)?;
         let output = action(&binding);
         validate_open_directory_at_path(&root_file, &self.root)?;
         Ok(output)
@@ -1687,6 +1932,61 @@ fn prepared_store_binding(
         return Err(PrivateOramOwnerJournalError::InvalidTransition);
     }
     Ok(PrivateOramOwnerPreparedStoreBindingV1 { snapshot })
+}
+
+fn recovery_prepared_binding<'lock>(
+    snapshot: PrivateOramOwnerJournalSnapshotV1,
+    projection: &PrivateOramOwnerRecoveryProjectionV1,
+    _root_lock: &'lock PrivateJournalRootLock<'_>,
+) -> Result<PrivateOramOwnerRecoveryPreparedBindingV1<'lock>, PrivateOramOwnerJournalError> {
+    let descriptor = &snapshot.descriptor;
+    if snapshot.terminal.is_some()
+        || snapshot.state.phase != PrivateOramOwnerJournalPhaseV1::Prepared
+        || descriptor.indexes.len() != MAX_PAIRED_OWNER_INDEXES
+        || descriptor.indexes[0].kind != PrivateOramIndexKindV2::Hnsw
+        || descriptor.indexes[1].kind != PrivateOramIndexKindV2::Result
+        || descriptor.owner_peer_id != projection.expected_owner_peer_id
+        || descriptor.parent_descriptor_digest != projection.parent_descriptor_digest
+        || descriptor.parent_lease_acquired_record_digest
+            != projection.parent_lease_acquired_record_digest
+        || descriptor.collection_id != projection.collection_id
+        || descriptor.mutation_id != projection.mutation_id
+        || descriptor.signed_mutation_digest != projection.signed_mutation_digest
+        || descriptor.writer_lease_digest != projection.writer_lease_digest
+        || descriptor.writer_fence != projection.writer_fence
+        || descriptor.indexes.len() != projection.indexes.len()
+    {
+        return Err(PrivateOramOwnerJournalError::InvalidTransition);
+    }
+
+    let prepared = prepared_token(descriptor)?;
+    for ((descriptor_index, prepared_index), projected_index) in descriptor
+        .indexes
+        .iter()
+        .zip(prepared.indexes())
+        .zip(&projection.indexes)
+    {
+        if descriptor_index.kind != projected_index.kind
+            || descriptor_index.index_name != projected_index.index_name
+            || descriptor_index.old_epoch != projected_index.old_epoch
+            || descriptor_index.new_epoch != projected_index.new_epoch
+            || descriptor_index.old_root_hash != projected_index.old_root_hash
+            || descriptor_index.new_root_hash != projected_index.new_root_hash
+            || descriptor_index.writeback_digest != projected_index.writeback_digest
+            || prepared_index.kind != projected_index.kind
+            || prepared_index.index_name != projected_index.index_name
+            || prepared_index.prepared_journal_digest != projected_index.prepared_journal_digest
+        {
+            return Err(PrivateOramOwnerJournalError::InvalidTransition);
+        }
+    }
+
+    let store_binding = prepared_store_binding(snapshot, &prepared)?;
+    Ok(PrivateOramOwnerRecoveryPreparedBindingV1 {
+        prepared,
+        store_binding,
+        lock_lifetime: PhantomData,
+    })
 }
 
 fn index_prepared_evidence_digest(
@@ -3547,6 +3847,42 @@ mod tests {
             .collect()
     }
 
+    fn recovery_projection(
+        desired: &ValidatedOwnerJournal,
+    ) -> PrivateOramOwnerRecoveryProjectionV1 {
+        let descriptor = &desired.snapshot.descriptor;
+        let prepared = prepared_token(descriptor).unwrap();
+        PrivateOramOwnerRecoveryProjectionV1 {
+            expected_owner_peer_id: descriptor.owner_peer_id,
+            parent_descriptor_digest: descriptor.parent_descriptor_digest.clone(),
+            parent_lease_acquired_record_digest: descriptor
+                .parent_lease_acquired_record_digest
+                .clone(),
+            collection_id: descriptor.collection_id.clone(),
+            mutation_id: descriptor.mutation_id.clone(),
+            signed_mutation_digest: descriptor.signed_mutation_digest.clone(),
+            writer_lease_digest: descriptor.writer_lease_digest.clone(),
+            writer_fence: descriptor.writer_fence,
+            indexes: descriptor
+                .indexes
+                .iter()
+                .zip(prepared.indexes())
+                .map(
+                    |(index, evidence)| PrivateOramOwnerRecoveryIndexProjectionV1 {
+                        kind: index.kind,
+                        index_name: index.index_name.clone(),
+                        old_epoch: index.old_epoch,
+                        new_epoch: index.new_epoch,
+                        old_root_hash: index.old_root_hash.clone(),
+                        new_root_hash: index.new_root_hash.clone(),
+                        writeback_digest: index.writeback_digest.clone(),
+                        prepared_journal_digest: evidence.prepared_journal_digest.clone(),
+                    },
+                )
+                .collect(),
+        }
+    }
+
     fn bucket_ref(
         bucket_id: u64,
         ciphertext_sha256: String,
@@ -4141,6 +4477,120 @@ mod tests {
             fixture
                 .journal
                 .bind_live_prepared_store_adapter_v1(&prepared)
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+    }
+
+    #[test]
+    fn recovery_rebind_recomputes_exact_pair_and_holds_shared_lock() {
+        let fixture = fixture();
+        let desired = validated_fixture(119, true);
+        let descriptor_digest = desired.snapshot.descriptor.descriptor_digest.clone();
+        let parent_descriptor_digest = desired.snapshot.descriptor.parent_descriptor_digest.clone();
+        let consensus_authority_record_digest = digest(120);
+        let reconciliation_authority_digest = digest(121);
+        let canonical_index_states = canonical_index_states(&desired, 122);
+        let expected_snapshot = desired.snapshot.clone();
+        let expected_prepared = prepared_token(&expected_snapshot.descriptor).unwrap();
+        let projection = recovery_projection(&desired);
+        fixture.journal.prepare_validated(desired).unwrap();
+
+        let concurrent_terminal = fixture
+            .journal
+            .with_revalidated_recovery_prepared_v1(&projection, |binding| {
+                assert_eq!(&binding.prepared, &expected_prepared);
+                assert_eq!(binding.store_binding.snapshot(), &expected_snapshot);
+                let rendered = format!("{binding:?}");
+                assert!(!rendered.contains(&descriptor_digest));
+                assert!(!rendered.contains("collection-119"));
+                fixture
+                    .journal
+                    .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                        expected_journal_descriptor_digest: &descriptor_digest,
+                        parent_descriptor_digest: &parent_descriptor_digest,
+                        authenticated_owner_peer_id: 7,
+                        consensus_authority_record_digest: &consensus_authority_record_digest,
+                        reconciliation_authority_digest: &reconciliation_authority_digest,
+                        canonical_index_states: &canonical_index_states,
+                    })
+            })
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            concurrent_terminal,
+            PrivateOramOwnerJournalError::ConcurrentMutation
+        );
+
+        let mut substitutions = Vec::new();
+        let mut forged = projection.clone();
+        forged.expected_owner_peer_id += 1;
+        substitutions.push(forged);
+        let mut forged = projection.clone();
+        forged.parent_descriptor_digest = digest(123);
+        substitutions.push(forged);
+        let mut forged = projection.clone();
+        forged.parent_lease_acquired_record_digest = digest(124);
+        substitutions.push(forged);
+        let mut forged = projection.clone();
+        forged.mutation_id = digest(125);
+        substitutions.push(forged);
+        let mut forged = projection.clone();
+        forged.writer_fence += 1;
+        substitutions.push(forged);
+        let mut forged = projection.clone();
+        forged.indexes.swap(0, 1);
+        substitutions.push(forged);
+        let mut forged = projection.clone();
+        forged.indexes[0].prepared_journal_digest = digest(126);
+        substitutions.push(forged);
+        let mut forged = projection.clone();
+        forged.indexes[1].new_root_hash = digest(127);
+        substitutions.push(forged);
+
+        for forged in substitutions {
+            let mut called = false;
+            assert_eq!(
+                fixture
+                    .journal
+                    .with_revalidated_recovery_prepared_v1(&forged, |_| called = true)
+                    .unwrap_err(),
+                PrivateOramOwnerJournalError::InvalidTransition
+            );
+            assert!(!called);
+        }
+
+        fixture
+            .journal
+            .record_finalized(PrivateOramOwnerJournalFinalizeContextV1 {
+                expected_journal_descriptor_digest: &descriptor_digest,
+                parent_descriptor_digest: &parent_descriptor_digest,
+                authenticated_owner_peer_id: 7,
+                consensus_authority_record_digest: &consensus_authority_record_digest,
+                reconciliation_authority_digest: &reconciliation_authority_digest,
+                canonical_index_states: &canonical_index_states,
+            })
+            .unwrap();
+        assert_eq!(
+            fixture
+                .journal
+                .with_revalidated_recovery_prepared_v1(&projection, |_| ())
+                .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidTransition
+        );
+    }
+
+    #[test]
+    fn recovery_rebind_requires_hnsw_result_pair() {
+        let fixture = fixture();
+        let desired = validated_fixture(120, false);
+        let projection = recovery_projection(&desired);
+        fixture.journal.prepare_validated(desired).unwrap();
+
+        assert_eq!(
+            fixture
+                .journal
+                .with_revalidated_recovery_prepared_v1(&projection, |_| ())
                 .unwrap_err(),
             PrivateOramOwnerJournalError::InvalidTransition
         );

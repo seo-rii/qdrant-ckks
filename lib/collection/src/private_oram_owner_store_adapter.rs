@@ -493,6 +493,8 @@ mod tests {
     use super::*;
     use crate::private_oram_owner_journal::{
         PrivateOramOwnerFinalBucketBatchV1, PrivateOramOwnerFinalBucketIndexV1,
+        PrivateOramOwnerJournalError, PrivateOramOwnerRecoveryIndexProjectionInputV1,
+        PrivateOramOwnerRecoveryIndexProjectionV1, PrivateOramOwnerRecoveryProjectionV1,
     };
 
     const COLLECTION_ID: &str = "collection-uuid-1";
@@ -1063,6 +1065,41 @@ mod tests {
         }
     }
 
+    fn recovery_projection(
+        fixture: &PairFixture,
+    ) -> Result<PrivateOramOwnerRecoveryProjectionV1, PrivateOramOwnerJournalError> {
+        let mutation = &fixture.mutation_bundle.mutation;
+        let indexes = mutation
+            .old_state
+            .state
+            .indexes
+            .iter()
+            .zip(&mutation.new_state.state.indexes)
+            .zip(fixture.prepared_token.indexes())
+            .map(|((old, new), prepared)| {
+                PrivateOramOwnerRecoveryIndexProjectionV1::try_from_input(
+                    PrivateOramOwnerRecoveryIndexProjectionInputV1 {
+                        kind: old.kind,
+                        index_name: &old.index_name,
+                        old_epoch: old.index_epoch,
+                        new_epoch: new.index_epoch,
+                        old_root_hash: &old.root_hash,
+                        new_root_hash: &new.root_hash,
+                        writeback_digest: &new.last_writeback_digest,
+                        prepared_journal_digest: prepared.prepared_journal_digest(),
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        PrivateOramOwnerRecoveryProjectionV1::try_new(
+            7,
+            &digest(61),
+            &digest(62),
+            &fixture.mutation_bundle,
+            indexes,
+        )
+    }
+
     #[test]
     fn pair_store_paths_reject_cross_journal_and_cross_collection_substitution() {
         let temp = TempDir::new().unwrap();
@@ -1119,6 +1156,69 @@ mod tests {
                 32
             );
         }
+    }
+
+    #[test]
+    fn recovery_projection_rebinds_the_live_prepared_pair() {
+        let fixture = pair_fixture();
+        let projection = recovery_projection(&fixture).unwrap();
+        let mut called = false;
+
+        fixture
+            .owner_journal
+            .with_revalidated_recovery_prepared_v1(&projection, |binding| {
+                called = true;
+                let rendered = format!("{projection:?} {binding:?}");
+                assert!(!rendered.contains(COLLECTION_ID));
+                assert!(!rendered.contains(HNSW_INDEX));
+                assert!(!rendered.contains(RESULT_INDEX));
+                assert!(!rendered.contains(fixture.prepared_token.journal_descriptor_digest()));
+            })
+            .unwrap();
+
+        assert!(called);
+    }
+
+    #[test]
+    fn recovery_projection_constructor_rejects_noncanonical_pair_order() {
+        let fixture = pair_fixture();
+        let mutation = &fixture.mutation_bundle.mutation;
+        let mut indexes = mutation
+            .old_state
+            .state
+            .indexes
+            .iter()
+            .zip(&mutation.new_state.state.indexes)
+            .zip(fixture.prepared_token.indexes())
+            .map(|((old, new), prepared)| {
+                PrivateOramOwnerRecoveryIndexProjectionV1::try_from_input(
+                    PrivateOramOwnerRecoveryIndexProjectionInputV1 {
+                        kind: old.kind,
+                        index_name: &old.index_name,
+                        old_epoch: old.index_epoch,
+                        new_epoch: new.index_epoch,
+                        old_root_hash: &old.root_hash,
+                        new_root_hash: &new.root_hash,
+                        writeback_digest: &new.last_writeback_digest,
+                        prepared_journal_digest: prepared.prepared_journal_digest(),
+                    },
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        indexes.swap(0, 1);
+
+        assert_eq!(
+            PrivateOramOwnerRecoveryProjectionV1::try_new(
+                7,
+                &digest(61),
+                &digest(62),
+                &fixture.mutation_bundle,
+                indexes,
+            )
+            .unwrap_err(),
+            PrivateOramOwnerJournalError::InvalidInput("indexes")
+        );
     }
 
     #[test]

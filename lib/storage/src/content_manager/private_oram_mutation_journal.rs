@@ -4,6 +4,10 @@ use std::fmt::{self, Debug, Formatter};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use collection::private_oram_owner_journal::{
+    PrivateOramOwnerRecoveryIndexProjectionInputV1, PrivateOramOwnerRecoveryIndexProjectionV1,
+    PrivateOramOwnerRecoveryProjectionV1,
+};
 use collection::shards::shard::PeerId;
 use data_encoding::BASE64URL_NOPAD;
 use fs_err as fs;
@@ -469,6 +473,53 @@ impl PrivateOramValidatedOwnerRecoveryAuthorityV1 {
 
     pub(super) fn indexes(&self) -> &[PrivateOramValidatedOwnerRecoveryIndexV1] {
         &self.indexes
+    }
+
+    pub(super) fn pair_recovery_projection(
+        &self,
+    ) -> Result<PrivateOramOwnerRecoveryProjectionV1, PrivateOramMutationJournalError> {
+        if self.indexes.len() != 2
+            || self.indexes[0].requirement.kind != PrivateOramIndexKindV2::Hnsw
+            || self.indexes[1].requirement.kind != PrivateOramIndexKindV2::Result
+        {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+        let indexes = self
+            .indexes
+            .iter()
+            .map(|index| {
+                let requirement = &index.requirement;
+                let prepared = &index.prepared;
+                if requirement.peer_id != self.owner_peer_id
+                    || prepared.peer_id != self.owner_peer_id
+                    || requirement.kind != prepared.kind
+                    || requirement.index_name != prepared.index_name
+                {
+                    return Err(PrivateOramMutationJournalError::Corrupt);
+                }
+                PrivateOramOwnerRecoveryIndexProjectionV1::try_from_input(
+                    PrivateOramOwnerRecoveryIndexProjectionInputV1 {
+                        kind: requirement.kind,
+                        index_name: &requirement.index_name,
+                        old_epoch: requirement.old_epoch,
+                        new_epoch: requirement.new_epoch,
+                        old_root_hash: &requirement.old_root_hash,
+                        new_root_hash: &requirement.new_root_hash,
+                        writeback_digest: &requirement.writeback_digest,
+                        prepared_journal_digest: &prepared.prepared_journal_digest,
+                    },
+                )
+                .map_err(|_| PrivateOramMutationJournalError::Corrupt)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        PrivateOramOwnerRecoveryProjectionV1::try_new(
+            self.owner_peer_id,
+            &self.parent_descriptor_digest,
+            &self.parent_lease_acquired_record_digest,
+            &self.mutation_bundle,
+            indexes,
+        )
+        .map_err(|_| PrivateOramMutationJournalError::Corrupt)
     }
 }
 
@@ -2571,6 +2622,109 @@ mod tests {
         BASE64URL_NOPAD.encode(&[fill; 32])
     }
 
+    fn pair_recovery_authority(
+        seed: u8,
+        marker: u8,
+    ) -> PrivateOramValidatedOwnerRecoveryAuthorityV1 {
+        let base = fixture(seed, marker);
+        let key_pair = Ed25519KeyPair::from_seed_unchecked(&[seed; 32]).unwrap();
+        let mut mutation = base.mutation_bundle.mutation.clone();
+        let result_old_root = digest(marker.wrapping_add(30));
+        let result_new_root = digest(marker.wrapping_add(31));
+        let result_writeback = PrivateOramAppendIndexWritebackV1 {
+            kind: PrivateOramIndexKindV2::Result,
+            index_name: "private-result".to_string(),
+            read_path_count: 1,
+            read_transcript_digest: digest(marker.wrapping_add(32)),
+            updated_buckets: vec![PrivateOramAppendBucketRefV1 {
+                bucket_id: 1,
+                ciphertext_sha256: digest(marker.wrapping_add(33)),
+                bucket_commitment: digest(marker.wrapping_add(34)),
+            }],
+        };
+        let result_writeback_digest =
+            private_oram_append_writeback_v1_digest(PrivateOramAppendWritebackDigestInput {
+                collection_id: &mutation.collection_id,
+                manifest_digest: &mutation.manifest_digest,
+                kind: result_writeback.kind,
+                index_name: &result_writeback.index_name,
+                old_epoch: 21,
+                new_epoch: 22,
+                old_root_hash: &result_old_root,
+                new_root_hash: &result_new_root,
+                read_path_count: result_writeback.read_path_count,
+                read_transcript_digest: &result_writeback.read_transcript_digest,
+                updated_buckets: &result_writeback.updated_buckets,
+            })
+            .unwrap();
+        let mut old_state = mutation.old_state.state.clone();
+        old_state.indexes.push(PrivateOramIndexStateV2 {
+            kind: PrivateOramIndexKindV2::Result,
+            index_name: result_writeback.index_name.clone(),
+            index_epoch: 21,
+            root_hash: result_old_root,
+            logical_count: 8,
+            dummy_count: 24,
+            last_writeback_digest: digest(marker.wrapping_add(35)),
+        });
+        let mut new_state = mutation.new_state.state.clone();
+        new_state.indexes.push(PrivateOramIndexStateV2 {
+            kind: PrivateOramIndexKindV2::Result,
+            index_name: result_writeback.index_name.clone(),
+            index_epoch: 22,
+            root_hash: result_new_root,
+            logical_count: 9,
+            dummy_count: 23,
+            last_writeback_digest: result_writeback_digest,
+        });
+        mutation.old_state = package_private_oram_signed_state_v2(&key_pair, old_state).unwrap();
+        mutation.new_state = package_private_oram_signed_state_v2(&key_pair, new_state).unwrap();
+        mutation.writebacks.push(result_writeback);
+        let mutation_bundle = package_private_oram_append_mutation_v1(&key_pair, mutation).unwrap();
+        let indexes = mutation_bundle
+            .mutation
+            .old_state
+            .state
+            .indexes
+            .iter()
+            .zip(&mutation_bundle.mutation.new_state.state.indexes)
+            .enumerate()
+            .map(
+                |(position, (old, new))| PrivateOramValidatedOwnerRecoveryIndexV1 {
+                    requirement: PrivateOramMutationOwnerRequirementV1 {
+                        peer_id: 11,
+                        kind: old.kind,
+                        index_name: old.index_name.clone(),
+                        old_epoch: old.index_epoch,
+                        new_epoch: new.index_epoch,
+                        old_root_hash: old.root_hash.clone(),
+                        new_root_hash: new.root_hash.clone(),
+                        writeback_digest: new.last_writeback_digest.clone(),
+                    },
+                    prepared: PrivateOramMutationOwnerPrepareEvidenceV1 {
+                        peer_id: 11,
+                        kind: old.kind,
+                        index_name: old.index_name.clone(),
+                        prepared_journal_digest: digest(
+                            marker.wrapping_add(36).wrapping_add(position as u8),
+                        ),
+                    },
+                },
+            )
+            .collect();
+        PrivateOramValidatedOwnerRecoveryAuthorityV1 {
+            owner_peer_id: 11,
+            disposition: PrivateOramMutationReconcileDispositionV1::ExactNew,
+            parent_descriptor_digest: digest(marker.wrapping_add(38)),
+            parent_lease_acquired_record_digest: digest(marker.wrapping_add(39)),
+            parent_owners_prepared_record_digest: digest(marker.wrapping_add(40)),
+            consensus_authority_record_digest: digest(marker.wrapping_add(41)),
+            reconciliation_authority_digest: digest(marker.wrapping_add(42)),
+            mutation_bundle,
+            indexes,
+        }
+    }
+
     fn fixture(seed: u8, marker: u8) -> Fixture {
         fixture_at_sequence(seed, marker, 0, false)
     }
@@ -3318,6 +3472,36 @@ mod tests {
             authority.reconciliation_authority_digest(),
             "fSOEGuuAWS9SgVu_oDuC1fcBIaZ-OXguisfs6bnnVAY"
         );
+    }
+
+    #[test]
+    fn owner_recovery_pair_projection_requires_canonical_authenticated_pair() {
+        let authority = pair_recovery_authority(46, 190);
+        let projection = authority.pair_recovery_projection().unwrap();
+        let rendered = format!("{projection:?}");
+        assert!(!rendered.contains(&authority.mutation_bundle.mutation.collection_id));
+        assert!(!rendered.contains(&authority.indexes[0].prepared.prepared_journal_digest));
+
+        let mut hnsw_only = authority.clone();
+        hnsw_only.indexes.pop();
+        assert!(matches!(
+            hnsw_only.pair_recovery_projection(),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+
+        let mut reordered = authority.clone();
+        reordered.indexes.swap(0, 1);
+        assert!(matches!(
+            reordered.pair_recovery_projection(),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+
+        let mut foreign_owner = authority;
+        foreign_owner.indexes[1].prepared.peer_id = 12;
+        assert!(matches!(
+            foreign_owner.pair_recovery_projection(),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
     }
 
     #[test]
