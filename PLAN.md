@@ -1241,8 +1241,9 @@ Signed fields:
 - 유지 조건(D3-B3-A3): `authenticated_owner_peer_id`는 request body가 아니라 local receiver
   identity 또는 인증된 transport destination에서 주입해야 한다. Parent의 raw
   `prepared_journal_digest`는 child durability proof가 아니므로 이 authority만으로 owner
-  token이나 terminal record를 발급하지 않는다. Exact child structural snapshot과 모든
-  per-index prepared evidence를 callback-scoped로 재결합하는 bridge가 다음 단계다.
+  token이나 terminal record를 발급하지 않는다. Exact child 재결합도 public projection을
+  authority로 취급하지 않으며 storage-private typed parent authority를 계속 보유한
+  coordinator만 이후 recovery disposition을 선택해야 한다.
 - 완료(D3-B3-B1): Client aggregate에서 server-safe owner-prepare wire package를 투영한다.
   Wire에는 signed mutation bundle, manifest-order ordered encrypted bucket bodies와 sparse
   Merkle patch proof만 들어가며 checkpoint, position map/stash, graph delta, result record,
@@ -1308,12 +1309,28 @@ Signed fields:
   journal/collection path, signature substitution, signed/physical manifest mismatch는 callback
   전에 fail closed 한다. 7개 집중 test가 exact-old/new, mixed state, substitution과 debug
   redaction을 고정한다. Production call site와 terminal 호출은 아직 없다.
-- 남음(D3-B3-B2-StoreAdapter-RestartTerminal): D3-B3-A3 parent authority를 exact child
-  structural snapshot과 모든 per-index Prepared digest에 재결합해 callback-scoped Prepared
-  token을 복원하고 `AllOld | AllNew | PartialNew | ThirdState`를 한 store-lock 구간에서
-  분류해야 한다. Partial-new는 fixed roll-forward만 허용하고, 모든 V2 writer를 같은 store
-  lock과 fd-relative pinned collection namespace에 편입한 뒤 pair token을 module-private
-  terminal recorder에 직접 소비시키는 bridge가 필요하다. Legacy HNSW/result pending
+- 완료(D3-B3-B3-ChildPreparedRebind): Storage-private parent recovery authority가 정확히 같은
+  authenticated owner의 canonical `Hnsw, Result` requirement/Prepared pair만 immutable public
+  projection으로 투영한다. Collection은 이 projection을 untrusted input으로 취급하고 exact
+  child journal을 shared root lock 아래 다시 열어 nonterminal Prepared state, parent/lease,
+  mutation/lease/fence, index order/epoch/root/writeback과 모든 per-index Prepared digest를
+  descriptor에서 재계산해 비교한다. Opaque binding은 실제 lock lifetime에 묶인 non-Clone
+  crate-private callback value이고 capability accessor도 제공하지 않아 storage나 public
+  caller가 잠금 밖으로 추출할 수 없다. HNSW-only,
+  terminal child, owner/parent/mutation/index/digest substitution과 callback 중 terminal publish를
+  fail closed 하는 집중 test를 추가했다. Store lock을 child lock 안에서 취득하도록 유도하던
+  draft bridge는 lock inversion을 피하기 위해 제거했다.
+- 남음(D3-B3-B3-AtomicClassifierRollForward): Recovery classifier는 기존 global lock order인
+  HNSW -> result -> child journal shared를 유지하면서 store별 `Old | New | Third`를 한 중첩
+  lock 구간에서 얻고 `Old+Old=AllOld`, `New+New=AllNew`, canonical write prefix인
+  `New+Old=PartialNew`, 그 밖의 조합과 검증 실패를 `ThirdState`로 분류해야 한다.
+  외부에 반환하는 classifier 결과는 non-authoritative observation이어야 한다. Partial-new는
+  storage-private typed parent authority를 계속 보유한 coordinator가 fixed roll-forward 뒤 같은
+  lock order로 전체 상태를 재검증해 `AllNew`가 된 경우에만 terminal evidence를 만들 수 있다.
+  Authority -> projection -> real child -> classifier integration test로 이 경계를 고정한다.
+  모든 V2 writer를 같은 store lock과 fd-relative pinned collection
+  namespace에 편입한 뒤 exact pair token을 module-private terminal recorder에 직접 소비시키는
+  bridge가 필요하다. Legacy HNSW/result pending
   journal은 digest domain, duplicate-bucket model과 signature contract가 달라 V2 authority나
   evidence로 재사용하지 않는다.
 - 남음(D3-B3-B3): HNSW/result owner record를 pair로 inspect하고 peer/parent requirement와

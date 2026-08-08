@@ -379,8 +379,9 @@ This remains parent coordination authority, not child durability evidence.
 Parent Prepared digests are still untrusted strings until an owner reopens the
 exact child journal under its shared lock and recomputes every per-index
 Prepared evidence value. `ObservedOldNeedsAbortDecision` remains observation
-only and cannot authorize an abort terminal. No production caller, RPC, store
-classifier, terminal recorder, or public route consumes this authority yet.
+only and cannot authorize an abort terminal. The dormant child-rebind foundation
+now performs that exact reopen, but no production RPC, store classifier,
+terminal recorder, or public route consumes the resulting recovery path yet.
 
 The legacy per-index HNSW/result pending journals also cannot directly supply
 V2 parent evidence. Their digest/signature domains use a unique bucket set,
@@ -431,9 +432,10 @@ same-inode content changes fail closed.
 Structural inspection deliberately returns only a self-consistent untrusted
 snapshot and cannot mint evidence. It takes a shared root advisory lock, so a
 terminal publish cannot be misclassified as structural corruption midway
-through inspection. Token issuance remains crate-private and dormant until
-D3-B3-B3 rebinds it to typed parent state, the signed mutation, canonical
-stores, manifests, and authenticated local or destination peer identity.
+through inspection. Token issuance remains crate-private. D3-B3-B3 now
+recomputes and rebinds exact child Prepared evidence to the parent projection,
+while canonical-store, manifest, authenticated transport, and terminal
+authority remain separate fail-closed gates.
 
 The journal now also supports an append-only sequence-2 `Finalized` or
 `AbortedOld` terminal record without replacing the Prepared state. The two
@@ -496,15 +498,34 @@ substitution, and either signed/physical manifest mismatch fail before the
 callback. Seven focused tests cover those cases, both successful phases, and
 debug redaction.
 
+The D3-B3-B3 child-rebind foundation adds the restart half of this boundary.
+The storage-private typed parent authority projects exactly one authenticated
+owner's canonical `Hnsw, Result` requirement and parent-recorded Prepared pair.
+The projection is intentionally public only as an immutable cross-crate DTO and
+is not authority. Collection reopens the exact nonterminal child under its
+shared root lock, recomputes every Prepared digest from the full descriptor,
+and compares parent/lease, mutation/lease/fence, index order, epoch/root,
+writeback, and Prepared evidence before issuing a non-Clone crate-private
+callback binding tied to the real lock lifetime. The binding exposes no
+capability accessor, so a callback cannot clone either Prepared capability out
+of the lock window. HNSW-only, terminal, reordered, foreign-owner, and
+substituted parent/mutation/index evidence fails before the callback; a terminal
+writer also cannot publish during the callback.
+
 This slice is still dormant and has no production caller or terminal call.
-Before production activation, restart must reconstruct Prepared authority from
-typed parent and consensus evidence, classify all-old, all-new, partial-new, and
-third-state outcomes, and roll a partial-new pair forward without exposing a
-mixed terminal state. Every V2 writer must also use the same store locks and an
-fd-relative pinned collection namespace. A terminal bridge must consume the
-pair token directly, and D3-B3-B3 must bind its evidence to authenticated peer
-identity. No current production caller can mint store or terminal evidence from
-raw digest strings.
+Before production activation, restart must classify all-old, all-new,
+partial-new, and third-state outcomes in one nested HNSW -> result -> child
+shared-lock window, then roll a canonical partial-new prefix forward without
+exposing a mixed terminal state. The discarded child-first bridge is not used
+because it would invert the existing store-to-journal lock order. Every V2
+writer must also use the same store locks and an fd-relative pinned collection
+namespace. The classifier may expose only a non-authoritative disposition;
+roll-forward and terminal transitions must retain storage-private typed parent
+authority and revalidate all stores and the child under the same lock order.
+An authority-to-projection-to-real-child integration test must enforce that
+boundary. A terminal bridge must consume a reverified exact pair token directly
+and bind authenticated transport identity. No current production caller can
+mint store or terminal evidence from raw digest strings.
 
 The parent descriptor and current-state digest formats have known-answer
 tests. Journal files live below a private non-symlink directory, use bounded
@@ -518,8 +539,9 @@ Prepared child point artifact, and the paired owner journal can now prove a
 structurally and durably installed Prepared artifact to crate-private callers.
 It can also persist a terminal record once the future restart/terminal bridge
 consumes the live adapter's exact paired canonical-state authority. Parent owner
-prepare/finalize digests remain coordination evidence until D3-B3-B3 performs
-typed parent and authenticated peer binding through that bridge. Cleanup
+prepare/finalize digests remain coordination evidence: child Prepared rebinding
+does not turn them into terminal authority, and the future bridge must still
+retain typed parent state plus authenticated peer identity. Cleanup
 must durably remove mutable child/point artifacts, compact the parent into an
 immutable reconciliation witness, and clear the consensus mutation lease as
 the final authority release. The witness makes a crash before or after lease
@@ -540,9 +562,10 @@ D3-B3-A3 provides the atomic parent-owner recovery authority foundation,
 D3-B3-B1 provides the server-safe owner-prepare validation contract, and the
 D3-B3-B2 slices provide the paired durable owner journal, dormant terminal
 record primitive, module-private canonical StoreInspector, and dormant live
-paired StoreAdapter without external evidence wiring. None adds a dispatcher
-proposal method or public route. Exact child Prepared rebinding, the atomic
-four-state store classifier, the typed terminal adapter, owner RPC evidence,
+paired StoreAdapter without external evidence wiring. D3-B3-B3 adds the exact
+child Prepared rebind and storage-private canonical pair projection. None adds
+a dispatcher proposal method or public route. The atomic four-state store
+classifier, partial-new roll-forward, typed terminal adapter, owner RPC evidence,
 abort/finalize execution,
 reconciliation-witness cleanup, state-aware search and lifecycle admission,
 and public APIs remain D3-B3/D4 gates. Normal Qdrant upsert and update APIs
