@@ -2,6 +2,9 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::fmt::{self, Debug, Formatter};
 use std::io::{self, Read, Write};
+use std::marker::PhantomData;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
 
 use collection::operations::types::{CollectionError, CollectionResult};
@@ -538,6 +541,80 @@ impl PrivateOramValidatedOwnerRecoveryAuthorityV1 {
     }
 }
 
+/// Parent-tip authority that cannot outlive the held mutation-journal lock.
+///
+/// The consensus state and lease are an atomically captured, monotonic reconciliation snapshot;
+/// this value deliberately does not retain the consensus read guard across filesystem work.
+pub(super) struct PrivateOramLiveOwnerRecoveryAuthorityV1<'lock> {
+    authority: PrivateOramValidatedOwnerRecoveryAuthorityV1,
+    _parent_lock: PhantomData<&'lock PrivateOramMutationJournalLock>,
+}
+
+impl Debug for PrivateOramLiveOwnerRecoveryAuthorityV1<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramLiveOwnerRecoveryAuthorityV1")
+            .field("authority", &self.authority)
+            .field("parent_lock", &"[held]")
+            .finish()
+    }
+}
+
+impl<'lock> PrivateOramLiveOwnerRecoveryAuthorityV1<'lock> {
+    fn new(
+        authority: PrivateOramValidatedOwnerRecoveryAuthorityV1,
+        _parent_lock: &'lock PrivateOramMutationJournalLock,
+    ) -> Self {
+        Self {
+            authority,
+            _parent_lock: PhantomData,
+        }
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "D3-B3 restart owner authority is consumed by the dormant mutating recovery bridge"
+)]
+impl PrivateOramLiveOwnerRecoveryAuthorityV1<'_> {
+    pub(super) const fn owner_peer_id(&self) -> PeerId {
+        self.authority.owner_peer_id()
+    }
+
+    pub(super) const fn disposition(&self) -> PrivateOramMutationReconcileDispositionV1 {
+        self.authority.disposition()
+    }
+
+    pub(super) fn parent_descriptor_digest(&self) -> &str {
+        self.authority.parent_descriptor_digest()
+    }
+
+    pub(super) fn parent_lease_acquired_record_digest(&self) -> &str {
+        self.authority.parent_lease_acquired_record_digest()
+    }
+
+    pub(super) fn parent_owners_prepared_record_digest(&self) -> &str {
+        self.authority.parent_owners_prepared_record_digest()
+    }
+
+    pub(super) fn consensus_authority_record_digest(&self) -> &str {
+        self.authority.consensus_authority_record_digest()
+    }
+
+    pub(super) fn reconciliation_authority_digest(&self) -> &str {
+        self.authority.reconciliation_authority_digest()
+    }
+
+    pub(super) fn mutation_bundle(&self) -> &PrivateOramAppendMutationBundleV1 {
+        self.authority.mutation_bundle()
+    }
+
+    pub(super) fn pair_recovery_projection(
+        &self,
+    ) -> Result<PrivateOramOwnerRecoveryProjectionV1, PrivateOramMutationJournalError> {
+        self.authority.pair_recovery_projection()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PrivateOramValidatedPointStageParentPhaseV1 {
     OwnersPrepared,
@@ -725,53 +802,7 @@ impl PrivateOramMutationJournal {
         let snapshot = self
             .load()?
             .ok_or(PrivateOramMutationJournalError::Corrupt)?;
-        let active_lease = validate_reconcile_lease_slot(&snapshot.descriptor, lease_slot)?;
-        let expected_new = expected_consensus_new_state(&snapshot.descriptor)?;
-        let disposition = if consensus_state == &snapshot.descriptor.expected_consensus_old_state {
-            if snapshot.state.phase.sequence()
-                > PrivateOramMutationJournalPhaseV1::PointStageDurable.sequence()
-            {
-                return Err(PrivateOramMutationJournalError::InvalidTransition);
-            }
-            match &active_lease.phase {
-                PrivateOramMutationLeasePhase::Preparing => {
-                    PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision
-                }
-                PrivateOramMutationLeasePhase::AbortDecided => {
-                    PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided
-                }
-                PrivateOramMutationLeasePhase::ConsensusCommitted { .. } => {
-                    return Err(PrivateOramMutationJournalError::InvalidTransition);
-                }
-            }
-        } else if consensus_state == &expected_new {
-            if snapshot.state.phase.sequence()
-                < PrivateOramMutationJournalPhaseV1::PointStageDurable.sequence()
-            {
-                return Err(PrivateOramMutationJournalError::InvalidTransition);
-            }
-            let derived =
-                derive_consensus_evidence(&snapshot.descriptor, &active_lease, consensus_state)?;
-            if snapshot.state.consensus.as_ref().is_some_and(|recorded| {
-                recorded.committed_record_digest != derived.committed_record_digest
-                    || recorded.committed_state_sequence != derived.committed_state_sequence
-                    || recorded.committed_signed_state_digest
-                        != derived.committed_signed_state_digest
-                    || recorded.receipt_digest != derived.receipt_digest
-                    || recorded.transition_digest != derived.transition_digest
-                    || recorded.lease_renewal_revision > derived.lease_renewal_revision
-            }) {
-                return Err(PrivateOramMutationJournalError::InvalidTransition);
-            }
-            PrivateOramMutationReconcileDispositionV1::ExactNew
-        } else {
-            return Err(PrivateOramMutationJournalError::InvalidTransition);
-        };
-        Ok(PrivateOramValidatedMutationReconcileContextV1 {
-            snapshot,
-            active_lease,
-            disposition,
-        })
+        validated_reconcile_context_for_snapshot(snapshot, consensus_state, lease_slot)
     }
 
     #[allow(
@@ -800,6 +831,41 @@ impl PrivateOramMutationJournal {
     ) -> Result<PrivateOramValidatedOwnerRecoveryAuthorityV1, PrivateOramMutationJournalError> {
         let context = self.validated_reconcile_snapshot(reconcile_snapshot)?;
         build_owner_recovery_authority(&context, authenticated_owner_peer_id)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "D3-B3 mutating recovery bridge is wired after writer-wide store locking"
+    )]
+    pub(super) fn with_live_owner_recovery_authority_v1<R>(
+        &self,
+        reconcile_snapshot: &PrivateOramMutationReconcileSnapshotV1,
+        authenticated_owner_peer_id: PeerId,
+        action: impl for<'lock> FnOnce(&PrivateOramLiveOwnerRecoveryAuthorityV1<'lock>) -> R,
+    ) -> Result<R, PrivateOramMutationJournalError> {
+        validate_private_directory(&self.root)?;
+        validate_private_directory(&self.temp_path())?;
+        let parent_lock = self.acquire_lock()?;
+        let snapshot = self.load_pinned_locked(&parent_lock)?;
+        let context = validated_reconcile_context_for_snapshot(
+            snapshot,
+            reconcile_snapshot.consensus_state(),
+            reconcile_snapshot.lease_slot(),
+        )?;
+        let expected_parent = context.snapshot.clone();
+        let live = PrivateOramLiveOwnerRecoveryAuthorityV1::new(
+            build_owner_recovery_authority(&context, authenticated_owner_peer_id)?,
+            &parent_lock,
+        );
+        let output = action(&live);
+        drop(live);
+        let revalidated_parent = self.load_pinned_locked(&parent_lock)?;
+        if revalidated_parent != expected_parent {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+        parent_lock.validate_root_identity()?;
+        drop(parent_lock);
+        Ok(output)
     }
 
     pub fn mark_owners_prepared(
@@ -1141,13 +1207,29 @@ impl PrivateOramMutationJournal {
     fn load_locked(
         &self,
     ) -> Result<PrivateOramMutationJournalSnapshotV1, PrivateOramMutationJournalError> {
-        validate_private_directory(&self.active_path())?;
-        validate_private_directory(&self.active_temp_path())?;
+        self.load_locked_at_root(&self.root)
+    }
+
+    fn load_pinned_locked(
+        &self,
+        lock: &PrivateOramMutationJournalLock,
+    ) -> Result<PrivateOramMutationJournalSnapshotV1, PrivateOramMutationJournalError> {
+        self.load_locked_at_root(&lock.pinned_root_path())
+    }
+
+    fn load_locked_at_root(
+        &self,
+        root: &Path,
+    ) -> Result<PrivateOramMutationJournalSnapshotV1, PrivateOramMutationJournalError> {
+        let active = root.join(ACTIVE_DIR);
+        let active_temp = active.join(ACTIVE_TEMP_DIR);
+        validate_private_directory(&active)?;
+        validate_private_directory(&active_temp)?;
         let descriptor: PrivateOramMutationJournalDescriptorV1 =
-            read_json_private(&self.descriptor_path(), MAX_DESCRIPTOR_BYTES)?;
+            read_json_private(&active.join(DESCRIPTOR_FILE), MAX_DESCRIPTOR_BYTES)?;
         validate_descriptor(&descriptor, self.signature_verification())?;
         let state: PrivateOramMutationJournalStateV1 =
-            read_json_private(&self.state_path(), MAX_STATE_BYTES)?;
+            read_json_private(&active.join(STATE_FILE), MAX_STATE_BYTES)?;
         validate_state(&descriptor, &state)?;
         Ok(PrivateOramMutationJournalSnapshotV1 { descriptor, state })
     }
@@ -1176,7 +1258,8 @@ impl PrivateOramMutationJournal {
     fn acquire_lock(
         &self,
     ) -> Result<PrivateOramMutationJournalLock, PrivateOramMutationJournalError> {
-        let path = self.root.join(LOCK_FILE);
+        let root = open_pinned_private_directory(&self.root)?;
+        let path = pinned_directory_entry_path(&root, &self.root, LOCK_FILE)?;
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true);
         secure_open_options(&mut options, true);
@@ -1200,8 +1283,13 @@ impl PrivateOramMutationJournal {
         validate_private_file_metadata(&current, 0)?;
         file.sync_all()
             .map_err(PrivateOramMutationJournalError::Io)?;
-        sync_directory(&self.root)?;
-        Ok(PrivateOramMutationJournalLock { _file: file })
+        root.validate_at_path(&self.root)?;
+        sync_directory(&root.pinned_path(&self.root))?;
+        Ok(PrivateOramMutationJournalLock {
+            _file: file,
+            root,
+            root_path: self.root.clone(),
+        })
     }
 
     fn active_path(&self) -> PathBuf {
@@ -1216,17 +1304,107 @@ impl PrivateOramMutationJournal {
         self.active_path().join(ACTIVE_TEMP_DIR)
     }
 
-    fn descriptor_path(&self) -> PathBuf {
-        self.active_path().join(DESCRIPTOR_FILE)
-    }
-
     fn state_path(&self) -> PathBuf {
         self.active_path().join(STATE_FILE)
     }
 }
 
+struct PinnedPrivateDirectory {
+    directory: File,
+}
+
+impl PinnedPrivateDirectory {
+    fn pinned_path(&self, fallback: &Path) -> PathBuf {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = fallback;
+            PathBuf::from("/proc/self/fd").join(self.directory.file().as_raw_fd().to_string())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            fallback.to_path_buf()
+        }
+    }
+
+    fn validate_at_path(&self, path: &Path) -> Result<(), PrivateOramMutationJournalError> {
+        let opened = self
+            .directory
+            .metadata()
+            .map_err(PrivateOramMutationJournalError::Io)?;
+        validate_private_directory_metadata(&opened)?;
+        let current = fs::symlink_metadata(path).map_err(PrivateOramMutationJournalError::Io)?;
+        validate_private_directory_metadata(&current)?;
+        ensure_same_directory(&opened, &current)
+    }
+}
+
+fn open_pinned_private_directory(
+    path: &Path,
+) -> Result<PinnedPrivateDirectory, PrivateOramMutationJournalError> {
+    let before = fs::symlink_metadata(path).map_err(PrivateOramMutationJournalError::Io)?;
+    validate_private_directory_metadata(&before)?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "linux")]
+    {
+        use fs_err::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW | nix::libc::O_DIRECTORY);
+    }
+    let directory = options
+        .open(path)
+        .map_err(PrivateOramMutationJournalError::Io)?;
+    let opened = directory
+        .metadata()
+        .map_err(PrivateOramMutationJournalError::Io)?;
+    validate_private_directory_metadata(&opened)?;
+    ensure_same_directory(&before, &opened)?;
+    let pinned = PinnedPrivateDirectory { directory };
+    pinned.validate_at_path(path)?;
+    Ok(pinned)
+}
+
+fn pinned_directory_entry_path(
+    directory: &PinnedPrivateDirectory,
+    fallback_root: &Path,
+    name: &str,
+) -> Result<PathBuf, PrivateOramMutationJournalError> {
+    if name.is_empty() || Path::new(name).components().count() != 1 || matches!(name, "." | "..") {
+        return Err(PrivateOramMutationJournalError::Corrupt);
+    }
+    Ok(directory.pinned_path(fallback_root).join(name))
+}
+
+fn ensure_same_directory(
+    before: &std::fs::Metadata,
+    after: &std::fs::Metadata,
+) -> Result<(), PrivateOramMutationJournalError> {
+    if !before.file_type().is_dir() || !after.file_type().is_dir() {
+        return Err(PrivateOramMutationJournalError::Corrupt);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if before.dev() != after.dev() || before.ino() != after.ino() {
+            return Err(PrivateOramMutationJournalError::Corrupt);
+        }
+    }
+    Ok(())
+}
+
 struct PrivateOramMutationJournalLock {
     _file: File,
+    root: PinnedPrivateDirectory,
+    root_path: PathBuf,
+}
+
+impl PrivateOramMutationJournalLock {
+    fn pinned_root_path(&self) -> PathBuf {
+        self.root.pinned_path(&self.root_path)
+    }
+
+    fn validate_root_identity(&self) -> Result<(), PrivateOramMutationJournalError> {
+        self.root.validate_at_path(&self.root_path)
+    }
 }
 
 fn validate_preparing_lease(
@@ -1778,6 +1956,59 @@ fn owner_recovery_authority_digest(
         hash_digest(&mut hasher, &index.prepared.prepared_journal_digest)?;
     }
     Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
+}
+
+fn validated_reconcile_context_for_snapshot(
+    snapshot: PrivateOramMutationJournalSnapshotV1,
+    consensus_state: &PrivateOramConsensusCollectionStateV2,
+    lease_slot: &PrivateOramMutationLeaseSlotV2,
+) -> Result<PrivateOramValidatedMutationReconcileContextV1, PrivateOramMutationJournalError> {
+    let active_lease = validate_reconcile_lease_slot(&snapshot.descriptor, lease_slot)?;
+    let expected_new = expected_consensus_new_state(&snapshot.descriptor)?;
+    let disposition = if consensus_state == &snapshot.descriptor.expected_consensus_old_state {
+        if snapshot.state.phase.sequence()
+            > PrivateOramMutationJournalPhaseV1::PointStageDurable.sequence()
+        {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+        match &active_lease.phase {
+            PrivateOramMutationLeasePhase::Preparing => {
+                PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision
+            }
+            PrivateOramMutationLeasePhase::AbortDecided => {
+                PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided
+            }
+            PrivateOramMutationLeasePhase::ConsensusCommitted { .. } => {
+                return Err(PrivateOramMutationJournalError::InvalidTransition);
+            }
+        }
+    } else if consensus_state == &expected_new {
+        if snapshot.state.phase.sequence()
+            < PrivateOramMutationJournalPhaseV1::PointStageDurable.sequence()
+        {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+        let derived =
+            derive_consensus_evidence(&snapshot.descriptor, &active_lease, consensus_state)?;
+        if snapshot.state.consensus.as_ref().is_some_and(|recorded| {
+            recorded.committed_record_digest != derived.committed_record_digest
+                || recorded.committed_state_sequence != derived.committed_state_sequence
+                || recorded.committed_signed_state_digest != derived.committed_signed_state_digest
+                || recorded.receipt_digest != derived.receipt_digest
+                || recorded.transition_digest != derived.transition_digest
+                || recorded.lease_renewal_revision > derived.lease_renewal_revision
+        }) {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+        PrivateOramMutationReconcileDispositionV1::ExactNew
+    } else {
+        return Err(PrivateOramMutationJournalError::InvalidTransition);
+    };
+    Ok(PrivateOramValidatedMutationReconcileContextV1 {
+        snapshot,
+        active_lease,
+        disposition,
+    })
 }
 
 pub(super) fn private_oram_point_id_digest(
@@ -2453,6 +2684,12 @@ pub(super) fn validate_private_directory(
     path: &Path,
 ) -> Result<(), PrivateOramMutationJournalError> {
     let metadata = fs::symlink_metadata(path).map_err(PrivateOramMutationJournalError::Io)?;
+    validate_private_directory_metadata(&metadata)
+}
+
+fn validate_private_directory_metadata(
+    metadata: &std::fs::Metadata,
+) -> Result<(), PrivateOramMutationJournalError> {
     if !metadata.file_type().is_dir() {
         return Err(PrivateOramMutationJournalError::Corrupt);
     }
@@ -3487,6 +3724,69 @@ mod tests {
             authority.reconciliation_authority_digest(),
             "fSOEGuuAWS9SgVu_oDuC1fcBIaZ-OXguisfs6bnnVAY"
         );
+    }
+
+    #[test]
+    fn live_owner_recovery_authority_holds_and_revalidates_parent_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(47, 200);
+        let journal = journal(&temp, &fixture);
+        let initial = begin(&journal, &fixture, &[11, 12]);
+        journal
+            .mark_owners_prepared(owner_prepares(&initial))
+            .unwrap();
+        mark_no_server_point_stage(&journal);
+        let reconcile = reconcile_snapshot(&fixture.new_consensus, fixture.committed_lease.clone());
+
+        let authority_digest = journal
+            .with_live_owner_recovery_authority_v1(&reconcile, 12, |live| {
+                assert_eq!(live.owner_peer_id(), 12);
+                assert_eq!(
+                    live.disposition(),
+                    PrivateOramMutationReconcileDispositionV1::ExactNew
+                );
+                assert_eq!(
+                    live.parent_descriptor_digest(),
+                    initial.descriptor.descriptor_digest
+                );
+                assert_eq!(live.mutation_bundle(), &fixture.mutation_bundle);
+
+                let second = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(journal.root.join(LOCK_FILE))
+                    .unwrap();
+                assert!(!FileExt::try_lock_exclusive(second.file()).unwrap());
+
+                let rendered = format!("{live:?}");
+                assert!(!rendered.contains(&fixture.mutation_bundle.mutation.collection_id));
+                assert!(!rendered.contains(live.reconciliation_authority_digest()));
+                live.reconciliation_authority_digest().to_string()
+            })
+            .unwrap();
+        assert_eq!(authority_digest.len(), 43);
+
+        let original_state = fs::read(journal.state_path()).unwrap();
+        let error = journal
+            .with_live_owner_recovery_authority_v1(&reconcile, 12, |_| {
+                fs::write(journal.state_path(), b"{\"tampered\":true}").unwrap();
+            })
+            .unwrap_err();
+        assert!(matches!(error, PrivateOramMutationJournalError::Corrupt));
+        fs::write(journal.state_path(), original_state).unwrap();
+
+        let displaced_root = temp.path().join("displaced-parent-journal");
+        let error = journal
+            .with_live_owner_recovery_authority_v1(&reconcile, 12, |_| {
+                fs::rename(&journal.root, &displaced_root).unwrap();
+                fs::create_dir(&journal.root).unwrap();
+                set_private_directory_permissions(&journal.root).unwrap();
+            })
+            .unwrap_err();
+        assert!(matches!(error, PrivateOramMutationJournalError::Corrupt));
+        fs::remove_dir(&journal.root).unwrap();
+        fs::rename(displaced_root, &journal.root).unwrap();
+        assert!(journal.load().unwrap().is_some());
     }
 
     #[test]
