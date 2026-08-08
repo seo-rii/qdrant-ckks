@@ -1297,9 +1297,9 @@ Signed fields:
 - 유지 조건(D3-B3-B2-StoreInspector): 이 token은 complete Merkle leaf state와
   mutation-affected bucket body의 canonical logical-state evidence이며 unrelated bucket body의
   availability proof는 아니다. Initial upload/restore가 전체 store를 검증하고 이후 모든 V2
-  writer가 full bucket/Merkle invariant를 보존한다는 귀납 조건이 필요하다. Live paired
-  adapter는 연결됐지만 writer-wide 동일 lock과 fd-relative pinned namespace가 완성될 때까지
-  production minting 경로를 열지 않는다.
+  writer가 full bucket/Merkle invariant를 보존한다는 귀납 조건이 필요하다. Writer-wide 동일
+  lock은 연결됐지만 child/store의 fd-relative pinned namespace가 완성될 때까지 production
+  minting 경로를 열지 않는다.
 - 완료(D3-B3-B2-StoreAdapter-LivePair): 진짜 durable Prepared token을 현재 journal의 exact
   Prepared snapshot에 다시 결합하고, immutable manifest, append mutation, old/new state의
   signature와 digest/identity/order를 재검증한 뒤 signed V2 immutable index를 physical V1
@@ -1331,12 +1331,25 @@ Signed fields:
   `ThirdState`이며 3x3 matrix, 양쪽 store의 네 종류 corrupt evidence, HNSW/result/child-lock
   contention과 error 뒤 lock release, debug redaction test를 추가했다. Store/child token과 lock
   guard는 facade 밖으로 나오지 않는다.
+- 완료(D3-B3-B3-WriterSerialization): HNSW/result canonical writer 전체를 각 owner-root
+  exclusive lock에 편입하고 public writer는 잠금 없는 private implementation만 호출하도록
+  정리했다. Common initial upload도 bucket별 재잠금 대신 전체 bucket set과 Merkle image를 한
+  owner lock에서 preflight하고 설치한다. Exact-old/new callback 뒤 root identity를 다시
+  검증하며, 동일 수준의 filesystem lock을 보장하지 못하는 non-Linux canonical writer는
+  mutation 전에 fail closed한다. StoreInspector와 writer가 이제 같은 lock discipline을
+  공유하지만 child/store 내부 파일 조작은 아직 pathname 기반이다.
+- 완료(D3-B3-B3-LiveParentFoundation): Storage parent journal root와 lock file을 directory
+  FD에 pin하고, consensus/lease snapshot과 parent descriptor/state를 callback 전후 exact
+  재검증하는 non-Clone live authority를 추가했다. Callback 중 parent root 교체는 pinned read와
+  pathname identity recheck로 거부한다. 이 callback은 아직 parent state를 변경하지 않으며,
+  active child directory와 terminal publication은 후속 fd-relative mutating transaction 범위다.
 - 남음(D3-B3-B3-AtomicRollForwardTerminal): 현재 classifier 원자성은 같은 owner store lock을
-  지키는 cooperative caller에 한정된다. 모든 V2 writer를 같은 lock과 fd-relative pinned
-  namespace에 편입하기 전에는 production activation이 금지된다. Owned parent recovery authority는
-  read-only observation에는 충분하지만 mutation authority가 아니므로, roll-forward/terminal은
-  parent live revalidation을 포함한 `parent -> HNSW -> result -> child exclusive` transaction을
-  별도로 사용해야 한다. Shared child lock의 lock upgrade나 반환된 disposition 재사용은 금지한다.
+  사용하는 writer와 직렬화되지만 child/store directory의 pathname ABA를 막지 못한다.
+  fd-relative pinned namespace와 child exclusive binding이 완성되기 전에는 production
+  activation이 금지된다. Owned parent recovery authority는 read-only observation에는 충분하지만
+  mutation authority가 아니므로, roll-forward/terminal은 parent live revalidation을 포함한
+  `parent -> HNSW -> result -> child exclusive` transaction을 별도로 사용해야 한다. Shared child
+  lock의 lock upgrade나 반환된 disposition 재사용은 금지한다.
   Partial-new는 fixed HNSW-prefix roll-forward 뒤 같은 transaction에서 `AllNew`를 재검증한
   경우에만 terminal evidence를 만들 수 있다. Authority -> projection -> real child -> real
   pair classifier cross-crate integration test도 activation 전에 추가한다.

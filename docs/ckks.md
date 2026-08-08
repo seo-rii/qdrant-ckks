@@ -531,11 +531,24 @@ commit, Merkle, and bucket corruption, HNSW/result/child-lock contention and
 error-path lock release, and debug redaction. No store token, child capability,
 or lock guard crosses the facade.
 
-This path remains dormant and has no production caller or terminal call. Its
-lock-window consistency currently applies only to cooperative users of the
-owner store locks; existing V2 canonical writers must all join those locks and
-the fd-relative pinned namespace before activation. The discarded child-first
-bridge is not used because it would invert the store-to-journal lock order.
+This path remains dormant and has no production caller or terminal call. Every
+HNSW and result canonical writer now serializes through its owner-root
+exclusive lock, including initial/live install, replica operations, recovery,
+abort, manifest, bucket, Merkle, and epoch publication. Common initial uploads
+preflight and install the complete bucket set and Merkle image in one owner-lock
+window instead of reacquiring it per bucket. Exact-state callbacks revalidate
+the root identity before returning. Platforms that cannot provide the required
+filesystem lock fail closed before a canonical write.
+
+The parent recovery journal also now pins its root directory and lock file by
+directory FD. A non-Clone live authority holds that parent lock while checking
+the exact consensus/lease snapshot and parent descriptor/state before and after
+its callback. Replacing the parent root during the callback is rejected. This
+foundation is read-only: the child/store directories and terminal writes are
+still pathname-based and are not yet safe against namespace replacement. They
+must move to fd-relative operations before activation. The discarded
+child-first bridge is not used because it would invert the store-to-journal
+lock order.
 The owned parent recovery value is sufficient for a non-authoritative read but
 not for mutation. Roll-forward and terminal publication require a separate
 live-parent transaction ordered parent -> HNSW -> result -> child exclusive.
@@ -583,10 +596,11 @@ D3-B3-B1 provides the server-safe owner-prepare validation contract, and the
 D3-B3-B2 slices provide the paired durable owner journal, dormant terminal
 record primitive, module-private canonical StoreInspector, and dormant live
 paired StoreAdapter without external evidence wiring. D3-B3-B3 adds the exact
-child Prepared rebind, storage-private canonical pair projection, and dormant
-read-only four-state classifier. None adds a dispatcher proposal method or
-public route. Writer-wide locking, live parent mutation authority, partial-new
-roll-forward, typed terminal adapter, owner RPC evidence, abort/finalize execution,
+child Prepared rebind, storage-private canonical pair projection, dormant
+read-only four-state classifier, writer-wide canonical-store serialization, and
+pinned read-only live-parent authority. None adds a dispatcher proposal method
+or public route. Fd-relative child/store mutation, live parent mutation authority,
+partial-new roll-forward, typed terminal adapter, owner RPC evidence, abort/finalize execution,
 reconciliation-witness cleanup, state-aware search and lifecycle admission,
 and public APIs remain D3-B3/D4 gates. Normal Qdrant upsert and update APIs
 remain rejected throughout.
