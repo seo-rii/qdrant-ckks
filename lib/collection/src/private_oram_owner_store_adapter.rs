@@ -29,6 +29,7 @@ use crate::private_hnsw_oram_store::{
     PrivateHnswOwnerStoreLockV1, PrivateHnswOwnerStoreObservationV1,
 };
 use crate::private_oram_owner_journal::{
+    PrivateOramDurableOwnerAbortedOldTokenV1, PrivateOramDurableOwnerFinalizedTokenV1,
     PrivateOramDurableOwnerPreparedTokenV1, PrivateOramOwnerFinalBucketBatchV1,
     PrivateOramOwnerJournal, PrivateOramOwnerJournalIndexDescriptorV1,
     PrivateOramOwnerJournalSnapshotV1, PrivateOramOwnerJournalTerminalIndexStateV1,
@@ -297,13 +298,125 @@ impl PrivateOramOwnerRecoveryParentBridgeV1 {
     }
 }
 
+/// One terminalized index projected from the child token after parent root/tip revalidation.
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerRecoveryTerminalIndexEvidenceV1 {
+    kind: PrivateOramIndexKindV2,
+    index_name: String,
+    prepared_journal_digest: String,
+    terminal_state_digest: String,
+}
+
+impl Debug for PrivateOramOwnerRecoveryTerminalIndexEvidenceV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerRecoveryTerminalIndexEvidenceV1")
+            .field("kind", &self.kind)
+            .field("index_name", &"[redacted]")
+            .field("prepared_journal_digest", &"[redacted]")
+            .field("terminal_state_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerRecoveryTerminalIndexEvidenceV1 {
+    pub const fn kind(&self) -> PrivateOramIndexKindV2 {
+        self.kind
+    }
+
+    pub fn index_name(&self) -> &str {
+        &self.index_name
+    }
+
+    pub fn prepared_journal_digest(&self) -> &str {
+        &self.prepared_journal_digest
+    }
+
+    pub fn terminal_state_digest(&self) -> &str {
+        &self.terminal_state_digest
+    }
+}
+
+/// Opaque durable evidence retained from an exact finalized or aborted-old child pair.
+#[doc(hidden)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PrivateOramOwnerRecoveryTerminalEvidenceV1 {
+    owner_peer_id: u64,
+    journal_descriptor_digest: String,
+    prepared_state_digest: String,
+    terminal_record_digest: String,
+    parent_descriptor_digest: String,
+    consensus_authority_record_digest: String,
+    reconciliation_authority_digest: String,
+    indexes: Vec<PrivateOramOwnerRecoveryTerminalIndexEvidenceV1>,
+}
+
+impl Debug for PrivateOramOwnerRecoveryTerminalEvidenceV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerRecoveryTerminalEvidenceV1")
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("journal_descriptor_digest", &"[redacted]")
+            .field("prepared_state_digest", &"[redacted]")
+            .field("terminal_record_digest", &"[redacted]")
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field("consensus_authority_record_digest", &"[redacted]")
+            .field("reconciliation_authority_digest", &"[redacted]")
+            .field("index_count", &self.indexes.len())
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerRecoveryTerminalEvidenceV1 {
+    pub const fn owner_peer_id(&self) -> u64 {
+        self.owner_peer_id
+    }
+
+    pub fn journal_descriptor_digest(&self) -> &str {
+        &self.journal_descriptor_digest
+    }
+
+    pub fn prepared_state_digest(&self) -> &str {
+        &self.prepared_state_digest
+    }
+
+    pub fn terminal_record_digest(&self) -> &str {
+        &self.terminal_record_digest
+    }
+
+    pub fn parent_descriptor_digest(&self) -> &str {
+        &self.parent_descriptor_digest
+    }
+
+    pub fn consensus_authority_record_digest(&self) -> &str {
+        &self.consensus_authority_record_digest
+    }
+
+    pub fn reconciliation_authority_digest(&self) -> &str {
+        &self.reconciliation_authority_digest
+    }
+
+    pub fn indexes(&self) -> &[PrivateOramOwnerRecoveryTerminalIndexEvidenceV1] {
+        &self.indexes
+    }
+}
+
 /// Durable child outcome. Storage exposes it only after revalidating the parent journal root/tip.
 #[doc(hidden)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum PrivateOramOwnerRecoveryPairOutcomeV1 {
     ObservedOld,
-    AbortedOld,
-    Finalized,
+    AbortedOld(PrivateOramOwnerRecoveryTerminalEvidenceV1),
+    Finalized(PrivateOramOwnerRecoveryTerminalEvidenceV1),
+}
+
+impl Debug for PrivateOramOwnerRecoveryPairOutcomeV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ObservedOld => f.write_str("ObservedOld"),
+            Self::AbortedOld(_) => f.write_str("AbortedOld([redacted])"),
+            Self::Finalized(_) => f.write_str("Finalized([redacted])"),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -704,12 +817,60 @@ fn recovery_pair_outcome(
         PrivateOramOwnerRecoveryExclusiveOutcomeV1::NoTerminal => {
             PrivateOramOwnerRecoveryPairOutcomeV1::ObservedOld
         }
-        PrivateOramOwnerRecoveryExclusiveOutcomeV1::Finalized(_) => {
-            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized
+        PrivateOramOwnerRecoveryExclusiveOutcomeV1::Finalized(token) => {
+            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized(finalized_terminal_evidence(&token))
         }
-        PrivateOramOwnerRecoveryExclusiveOutcomeV1::AbortedOld(_) => {
-            PrivateOramOwnerRecoveryPairOutcomeV1::AbortedOld
+        PrivateOramOwnerRecoveryExclusiveOutcomeV1::AbortedOld(token) => {
+            PrivateOramOwnerRecoveryPairOutcomeV1::AbortedOld(aborted_terminal_evidence(&token))
         }
+    }
+}
+
+fn finalized_terminal_evidence(
+    token: &PrivateOramDurableOwnerFinalizedTokenV1,
+) -> PrivateOramOwnerRecoveryTerminalEvidenceV1 {
+    PrivateOramOwnerRecoveryTerminalEvidenceV1 {
+        owner_peer_id: token.owner_peer_id(),
+        journal_descriptor_digest: token.journal_descriptor_digest().to_string(),
+        prepared_state_digest: token.prepared_state_digest().to_string(),
+        terminal_record_digest: token.terminal_record_digest().to_string(),
+        parent_descriptor_digest: token.parent_descriptor_digest().to_string(),
+        consensus_authority_record_digest: token.consensus_authority_record_digest().to_string(),
+        reconciliation_authority_digest: token.reconciliation_authority_digest().to_string(),
+        indexes: token
+            .indexes()
+            .iter()
+            .map(|index| PrivateOramOwnerRecoveryTerminalIndexEvidenceV1 {
+                kind: index.kind(),
+                index_name: index.index_name().to_string(),
+                prepared_journal_digest: index.prepared_journal_digest().to_string(),
+                terminal_state_digest: index.finalized_state_digest().to_string(),
+            })
+            .collect(),
+    }
+}
+
+fn aborted_terminal_evidence(
+    token: &PrivateOramDurableOwnerAbortedOldTokenV1,
+) -> PrivateOramOwnerRecoveryTerminalEvidenceV1 {
+    PrivateOramOwnerRecoveryTerminalEvidenceV1 {
+        owner_peer_id: token.owner_peer_id(),
+        journal_descriptor_digest: token.journal_descriptor_digest().to_string(),
+        prepared_state_digest: token.prepared_state_digest().to_string(),
+        terminal_record_digest: token.terminal_record_digest().to_string(),
+        parent_descriptor_digest: token.parent_descriptor_digest().to_string(),
+        consensus_authority_record_digest: token.consensus_authority_record_digest().to_string(),
+        reconciliation_authority_digest: token.reconciliation_authority_digest().to_string(),
+        indexes: token
+            .indexes()
+            .iter()
+            .map(|index| PrivateOramOwnerRecoveryTerminalIndexEvidenceV1 {
+                kind: index.kind(),
+                index_name: index.index_name().to_string(),
+                prepared_journal_digest: index.prepared_journal_digest().to_string(),
+                terminal_state_digest: index.aborted_old_state_digest().to_string(),
+            })
+            .collect(),
     }
 }
 
@@ -2001,6 +2162,24 @@ mod tests {
         )
     }
 
+    fn finalized_evidence(
+        outcome: PrivateOramOwnerRecoveryPairOutcomeV1,
+    ) -> PrivateOramOwnerRecoveryTerminalEvidenceV1 {
+        match outcome {
+            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized(evidence) => evidence,
+            _ => panic!("expected finalized private ORAM owner recovery"),
+        }
+    }
+
+    fn aborted_evidence(
+        outcome: PrivateOramOwnerRecoveryPairOutcomeV1,
+    ) -> PrivateOramOwnerRecoveryTerminalEvidenceV1 {
+        match outcome {
+            PrivateOramOwnerRecoveryPairOutcomeV1::AbortedOld(evidence) => evidence,
+            _ => panic!("expected aborted-old private ORAM owner recovery"),
+        }
+    }
+
     fn write_historical_hnsw_commit(fixture: &PairFixture, epoch: u64) {
         #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt as _;
@@ -2670,14 +2849,20 @@ mod tests {
     #[test]
     fn paired_recovery_rolls_forward_both_stores_and_replays_finalized() {
         let fixture = pair_fixture();
-        assert_eq!(
+        let evidence = finalized_evidence(
             recover_pair(
                 &fixture,
                 PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
             )
             .unwrap(),
-            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized
         );
+        assert_eq!(evidence.owner_peer_id(), 7);
+        assert_eq!(evidence.parent_descriptor_digest(), digest(61));
+        assert_eq!(evidence.consensus_authority_record_digest(), digest(64));
+        assert_eq!(evidence.reconciliation_authority_digest(), digest(65));
+        assert_eq!(evidence.indexes().len(), 2);
+        assert_eq!(evidence.indexes()[0].kind(), PrivateOramIndexKindV2::Hnsw);
+        assert_eq!(evidence.indexes()[1].kind(), PrivateOramIndexKindV2::Result);
         let new = &fixture.mutation_bundle.mutation.new_state.state.indexes;
         let hnsw = fixture.hnsw_store.read_current_epoch().unwrap();
         let result = fixture.result_store.read_current_epoch().unwrap();
@@ -2701,26 +2886,25 @@ mod tests {
             PrivateOramOwnerJournalPhaseV1::Finalized
         );
 
-        assert_eq!(
+        let replay = finalized_evidence(
             recover_pair(
                 &fixture,
                 PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
             )
             .unwrap(),
-            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized
         );
+        assert_eq!(replay, evidence);
     }
 
     #[test]
     fn paired_finalized_replay_rejects_historical_commit_replacement() {
         let fixture = pair_fixture();
-        assert_eq!(
+        let _ = finalized_evidence(
             recover_pair(
                 &fixture,
                 PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
             )
             .unwrap(),
-            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized
         );
         let terminal_before = fixture
             .owner_journal
@@ -2755,13 +2939,12 @@ mod tests {
         let fixture = pair_fixture();
         set_hnsw_recovery_state(&fixture, RecoveryFixtureStoreState::New);
 
-        assert_eq!(
+        let _ = finalized_evidence(
             recover_pair(
                 &fixture,
                 PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
             )
             .unwrap(),
-            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized
         );
         let new = &fixture.mutation_bundle.mutation.new_state.state.indexes;
         let result = fixture.result_store.read_current_epoch().unwrap();
@@ -2821,14 +3004,15 @@ mod tests {
         );
 
         for _ in 0..2 {
-            assert_eq!(
+            let evidence = aborted_evidence(
                 recover_pair(
                     &fixture,
                     PrivateOramOwnerRecoveryParentDispositionV1::ExactOldAbortDecided,
                 )
                 .unwrap(),
-                PrivateOramOwnerRecoveryPairOutcomeV1::AbortedOld
             );
+            assert_eq!(evidence.owner_peer_id(), 7);
+            assert_eq!(evidence.indexes().len(), 2);
         }
         assert_eq!(
             fixture

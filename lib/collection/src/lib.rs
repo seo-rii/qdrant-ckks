@@ -33,6 +33,7 @@ pub use private_oram_owner_store_adapter::{
     PrivateOramOwnerRecoveryParentBridgeV1, PrivateOramOwnerRecoveryParentDispositionV1,
     PrivateOramOwnerRecoveryParentInputV1, PrivateOramOwnerRecoveryParentVerifierV1,
     PrivateOramOwnerRecoveryStoreDispositionV1, PrivateOramOwnerRecoveryStorePairResourcesV1,
+    PrivateOramOwnerRecoveryTerminalEvidenceV1, PrivateOramOwnerRecoveryTerminalIndexEvidenceV1,
     classify_private_oram_owner_recovery_store_pair_v1,
     new_private_oram_owner_recovery_parent_bridge_v1, recover_private_oram_owner_store_pair_v1,
 };

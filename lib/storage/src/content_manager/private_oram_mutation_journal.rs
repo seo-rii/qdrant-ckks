@@ -16,7 +16,7 @@ use collection::{
     PrivateOramOwnerRecoveryPairOutcomeV1, PrivateOramOwnerRecoveryParentBridgeV1,
     PrivateOramOwnerRecoveryParentDispositionV1, PrivateOramOwnerRecoveryParentInputV1,
     PrivateOramOwnerRecoveryParentVerifierV1, PrivateOramOwnerRecoveryStoreDispositionV1,
-    PrivateOramOwnerRecoveryStorePairResourcesV1,
+    PrivateOramOwnerRecoveryStorePairResourcesV1, PrivateOramOwnerRecoveryTerminalEvidenceV1,
     classify_private_oram_owner_recovery_store_pair_v1,
     new_private_oram_owner_recovery_parent_bridge_v1, recover_private_oram_owner_store_pair_v1,
 };
@@ -555,6 +555,63 @@ pub(super) struct PrivateOramLiveOwnerRecoveryAuthorityV1<'lock> {
     parent_verifier: &'lock PrivateOramOwnerRecoveryParentVerifierV1,
 }
 
+#[allow(
+    dead_code,
+    reason = "D3-C consumes validated owner terminal evidence after paired recovery"
+)]
+pub(super) enum PrivateOramValidatedOwnerRecoveryOutcomeV1 {
+    ObservedOld,
+    Finalized {
+        terminal: PrivateOramOwnerRecoveryTerminalEvidenceV1,
+        owner_finalizations: Vec<PrivateOramMutationOwnerFinalizeEvidenceV1>,
+    },
+    AbortedOld {
+        terminal: PrivateOramOwnerRecoveryTerminalEvidenceV1,
+    },
+}
+
+impl Debug for PrivateOramValidatedOwnerRecoveryOutcomeV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ObservedOld => f.write_str("ObservedOld"),
+            Self::Finalized {
+                owner_finalizations,
+                ..
+            } => f
+                .debug_struct("Finalized")
+                .field("owner_finalization_count", &owner_finalizations.len())
+                .field("terminal", &"[redacted]")
+                .finish(),
+            Self::AbortedOld { .. } => f.write_str("AbortedOld([redacted])"),
+        }
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "D3-C consumes validated owner terminal evidence after paired recovery"
+)]
+impl PrivateOramValidatedOwnerRecoveryOutcomeV1 {
+    pub(super) fn owner_finalizations(
+        &self,
+    ) -> Option<&[PrivateOramMutationOwnerFinalizeEvidenceV1]> {
+        match self {
+            Self::Finalized {
+                owner_finalizations,
+                ..
+            } => Some(owner_finalizations),
+            Self::ObservedOld | Self::AbortedOld { .. } => None,
+        }
+    }
+
+    pub(super) fn terminal(&self) -> Option<&PrivateOramOwnerRecoveryTerminalEvidenceV1> {
+        match self {
+            Self::ObservedOld => None,
+            Self::Finalized { terminal, .. } | Self::AbortedOld { terminal } => Some(terminal),
+        }
+    }
+}
+
 impl Debug for PrivateOramLiveOwnerRecoveryAuthorityV1<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateOramLiveOwnerRecoveryAuthorityV1")
@@ -620,7 +677,7 @@ impl PrivateOramLiveOwnerRecoveryAuthorityV1<'_> {
     fn recover_pair_v1(
         &self,
         resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
-    ) -> CollectionResult<PrivateOramOwnerRecoveryPairOutcomeV1> {
+    ) -> CollectionResult<PrivateOramValidatedOwnerRecoveryOutcomeV1> {
         let input = PrivateOramOwnerRecoveryParentInputV1 {
             projection: self.authority.pair_recovery_projection().map_err(|_| {
                 CollectionError::bad_request("private ORAM owner recovery authority is invalid")
@@ -662,8 +719,82 @@ impl PrivateOramLiveOwnerRecoveryAuthorityV1<'_> {
                         parent,
                         resources,
                     )
+                    .and_then(|outcome| self.bind_pair_outcome_v1(outcome))
                 })
         }
+    }
+
+    fn bind_pair_outcome_v1(
+        &self,
+        outcome: PrivateOramOwnerRecoveryPairOutcomeV1,
+    ) -> CollectionResult<PrivateOramValidatedOwnerRecoveryOutcomeV1> {
+        match (self.authority.disposition(), outcome) {
+            (
+                PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision,
+                PrivateOramOwnerRecoveryPairOutcomeV1::ObservedOld,
+            ) => Ok(PrivateOramValidatedOwnerRecoveryOutcomeV1::ObservedOld),
+            (
+                PrivateOramMutationReconcileDispositionV1::ExactNew,
+                PrivateOramOwnerRecoveryPairOutcomeV1::Finalized(terminal),
+            ) => {
+                self.validate_terminal_evidence_v1(&terminal)?;
+                let owner_finalizations = terminal
+                    .indexes()
+                    .iter()
+                    .map(|index| PrivateOramMutationOwnerFinalizeEvidenceV1 {
+                        peer_id: terminal.owner_peer_id(),
+                        kind: index.kind(),
+                        index_name: index.index_name().to_string(),
+                        prepared_journal_digest: index.prepared_journal_digest().to_string(),
+                        finalized_state_digest: index.terminal_state_digest().to_string(),
+                    })
+                    .collect();
+                Ok(PrivateOramValidatedOwnerRecoveryOutcomeV1::Finalized {
+                    terminal,
+                    owner_finalizations,
+                })
+            }
+            (
+                PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided,
+                PrivateOramOwnerRecoveryPairOutcomeV1::AbortedOld(terminal),
+            ) => {
+                self.validate_terminal_evidence_v1(&terminal)?;
+                Ok(PrivateOramValidatedOwnerRecoveryOutcomeV1::AbortedOld { terminal })
+            }
+            _ => Err(CollectionError::bad_request(
+                "private ORAM owner recovery outcome is invalid",
+            )),
+        }
+    }
+
+    fn validate_terminal_evidence_v1(
+        &self,
+        terminal: &PrivateOramOwnerRecoveryTerminalEvidenceV1,
+    ) -> CollectionResult<()> {
+        if terminal.owner_peer_id() != self.authority.owner_peer_id()
+            || terminal.parent_descriptor_digest() != self.authority.parent_descriptor_digest()
+            || terminal.consensus_authority_record_digest()
+                != self.authority.consensus_authority_record_digest()
+            || terminal.reconciliation_authority_digest()
+                != self.authority.reconciliation_authority_digest()
+            || terminal.indexes().len() != self.authority.indexes().len()
+        {
+            return Err(CollectionError::bad_request(
+                "private ORAM owner recovery outcome is invalid",
+            ));
+        }
+        for (terminal_index, expected) in terminal.indexes().iter().zip(self.authority.indexes()) {
+            if terminal_index.kind() != expected.requirement().kind
+                || terminal_index.index_name() != expected.requirement().index_name
+                || terminal_index.prepared_journal_digest()
+                    != expected.prepared().prepared_journal_digest
+            {
+                return Err(CollectionError::bad_request(
+                    "private ORAM owner recovery outcome is invalid",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -940,7 +1071,7 @@ impl PrivateOramMutationJournal {
         authenticated_owner_peer_id: PeerId,
         resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
     ) -> Result<
-        CollectionResult<PrivateOramOwnerRecoveryPairOutcomeV1>,
+        CollectionResult<PrivateOramValidatedOwnerRecoveryOutcomeV1>,
         PrivateOramMutationJournalError,
     > {
         let collection_path = resources
