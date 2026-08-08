@@ -164,7 +164,7 @@ impl Debug for PrivateOramPointStageSnapshotV1 {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct PrivateOramDurablePointStageTokenV1 {
     point_id: String,
     frame_sha256: String,

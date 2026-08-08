@@ -1284,6 +1284,62 @@ fn canonical_state_chain_v2(
     Ok(chain)
 }
 
+pub(super) fn initial_private_oram_mutation_state_v2(
+    descriptor: &PrivateOramMutationJournalDescriptorV1,
+) -> Result<PrivateOramMutationJournalStateV2, PrivateOramMutationJournalError> {
+    let mut state = PrivateOramMutationJournalStateV2 {
+        version: PRIVATE_ORAM_MUTATION_STATE_V2_VERSION,
+        sequence: PrivateOramMutationJournalPhaseV2::LeaseAcquired.sequence(),
+        phase: PrivateOramMutationJournalPhaseV2::LeaseAcquired,
+        origin: PrivateOramMutationStateOriginV2::FreshV2,
+        predecessor: PrivateOramMutationStatePredecessorV2::Genesis,
+        owner_prepares: Vec::new(),
+        point_stage: None,
+        decision: None,
+        remote_terminals: None,
+        local_terminals: None,
+        point_resolution: None,
+        record_digest: String::new(),
+    };
+    state.record_digest = state_record_digest_v2(&descriptor.descriptor_digest, &state)?;
+    validate_private_oram_mutation_state_v2_structure(descriptor, &state)?;
+    Ok(state)
+}
+
+pub(super) fn next_private_oram_mutation_state_v2(
+    descriptor: &PrivateOramMutationJournalDescriptorV1,
+    current: &PrivateOramMutationJournalStateV2,
+    phase: PrivateOramMutationJournalPhaseV2,
+    update: impl FnOnce(
+        &mut PrivateOramMutationJournalStateV2,
+    ) -> Result<(), PrivateOramMutationJournalError>,
+) -> Result<PrivateOramMutationJournalStateV2, PrivateOramMutationJournalError> {
+    validate_private_oram_mutation_state_v2_structure(descriptor, current)?;
+    if phase.sequence() != current.sequence + 1 {
+        return Err(PrivateOramMutationJournalError::InvalidTransition);
+    }
+    let mut next = current.clone();
+    next.sequence = phase.sequence();
+    next.phase = phase;
+    next.predecessor = PrivateOramMutationStatePredecessorV2::PreviousV2 {
+        sequence: current.sequence,
+        phase: current.phase,
+        record_digest: current.record_digest.clone(),
+    };
+    update(&mut next)?;
+    next.record_digest.clear();
+    next.record_digest = state_record_digest_v2(&descriptor.descriptor_digest, &next)?;
+    validate_private_oram_mutation_state_v2_structure(descriptor, &next)?;
+    Ok(next)
+}
+
+pub(super) fn canonical_private_oram_mutation_state_history_v2(
+    descriptor: &PrivateOramMutationJournalDescriptorV1,
+    source: &PrivateOramMutationJournalStateV2,
+) -> Result<Vec<PrivateOramMutationJournalStateV2>, PrivateOramMutationJournalError> {
+    canonical_state_chain_v2(descriptor, source)
+}
+
 #[cfg(test)]
 pub(super) fn canonical_private_oram_mutation_state_v2_for_test(
     descriptor: &PrivateOramMutationJournalDescriptorV1,

@@ -57,6 +57,12 @@ use super::private_oram_mutation_state_v2::{
 };
 use super::private_oram_point_staging::PrivateOramDurablePointStageTokenV1;
 
+#[allow(
+    dead_code,
+    reason = "D3-C2 V2 writer remains dormant until the recovery coordinator is activated"
+)]
+mod writer_v2;
+
 pub const PRIVATE_ORAM_MUTATION_JOURNAL_DIR: &str = "private_oram_mutations";
 pub const PRIVATE_ORAM_MUTATION_JOURNAL_VERSION: u16 = 1;
 
@@ -86,6 +92,8 @@ pub enum PrivateOramMutationJournalError {
     ConcurrentMutation,
     #[error("private ORAM mutation journal phase transition is invalid")]
     InvalidTransition,
+    #[error("private ORAM mutation journal has a legacy V1 state that requires explicit recovery")]
+    LegacyV1State,
     #[error("private ORAM mutation journal signature validation failed")]
     Signature(#[source] PrivateOramMutationError),
     #[error("private ORAM mutation journal I/O failed before publication")]
@@ -101,6 +109,7 @@ impl Debug for PrivateOramMutationJournalError {
             Self::Corrupt => f.write_str("Corrupt"),
             Self::ConcurrentMutation => f.write_str("ConcurrentMutation"),
             Self::InvalidTransition => f.write_str("InvalidTransition"),
+            Self::LegacyV1State => f.write_str("LegacyV1State"),
             Self::Signature(_) => f.write_str("Signature([redacted])"),
             Self::Io(_) => f.write_str("Io([redacted])"),
             Self::Indeterminate => f.write_str("Indeterminate"),
@@ -386,58 +395,120 @@ impl PrivateOramValidatedMutationReconcileContextV1 {
         self.disposition
     }
 
-    fn validated_decision_v2(
+    fn validated_decision_evidence_v2(
         &self,
-    ) -> Result<PrivateOramValidatedMutationDecisionV2, PrivateOramMutationJournalError> {
-        let descriptor = &self.snapshot.descriptor;
-        let evidence = match self.disposition {
-            PrivateOramMutationReconcileDispositionV1::ExactNew => {
-                let committed_state = expected_consensus_new_state(descriptor)?;
-                RawPrivateOramMutationDecisionEvidenceV2::ExactNew {
-                    consensus: derive_consensus_evidence(
-                        descriptor,
-                        &self.active_lease,
-                        &committed_state,
-                    )?,
-                    committed_lease: Box::new(self.active_lease.clone()),
-                }
-            }
-            PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided => {
-                let old = &descriptor.expected_consensus_old_state;
-                RawPrivateOramMutationDecisionEvidenceV2::ExactOldAbort {
-                    old_consensus_record_digest:
-                        canonical_private_oram_consensus_state_record_digest(old)
-                            .map_err(|_| PrivateOramMutationJournalError::InvalidTransition)?,
-                    old_consensus_state_sequence: old.state_sequence,
-                    old_consensus_signed_state_digest: old.signed_state_digest.clone(),
-                    abort_decided_lease: Box::new(self.active_lease.clone()),
-                }
-            }
-            PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision => {
-                return Err(PrivateOramMutationJournalError::InvalidTransition);
-            }
-        };
-        Ok(PrivateOramValidatedMutationDecisionV2 { evidence })
+    ) -> Result<RawPrivateOramMutationDecisionEvidenceV2, PrivateOramMutationJournalError> {
+        build_validated_mutation_decision_evidence_v2(
+            &self.snapshot.descriptor,
+            &self.active_lease,
+            self.disposition,
+        )
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "D3-C2 V2 writer remains dormant until the recovery coordinator is activated"
+)]
 pub(super) struct PrivateOramValidatedMutationDecisionV2 {
     evidence: RawPrivateOramMutationDecisionEvidenceV2,
+    expected_descriptor_digest: String,
+    expected_predecessor_record_digest: String,
 }
 
 impl Debug for PrivateOramValidatedMutationDecisionV2 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateOramValidatedMutationDecisionV2")
             .field("kind", &self.kind())
+            .field("expected_descriptor_digest", &"[redacted]")
+            .field("expected_predecessor_record_digest", &"[redacted]")
             .field("evidence", &"[redacted]")
             .finish()
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "D3-C2 V2 writer remains dormant until the recovery coordinator is activated"
+)]
 impl PrivateOramValidatedMutationDecisionV2 {
     pub(super) const fn kind(&self) -> ValidatedPrivateOramMutationDecisionKindV2 {
         self.evidence.kind()
     }
+}
+
+#[allow(
+    dead_code,
+    reason = "D3-C2 V2 writer remains dormant until the recovery coordinator is activated"
+)]
+pub(super) struct PrivateOramValidatedDecisionDurableV2 {
+    evidence: RawPrivateOramMutationDecisionEvidenceV2,
+    expected_descriptor_digest: String,
+    decision_record_digest: String,
+}
+
+impl Debug for PrivateOramValidatedDecisionDurableV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramValidatedDecisionDurableV2")
+            .field("kind", &self.evidence.kind())
+            .field("expected_descriptor_digest", &"[redacted]")
+            .field("decision_record_digest", &"[redacted]")
+            .field("evidence", &"[redacted]")
+            .finish()
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "D3-C2 V2 writer remains dormant until the recovery coordinator is activated"
+)]
+pub(super) struct PrivateOramValidatedRemotesTerminalV2 {
+    evidence: RawPrivateOramMutationDecisionEvidenceV2,
+    expected_descriptor_digest: String,
+    remotes_terminal_record_digest: String,
+}
+
+impl Debug for PrivateOramValidatedRemotesTerminalV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramValidatedRemotesTerminalV2")
+            .field("kind", &self.evidence.kind())
+            .field("expected_descriptor_digest", &"[redacted]")
+            .field("remotes_terminal_record_digest", &"[redacted]")
+            .field("evidence", &"[redacted]")
+            .finish()
+    }
+}
+
+fn build_validated_mutation_decision_evidence_v2(
+    descriptor: &PrivateOramMutationJournalDescriptorV1,
+    active_lease: &PrivateOramMutationLease,
+    disposition: PrivateOramMutationReconcileDispositionV1,
+) -> Result<RawPrivateOramMutationDecisionEvidenceV2, PrivateOramMutationJournalError> {
+    let evidence = match disposition {
+        PrivateOramMutationReconcileDispositionV1::ExactNew => {
+            let committed_state = expected_consensus_new_state(descriptor)?;
+            RawPrivateOramMutationDecisionEvidenceV2::ExactNew {
+                consensus: derive_consensus_evidence(descriptor, active_lease, &committed_state)?,
+                committed_lease: Box::new(active_lease.clone()),
+            }
+        }
+        PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided => {
+            let old = &descriptor.expected_consensus_old_state;
+            RawPrivateOramMutationDecisionEvidenceV2::ExactOldAbort {
+                old_consensus_record_digest: canonical_private_oram_consensus_state_record_digest(
+                    old,
+                )
+                .map_err(|_| PrivateOramMutationJournalError::InvalidTransition)?,
+                old_consensus_state_sequence: old.state_sequence,
+                old_consensus_signed_state_digest: old.signed_state_digest.clone(),
+                abort_decided_lease: Box::new(active_lease.clone()),
+            }
+        }
+        PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision => {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+    };
+    Ok(evidence)
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -1066,18 +1137,6 @@ impl PrivateOramMutationJournal {
             reconcile_snapshot.consensus_state(),
             reconcile_snapshot.lease_slot(),
         )
-    }
-
-    #[allow(
-        dead_code,
-        reason = "the D3-C2 V2 writer consumes this opaque decision token"
-    )]
-    pub(super) fn validated_decision_v2(
-        &self,
-        reconcile_snapshot: &PrivateOramMutationReconcileSnapshotV1,
-    ) -> Result<PrivateOramValidatedMutationDecisionV2, PrivateOramMutationJournalError> {
-        self.validated_reconcile_snapshot(reconcile_snapshot)?
-            .validated_decision_v2()
     }
 
     #[allow(
@@ -3064,23 +3123,72 @@ pub(super) fn read_json_private<T: DeserializeOwned>(
     path: &Path,
     max_bytes: u64,
 ) -> Result<T, PrivateOramMutationJournalError> {
-    let mut file = open_private_file(path, max_bytes)?;
-    serde_json::from_reader(&mut file).map_err(|_| PrivateOramMutationJournalError::Corrupt)
+    let file = open_private_file(path, max_bytes)?;
+    let read_limit = max_bytes
+        .checked_add(1)
+        .ok_or(PrivateOramMutationJournalError::Corrupt)?;
+    let mut reader = file.take(read_limit);
+    let value = serde_json::from_reader(&mut reader)
+        .map_err(|_| PrivateOramMutationJournalError::Corrupt)?;
+    if reader.limit() == 0 {
+        return Err(PrivateOramMutationJournalError::Corrupt);
+    }
+    Ok(value)
+}
+
+pub(super) fn read_private_bytes_bounded(
+    path: &Path,
+    max_bytes: u64,
+) -> Result<Vec<u8>, PrivateOramMutationJournalError> {
+    let file = open_private_file(path, max_bytes)?;
+    let initial_length = file
+        .metadata()
+        .map_err(PrivateOramMutationJournalError::Io)?
+        .len()
+        .min(max_bytes);
+    let capacity =
+        usize::try_from(initial_length).map_err(|_| PrivateOramMutationJournalError::Corrupt)?;
+    let read_limit = max_bytes
+        .checked_add(1)
+        .ok_or(PrivateOramMutationJournalError::Corrupt)?;
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(capacity)
+        .map_err(|_| PrivateOramMutationJournalError::Corrupt)?;
+    file.take(read_limit)
+        .read_to_end(&mut bytes)
+        .map_err(PrivateOramMutationJournalError::Io)?;
+    if u64::try_from(bytes.len()).map_err(|_| PrivateOramMutationJournalError::Corrupt)? > max_bytes
+    {
+        return Err(PrivateOramMutationJournalError::Corrupt);
+    }
+    Ok(bytes)
 }
 
 pub(super) fn file_sha256(
     path: &Path,
     max_bytes: u64,
 ) -> Result<[u8; 32], PrivateOramMutationJournalError> {
-    let mut file = open_private_file(path, max_bytes)?;
+    let file = open_private_file(path, max_bytes)?;
+    let read_limit = max_bytes
+        .checked_add(1)
+        .ok_or(PrivateOramMutationJournalError::Corrupt)?;
+    let mut limited = file.take(read_limit);
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 64 * 1024];
+    let mut total = 0_u64;
     loop {
-        let read = file
+        let read = limited
             .read(&mut buffer)
             .map_err(PrivateOramMutationJournalError::Io)?;
         if read == 0 {
             break;
+        }
+        total = total
+            .checked_add(u64::try_from(read).map_err(|_| PrivateOramMutationJournalError::Corrupt)?)
+            .ok_or(PrivateOramMutationJournalError::Corrupt)?;
+        if total > max_bytes {
+            return Err(PrivateOramMutationJournalError::Corrupt);
         }
         hasher.update(&buffer[..read]);
     }
@@ -3206,9 +3314,9 @@ mod tests {
         PrivateOramPointResolutionOutcomeV2, PrivateOramPointResolutionReceiptV2,
         canonical_private_oram_mutation_state_v2_for_test,
         decode_untrusted_private_oram_mutation_state, exact_new_decision_v2_for_test,
-        exact_old_abort_decision_v2_for_test, private_oram_collection_id_digest_v2,
-        private_oram_owner_terminal_evidence_v2_digest, private_oram_point_replica_set_digest_v2,
-        private_oram_point_resolution_receipt_v2_digest,
+        exact_old_abort_decision_v2_for_test, next_private_oram_mutation_state_v2,
+        private_oram_collection_id_digest_v2, private_oram_owner_terminal_evidence_v2_digest,
+        private_oram_point_replica_set_digest_v2, private_oram_point_resolution_receipt_v2_digest,
         private_oram_point_stage_evidence_v2_from_durable_token, state_record_digest_v2_for_test,
         validate_private_oram_mutation_state_v2_structure,
     };
@@ -3664,8 +3772,19 @@ mod tests {
     fn owner_prepares(
         snapshot: &PrivateOramMutationJournalSnapshotV1,
     ) -> Vec<PrivateOramMutationOwnerPrepareEvidenceV1> {
-        snapshot
-            .descriptor
+        owner_prepares_for_descriptor(&snapshot.descriptor)
+    }
+
+    fn owner_prepares_v2(
+        snapshot: &writer_v2::PrivateOramMutationJournalStructuralSnapshotV2,
+    ) -> Vec<PrivateOramMutationOwnerPrepareEvidenceV1> {
+        owner_prepares_for_descriptor(&snapshot.descriptor)
+    }
+
+    fn owner_prepares_for_descriptor(
+        descriptor: &PrivateOramMutationJournalDescriptorV1,
+    ) -> Vec<PrivateOramMutationOwnerPrepareEvidenceV1> {
+        descriptor
             .owner_requirements
             .iter()
             .enumerate()
@@ -3678,6 +3797,22 @@ mod tests {
                 },
             )
             .collect()
+    }
+
+    fn begin_v2(
+        journal: &PrivateOramMutationJournal,
+        fixture: &Fixture,
+        owners: &[PeerId],
+    ) -> writer_v2::PrivateOramMutationJournalStructuralSnapshotV2 {
+        journal
+            .begin_v2(
+                11,
+                owners,
+                fixture.mutation_bundle.clone(),
+                fixture.preparing_lease.clone(),
+                fixture.old_consensus.clone(),
+            )
+            .unwrap()
     }
 
     fn finalizations(
@@ -4032,6 +4167,489 @@ mod tests {
             _ => unreachable!(),
         });
         canonical_private_oram_mutation_state_v2_for_test(&initial.descriptor, &state).unwrap()
+    }
+
+    fn v2_record_path(journal: &PrivateOramMutationJournal, sequence: u64) -> PathBuf {
+        journal
+            .active_path()
+            .join("state_records")
+            .join(format!("{sequence:020}.json"))
+    }
+
+    #[test]
+    fn v2_writer_persists_exact_new_decision_as_actual_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(43, 150);
+        let journal = journal(&temp, &fixture);
+        let initial = begin_v2(&journal, &fixture, &[11]);
+        assert_eq!(
+            initial.state.phase,
+            PrivateOramMutationJournalPhaseV2::LeaseAcquired
+        );
+
+        let prepared = journal
+            .mark_owners_prepared_v2(owner_prepares_v2(&initial))
+            .unwrap();
+        let parent = journal.validated_point_stage_parent_v2().unwrap();
+        assert_eq!(
+            parent.owners_prepared_record_digest(),
+            prepared.state.record_digest
+        );
+        let staged = journal
+            .mark_no_server_point_stage_durable_v2(&parent)
+            .unwrap();
+        assert_eq!(
+            staged.state.phase,
+            PrivateOramMutationJournalPhaseV2::PointStageDurable
+        );
+        assert!(
+            journal
+                .validated_decision_for_v2_state(
+                    &reconcile_snapshot(&fixture.old_consensus, fixture.preparing_lease.clone(),),
+                    None
+                )
+                .is_err()
+        );
+
+        let decision = journal
+            .validated_decision_for_v2_state(
+                &reconcile_snapshot(&fixture.new_consensus, fixture.committed_lease.clone()),
+                None,
+            )
+            .unwrap();
+        assert_eq!(decision.kind(), PrivateOramMutationDecisionKindV2::ExactNew);
+        let (decided, decision_durable) = journal.mark_decision_durable_v2(&decision).unwrap();
+        assert_eq!(
+            decided.state.phase,
+            PrivateOramMutationJournalPhaseV2::DecisionDurable
+        );
+        assert_eq!(decided.state.sequence, 4);
+        assert!(decided.pending_next_for_test().is_none());
+        let (_, mut wrong_predecessor) = journal.mark_decision_durable_v2(&decision).unwrap();
+        wrong_predecessor.decision_record_digest = digest(249);
+        assert!(matches!(
+            journal.mark_remotes_terminal_v2(&wrong_predecessor, &[]),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+        let (remotes, remotes_terminal) = journal
+            .mark_remotes_terminal_v2(&decision_durable, &[])
+            .unwrap();
+        assert_eq!(
+            remotes.state.phase,
+            PrivateOramMutationJournalPhaseV2::RemotesTerminal
+        );
+        assert!(matches!(
+            journal.mark_local_terminal_v2(
+                &remotes_terminal,
+                &PrivateOramValidatedOwnerRecoveryOutcomeV1::ObservedOld,
+            ),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+        assert_eq!(
+            fs::read_dir(journal.active_path().join("state_records"))
+                .unwrap()
+                .count(),
+            5
+        );
+        assert_eq!(journal.load_v2().unwrap().unwrap(), remotes);
+        let rendered =
+            format!("{decision:?} {decision_durable:?} {remotes_terminal:?} {remotes:?}");
+        assert!(!rendered.contains(&fixture.mutation_bundle.mutation.collection_id));
+        assert!(!rendered.contains(&fixture.mutation_bundle.mutation.mutation_id));
+    }
+
+    #[test]
+    fn v2_writer_requires_abort_decision_for_exact_old() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(44, 160);
+        let journal = journal(&temp, &fixture);
+        let initial = begin_v2(&journal, &fixture, &[11]);
+        journal
+            .mark_owners_prepared_v2(owner_prepares_v2(&initial))
+            .unwrap();
+        let parent = journal.validated_point_stage_parent_v2().unwrap();
+        journal
+            .mark_no_server_point_stage_durable_v2(&parent)
+            .unwrap();
+        assert!(
+            journal
+                .validated_decision_for_v2_state(
+                    &reconcile_snapshot(&fixture.old_consensus, fixture.preparing_lease.clone(),),
+                    None
+                )
+                .is_err()
+        );
+
+        let mut abort_decided = fixture.preparing_lease.clone();
+        abort_decided.phase = PrivateOramMutationLeasePhase::AbortDecided;
+        let decision = journal
+            .validated_decision_for_v2_state(
+                &reconcile_snapshot(&fixture.old_consensus, abort_decided),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            decision.kind(),
+            PrivateOramMutationDecisionKindV2::ExactOldAbort
+        );
+        let (decided, decision_durable) = journal.mark_decision_durable_v2(&decision).unwrap();
+        assert_eq!(
+            decided.state.phase,
+            PrivateOramMutationJournalPhaseV2::DecisionDurable
+        );
+        assert_eq!(
+            journal
+                .mark_remotes_terminal_v2(&decision_durable, &[])
+                .unwrap()
+                .0
+                .state
+                .phase,
+            PrivateOramMutationJournalPhaseV2::RemotesTerminal
+        );
+    }
+
+    #[test]
+    fn v2_phase_tokens_reject_cross_descriptor_reuse_and_replay_exactly() {
+        let first_temp = tempfile::tempdir().unwrap();
+        let first_fixture = fixture(54, 20);
+        let first_journal = journal(&first_temp, &first_fixture);
+        let first_initial = begin_v2(&first_journal, &first_fixture, &[11]);
+        first_journal
+            .mark_owners_prepared_v2(owner_prepares_v2(&first_initial))
+            .unwrap();
+        let first_parent = first_journal.validated_point_stage_parent_v2().unwrap();
+        first_journal
+            .mark_no_server_point_stage_durable_v2(&first_parent)
+            .unwrap();
+        let first_decision = first_journal
+            .validated_decision_for_v2_state(
+                &reconcile_snapshot(
+                    &first_fixture.new_consensus,
+                    first_fixture.committed_lease.clone(),
+                ),
+                None,
+            )
+            .unwrap();
+        let (_, first_decision_durable) = first_journal
+            .mark_decision_durable_v2(&first_decision)
+            .unwrap();
+
+        let second_temp = tempfile::tempdir().unwrap();
+        let second_fixture = fixture(55, 40);
+        let second_journal = journal(&second_temp, &second_fixture);
+        let second_initial = begin_v2(&second_journal, &second_fixture, &[11]);
+        second_journal
+            .mark_owners_prepared_v2(owner_prepares_v2(&second_initial))
+            .unwrap();
+        let second_parent = second_journal.validated_point_stage_parent_v2().unwrap();
+        second_journal
+            .mark_no_server_point_stage_durable_v2(&second_parent)
+            .unwrap();
+        let second_decision = second_journal
+            .validated_decision_for_v2_state(
+                &reconcile_snapshot(
+                    &second_fixture.new_consensus,
+                    second_fixture.committed_lease.clone(),
+                ),
+                None,
+            )
+            .unwrap();
+        let (_, second_decision_durable) = second_journal
+            .mark_decision_durable_v2(&second_decision)
+            .unwrap();
+
+        assert!(matches!(
+            second_journal.mark_remotes_terminal_v2(&first_decision_durable, &[]),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+        let (first_remote, first_remote_token) = second_journal
+            .mark_remotes_terminal_v2(&second_decision_durable, &[])
+            .unwrap();
+        let (replayed_remote, replayed_remote_token) = second_journal
+            .mark_remotes_terminal_v2(&second_decision_durable, &[])
+            .unwrap();
+        assert_eq!(replayed_remote, first_remote);
+        assert_eq!(
+            replayed_remote_token.remotes_terminal_record_digest,
+            first_remote_token.remotes_terminal_record_digest
+        );
+    }
+
+    #[test]
+    fn v2_writer_accepts_only_durable_visible_point_stage_evidence() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture_at_sequence(51, 230, 0, true);
+        let journal = journal(&temp, &fixture);
+        let initial = begin_v2(&journal, &fixture, &[11]);
+        journal
+            .mark_owners_prepared_v2(owner_prepares_v2(&initial))
+            .unwrap();
+        let parent = journal.validated_point_stage_parent_v2().unwrap();
+        let point_store = PrivateOramPointStagingStore::new(&temp.path().join("collection"));
+        let (_, durable) = point_store
+            .prepare(fixture.staged_frame_bytes.as_deref().unwrap(), &parent)
+            .unwrap();
+        let staged = journal
+            .mark_private_point_stage_durable_v2(&durable)
+            .unwrap();
+        let Some(PrivateOramMutationPointStageEvidenceV2::PrivateOramPointStaging {
+            point_semantic_digest,
+            target_shard_ids,
+            ..
+        }) = staged.state.point_stage.as_ref()
+        else {
+            panic!("expected visible private point stage");
+        };
+        assert_eq!(point_semantic_digest, durable.point_semantic_digest());
+        assert_eq!(target_shard_ids, durable.target_shard_ids());
+        assert_eq!(journal.load_v2().unwrap().unwrap(), staged);
+        let reconcile = reconcile_snapshot(&fixture.new_consensus, fixture.committed_lease.clone());
+        assert!(
+            journal
+                .validated_decision_for_v2_state(&reconcile, None)
+                .is_err()
+        );
+        let decision = journal
+            .validated_decision_for_v2_state(&reconcile, Some(&durable))
+            .unwrap();
+        assert_eq!(decision.kind(), PrivateOramMutationDecisionKindV2::ExactNew);
+    }
+
+    #[test]
+    fn v2_writer_rejects_legacy_and_mixed_active_layouts() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(45, 170);
+        let journal = journal(&temp, &fixture);
+        begin(&journal, &fixture, &[11]);
+        assert!(matches!(
+            journal.load_v2(),
+            Err(PrivateOramMutationJournalError::LegacyV1State)
+        ));
+        assert!(matches!(
+            journal.begin_v2(
+                11,
+                &[11],
+                fixture.mutation_bundle.clone(),
+                fixture.preparing_lease.clone(),
+                fixture.old_consensus.clone(),
+            ),
+            Err(PrivateOramMutationJournalError::LegacyV1State)
+        ));
+
+        write_new_json_private(
+            &journal.active_path().join("format.json"),
+            &json!({
+                "state_version": 2,
+                "descriptor_digest": digest(250),
+            }),
+            1 << 12,
+        )
+        .unwrap();
+        assert!(matches!(
+            journal.load_v2(),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
+    }
+
+    #[test]
+    fn v2_writer_resumes_only_an_exact_pending_typed_transition() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(46, 180);
+        let journal = journal(&temp, &fixture);
+        let initial = begin_v2(&journal, &fixture, &[11]);
+        let prepares = owner_prepares_v2(&initial);
+        let pending = next_private_oram_mutation_state_v2(
+            &initial.descriptor,
+            &initial.state,
+            PrivateOramMutationJournalPhaseV2::OwnersPrepared,
+            |next| {
+                next.owner_prepares = prepares.clone();
+                Ok(())
+            },
+        )
+        .unwrap();
+        write_new_json_private(
+            &v2_record_path(&journal, pending.sequence),
+            &pending,
+            MAX_STATE_BYTES,
+        )
+        .unwrap();
+
+        let observed = journal.load_v2().unwrap().unwrap();
+        assert_eq!(observed.state, initial.state);
+        assert_eq!(observed.pending_next_for_test(), Some(&pending));
+        let resumed = journal.mark_owners_prepared_v2(prepares).unwrap();
+        assert_eq!(resumed.state, pending);
+        assert!(resumed.pending_next_for_test().is_none());
+    }
+
+    #[test]
+    fn v2_writer_rejects_different_evidence_for_pending_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(47, 190);
+        let journal = journal(&temp, &fixture);
+        let initial = begin_v2(&journal, &fixture, &[11]);
+        let prepares = owner_prepares_v2(&initial);
+        let pending = next_private_oram_mutation_state_v2(
+            &initial.descriptor,
+            &initial.state,
+            PrivateOramMutationJournalPhaseV2::OwnersPrepared,
+            |next| {
+                next.owner_prepares = prepares.clone();
+                Ok(())
+            },
+        )
+        .unwrap();
+        write_new_json_private(
+            &v2_record_path(&journal, pending.sequence),
+            &pending,
+            MAX_STATE_BYTES,
+        )
+        .unwrap();
+
+        let mut different = prepares;
+        different[0].prepared_journal_digest = digest(249);
+        assert!(matches!(
+            journal.mark_owners_prepared_v2(different),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
+        let observed = journal.load_v2().unwrap().unwrap();
+        assert_eq!(observed.state, initial.state);
+        assert_eq!(observed.pending_next_for_test(), Some(&pending));
+    }
+
+    #[test]
+    fn v2_writer_rejects_structurally_invalid_pending_record() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(52, 240);
+        let journal = journal(&temp, &fixture);
+        let initial = begin_v2(&journal, &fixture, &[11]);
+        let prepares = owner_prepares_v2(&initial);
+        let mut pending = next_private_oram_mutation_state_v2(
+            &initial.descriptor,
+            &initial.state,
+            PrivateOramMutationJournalPhaseV2::OwnersPrepared,
+            |next| {
+                next.owner_prepares = prepares;
+                Ok(())
+            },
+        )
+        .unwrap();
+        pending.owner_prepares[0].prepared_journal_digest = digest(248);
+        write_new_json_private(
+            &v2_record_path(&journal, pending.sequence),
+            &pending,
+            MAX_STATE_BYTES,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            journal.load_v2(),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
+    }
+
+    #[test]
+    fn v2_writer_bounds_history_directory_iteration() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(53, 250);
+        let journal = journal(&temp, &fixture);
+        begin_v2(&journal, &fixture, &[11]);
+        let records = journal.active_path().join("state_records");
+        for index in 0..7 {
+            write_new_json_private(
+                &records.join(format!("extra-{index}.json")),
+                &json!({ "unexpected": index }),
+                1024,
+            )
+            .unwrap();
+        }
+
+        assert!(matches!(
+            journal.load_v2(),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
+    }
+
+    #[test]
+    fn v2_writer_rejects_history_gap_pointer_ahead_and_missing_format() {
+        let gap_temp = tempfile::tempdir().unwrap();
+        let gap_fixture = fixture(48, 200);
+        let gap_journal = journal(&gap_temp, &gap_fixture);
+        begin_v2(&gap_journal, &gap_fixture, &[11]);
+        fs::remove_file(v2_record_path(&gap_journal, 1)).unwrap();
+        assert!(matches!(
+            gap_journal.load_v2(),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
+
+        let pointer_temp = tempfile::tempdir().unwrap();
+        let pointer_fixture = fixture(49, 210);
+        let pointer_journal = journal(&pointer_temp, &pointer_fixture);
+        let initial = begin_v2(&pointer_journal, &pointer_fixture, &[11]);
+        let prepares = owner_prepares_v2(&initial);
+        let pointer_ahead = next_private_oram_mutation_state_v2(
+            &initial.descriptor,
+            &initial.state,
+            PrivateOramMutationJournalPhaseV2::OwnersPrepared,
+            |next| {
+                next.owner_prepares = prepares;
+                Ok(())
+            },
+        )
+        .unwrap();
+        fs::write(
+            pointer_journal.state_path(),
+            serde_json::to_vec(&pointer_ahead).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            pointer_journal.load_v2(),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
+
+        let format_temp = tempfile::tempdir().unwrap();
+        let format_fixture = fixture(50, 220);
+        let format_journal = journal(&format_temp, &format_fixture);
+        begin_v2(&format_journal, &format_fixture, &[11]);
+        fs::remove_file(format_journal.active_path().join("format.json")).unwrap();
+        assert!(matches!(
+            format_journal.load_v2(),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
+    }
+
+    #[test]
+    fn v2_writer_classifies_missing_mandatory_artifacts_as_corrupt() {
+        let descriptor_temp = tempfile::tempdir().unwrap();
+        let descriptor_fixture = fixture(56, 60);
+        let descriptor_journal = journal(&descriptor_temp, &descriptor_fixture);
+        begin_v2(&descriptor_journal, &descriptor_fixture, &[11]);
+        fs::remove_file(descriptor_journal.active_path().join(DESCRIPTOR_FILE)).unwrap();
+        assert!(matches!(
+            descriptor_journal.load_v2(),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
+
+        let state_temp = tempfile::tempdir().unwrap();
+        let state_fixture = fixture(57, 80);
+        let state_journal = journal(&state_temp, &state_fixture);
+        begin_v2(&state_journal, &state_fixture, &[11]);
+        fs::remove_file(state_journal.state_path()).unwrap();
+        assert!(matches!(
+            state_journal.load_v2(),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
+
+        let records_temp = tempfile::tempdir().unwrap();
+        let records_fixture = fixture(58, 100);
+        let records_journal = journal(&records_temp, &records_fixture);
+        begin_v2(&records_journal, &records_fixture, &[11]);
+        fs::remove_dir_all(records_journal.active_path().join("state_records")).unwrap();
+        assert!(matches!(
+            records_journal.load_v2(),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
     }
 
     #[test]
@@ -4621,7 +5239,7 @@ mod tests {
             PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision
         );
         assert_eq!(old.active_lease(), &renewed_preparing);
-        assert!(old.validated_decision_v2().is_err());
+        assert!(old.validated_decision_evidence_v2().is_err());
         assert_eq!(
             old.snapshot().state.phase,
             PrivateOramMutationJournalPhaseV1::PointStageDurable
@@ -4643,7 +5261,7 @@ mod tests {
             PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided
         );
         assert_eq!(abort.active_lease(), &abort_decided);
-        let abort_decision = abort.validated_decision_v2().unwrap();
+        let abort_decision = abort.validated_decision_evidence_v2().unwrap();
         assert_eq!(
             abort_decision.kind(),
             PrivateOramMutationDecisionKindV2::ExactOldAbort
@@ -4660,7 +5278,7 @@ mod tests {
             PrivateOramMutationReconcileDispositionV1::ExactNew
         );
         assert_eq!(new.active_lease(), &fixture.committed_lease);
-        let new_decision = new.validated_decision_v2().unwrap();
+        let new_decision = new.validated_decision_evidence_v2().unwrap();
         assert_eq!(
             new_decision.kind(),
             PrivateOramMutationDecisionKindV2::ExactNew
@@ -5429,6 +6047,17 @@ mod tests {
             read_json_private::<serde_json::Value>(&destination, 4096).unwrap(),
             json!({ "value": "new" })
         );
+    }
+
+    #[test]
+    fn private_json_read_rejects_content_beyond_the_callers_bound() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("bounded.json");
+        write_new_json_private(&path, &json!({ "value": "too-large" }), 4096).unwrap();
+        assert!(matches!(
+            read_json_private::<serde_json::Value>(&path, 2),
+            Err(PrivateOramMutationJournalError::Corrupt)
+        ));
     }
 
     #[cfg(unix)]
