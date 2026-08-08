@@ -54,11 +54,17 @@ const MAX_SIGNATURE_BYTES: u64 = 16 * 1024;
 const MAX_EPOCH_BYTES: u64 = 16 * 1024;
 const MAX_MERKLE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_PENDING_WRITEBACK_BYTES: u64 = 512 * 1024 * 1024;
+#[cfg(not(test))]
+const MAX_OWNER_EPOCH_DIRECTORY_ENTRIES: usize = 4_096;
+#[cfg(test)]
+const MAX_OWNER_EPOCH_DIRECTORY_ENTRIES: usize = 16;
 const BUCKET_JSON_OVERHEAD_BYTES: usize = 32 * 1024;
 const OWNER_EXACT_OLD_STORE_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-owner-result-store-exact-old/v1";
 const OWNER_EXACT_NEW_STORE_DOMAIN: &[u8] =
     b"qdrant-sec/private-oram-owner-result-store-exact-new/v1";
+const OWNER_EPOCH_DIRECTORY_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-result-epoch-directory/v1";
 
 #[derive(Clone)]
 pub struct PrivateResultOramStore {
@@ -339,7 +345,10 @@ pub(crate) enum PrivateResultOwnerRecoveryProgressV1 {
 #[derive(Clone, PartialEq, Eq)]
 struct PrivateResultOwnerRecoverySnapshotV1 {
     progress: PrivateResultOwnerRecoveryProgressV1,
+    manifest: PrivateResultOramManifest,
+    manifest_signature: PrivateResultOramSignature,
     store_manifest_digest: String,
+    epoch_directory_digest: String,
     tree: PrivateResultOramMerkleTree,
     old_commit_kind: OwnerStoreCommitKind,
     affected_buckets: Vec<PrivateResultOramBucket>,
@@ -349,7 +358,10 @@ impl Debug for PrivateResultOwnerRecoverySnapshotV1 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOwnerRecoverySnapshotV1")
             .field("progress", &self.progress)
+            .field("manifest", &"[redacted]")
+            .field("manifest_signature", &"[redacted]")
             .field("store_manifest_digest", &"[redacted]")
+            .field("epoch_directory_digest", &"[redacted]")
             .field("tree", &self.tree)
             .field("old_commit_kind", &self.old_commit_kind)
             .field("affected_bucket_count", &self.affected_buckets.len())
@@ -2565,6 +2577,34 @@ impl PrivateResultOwnerStoreLockV1<'_> {
             .progress)
     }
 
+    pub(crate) fn verify_owner_exact_old_v1<'lock, 'context>(
+        &'lock self,
+        authority: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'context>,
+        max_ciphertext_bytes: usize,
+        manifest_validation: PrivateResultOramManifestValidationContext<'context>,
+    ) -> CollectionResult<PrivateResultOwnerExactOldStoreTokenV1<'lock>> {
+        let context = private_result_owner_recovery_context_v1(
+            authority,
+            max_ciphertext_bytes,
+            manifest_validation,
+        )?;
+        self.verify_exact_old(context)
+    }
+
+    pub(crate) fn verify_owner_exact_new_v1<'lock, 'context>(
+        &'lock self,
+        authority: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'context>,
+        max_ciphertext_bytes: usize,
+        manifest_validation: PrivateResultOramManifestValidationContext<'context>,
+    ) -> CollectionResult<PrivateResultOwnerExactNewStoreTokenV1<'lock>> {
+        let context = private_result_owner_recovery_context_v1(
+            authority,
+            max_ciphertext_bytes,
+            manifest_validation,
+        )?;
+        self.verify_exact_new(context)
+    }
+
     pub(crate) fn resume_owner_recovery_to_exact_new_v1<'lock, 'context>(
         &'lock self,
         authority: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'context>,
@@ -2583,60 +2623,63 @@ impl PrivateResultOwnerStoreLockV1<'_> {
         &'lock self,
         context: PrivateResultOwnerStoreVerificationContextV1<'_>,
     ) -> CollectionResult<PrivateResultOwnerExactNewStoreTokenV1<'lock>> {
-        let iteration_limit = context.final_buckets.len().checked_add(5).ok_or_else(|| {
-            CollectionError::bad_request("private result ORAM owner recovery step count is invalid")
-        })?;
-        for _ in 0..iteration_limit {
-            match self
-                .revalidated_owner_recovery_snapshot_v1(context)?
-                .progress
-            {
-                PrivateResultOwnerRecoveryProgressV1::S0 => {
-                    self.write_owner_recovery_next_bucket_v1(context, 0)?;
-                }
-                PrivateResultOwnerRecoveryProgressV1::S1 { written_prefix }
-                    if written_prefix < context.final_buckets.len() =>
-                {
-                    self.write_owner_recovery_next_bucket_v1(context, written_prefix)?;
-                }
-                PrivateResultOwnerRecoveryProgressV1::S1 { written_prefix }
-                    if written_prefix == context.final_buckets.len() =>
-                {
-                    self.publish_owner_recovery_merkle_v1(context)?;
-                }
-                PrivateResultOwnerRecoveryProgressV1::S1 { .. } => {
-                    return Err(owner_store_state_mismatch());
-                }
-                PrivateResultOwnerRecoveryProgressV1::S2 => {
-                    self.publish_owner_recovery_commit_v1(context)?;
-                }
-                PrivateResultOwnerRecoveryProgressV1::S3 => {
-                    self.publish_owner_recovery_current_v1(context)?;
-                }
-                PrivateResultOwnerRecoveryProgressV1::S4 => {
-                    return self.verify_exact_new(context);
-                }
+        let mut snapshot = self.revalidated_owner_recovery_snapshot_v1(context)?;
+        let written_prefix = match snapshot.progress {
+            PrivateResultOwnerRecoveryProgressV1::S0 => 0,
+            PrivateResultOwnerRecoveryProgressV1::S1 { written_prefix } => written_prefix,
+            PrivateResultOwnerRecoveryProgressV1::S2
+            | PrivateResultOwnerRecoveryProgressV1::S3
+            | PrivateResultOwnerRecoveryProgressV1::S4 => context.final_buckets.len(),
+        };
+        if written_prefix < context.final_buckets.len() {
+            for next_prefix in written_prefix..context.final_buckets.len() {
+                self.write_owner_recovery_next_bucket_v1(context, next_prefix, &snapshot)?;
             }
+            snapshot = self.revalidated_owner_recovery_snapshot_v1(context)?;
         }
-        Err(CollectionError::service_error(
-            "private result ORAM owner recovery did not reach exact new state",
-        ))
+
+        if snapshot.progress
+            == (PrivateResultOwnerRecoveryProgressV1::S1 {
+                written_prefix: context.final_buckets.len(),
+            })
+        {
+            self.publish_owner_recovery_merkle_v1(context)?;
+            snapshot = self.revalidated_owner_recovery_snapshot_v1(context)?;
+        }
+        if snapshot.progress == PrivateResultOwnerRecoveryProgressV1::S2 {
+            self.publish_owner_recovery_commit_v1(context)?;
+            snapshot = self.revalidated_owner_recovery_snapshot_v1(context)?;
+        }
+        if snapshot.progress == PrivateResultOwnerRecoveryProgressV1::S3 {
+            self.publish_owner_recovery_current_v1(context)?;
+            snapshot = self.revalidated_owner_recovery_snapshot_v1(context)?;
+        }
+        if snapshot.progress != PrivateResultOwnerRecoveryProgressV1::S4 {
+            return Err(CollectionError::service_error(
+                "private result ORAM owner recovery did not reach exact new state",
+            ));
+        }
+        self.verify_exact_new(context)
     }
 
     fn write_owner_recovery_next_bucket_v1(
         &self,
         context: PrivateResultOwnerStoreVerificationContextV1<'_>,
         written_prefix: usize,
+        snapshot: &PrivateResultOwnerRecoverySnapshotV1,
     ) -> CollectionResult<()> {
         let expected = if written_prefix == 0 {
             PrivateResultOwnerRecoveryProgressV1::S0
         } else {
             PrivateResultOwnerRecoveryProgressV1::S1 { written_prefix }
         };
-        if self
-            .revalidated_owner_recovery_snapshot_v1(context)?
-            .progress
-            != expected
+        let initial_prefix = match snapshot.progress {
+            PrivateResultOwnerRecoveryProgressV1::S0 => 0,
+            PrivateResultOwnerRecoveryProgressV1::S1 { written_prefix } => written_prefix,
+            _ => return Err(owner_store_state_mismatch()),
+        };
+        if written_prefix < initial_prefix
+            || (written_prefix == initial_prefix && snapshot.progress != expected)
         {
             return Err(owner_store_state_mismatch());
         }
@@ -2644,16 +2687,68 @@ impl PrivateResultOwnerStoreLockV1<'_> {
             .final_buckets
             .get(written_prefix)
             .ok_or_else(owner_store_state_mismatch)?;
-        let (manifest, _) = self.store.read_manifest()?;
+        validate_owner_store_directory_identity(&self.directory, &self.store.root)?;
+        ensure_owner_store_has_no_legacy_pending(self.store)?;
+        if self.store.read_manifest()?
+            != (
+                snapshot.manifest.clone(),
+                snapshot.manifest_signature.clone(),
+            )
+        {
+            return Err(owner_store_state_mismatch());
+        }
+        validate_owner_store_context(&snapshot.manifest, context, OwnerStorePhase::ExactOld)?;
+        let expected_old = PrivateResultOramEpochState {
+            index_epoch: context.old_state.index_epoch,
+            root_hash: context.old_state.root_hash.clone(),
+        };
+        if self.store.read_current_epoch()? != expected_old
+            || self.store.read_merkle_tree()? != snapshot.tree
+            || validate_owner_recovery_old_commit(self.store, &snapshot.manifest, context)?
+                != snapshot.old_commit_kind
+            || owner_recovery_new_commit_is_exact_or_absent(self.store, context)?
+        {
+            return Err(owner_store_state_mismatch());
+        }
+        validate_merkle_tree_context(
+            &snapshot.tree,
+            context.old_state.index_epoch,
+            &context.old_state.root_hash,
+            snapshot.manifest.bucket_count,
+        )?;
+
+        let max_file_bytes = max_bucket_file_bytes(context.max_ciphertext_bytes)?;
+        let observed_old: PrivateResultOramBucket =
+            read_json_private_file(&self.store.bucket_path(bucket.bucket_id), max_file_bytes)?;
+        let expected_old_bucket = snapshot
+            .affected_buckets
+            .get(written_prefix)
+            .ok_or_else(owner_store_state_mismatch)?;
+        if &observed_old != expected_old_bucket || observed_old == *bucket {
+            return Err(owner_store_state_mismatch());
+        }
+        if let Some(previous_index) = written_prefix.checked_sub(1) {
+            let previous = context
+                .final_buckets
+                .get(previous_index)
+                .ok_or_else(owner_store_state_mismatch)?;
+            let observed_previous: PrivateResultOramBucket = read_json_private_file(
+                &self.store.bucket_path(previous.bucket_id),
+                max_file_bytes,
+            )?;
+            if observed_previous != *previous {
+                return Err(owner_store_state_mismatch());
+            }
+        }
         validate_bucket(
             bucket,
             context.new_state.index_epoch,
-            manifest.bucket_count,
+            snapshot.manifest.bucket_count,
             context.max_ciphertext_bytes,
         )?;
-        validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
+        validate_bucket_ciphertext_fixed_size(bucket, &snapshot.manifest)?;
         validate_bucket_commitment_context(
-            &manifest,
+            &snapshot.manifest,
             context.new_state.index_epoch,
             std::slice::from_ref(bucket),
         )?;
@@ -2664,18 +2759,23 @@ impl PrivateResultOwnerStoreLockV1<'_> {
             &self.store.bucket_path(bucket.bucket_id),
             bucket,
         )?;
-        let next_prefix = written_prefix
-            .checked_add(1)
-            .ok_or_else(owner_store_state_mismatch)?;
-        if self
-            .revalidated_owner_recovery_snapshot_v1(context)?
-            .progress
-            != (PrivateResultOwnerRecoveryProgressV1::S1 {
-                written_prefix: next_prefix,
-            })
+        let observed_new: PrivateResultOramBucket =
+            read_json_private_file(&self.store.bucket_path(bucket.bucket_id), max_file_bytes)?;
+        if observed_new != *bucket
+            || self.store.read_manifest()?
+                != (
+                    snapshot.manifest.clone(),
+                    snapshot.manifest_signature.clone(),
+                )
+            || self.store.read_current_epoch()? != expected_old
+            || self.store.read_merkle_tree()? != snapshot.tree
+            || validate_owner_recovery_old_commit(self.store, &snapshot.manifest, context)?
+                != snapshot.old_commit_kind
+            || owner_recovery_new_commit_is_exact_or_absent(self.store, context)?
         {
             return Err(owner_store_state_mismatch());
         }
+        validate_owner_store_directory_identity(&self.directory, &self.store.root)?;
         Ok(())
     }
 
@@ -2826,7 +2926,7 @@ impl PrivateResultOwnerStoreLockV1<'_> {
         );
         let old_commit_kind = validate_owner_recovery_old_commit(self.store, &manifest, context)?;
         let new_commit_present = owner_recovery_new_commit_is_exact_or_absent(self.store, context)?;
-        validate_owner_recovery_epoch_directory(
+        let epoch_directory_digest = validate_owner_recovery_epoch_directory(
             self.store,
             context.old_state.index_epoch,
             context.new_state.index_epoch,
@@ -2874,7 +2974,10 @@ impl PrivateResultOwnerStoreLockV1<'_> {
         validate_owner_store_directory_identity(&self.directory, &self.store.root)?;
         Ok(PrivateResultOwnerRecoverySnapshotV1 {
             progress,
+            manifest,
+            manifest_signature: signature,
             store_manifest_digest,
+            epoch_directory_digest,
             tree,
             old_commit_kind,
             affected_buckets,
@@ -2997,13 +3100,18 @@ impl PrivateResultOwnerStoreLockV1<'_> {
             &target.root_hash,
             manifest.bucket_count,
         )?;
-        validate_owner_store_epoch_directory(self.store, target.index_epoch)?;
+        let epoch_directory_digest =
+            validate_owner_store_epoch_directory(self.store, target.index_epoch)?;
         let commit_kind =
             validate_owner_store_epoch_commits(self.store, &manifest, context, phase)?;
         let buckets = read_owner_store_buckets(self.store, &manifest, &tree, context, phase)?;
 
         ensure_owner_store_has_no_legacy_pending(self.store)?;
-        validate_owner_store_epoch_directory(self.store, target.index_epoch)?;
+        if validate_owner_store_epoch_directory(self.store, target.index_epoch)?
+            != epoch_directory_digest
+        {
+            return Err(owner_store_state_mismatch());
+        }
         if self.store.read_manifest()? != (manifest.clone(), signature) {
             return Err(owner_store_state_mismatch());
         }
@@ -3024,6 +3132,7 @@ impl PrivateResultOwnerStoreLockV1<'_> {
                 &store_manifest_digest,
                 &tree,
                 commit_kind,
+                &epoch_directory_digest,
                 &buckets,
             ),
         })
@@ -3101,50 +3210,23 @@ fn validate_owner_recovery_epoch_directory(
     old_epoch: u64,
     new_epoch: u64,
     new_commit_present: bool,
-) -> CollectionResult<()> {
-    validate_private_dir(&store.epochs_dir())?;
-    let entries = fs::read_dir(store.epochs_dir()).map_err(|_| {
-        CollectionError::service_error(
-            "failed to inspect private result ORAM owner recovery epoch state",
-        )
-    })?;
+) -> CollectionResult<String> {
+    let entries = read_owner_epoch_directory_entries(store, new_epoch)?;
     let mut observed_new_commit = false;
-    for entry in entries {
-        let entry = entry.map_err(|_| {
-            CollectionError::service_error(
-                "failed to inspect private result ORAM owner recovery epoch state",
-            )
-        })?;
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            return Err(owner_store_state_mismatch());
-        };
-        if name == CURRENT_EPOCH_FILE {
-            continue;
-        }
-        let Some(encoded_epoch) = name.strip_suffix(".commit") else {
-            return Err(owner_store_state_mismatch());
-        };
-        let epoch = encoded_epoch
-            .parse::<u64>()
-            .map_err(|_| owner_store_state_mismatch())?;
-        if name != format!("{epoch:08}.commit") || epoch > new_epoch {
-            return Err(owner_store_state_mismatch());
-        }
-        if epoch == new_epoch {
+    for (epoch, _) in &entries {
+        if *epoch == new_epoch {
             if !new_commit_present || observed_new_commit {
                 return Err(owner_store_state_mismatch());
             }
             observed_new_commit = true;
-        } else if epoch > old_epoch {
+        } else if *epoch > old_epoch {
             return Err(owner_store_state_mismatch());
         }
-        store.read_epoch_commit(epoch)?;
     }
     if observed_new_commit != new_commit_present {
         return Err(owner_store_state_mismatch());
     }
-    Ok(())
+    Ok(owner_epoch_directory_digest(&entries))
 }
 
 fn read_owner_recovery_bucket_prefix(
@@ -3457,12 +3539,28 @@ fn validate_owner_store_epoch_commits(
 fn validate_owner_store_epoch_directory(
     store: &PrivateResultOramStore,
     current_epoch: u64,
-) -> CollectionResult<()> {
+) -> CollectionResult<String> {
+    let entries = read_owner_epoch_directory_entries(store, current_epoch)?;
+    Ok(owner_epoch_directory_digest(&entries))
+}
+
+fn read_owner_epoch_directory_entries(
+    store: &PrivateResultOramStore,
+    current_epoch: u64,
+) -> CollectionResult<Vec<(u64, PrivateResultOramEpochCommit)>> {
     validate_private_dir(&store.epochs_dir())?;
-    let entries = fs::read_dir(store.epochs_dir()).map_err(|_| {
+    let entries = fs_err::read_dir(store.epochs_dir()).map_err(|_| {
         CollectionError::service_error("failed to inspect private result ORAM owner epoch state")
     })?;
+    let mut entry_count = 0_usize;
+    let mut commits = Vec::new();
     for entry in entries {
+        entry_count = entry_count
+            .checked_add(1)
+            .ok_or_else(owner_store_state_mismatch)?;
+        if entry_count > MAX_OWNER_EPOCH_DIRECTORY_ENTRIES {
+            return Err(owner_store_state_mismatch());
+        }
         let entry = entry.map_err(|_| {
             CollectionError::service_error(
                 "failed to inspect private result ORAM owner epoch state",
@@ -3484,9 +3582,28 @@ fn validate_owner_store_epoch_directory(
         if name != format!("{epoch:08}.commit") || epoch > current_epoch {
             return Err(owner_store_state_mismatch());
         }
-        store.read_epoch_commit(epoch)?;
+        commits.push((epoch, store.read_epoch_commit(epoch)?));
     }
-    Ok(())
+    commits.sort_unstable_by_key(|(epoch, _)| *epoch);
+    Ok(commits)
+}
+
+fn owner_epoch_directory_digest(entries: &[(u64, PrivateResultOramEpochCommit)]) -> String {
+    let mut hasher = Sha256::new();
+    hash_len_prefixed(&mut hasher, OWNER_EPOCH_DIRECTORY_DOMAIN);
+    hasher.update((entries.len() as u64).to_be_bytes());
+    for (epoch, commit) in entries {
+        hasher.update(epoch.to_be_bytes());
+        hash_len_prefixed(&mut hasher, commit.root_hash.as_bytes());
+        match &commit.writeback_digest {
+            Some(writeback_digest) => {
+                hasher.update([1]);
+                hash_len_prefixed(&mut hasher, writeback_digest.as_bytes());
+            }
+            None => hasher.update([0]),
+        }
+    }
+    BASE64URL_NOPAD.encode(&hasher.finalize())
 }
 
 fn read_owner_store_buckets(
@@ -3545,6 +3662,7 @@ fn owner_store_canonical_state_digest(
     store_manifest_digest: &str,
     tree: &PrivateResultOramMerkleTree,
     commit_kind: OwnerStoreCommitKind,
+    epoch_directory_digest: &str,
     buckets: &[PrivateResultOramBucket],
 ) -> String {
     let mut hasher = Sha256::new();
@@ -3564,6 +3682,7 @@ fn owner_store_canonical_state_digest(
         owner_store_merkle_leaves_digest(tree).as_bytes(),
     );
     hasher.update([commit_kind.tag()]);
+    hash_len_prefixed(&mut hasher, epoch_directory_digest.as_bytes());
     hasher.update((context.final_bucket_refs.len() as u64).to_be_bytes());
     for bucket_ref in context.final_bucket_refs {
         hasher.update(bucket_ref.bucket_id.to_be_bytes());
@@ -5631,8 +5750,11 @@ mod tests {
             | PrivateResultOwnerRecoveryProgressV1::S3
             | PrivateResultOwnerRecoveryProgressV1::S4 => context.final_buckets.len(),
         };
+        let snapshot = lock
+            .revalidated_owner_recovery_snapshot_v1(context)
+            .unwrap();
         for written_prefix in 0..target_prefix {
-            lock.write_owner_recovery_next_bucket_v1(context, written_prefix)
+            lock.write_owner_recovery_next_bucket_v1(context, written_prefix, &snapshot)
                 .unwrap();
         }
         if matches!(
@@ -8915,6 +9037,86 @@ mod tests {
                 .unwrap_err()
                 .to_string();
             assert!(error.contains("rejects legacy pending writeback"));
+        });
+    }
+
+    #[test]
+    fn owner_store_canonical_digest_binds_historical_epoch_commits() {
+        with_owner_recovery_fixture(|store, context| {
+            let before = store
+                .lock_owner_store_v1()
+                .unwrap()
+                .verify_exact_old(context)
+                .unwrap()
+                .canonical_state_digest()
+                .to_string();
+            let historical_epoch = context.old_state.index_epoch - 1;
+            write_json_atomic(
+                &store.root,
+                &store.temp_dir(),
+                &store.commit_epoch_path(historical_epoch),
+                &PrivateResultOramEpochCommit {
+                    index_epoch: historical_epoch,
+                    root_hash: root_hash(101),
+                    writeback_digest: Some(root_hash(102)),
+                },
+            )
+            .unwrap();
+            let first_history = store
+                .lock_owner_store_v1()
+                .unwrap()
+                .verify_exact_old(context)
+                .unwrap()
+                .canonical_state_digest()
+                .to_string();
+            assert_ne!(before, first_history);
+
+            write_json_atomic(
+                &store.root,
+                &store.temp_dir(),
+                &store.commit_epoch_path(historical_epoch),
+                &PrivateResultOramEpochCommit {
+                    index_epoch: historical_epoch,
+                    root_hash: root_hash(103),
+                    writeback_digest: Some(root_hash(104)),
+                },
+            )
+            .unwrap();
+            let replaced_history = store
+                .lock_owner_store_v1()
+                .unwrap()
+                .verify_exact_old(context)
+                .unwrap()
+                .canonical_state_digest()
+                .to_string();
+            assert_ne!(first_history, replaced_history);
+        });
+    }
+
+    #[test]
+    fn owner_store_rejects_excessive_epoch_directory_entries() {
+        with_owner_recovery_fixture(|store, context| {
+            for epoch in 0..MAX_OWNER_EPOCH_DIRECTORY_ENTRIES as u64 {
+                write_json_atomic(
+                    &store.root,
+                    &store.temp_dir(),
+                    &store.commit_epoch_path(epoch),
+                    &PrivateResultOramEpochCommit {
+                        index_epoch: epoch,
+                        root_hash: root_hash(120_u8.wrapping_add(epoch as u8)),
+                        writeback_digest: Some(root_hash(140_u8.wrapping_add(epoch as u8))),
+                    },
+                )
+                .unwrap();
+            }
+
+            let error = store
+                .lock_owner_store_v1()
+                .unwrap()
+                .verify_exact_old(context)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("canonical store state does not match"));
         });
     }
 }
