@@ -25,7 +25,7 @@ use qdrant_sec::{
     PrivateOramAppendMutationBundleV1, PrivateOramStagedInsertFrameV1,
     decode_private_oram_staged_insert_frame_v1, encode_private_oram_staged_insert_frame_v1,
     private_oram_append_mutation_v1_digest, private_oram_staged_insert_frame_v1_digest,
-    private_oram_staged_point_id_canonical_string,
+    private_oram_staged_point_id_canonical_string, private_oram_staged_point_semantic_v1_digest,
     validate_private_oram_staged_insert_frame_v1_against_mutation_bundle,
 };
 use sha2::{Digest, Sha256};
@@ -169,6 +169,8 @@ pub struct PrivateOramDurablePointStageTokenV1 {
     point_id: String,
     frame_sha256: String,
     canonical_point_id_digest: String,
+    point_semantic_digest: String,
+    target_shard_ids: Vec<u32>,
     child_descriptor_digest: String,
     parent_descriptor_digest: String,
     parent_owners_prepared_record_digest: String,
@@ -180,6 +182,8 @@ impl Debug for PrivateOramDurablePointStageTokenV1 {
             .field("point_id", &"[redacted]")
             .field("frame_sha256", &"[redacted]")
             .field("canonical_point_id_digest", &"[redacted]")
+            .field("point_semantic_digest", &"[redacted]")
+            .field("target_shard_count", &self.target_shard_ids.len())
             .field("child_descriptor_digest", &"[redacted]")
             .field("parent_descriptor_digest", &"[redacted]")
             .field("parent_owners_prepared_record_digest", &"[redacted]")
@@ -190,12 +194,16 @@ impl Debug for PrivateOramDurablePointStageTokenV1 {
 impl PrivateOramDurablePointStageTokenV1 {
     fn from_validated_stage(
         descriptor: &PrivateOramPointStageDescriptorV1,
+        frame: &PrivateOramStagedInsertFrameV1,
+        point_semantic_digest: String,
         point_id: String,
     ) -> Self {
         Self {
             point_id,
             frame_sha256: descriptor.frame_sha256.clone(),
             canonical_point_id_digest: descriptor.canonical_point_id_digest.clone(),
+            point_semantic_digest,
+            target_shard_ids: frame.target_shard_ids.clone(),
             child_descriptor_digest: descriptor.descriptor_digest.clone(),
             parent_descriptor_digest: descriptor.parent_descriptor_digest.clone(),
             parent_owners_prepared_record_digest: descriptor
@@ -214,6 +222,14 @@ impl PrivateOramDurablePointStageTokenV1 {
 
     pub(super) fn canonical_point_id_digest(&self) -> &str {
         &self.canonical_point_id_digest
+    }
+
+    pub(super) fn point_semantic_digest(&self) -> &str {
+        &self.point_semantic_digest
+    }
+
+    pub(super) fn target_shard_ids(&self) -> &[u32] {
+        &self.target_shard_ids
     }
 
     pub(super) fn child_descriptor_digest(&self) -> &str {
@@ -502,6 +518,7 @@ struct ValidatedPointStage {
     state: PrivateOramPointStageStateV1,
     state_bytes: Vec<u8>,
     point_id: String,
+    point_semantic_digest: String,
 }
 
 impl ValidatedPointStage {
@@ -530,6 +547,8 @@ impl ValidatedPointStage {
             return Err(PrivateOramPointStagingError::ServerVectorsForbidden);
         }
         let point_id = private_oram_staged_point_id_canonical_string(&frame.point.id)
+            .map_err(|_| PrivateOramPointStagingError::InvalidFrame)?;
+        let point_semantic_digest = private_oram_staged_point_semantic_v1_digest(&frame.point)
             .map_err(|_| PrivateOramPointStagingError::InvalidFrame)?;
         let frame_sha256 = private_oram_staged_insert_frame_v1_digest(&frame)
             .map_err(|_| PrivateOramPointStagingError::InvalidFrame)?;
@@ -581,6 +600,7 @@ impl ValidatedPointStage {
             state,
             state_bytes,
             point_id,
+            point_semantic_digest,
         })
     }
 
@@ -612,6 +632,8 @@ impl ValidatedPointStage {
         }
         let point_id = private_oram_staged_point_id_canonical_string(&frame.point.id)
             .map_err(|_| PrivateOramPointStagingError::Corrupt)?;
+        let point_semantic_digest = private_oram_staged_point_semantic_v1_digest(&frame.point)
+            .map_err(|_| PrivateOramPointStagingError::Corrupt)?;
         if private_oram_point_id_digest(&point_id)
             .map_err(|_| PrivateOramPointStagingError::Corrupt)?
             != descriptor.canonical_point_id_digest
@@ -626,6 +648,7 @@ impl ValidatedPointStage {
             state,
             state_bytes,
             point_id,
+            point_semantic_digest,
         })
     }
 
@@ -665,6 +688,8 @@ impl ValidatedPointStage {
     ) {
         let token = PrivateOramDurablePointStageTokenV1::from_validated_stage(
             &self.descriptor,
+            &self.frame,
+            self.point_semantic_digest,
             self.point_id,
         );
         let snapshot = PrivateOramPointStageSnapshotV1 {

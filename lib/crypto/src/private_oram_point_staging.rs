@@ -16,6 +16,8 @@ use crate::private_oram_mutation::{
 pub const PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_VERSION: u16 = 1;
 pub const PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_DOMAIN: &str =
     "qdrant-sec/private-oram-staged-insert-frame/v1";
+pub const PRIVATE_ORAM_STAGED_POINT_SEMANTIC_V1_DOMAIN: &str =
+    "qdrant-sec/private-oram-staged-point-semantic/v1";
 pub const PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_BYTES: usize = 64 * 1024 * 1024;
 pub const PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_VECTOR_NAME_BYTES: usize = 256;
 pub const PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_SHARD_KEYWORD_BYTES: usize = 1_024;
@@ -355,6 +357,15 @@ pub fn private_oram_staged_insert_frame_v1_digest(
 ) -> Result<String, PrivateOramStagingError> {
     let bytes = encode_private_oram_staged_insert_frame_v1(frame)?;
     Ok(digest_bytes(&bytes))
+}
+
+pub fn private_oram_staged_point_semantic_v1_digest(
+    point: &PrivateOramStagedPointV1,
+) -> Result<String, PrivateOramStagingError> {
+    let mut encoder = CanonicalEncoder::new();
+    encoder.push_domain(PRIVATE_ORAM_STAGED_POINT_SEMANTIC_V1_DOMAIN)?;
+    encode_point(&mut encoder, point)?;
+    Ok(digest_bytes(&encoder.finish()))
 }
 
 pub fn private_oram_staged_point_id_canonical_string(
@@ -1598,6 +1609,10 @@ mod tests {
         assert_eq!(
             private_oram_staged_insert_frame_v1_digest(&frame).unwrap(),
             "fveBL9G6uk4GFHv2MqgxCeVuPHSssmU91or_dtp-auQ"
+        );
+        assert_eq!(
+            private_oram_staged_point_semantic_v1_digest(&frame.point).unwrap(),
+            "CqRJtsyVfAzNuGnY-tcrTBUxgxVWi2ZvEDnfmBg2q-k"
         );
     }
 
