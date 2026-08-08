@@ -25,7 +25,6 @@ use qdrant_sec::{
     private_result_oram_writeback_digest, validate_private_result_oram_commit_signature,
     validate_private_result_oram_manifest, validate_private_result_oram_manifest_signature_shape,
     validate_private_result_oram_read_buckets_signature,
-    validate_private_result_oram_upload_bundle,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -1316,51 +1315,19 @@ async fn do_upload_private_result_oram_buckets_inner(
     resolved.validate_manifest_runtime_policy(&manifest)?;
     let _upload_guard =
         begin_private_result_oram_upload_write_window(&resolved.collection_crypto_id)?;
-    let current_epoch = store
-        .read_current_epoch()
-        .map_err(private_result_oram_epoch_store_error)?;
-    if current_epoch.index_epoch != index_epoch || current_epoch.root_hash != root_hash {
-        return Err(StorageError::bad_request(
-            "private result ORAM bucket upload epoch/root does not match current manifest epoch",
-        ));
-    }
-
     let max_ciphertext_bytes = max_bucket_ciphertext_bytes(&manifest.oram)?;
     let bundle = PrivateResultOramUploadBundle {
-        manifest: manifest.clone(),
-        manifest_signature: signature.clone(),
+        manifest,
+        manifest_signature: signature,
         buckets,
     };
-    let leaf_commitments =
-        validate_private_result_oram_upload_bundle(&bundle).map_err(private_result_oram_error)?;
-    for bucket in &bundle.buckets {
-        store
-            .validate_bucket_for_write(
-                bucket,
-                index_epoch,
-                manifest.bucket_count,
-                max_ciphertext_bytes,
-            )
-            .map_err(private_result_oram_upload_store_error)?;
-        validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
-    }
-    for bucket in &bundle.buckets {
-        store
-            .write_bucket(
-                bucket,
-                index_epoch,
-                manifest.bucket_count,
-                max_ciphertext_bytes,
-            )
-            .map_err(private_result_oram_upload_store_error)?;
-    }
-    store
-        .write_merkle_tree_from_commitments(index_epoch, root_hash.clone(), leaf_commitments)
-        .map_err(private_result_oram_upload_store_error)?;
-    Ok(PrivateResultOramEpochState {
+    let expected_current = PrivateResultOramEpochState {
         index_epoch,
         root_hash,
-    })
+    };
+    store
+        .write_bucket_upload_bundle(&expected_current, &bundle, max_ciphertext_bytes)
+        .map_err(private_result_oram_upload_store_error)
 }
 
 pub async fn do_read_private_result_oram_buckets(

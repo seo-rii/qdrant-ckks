@@ -199,21 +199,6 @@ impl Debug for PrivateResultOramMerkleTree {
     }
 }
 
-#[derive(Clone)]
-pub struct PrivateResultPreparedMerkleCommit {
-    store: PrivateResultOramStore,
-    tree: PrivateResultOramMerkleTree,
-}
-
-impl Debug for PrivateResultPreparedMerkleCommit {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PrivateResultPreparedMerkleCommit")
-            .field("store", &self.store)
-            .field("tree", &self.tree)
-            .finish()
-    }
-}
-
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PrivateResultPendingWriteback {
@@ -347,6 +332,17 @@ pub(crate) struct PrivateResultOwnerStoreLockV1<'a> {
     directory: File,
 }
 
+struct PrivateResultOwnerStoreWriteTokenV1<'a> {
+    store: &'a PrivateResultOramStore,
+    lock: PrivateResultOwnerStoreLockV1<'a>,
+}
+
+impl PrivateResultOwnerStoreWriteTokenV1<'_> {
+    fn validate_pinned_root_identity(&self) -> CollectionResult<()> {
+        validate_owner_store_directory_identity(&self.lock.directory, &self.store.root)
+    }
+}
+
 impl Debug for PrivateResultOwnerStoreLockV1<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateResultOwnerStoreLockV1")
@@ -475,7 +471,38 @@ impl PrivateResultOramStore {
         action: impl for<'lock> FnOnce(&'lock PrivateResultOwnerStoreLockV1<'_>) -> CollectionResult<R>,
     ) -> CollectionResult<R> {
         let lock = self.lock_owner_store_v1()?;
-        action(&lock)
+        let output = action(&lock);
+        validate_owner_store_directory_identity(&lock.directory, &self.root)?;
+        output
+    }
+
+    fn with_canonical_writer_lock_v1<R>(
+        &self,
+        action: impl for<'lock> FnOnce(
+            &'lock PrivateResultOwnerStoreWriteTokenV1<'_>,
+        ) -> CollectionResult<R>,
+    ) -> CollectionResult<R> {
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = action;
+            return Err(CollectionError::service_error(
+                "private result ORAM canonical writes are unsupported on this platform",
+            ));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // The root is the lock inode. Its idempotent bootstrap must happen before
+            // opening and pinning that inode; every mutation after bootstrap is locked.
+            create_private_dir(&self.root)?;
+            let token = PrivateResultOwnerStoreWriteTokenV1 {
+                store: self,
+                lock: self.lock_owner_store_v1()?,
+            };
+
+            let output = action(&token);
+            token.validate_pinned_root_identity()?;
+            output
+        }
     }
 
     pub(crate) fn with_owner_exact_old_store_v1<R>(
@@ -490,22 +517,23 @@ impl PrivateResultOramStore {
         let final_buckets = authority
             .result_final_buckets()
             .ok_or_else(owner_store_state_mismatch)?;
-        let lock = self.lock_owner_store_v1()?;
-        let token = lock.verify_exact_old(PrivateResultOwnerStoreVerificationContextV1 {
-            journal_descriptor_digest: authority.journal_descriptor_digest(),
-            prepared_state_digest: authority.prepared_state_digest(),
-            immutable_manifest_digest: authority.immutable_manifest_digest(),
-            immutable_manifest: authority.immutable_manifest(),
-            immutable_index: authority.immutable_index(),
-            index_name: authority.index_name(),
-            old_state: authority.old_state(),
-            new_state: authority.new_state(),
-            final_bucket_refs: authority.final_bucket_refs(),
-            final_buckets,
-            max_ciphertext_bytes,
-            manifest_validation,
-        })?;
-        action(token)
+        self.with_owner_store_lock_v1(|lock| {
+            let token = lock.verify_exact_old(PrivateResultOwnerStoreVerificationContextV1 {
+                journal_descriptor_digest: authority.journal_descriptor_digest(),
+                prepared_state_digest: authority.prepared_state_digest(),
+                immutable_manifest_digest: authority.immutable_manifest_digest(),
+                immutable_manifest: authority.immutable_manifest(),
+                immutable_index: authority.immutable_index(),
+                index_name: authority.index_name(),
+                old_state: authority.old_state(),
+                new_state: authority.new_state(),
+                final_bucket_refs: authority.final_bucket_refs(),
+                final_buckets,
+                max_ciphertext_bytes,
+                manifest_validation,
+            })?;
+            action(token)
+        })
     }
 
     pub(crate) fn with_owner_exact_new_store_v1<R>(
@@ -520,22 +548,23 @@ impl PrivateResultOramStore {
         let final_buckets = authority
             .result_final_buckets()
             .ok_or_else(owner_store_state_mismatch)?;
-        let lock = self.lock_owner_store_v1()?;
-        let token = lock.verify_exact_new(PrivateResultOwnerStoreVerificationContextV1 {
-            journal_descriptor_digest: authority.journal_descriptor_digest(),
-            prepared_state_digest: authority.prepared_state_digest(),
-            immutable_manifest_digest: authority.immutable_manifest_digest(),
-            immutable_manifest: authority.immutable_manifest(),
-            immutable_index: authority.immutable_index(),
-            index_name: authority.index_name(),
-            old_state: authority.old_state(),
-            new_state: authority.new_state(),
-            final_bucket_refs: authority.final_bucket_refs(),
-            final_buckets,
-            max_ciphertext_bytes,
-            manifest_validation,
-        })?;
-        action(token)
+        self.with_owner_store_lock_v1(|lock| {
+            let token = lock.verify_exact_new(PrivateResultOwnerStoreVerificationContextV1 {
+                journal_descriptor_digest: authority.journal_descriptor_digest(),
+                prepared_state_digest: authority.prepared_state_digest(),
+                immutable_manifest_digest: authority.immutable_manifest_digest(),
+                immutable_manifest: authority.immutable_manifest(),
+                immutable_index: authority.immutable_index(),
+                index_name: authority.index_name(),
+                old_state: authority.old_state(),
+                new_state: authority.new_state(),
+                final_bucket_refs: authority.final_bucket_refs(),
+                final_buckets,
+                max_ciphertext_bytes,
+                manifest_validation,
+            })?;
+            action(token)
+        })
     }
 
     #[cfg(test)]
@@ -555,27 +584,48 @@ impl PrivateResultOramStore {
             index_epoch: new.index_epoch,
             root_hash: new.root_hash.clone(),
         };
-        let prepared = self.prepare_merkle_commit(
-            old.index_epoch,
-            &old.root_hash,
-            new.index_epoch,
-            &new.root_hash,
-            bucket_count,
-            final_buckets,
-        )?;
-        for bucket in final_buckets {
-            self.write_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
-        }
-        prepared.write()?;
-        self.compare_and_swap_epoch_with_writeback_digest(
-            &old_epoch,
-            &new_epoch,
-            Some(&new.last_writeback_digest),
-        )
+        self.with_canonical_writer_lock_v1(|token| {
+            let tree = self.prepare_merkle_tree_under_owner_lock(
+                token,
+                old.index_epoch,
+                &old.root_hash,
+                new.index_epoch,
+                &new.root_hash,
+                bucket_count,
+                final_buckets,
+            )?;
+            for bucket in final_buckets {
+                self.write_bucket_under_owner_lock(
+                    token,
+                    bucket,
+                    new.index_epoch,
+                    bucket_count,
+                    max_ciphertext_bytes,
+                )?;
+            }
+            self.write_merkle_tree_under_owner_lock(token, &tree)?;
+            self.compare_and_swap_epoch_under_owner_lock(
+                token,
+                &old_epoch,
+                &new_epoch,
+                Some(&new.last_writeback_digest),
+            )
+        })
     }
 
     pub fn ensure_layout(&self) -> CollectionResult<()> {
-        create_private_dir(&self.root)?;
+        self.with_canonical_writer_lock_v1(|token| self.ensure_layout_under_owner_lock(token))
+    }
+
+    fn ensure_layout_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+    ) -> CollectionResult<()> {
+        if !std::ptr::eq(self, token.store) {
+            return Err(CollectionError::service_error(
+                "private result ORAM owner store writer token mismatch",
+            ));
+        }
         create_private_dir(&self.buckets_dir())?;
         create_private_dir(&self.epochs_dir())?;
         create_private_dir(&self.merkle_dir())?;
@@ -588,7 +638,18 @@ impl PrivateResultOramStore {
         manifest: &PrivateResultOramManifest,
         signature: &PrivateResultOramSignature,
     ) -> CollectionResult<()> {
-        self.ensure_layout()?;
+        self.with_canonical_writer_lock_v1(|token| {
+            self.write_manifest_under_owner_lock(token, manifest, signature)
+        })
+    }
+
+    fn write_manifest_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+        manifest: &PrivateResultOramManifest,
+        signature: &PrivateResultOramSignature,
+    ) -> CollectionResult<()> {
+        self.ensure_layout_under_owner_lock(token)?;
         write_json_atomic(
             &self.root,
             &self.temp_dir(),
@@ -618,6 +679,19 @@ impl PrivateResultOramStore {
         bundle: &PrivateResultOramUploadBundle,
         max_ciphertext_bytes: usize,
     ) -> CollectionResult<PrivateResultOramEpochState> {
+        validate_upload_bundle(bundle, max_ciphertext_bytes)?;
+        self.with_canonical_writer_lock_v1(|token| {
+            self.write_initial_upload_bundle_under_owner_lock(token, bundle, max_ciphertext_bytes)
+        })
+    }
+
+    fn write_initial_upload_bundle_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+        bundle: &PrivateResultOramUploadBundle,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<PrivateResultOramEpochState> {
+        self.ensure_layout_under_owner_lock(token)?;
         let leaf_commitments = validate_upload_bundle(bundle, max_ciphertext_bytes)?;
         self.ensure_no_pending_initial_replication()?;
         let epoch = PrivateResultOramEpochState {
@@ -625,7 +699,7 @@ impl PrivateResultOramStore {
             root_hash: bundle.manifest.root_hash.clone(),
         };
 
-        match self.initial_epoch_status(&epoch)? {
+        match self.initial_epoch_status_under_owner_lock(token, &epoch)? {
             InitialEpochStatus::Absent => {}
             InitialEpochStatus::Matching => {
                 self.validate_existing_initial_upload_bundle(
@@ -636,21 +710,23 @@ impl PrivateResultOramStore {
                 return Ok(epoch);
             }
         }
-        self.write_manifest(&bundle.manifest, &bundle.manifest_signature)?;
-        self.write_merkle_tree_from_commitments(
+        self.write_manifest_under_owner_lock(token, &bundle.manifest, &bundle.manifest_signature)?;
+        self.write_merkle_tree_from_commitments_under_owner_lock(
+            token,
             bundle.manifest.index_epoch,
             bundle.manifest.root_hash.clone(),
             leaf_commitments,
         )?;
         for bucket in &bundle.buckets {
-            self.write_bucket(
+            self.write_bucket_under_owner_lock(
+                token,
                 bucket,
                 bundle.manifest.index_epoch,
                 bundle.manifest.bucket_count,
                 max_ciphertext_bytes,
             )?;
         }
-        self.write_initial_epoch_if_absent_or_matching(&epoch)?;
+        self.write_initial_epoch_if_absent_or_matching_under_owner_lock(token, &epoch)?;
         Ok(epoch)
     }
 
@@ -661,7 +737,9 @@ impl PrivateResultOramStore {
         validation_context: PrivateResultOramManifestValidationContext<'_>,
     ) -> CollectionResult<PrivateResultOramEpochState> {
         validate_upload_bundle_with_signature(bundle, max_ciphertext_bytes, validation_context)?;
-        self.write_initial_upload_bundle(bundle, max_ciphertext_bytes)
+        self.with_canonical_writer_lock_v1(|token| {
+            self.write_initial_upload_bundle_under_owner_lock(token, bundle, max_ciphertext_bytes)
+        })
     }
 
     pub fn read_initial_upload_bundle(
@@ -799,6 +877,42 @@ impl PrivateResultOramStore {
                 "private result ORAM live replication bundle does not match consensus",
             ));
         }
+        validate_live_replication_bundle(bundle, max_ciphertext_bytes)?;
+        self.with_canonical_writer_lock_v1(|token| {
+            self.write_live_replication_bundle_with_signature_under_owner_lock(
+                token,
+                bundle,
+                max_ciphertext_bytes,
+                validation_context,
+                expected_current,
+                expected_writeback_digest,
+            )
+        })
+    }
+
+    fn write_live_replication_bundle_with_signature_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+        bundle: &PrivateResultOramLiveReplicationBundle,
+        max_ciphertext_bytes: usize,
+        validation_context: PrivateResultOramManifestValidationContext<'_>,
+        expected_current: &PrivateResultOramEpochState,
+        expected_writeback_digest: Option<&str>,
+    ) -> CollectionResult<PrivateResultOramEpochState> {
+        self.ensure_layout_under_owner_lock(token)?;
+        validate_private_result_oram_manifest(
+            &bundle.manifest,
+            Some(&bundle.manifest_signature),
+            validation_context,
+        )
+        .map_err(private_result_oram_error)?;
+        if bundle.current != *expected_current
+            || bundle.writeback_digest.as_deref() != expected_writeback_digest
+        {
+            return Err(CollectionError::bad_request(
+                "private result ORAM live replication bundle does not match consensus",
+            ));
+        }
         let commitments = validate_live_replication_bundle(bundle, max_ciphertext_bytes)?;
         self.ensure_no_pending_live_replication()?;
 
@@ -821,21 +935,27 @@ impl PrivateResultOramStore {
             Err(err) => return Err(err),
         }
 
-        self.write_manifest(&bundle.manifest, &bundle.manifest_signature)?;
-        self.write_merkle_tree_from_commitments(
+        self.write_manifest_under_owner_lock(token, &bundle.manifest, &bundle.manifest_signature)?;
+        self.write_merkle_tree_from_commitments_under_owner_lock(
+            token,
             bundle.current.index_epoch,
             bundle.current.root_hash.clone(),
             commitments,
         )?;
         for bucket in &bundle.buckets {
-            self.write_bucket(
+            self.write_bucket_under_owner_lock(
+                token,
                 bucket,
                 bucket.index_epoch,
                 bundle.manifest.bucket_count,
                 max_ciphertext_bytes,
             )?;
         }
-        self.write_live_epoch(&bundle.current, bundle.writeback_digest.as_deref())?;
+        self.write_live_epoch_under_owner_lock(
+            token,
+            &bundle.current,
+            bundle.writeback_digest.as_deref(),
+        )?;
 
         let stored = self.read_live_replication_bundle(max_ciphertext_bytes, usize::MAX)?;
         if stored != *bundle {
@@ -934,11 +1054,13 @@ impl PrivateResultOramStore {
         Ok(buckets)
     }
 
-    fn write_live_epoch(
+    fn write_live_epoch_under_owner_lock(
         &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
         current: &PrivateResultOramEpochState,
         writeback_digest: Option<&str>,
     ) -> CollectionResult<()> {
+        self.ensure_layout_under_owner_lock(token)?;
         validate_epoch_state(current)?;
         if let Some(writeback_digest) = writeback_digest {
             validate_writeback_digest(writeback_digest)?;
@@ -953,7 +1075,7 @@ impl PrivateResultOramStore {
                 },
             )?;
         }
-        self.write_initial_epoch(current)
+        self.write_initial_epoch_under_owner_lock(token, current)
     }
 
     fn ensure_no_pending_initial_replication(&self) -> CollectionResult<()> {
@@ -965,11 +1087,12 @@ impl PrivateResultOramStore {
         Ok(())
     }
 
-    fn initial_epoch_status(
+    fn initial_epoch_status_under_owner_lock(
         &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
         epoch: &PrivateResultOramEpochState,
     ) -> CollectionResult<InitialEpochStatus> {
-        self.ensure_layout()?;
+        self.ensure_layout_under_owner_lock(token)?;
         match self.read_current_epoch() {
             Ok(current) if current == *epoch => Ok(InitialEpochStatus::Matching),
             Ok(_) => Err(CollectionError::bad_request(
@@ -1027,7 +1150,26 @@ impl PrivateResultOramStore {
         bucket_count: u64,
         max_ciphertext_bytes: usize,
     ) -> CollectionResult<()> {
-        self.ensure_layout()?;
+        self.with_canonical_writer_lock_v1(|token| {
+            self.write_bucket_under_owner_lock(
+                token,
+                bucket,
+                expected_epoch,
+                bucket_count,
+                max_ciphertext_bytes,
+            )
+        })
+    }
+
+    fn write_bucket_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+        bucket: &PrivateResultOramBucket,
+        expected_epoch: u64,
+        bucket_count: u64,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<()> {
+        self.ensure_layout_under_owner_lock(token)?;
         validate_bucket(bucket, expected_epoch, bucket_count, max_ciphertext_bytes)?;
         write_json_atomic(
             &self.root,
@@ -1045,6 +1187,90 @@ impl PrivateResultOramStore {
         max_ciphertext_bytes: usize,
     ) -> CollectionResult<()> {
         validate_bucket(bucket, expected_epoch, bucket_count, max_ciphertext_bytes)
+    }
+
+    pub fn write_bucket_upload_bundle(
+        &self,
+        expected_current: &PrivateResultOramEpochState,
+        bundle: &PrivateResultOramUploadBundle,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<PrivateResultOramEpochState> {
+        self.with_canonical_writer_lock_v1(|token| {
+            self.write_bucket_upload_bundle_under_owner_lock(
+                token,
+                expected_current,
+                bundle,
+                max_ciphertext_bytes,
+            )
+        })
+    }
+
+    fn write_bucket_upload_bundle_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+        expected_current: &PrivateResultOramEpochState,
+        bundle: &PrivateResultOramUploadBundle,
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<PrivateResultOramEpochState> {
+        validate_epoch_state(expected_current)?;
+        if self.read_current_epoch()? != *expected_current {
+            return Err(CollectionError::bad_request(
+                "private result ORAM bucket upload epoch/root does not match current manifest epoch",
+            ));
+        }
+
+        let (stored_manifest, stored_signature) = self.read_manifest()?;
+        if stored_manifest != bundle.manifest || stored_signature != bundle.manifest_signature {
+            return Err(CollectionError::bad_request(
+                "private result ORAM bucket upload does not match current manifest",
+            ));
+        }
+        if bundle.manifest.index_epoch != expected_current.index_epoch
+            || bundle.manifest.root_hash != expected_current.root_hash
+        {
+            return Err(CollectionError::bad_request(
+                "private result ORAM bucket upload epoch/root does not match current manifest epoch",
+            ));
+        }
+
+        // Complete preflight happens before the first canonical write. The bundle
+        // validator enforces exact bucket count, ascending IDs, hashes, fixed
+        // ciphertext size, commitments, and the final Merkle root.
+        let leaf_commitments = validate_upload_bundle(bundle, max_ciphertext_bytes)?;
+        for bucket in &bundle.buckets {
+            validate_bucket_ciphertext_fixed_size(bucket, &bundle.manifest)?;
+        }
+        validate_bucket_commitment_context(
+            &bundle.manifest,
+            expected_current.index_epoch,
+            &bundle.buckets,
+        )?;
+        let tree = PrivateResultOramMerkleTree {
+            version: 1,
+            index_epoch: expected_current.index_epoch,
+            root_hash: expected_current.root_hash.clone(),
+            bucket_count: bundle.manifest.bucket_count,
+            leaf_hashes: leaf_commitments,
+        };
+        validate_merkle_tree_context(
+            &tree,
+            expected_current.index_epoch,
+            &expected_current.root_hash,
+            bundle.manifest.bucket_count,
+        )?;
+
+        self.ensure_layout_under_owner_lock(token)?;
+        for bucket in &bundle.buckets {
+            self.write_bucket_under_owner_lock(
+                token,
+                bucket,
+                expected_current.index_epoch,
+                bundle.manifest.bucket_count,
+                max_ciphertext_bytes,
+            )?;
+        }
+        self.write_merkle_tree_under_owner_lock(token, &tree)?;
+        Ok(expected_current.clone())
     }
 
     pub fn read_bucket(
@@ -1068,7 +1294,17 @@ impl PrivateResultOramStore {
     }
 
     pub fn write_initial_epoch(&self, epoch: &PrivateResultOramEpochState) -> CollectionResult<()> {
-        self.ensure_layout()?;
+        self.with_canonical_writer_lock_v1(|token| {
+            self.write_initial_epoch_under_owner_lock(token, epoch)
+        })
+    }
+
+    fn write_initial_epoch_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+        epoch: &PrivateResultOramEpochState,
+    ) -> CollectionResult<()> {
+        self.ensure_layout_under_owner_lock(token)?;
         validate_epoch_state(epoch)?;
         let current_path = self.current_epoch_path();
         if current_path.exists() {
@@ -1083,13 +1319,25 @@ impl PrivateResultOramStore {
         &self,
         epoch: &PrivateResultOramEpochState,
     ) -> CollectionResult<()> {
-        self.ensure_layout()?;
+        self.with_canonical_writer_lock_v1(|token| {
+            self.write_initial_epoch_if_absent_or_matching_under_owner_lock(token, epoch)
+        })
+    }
+
+    fn write_initial_epoch_if_absent_or_matching_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+        epoch: &PrivateResultOramEpochState,
+    ) -> CollectionResult<()> {
+        self.ensure_layout_under_owner_lock(token)?;
         match self.read_current_epoch() {
             Ok(current) if current == *epoch => Ok(()),
             Ok(_) => Err(CollectionError::bad_request(
                 "private result ORAM current epoch/root does not match uploaded manifest epoch",
             )),
-            Err(CollectionError::NotFound { .. }) => self.write_initial_epoch(epoch),
+            Err(CollectionError::NotFound { .. }) => {
+                self.write_initial_epoch_under_owner_lock(token, epoch)
+            }
             Err(err) => Err(err),
         }
     }
@@ -1100,7 +1348,21 @@ impl PrivateResultOramStore {
         signature: &PrivateResultOramSignature,
         epoch: &PrivateResultOramEpochState,
     ) -> CollectionResult<()> {
-        self.ensure_layout()?;
+        self.with_canonical_writer_lock_v1(|token| {
+            self.write_manifest_with_initial_epoch_if_absent_or_matching_under_owner_lock(
+                token, manifest, signature, epoch,
+            )
+        })
+    }
+
+    fn write_manifest_with_initial_epoch_if_absent_or_matching_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+        manifest: &PrivateResultOramManifest,
+        signature: &PrivateResultOramSignature,
+        epoch: &PrivateResultOramEpochState,
+    ) -> CollectionResult<()> {
+        self.ensure_layout_under_owner_lock(token)?;
         match self.read_current_epoch() {
             Ok(current) if current == *epoch => match self.read_manifest() {
                 Ok((stored_manifest, stored_signature))
@@ -1115,7 +1377,7 @@ impl PrivateResultOramStore {
                     Ok(())
                 }
                 Ok(_) | Err(CollectionError::NotFound { .. }) => {
-                    self.write_manifest(manifest, signature)
+                    self.write_manifest_under_owner_lock(token, manifest, signature)
                 }
                 Err(err) => Err(err),
             },
@@ -1123,8 +1385,8 @@ impl PrivateResultOramStore {
                 "private result ORAM current epoch/root does not match uploaded manifest epoch",
             )),
             Err(CollectionError::NotFound { .. }) => {
-                self.write_manifest(manifest, signature)?;
-                self.write_initial_epoch(epoch)
+                self.write_manifest_under_owner_lock(token, manifest, signature)?;
+                self.write_initial_epoch_under_owner_lock(token, epoch)
             }
             Err(err) => Err(err),
         }
@@ -1142,16 +1404,19 @@ impl PrivateResultOramStore {
         old: &PrivateResultOramEpochState,
         new: &PrivateResultOramEpochState,
     ) -> CollectionResult<()> {
-        self.compare_and_swap_epoch_with_writeback_digest(old, new, None)
+        self.with_canonical_writer_lock_v1(|token| {
+            self.compare_and_swap_epoch_under_owner_lock(token, old, new, None)
+        })
     }
 
-    fn compare_and_swap_epoch_with_writeback_digest(
+    fn compare_and_swap_epoch_under_owner_lock(
         &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
         old: &PrivateResultOramEpochState,
         new: &PrivateResultOramEpochState,
         writeback_digest: Option<&str>,
     ) -> CollectionResult<()> {
-        self.ensure_layout()?;
+        self.ensure_layout_under_owner_lock(token)?;
         validate_epoch_state(old)?;
         validate_epoch_state(new)?;
         if let Some(writeback_digest) = writeback_digest {
@@ -1196,6 +1461,28 @@ impl PrivateResultOramStore {
         updated_buckets: &[PrivateResultOramBucket],
         max_ciphertext_bytes: usize,
     ) -> CollectionResult<PrivateResultOramEpochState> {
+        self.with_canonical_writer_lock_v1(|token| {
+            self.commit_writeback_under_owner_lock(
+                token,
+                old,
+                new,
+                bucket_count,
+                updated_buckets,
+                max_ciphertext_bytes,
+            )
+        })
+    }
+
+    fn commit_writeback_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+        old: &PrivateResultOramEpochState,
+        new: &PrivateResultOramEpochState,
+        bucket_count: u64,
+        updated_buckets: &[PrivateResultOramBucket],
+        max_ciphertext_bytes: usize,
+    ) -> CollectionResult<PrivateResultOramEpochState> {
+        self.ensure_layout_under_owner_lock(token)?;
         if updated_buckets.is_empty() {
             return Err(CollectionError::bad_request(
                 "private result ORAM commit must update at least one bucket",
@@ -1215,7 +1502,8 @@ impl PrivateResultOramStore {
             validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
         }
         validate_bucket_commitment_context(&manifest, new.index_epoch, updated_buckets)?;
-        let prepared_merkle_commit = self.prepare_merkle_commit(
+        let merkle_tree = self.prepare_merkle_tree_under_owner_lock(
+            token,
             old.index_epoch,
             &old.root_hash,
             new.index_epoch,
@@ -1224,10 +1512,16 @@ impl PrivateResultOramStore {
             updated_buckets,
         )?;
         for bucket in updated_buckets {
-            self.write_bucket(bucket, new.index_epoch, bucket_count, max_ciphertext_bytes)?;
+            self.write_bucket_under_owner_lock(
+                token,
+                bucket,
+                new.index_epoch,
+                bucket_count,
+                max_ciphertext_bytes,
+            )?;
         }
-        prepared_merkle_commit.write()?;
-        self.compare_and_swap_epoch(old, new)?;
+        self.write_merkle_tree_under_owner_lock(token, &merkle_tree)?;
+        self.compare_and_swap_epoch_under_owner_lock(token, old, new, None)?;
         Ok(new.clone())
     }
 
@@ -1245,25 +1539,31 @@ impl PrivateResultOramStore {
             expected_key_id,
             public_key,
         } = signature_verification;
-        self.prepare_durable_writeback_with_signature(
-            old,
-            new,
-            bucket_count,
-            updated_buckets,
-            max_ciphertext_bytes,
-            commit_signature,
-            PrivateResultOramSignatureVerification {
-                expected_key_id,
-                public_key,
-            },
-        )?;
-        self.commit_prepared_writeback_with_signature(
-            max_ciphertext_bytes,
-            PrivateResultOramSignatureVerification {
-                expected_key_id,
-                public_key,
-            },
-        )
+        self.with_canonical_writer_lock_v1(|token| {
+            self.prepare_durable_writeback_with_signature_and_consensus_under_owner_lock(
+                token,
+                old,
+                new,
+                bucket_count,
+                updated_buckets,
+                max_ciphertext_bytes,
+                commit_signature,
+                PrivateResultOramSignatureVerification {
+                    expected_key_id,
+                    public_key,
+                },
+                None,
+            )?;
+            self.commit_prepared_writeback_with_signature_and_consensus_under_owner_lock(
+                token,
+                max_ciphertext_bytes,
+                PrivateResultOramSignatureVerification {
+                    expected_key_id,
+                    public_key,
+                },
+                None,
+            )
+        })
     }
 
     pub fn prepare_durable_writeback_with_signature(
@@ -1276,20 +1576,24 @@ impl PrivateResultOramStore {
         commit_signature: &PrivateResultOramSignature,
         signature_verification: PrivateResultOramSignatureVerification<'_>,
     ) -> CollectionResult<PrivateResultOramConsensusWriteback> {
-        self.prepare_durable_writeback_with_signature_and_consensus(
-            old,
-            new,
-            bucket_count,
-            updated_buckets,
-            max_ciphertext_bytes,
-            commit_signature,
-            signature_verification,
-            None,
-        )
+        self.with_canonical_writer_lock_v1(|token| {
+            self.prepare_durable_writeback_with_signature_and_consensus_under_owner_lock(
+                token,
+                old,
+                new,
+                bucket_count,
+                updated_buckets,
+                max_ciphertext_bytes,
+                commit_signature,
+                signature_verification,
+                None,
+            )
+        })
     }
 
-    fn prepare_durable_writeback_with_signature_and_consensus(
+    fn prepare_durable_writeback_with_signature_and_consensus_under_owner_lock(
         &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
         old: &PrivateResultOramEpochState,
         new: &PrivateResultOramEpochState,
         bucket_count: u64,
@@ -1299,7 +1603,7 @@ impl PrivateResultOramStore {
         signature_verification: PrivateResultOramSignatureVerification<'_>,
         expected_consensus_writeback: Option<&PrivateResultOramConsensusWriteback>,
     ) -> CollectionResult<PrivateResultOramConsensusWriteback> {
-        self.ensure_layout()?;
+        self.ensure_layout_under_owner_lock(token)?;
         let pending_path = self.pending_writeback_path();
         if pending_path.exists() {
             let pending: PrivateResultPendingWriteback =
@@ -1413,7 +1717,8 @@ impl PrivateResultOramStore {
                 "private result ORAM current epoch/root does not match expected state",
             ));
         }
-        let prepared_merkle_commit = self.prepare_merkle_commit(
+        let merkle_tree = self.prepare_merkle_tree_under_owner_lock(
+            token,
             old.index_epoch,
             &old.root_hash,
             new.index_epoch,
@@ -1427,7 +1732,7 @@ impl PrivateResultOramStore {
             new: new.clone(),
             bucket_count,
             updated_buckets: updated_buckets.to_vec(),
-            merkle_tree: prepared_merkle_commit.tree,
+            merkle_tree,
             commit_signature: commit_signature.clone(),
         };
         write_json_atomic(&self.root, &self.temp_dir(), &pending_path, &pending)?;
@@ -1439,11 +1744,14 @@ impl PrivateResultOramStore {
         max_ciphertext_bytes: usize,
         signature_verification: PrivateResultOramSignatureVerification<'_>,
     ) -> CollectionResult<PrivateResultOramEpochState> {
-        self.commit_prepared_writeback_with_signature_and_consensus(
-            max_ciphertext_bytes,
-            signature_verification,
-            None,
-        )
+        self.with_canonical_writer_lock_v1(|token| {
+            self.commit_prepared_writeback_with_signature_and_consensus_under_owner_lock(
+                token,
+                max_ciphertext_bytes,
+                signature_verification,
+                None,
+            )
+        })
     }
 
     pub fn commit_replica_writeback_with_signature(
@@ -1452,20 +1760,24 @@ impl PrivateResultOramStore {
         max_ciphertext_bytes: usize,
         signature_verification: PrivateResultOramSignatureVerification<'_>,
     ) -> CollectionResult<PrivateResultOramEpochState> {
-        self.commit_prepared_writeback_with_signature_and_consensus(
-            max_ciphertext_bytes,
-            signature_verification,
-            Some(expected_consensus_writeback),
-        )
+        self.with_canonical_writer_lock_v1(|token| {
+            self.commit_prepared_writeback_with_signature_and_consensus_under_owner_lock(
+                token,
+                max_ciphertext_bytes,
+                signature_verification,
+                Some(expected_consensus_writeback),
+            )
+        })
     }
 
-    fn commit_prepared_writeback_with_signature_and_consensus(
+    fn commit_prepared_writeback_with_signature_and_consensus_under_owner_lock(
         &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
         max_ciphertext_bytes: usize,
         signature_verification: PrivateResultOramSignatureVerification<'_>,
         expected_consensus_writeback: Option<&PrivateResultOramConsensusWriteback>,
     ) -> CollectionResult<PrivateResultOramEpochState> {
-        self.ensure_layout()?;
+        self.ensure_layout_under_owner_lock(token)?;
         let pending: PrivateResultPendingWriteback =
             read_json_private_file(&self.pending_writeback_path(), MAX_PENDING_WRITEBACK_BYTES)?;
         let consensus_writeback = self.validate_pending_writeback(
@@ -1486,16 +1798,18 @@ impl PrivateResultOramStore {
             ));
         }
         for bucket in &pending.updated_buckets {
-            self.write_bucket(
+            self.write_bucket_under_owner_lock(
+                token,
                 bucket,
                 pending.new.index_epoch,
                 pending.bucket_count,
                 max_ciphertext_bytes,
             )?;
         }
-        self.write_merkle_tree(&pending.merkle_tree)?;
+        self.write_merkle_tree_under_owner_lock(token, &pending.merkle_tree)?;
         if current == pending.old {
-            self.compare_and_swap_epoch_with_writeback_digest(
+            self.compare_and_swap_epoch_under_owner_lock(
+                token,
                 &pending.old,
                 &pending.new,
                 Some(&consensus_writeback.writeback_digest),
@@ -1522,12 +1836,8 @@ impl PrivateResultOramStore {
                 ));
             }
         }
-        self.write_completed_writeback_record(&consensus_writeback)?;
-        remove_private_file(
-            &self.pending_writeback_path(),
-            &self.temp_dir(),
-            MAX_PENDING_WRITEBACK_BYTES,
-        )?;
+        self.write_completed_writeback_record_under_owner_lock(token, &consensus_writeback)?;
+        self.remove_pending_writeback_record_under_owner_lock(token)?;
         Ok(pending.new)
     }
 
@@ -1550,10 +1860,12 @@ impl PrivateResultOramStore {
             && commit.writeback_digest.as_deref() == Some(&expected.writeback_digest))
     }
 
-    fn write_completed_writeback_record(
+    fn write_completed_writeback_record_under_owner_lock(
         &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
         expected: &PrivateResultOramConsensusWriteback,
     ) -> CollectionResult<()> {
+        self.ensure_layout_under_owner_lock(token)?;
         validate_writeback_digest(&expected.writeback_digest)?;
         let completed = PrivateResultOramEpochCommit {
             index_epoch: expected.new.index_epoch,
@@ -1579,6 +1891,18 @@ impl PrivateResultOramStore {
             &self.temp_dir(),
             &self.commit_epoch_path(completed.index_epoch),
             &completed,
+        )
+    }
+
+    fn remove_pending_writeback_record_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+    ) -> CollectionResult<()> {
+        self.ensure_layout_under_owner_lock(token)?;
+        remove_private_file(
+            &self.pending_writeback_path(),
+            &self.temp_dir(),
+            MAX_PENDING_WRITEBACK_BYTES,
         )
     }
 
@@ -1658,16 +1982,19 @@ impl PrivateResultOramStore {
                 "private result ORAM replicated writeback is invalid",
             ));
         }
-        self.prepare_durable_writeback_with_signature_and_consensus(
-            &batch.old,
-            &batch.new,
-            batch.bucket_count,
-            &batch.updated_buckets,
-            max_ciphertext_bytes,
-            &batch.commit_signature,
-            signature_verification,
-            Some(expected_consensus_writeback),
-        )
+        self.with_canonical_writer_lock_v1(|token| {
+            self.prepare_durable_writeback_with_signature_and_consensus_under_owner_lock(
+                token,
+                &batch.old,
+                &batch.new,
+                batch.bucket_count,
+                &batch.updated_buckets,
+                max_ciphertext_bytes,
+                &batch.commit_signature,
+                signature_verification,
+                Some(expected_consensus_writeback),
+            )
+        })
     }
 
     pub fn recover_pending_writeback_with_signature(
@@ -1675,11 +2002,18 @@ impl PrivateResultOramStore {
         max_ciphertext_bytes: usize,
         signature_verification: PrivateResultOramSignatureVerification<'_>,
     ) -> CollectionResult<Option<PrivateResultOramEpochState>> {
-        if !self.pending_writeback_exists()? {
-            return Ok(None);
-        }
-        self.commit_prepared_writeback_with_signature(max_ciphertext_bytes, signature_verification)
+        self.with_canonical_writer_lock_v1(|token| {
+            if !self.pending_writeback_exists()? {
+                return Ok(None);
+            }
+            self.commit_prepared_writeback_with_signature_and_consensus_under_owner_lock(
+                token,
+                max_ciphertext_bytes,
+                signature_verification,
+                None,
+            )
             .map(Some)
+        })
     }
 
     pub fn abort_pending_writeback_with_signature(
@@ -1687,11 +2021,14 @@ impl PrivateResultOramStore {
         max_ciphertext_bytes: usize,
         signature_verification: PrivateResultOramSignatureVerification<'_>,
     ) -> CollectionResult<bool> {
-        self.abort_pending_writeback_with_signature_and_consensus(
-            max_ciphertext_bytes,
-            signature_verification,
-            None,
-        )
+        self.with_canonical_writer_lock_v1(|token| {
+            self.abort_pending_writeback_with_signature_and_consensus_under_owner_lock(
+                token,
+                max_ciphertext_bytes,
+                signature_verification,
+                None,
+            )
+        })
     }
 
     pub fn abort_replica_writeback_with_signature(
@@ -1700,19 +2037,24 @@ impl PrivateResultOramStore {
         max_ciphertext_bytes: usize,
         signature_verification: PrivateResultOramSignatureVerification<'_>,
     ) -> CollectionResult<bool> {
-        self.abort_pending_writeback_with_signature_and_consensus(
-            max_ciphertext_bytes,
-            signature_verification,
-            Some(expected_consensus_writeback),
-        )
+        self.with_canonical_writer_lock_v1(|token| {
+            self.abort_pending_writeback_with_signature_and_consensus_under_owner_lock(
+                token,
+                max_ciphertext_bytes,
+                signature_verification,
+                Some(expected_consensus_writeback),
+            )
+        })
     }
 
-    fn abort_pending_writeback_with_signature_and_consensus(
+    fn abort_pending_writeback_with_signature_and_consensus_under_owner_lock(
         &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
         max_ciphertext_bytes: usize,
         signature_verification: PrivateResultOramSignatureVerification<'_>,
         expected_consensus_writeback: Option<&PrivateResultOramConsensusWriteback>,
     ) -> CollectionResult<bool> {
+        self.ensure_layout_under_owner_lock(token)?;
         if !self.pending_writeback_exists()? {
             return Ok(false);
         }
@@ -1752,11 +2094,7 @@ impl PrivateResultOramStore {
                 ));
             }
         }
-        remove_private_file(
-            &self.pending_writeback_path(),
-            &self.temp_dir(),
-            MAX_PENDING_WRITEBACK_BYTES,
-        )?;
+        self.remove_pending_writeback_record_under_owner_lock(token)?;
         Ok(true)
     }
 
@@ -1873,7 +2211,24 @@ impl PrivateResultOramStore {
         root_hash: String,
         leaf_hashes: Vec<String>,
     ) -> CollectionResult<()> {
-        self.ensure_layout()?;
+        self.with_canonical_writer_lock_v1(|token| {
+            self.write_merkle_tree_from_commitments_under_owner_lock(
+                token,
+                index_epoch,
+                root_hash,
+                leaf_hashes,
+            )
+        })
+    }
+
+    fn write_merkle_tree_from_commitments_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+        index_epoch: u64,
+        root_hash: String,
+        leaf_hashes: Vec<String>,
+    ) -> CollectionResult<()> {
+        self.ensure_layout_under_owner_lock(token)?;
         let bucket_count = u64::try_from(leaf_hashes.len()).map_err(|_| {
             CollectionError::bad_request("private result ORAM Merkle tree bucket_count exceeds u64")
         })?;
@@ -1885,7 +2240,7 @@ impl PrivateResultOramStore {
             leaf_hashes,
         };
         validate_merkle_tree(&tree)?;
-        self.write_merkle_tree(&tree)
+        self.write_merkle_tree_under_owner_lock(token, &tree)
     }
 
     pub fn read_merkle_path_batch(
@@ -1973,15 +2328,21 @@ impl PrivateResultOramStore {
         Ok((buckets, proof))
     }
 
-    pub fn prepare_merkle_commit(
+    fn prepare_merkle_tree_under_owner_lock(
         &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
         old_epoch: u64,
         old_root_hash: &str,
         new_epoch: u64,
         new_root_hash: &str,
         bucket_count: u64,
         updated_buckets: &[PrivateResultOramBucket],
-    ) -> CollectionResult<PrivateResultPreparedMerkleCommit> {
+    ) -> CollectionResult<PrivateResultOramMerkleTree> {
+        if !std::ptr::eq(self, token.store) {
+            return Err(CollectionError::service_error(
+                "private result ORAM owner store writer token mismatch",
+            ));
+        }
         if new_epoch <= old_epoch {
             return Err(CollectionError::bad_request(
                 "private result ORAM Merkle commit new epoch must be greater than old epoch",
@@ -2028,9 +2389,52 @@ impl PrivateResultOramStore {
         tree.index_epoch = new_epoch;
         tree.root_hash = new_root_hash.to_string();
         validate_merkle_tree(&tree)?;
-        Ok(PrivateResultPreparedMerkleCommit {
-            store: self.clone(),
-            tree,
+        Ok(tree)
+    }
+
+    #[cfg(test)]
+    fn write_merkle_commit_for_offline_corruption_test(
+        &self,
+        old_epoch: u64,
+        old_root_hash: &str,
+        new_epoch: u64,
+        new_root_hash: &str,
+        bucket_count: u64,
+        updated_buckets: &[PrivateResultOramBucket],
+    ) -> CollectionResult<()> {
+        self.with_canonical_writer_lock_v1(|token| {
+            let tree = self.prepare_merkle_tree_under_owner_lock(
+                token,
+                old_epoch,
+                old_root_hash,
+                new_epoch,
+                new_root_hash,
+                bucket_count,
+                updated_buckets,
+            )?;
+            self.write_merkle_tree_under_owner_lock(token, &tree)
+        })
+    }
+
+    #[cfg(test)]
+    fn write_merkle_tree_for_offline_corruption_test(
+        &self,
+        tree: &PrivateResultOramMerkleTree,
+    ) -> CollectionResult<()> {
+        self.with_canonical_writer_lock_v1(|token| {
+            self.write_merkle_tree_under_owner_lock(token, tree)
+        })
+    }
+
+    #[cfg(test)]
+    fn compare_and_swap_epoch_with_writeback_digest_for_offline_corruption_test(
+        &self,
+        old: &PrivateResultOramEpochState,
+        new: &PrivateResultOramEpochState,
+        writeback_digest: Option<&str>,
+    ) -> CollectionResult<()> {
+        self.with_canonical_writer_lock_v1(|token| {
+            self.compare_and_swap_epoch_under_owner_lock(token, old, new, writeback_digest)
         })
     }
 
@@ -2041,8 +2445,12 @@ impl PrivateResultOramStore {
         Ok(tree)
     }
 
-    fn write_merkle_tree(&self, tree: &PrivateResultOramMerkleTree) -> CollectionResult<()> {
-        self.ensure_layout()?;
+    fn write_merkle_tree_under_owner_lock(
+        &self,
+        token: &PrivateResultOwnerStoreWriteTokenV1<'_>,
+        tree: &PrivateResultOramMerkleTree,
+    ) -> CollectionResult<()> {
+        self.ensure_layout_under_owner_lock(token)?;
         validate_merkle_tree(tree)?;
         write_json_atomic(
             &self.root,
@@ -2257,12 +2665,6 @@ impl PrivateResultOwnerStoreLockV1<'_> {
                 &buckets,
             ),
         })
-    }
-}
-
-impl PrivateResultPreparedMerkleCommit {
-    pub fn write(self) -> CollectionResult<()> {
-        self.store.write_merkle_tree(&self.tree)
     }
 }
 
@@ -3696,16 +4098,10 @@ mod tests {
             bucket_count: 8,
             leaf_hashes: vec![leaf_commitment.clone()],
         };
-        let prepared = PrivateResultPreparedMerkleCommit {
-            store: store.clone(),
-            tree: tree.clone(),
-        };
-
         let rendered = [
             format!("{store:?}"),
             format!("{epoch:?}"),
             format!("{tree:?}"),
-            format!("{prepared:?}"),
         ]
         .join("\n");
         for leaked in [
@@ -4072,6 +4468,211 @@ mod tests {
 
     fn fixture_store(temp: &TempDir) -> PrivateResultOramStore {
         PrivateResultOramStore::new(temp.path())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn owner_root_lock_rejects_leaf_writer_before_mutation() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        store.ensure_layout().unwrap();
+        let bucket = fixture_bucket(0, 42, b"owner-lock-leaf-writer");
+
+        let lock = store.lock_owner_store_v1().unwrap();
+        let error = store.write_bucket(&bucket, 42, 1, 128).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("another private result ORAM owner store operation")
+        );
+        assert!(!store.bucket_path(bucket.bucket_id).exists());
+        drop(lock);
+
+        store.write_bucket(&bucket, 42, 1, 128).unwrap();
+        assert!(store.bucket_path(bucket.bucket_id).exists());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn owner_root_lock_rejects_initial_install_before_mutation() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        store.ensure_layout().unwrap();
+        let bundle = fixture_upload_bundle();
+
+        let lock = store.lock_owner_store_v1().unwrap();
+        let error = store.write_initial_upload_bundle(&bundle, 128).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("another private result ORAM owner store operation")
+        );
+        assert!(!store.manifest_path().exists());
+        assert!(!store.current_epoch_path().exists());
+        assert!(!store.merkle_nodes_path().exists());
+        assert!(!store.bucket_path(0).exists());
+        drop(lock);
+
+        assert_eq!(
+            store.write_initial_upload_bundle(&bundle, 128).unwrap(),
+            PrivateResultOramEpochState {
+                index_epoch: bundle.manifest.index_epoch,
+                root_hash: bundle.manifest.root_hash.clone(),
+            }
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn bucket_upload_bundle_uses_one_lock_and_preflights_before_mutation() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bundle = fixture_upload_bundle();
+        let expected = PrivateResultOramEpochState {
+            index_epoch: bundle.manifest.index_epoch,
+            root_hash: bundle.manifest.root_hash.clone(),
+        };
+        store
+            .write_manifest(&bundle.manifest, &bundle.manifest_signature)
+            .unwrap();
+        store.write_initial_epoch(&expected).unwrap();
+
+        let lock = store.lock_owner_store_v1().unwrap();
+        let error = store
+            .write_bucket_upload_bundle(&expected, &bundle, 128)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("another private result ORAM owner store operation")
+        );
+        for bucket in &bundle.buckets {
+            assert!(!store.bucket_path(bucket.bucket_id).exists());
+        }
+        assert!(!store.merkle_nodes_path().exists());
+        drop(lock);
+
+        let stale = PrivateResultOramEpochState {
+            index_epoch: expected.index_epoch,
+            root_hash: root_hash(98),
+        };
+        let error = store
+            .write_bucket_upload_bundle(&stale, &bundle, 128)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("bucket upload epoch/root does not match current manifest epoch")
+        );
+        for bucket in &bundle.buckets {
+            assert!(!store.bucket_path(bucket.bucket_id).exists());
+        }
+        assert!(!store.merkle_nodes_path().exists());
+
+        let mut invalid = bundle.clone();
+        let last = invalid.buckets.last_mut().unwrap();
+        last.ciphertext_sha256 = root_hash(99);
+        let _error = store
+            .write_bucket_upload_bundle(&expected, &invalid, 128)
+            .unwrap_err();
+        for bucket in &bundle.buckets {
+            assert!(!store.bucket_path(bucket.bucket_id).exists());
+        }
+        assert!(!store.merkle_nodes_path().exists());
+
+        assert_eq!(
+            store
+                .write_bucket_upload_bundle(&expected, &bundle, 128)
+                .unwrap(),
+            expected
+        );
+        for bucket in &bundle.buckets {
+            assert_eq!(
+                store
+                    .read_bucket(
+                        bucket.bucket_id,
+                        expected.index_epoch,
+                        bundle.manifest.bucket_count,
+                        128,
+                    )
+                    .unwrap(),
+                *bucket
+            );
+        }
+        assert_eq!(
+            store.read_merkle_tree().unwrap().root_hash,
+            expected.root_hash
+        );
+        assert_eq!(
+            store
+                .write_bucket_upload_bundle(&expected, &bundle, 128)
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn owner_store_callback_revalidates_pinned_root_identity() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        store.ensure_layout().unwrap();
+        let displaced = temp.path().join("displaced-private-result-oram");
+
+        let error = store
+            .with_owner_store_lock_v1(|_| {
+                fs::rename(&store.root, &displaced).unwrap();
+                create_private_dir(&store.root).unwrap();
+                Ok(())
+            })
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("owner store root identity is invalid")
+        );
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn canonical_writers_fail_closed_without_owner_lock_support() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+
+        let error = store.ensure_layout().unwrap_err();
+
+        assert!(error.to_string().contains("unsupported on this platform"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn aggregate_writers_acquire_owner_root_lock_once_without_self_deadlock() {
+        let temp = TempDir::new().unwrap();
+        let store = fixture_store(&temp);
+        let bundle = fixture_upload_bundle();
+        let old = store.write_initial_upload_bundle(&bundle, 128).unwrap();
+        let updated_bucket = fixture_bucket(1, 43, b"single-lock-aggregate-writeback");
+        let mut commitments = bundle.bucket_commitments();
+        commitments[1] = updated_bucket.bucket_commitment.clone();
+        let new = PrivateResultOramEpochState {
+            index_epoch: 43,
+            root_hash: PrivateResultOramStore::merkle_root_for_commitments(&commitments).unwrap(),
+        };
+
+        assert_eq!(
+            store
+                .commit_writeback(
+                    &old,
+                    &new,
+                    bundle.bucket_count(),
+                    std::slice::from_ref(&updated_bucket),
+                    128,
+                )
+                .unwrap(),
+            new
+        );
+        assert_eq!(store.read_current_epoch().unwrap(), new);
     }
 
     fn fixture_manifest() -> PrivateResultOramManifest {
@@ -5729,7 +6330,9 @@ mod tests {
                 store
                     .write_bucket(&updated_bucket, new.index_epoch, bundle.bucket_count(), 128)
                     .unwrap();
-                store.write_merkle_tree(&pending.merkle_tree).unwrap();
+                store
+                    .write_merkle_tree_for_offline_corruption_test(&pending.merkle_tree)
+                    .unwrap();
             }
             if crash_window >= 2 {
                 store.compare_and_swap_epoch(&old, &new).unwrap();
@@ -6619,12 +7222,12 @@ mod tests {
         let wrong_new_root = root_hash(99);
         assert_ne!(wrong_new_root, new_root);
         let err = store
-            .prepare_merkle_commit(42, &old_root, 43, &old_root, 4, &[])
+            .write_merkle_commit_for_offline_corruption_test(42, &old_root, 43, &old_root, 4, &[])
             .unwrap_err();
         assert!(err.to_string().contains("must update at least one bucket"));
 
         let err = store
-            .prepare_merkle_commit(
+            .write_merkle_commit_for_offline_corruption_test(
                 42,
                 &old_root,
                 43,
@@ -6637,13 +7240,18 @@ mod tests {
         assert!(!err.to_string().contains(&new_root));
 
         store
-            .prepare_merkle_commit(42, &old_root, 43, &new_root, 4, &[updated_bucket])
-            .unwrap()
-            .write()
+            .write_merkle_commit_for_offline_corruption_test(
+                42,
+                &old_root,
+                43,
+                &new_root,
+                4,
+                &[updated_bucket],
+            )
             .unwrap();
 
         let err = store
-            .prepare_merkle_commit(42, &old_root, 43, &new_root, 4, &[])
+            .write_merkle_commit_for_offline_corruption_test(42, &old_root, 43, &new_root, 4, &[])
             .unwrap_err();
         assert!(err.to_string().contains("must update at least one bucket"));
     }
@@ -6663,7 +7271,14 @@ mod tests {
         let second = fixture_bucket(1, 43, b"second update");
 
         let err = store
-            .prepare_merkle_commit(42, &old_root, 43, &root_hash(43), 2, &[first, second])
+            .write_merkle_commit_for_offline_corruption_test(
+                42,
+                &old_root,
+                43,
+                &root_hash(43),
+                2,
+                &[first, second],
+            )
             .unwrap_err();
 
         let rendered = err.to_string();
@@ -6906,7 +7521,7 @@ mod tests {
         let new_root =
             PrivateResultOramStore::merkle_root_for_commitments(&new_commitments).unwrap();
         store
-            .prepare_merkle_commit(
+            .write_merkle_commit_for_offline_corruption_test(
                 42,
                 &old_root,
                 43,
@@ -6914,8 +7529,6 @@ mod tests {
                 2,
                 std::slice::from_ref(&updated_bucket),
             )
-            .unwrap()
-            .write()
             .unwrap();
         assert_eq!(store.read_current_epoch().unwrap(), old_epoch);
         let rendered = store
@@ -7083,8 +7696,16 @@ mod tests {
         drop(digest_bound_old_token);
         drop(lock);
 
-        let prepared_merkle = store
-            .prepare_merkle_commit(
+        store
+            .write_bucket(
+                &updated_bucket,
+                new_epoch.index_epoch,
+                bundle.bucket_count(),
+                128,
+            )
+            .unwrap();
+        store
+            .write_merkle_commit_for_offline_corruption_test(
                 old_epoch.index_epoch,
                 &old_epoch.root_hash,
                 new_epoch.index_epoch,
@@ -7094,16 +7715,7 @@ mod tests {
             )
             .unwrap();
         store
-            .write_bucket(
-                &updated_bucket,
-                new_epoch.index_epoch,
-                bundle.bucket_count(),
-                128,
-            )
-            .unwrap();
-        prepared_merkle.write().unwrap();
-        store
-            .compare_and_swap_epoch_with_writeback_digest(
+            .compare_and_swap_epoch_with_writeback_digest_for_offline_corruption_test(
                 &old_epoch,
                 &new_epoch,
                 Some(&new_state.last_writeback_digest),
@@ -7244,16 +7856,6 @@ mod tests {
             public_key.as_ref(),
         );
 
-        let prepared_merkle = store
-            .prepare_merkle_commit(
-                old_epoch.index_epoch,
-                &old_epoch.root_hash,
-                new_epoch.index_epoch,
-                &new_epoch.root_hash,
-                bundle.bucket_count(),
-                &final_buckets,
-            )
-            .unwrap();
         store
             .write_bucket(
                 &updated_bucket,
@@ -7262,7 +7864,16 @@ mod tests {
                 128,
             )
             .unwrap();
-        prepared_merkle.write().unwrap();
+        store
+            .write_merkle_commit_for_offline_corruption_test(
+                old_epoch.index_epoch,
+                &old_epoch.root_hash,
+                new_epoch.index_epoch,
+                &new_epoch.root_hash,
+                bundle.bucket_count(),
+                &final_buckets,
+            )
+            .unwrap();
         write_json_atomic(
             &store.root,
             &store.temp_dir(),

@@ -1378,25 +1378,16 @@ async fn do_upload_private_hnsw_buckets_inner(
             .map_err(private_hnsw_upload_store_error)?;
         validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
     }
-    let leaf_commitments =
+    let _ =
         validate_initial_private_hnsw_upload_bundle(&manifest, index_epoch, &root_hash, &buckets)?;
-    for bucket in &buckets {
-        store
-            .write_bucket(
-                bucket,
-                index_epoch,
-                manifest.bucket_count,
-                max_ciphertext_bytes,
-            )
-            .map_err(private_hnsw_upload_store_error)?;
-    }
-    store
-        .write_merkle_tree_from_commitments(index_epoch, root_hash.clone(), leaf_commitments)
-        .map_err(private_hnsw_upload_store_error)?;
-    Ok(PrivateHnswOramEpochState {
+    let uploaded = PrivateHnswOramEpochState {
         index_epoch,
         root_hash,
-    })
+    };
+    store
+        .write_initial_bucket_set(&uploaded, &buckets, max_ciphertext_bytes)
+        .map_err(private_hnsw_upload_store_error)?;
+    Ok(uploaded)
 }
 
 pub async fn do_open_private_hnsw_session(
