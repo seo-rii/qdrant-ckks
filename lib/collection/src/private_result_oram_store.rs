@@ -326,7 +326,23 @@ impl PrivateResultOwnerExactNewStoreTokenV1<'_> {
     }
 }
 
-struct PrivateResultOwnerStoreLockV1<'a> {
+pub(crate) enum PrivateResultOwnerStoreObservationV1<'lock> {
+    Old(PrivateResultOwnerExactOldStoreTokenV1<'lock>),
+    New(PrivateResultOwnerExactNewStoreTokenV1<'lock>),
+    Third,
+}
+
+impl Debug for PrivateResultOwnerStoreObservationV1<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Old(_) => "PrivateResultOwnerStoreObservationV1::Old([redacted])",
+            Self::New(_) => "PrivateResultOwnerStoreObservationV1::New([redacted])",
+            Self::Third => "PrivateResultOwnerStoreObservationV1::Third",
+        })
+    }
+}
+
+pub(crate) struct PrivateResultOwnerStoreLockV1<'a> {
     store: &'a PrivateResultOramStore,
     directory: File,
 }
@@ -452,6 +468,14 @@ impl PrivateResultOramStore {
                 directory,
             })
         }
+    }
+
+    pub(crate) fn with_owner_store_lock_v1<R>(
+        &self,
+        action: impl for<'lock> FnOnce(&'lock PrivateResultOwnerStoreLockV1<'_>) -> CollectionResult<R>,
+    ) -> CollectionResult<R> {
+        let lock = self.lock_owner_store_v1()?;
+        action(&lock)
     }
 
     pub(crate) fn with_owner_exact_old_store_v1<R>(
@@ -2087,6 +2111,58 @@ impl PrivateResultOramStore {
 }
 
 impl PrivateResultOwnerStoreLockV1<'_> {
+    pub(crate) fn classify_owner_state_v1<'lock>(
+        &'lock self,
+        authority: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'_>,
+        max_ciphertext_bytes: usize,
+        manifest_validation: PrivateResultOramManifestValidationContext<'_>,
+    ) -> CollectionResult<PrivateResultOwnerStoreObservationV1<'lock>> {
+        let final_buckets = authority
+            .result_final_buckets()
+            .ok_or_else(owner_store_state_mismatch)?;
+        let context = PrivateResultOwnerStoreVerificationContextV1 {
+            journal_descriptor_digest: authority.journal_descriptor_digest(),
+            prepared_state_digest: authority.prepared_state_digest(),
+            immutable_manifest_digest: authority.immutable_manifest_digest(),
+            immutable_manifest: authority.immutable_manifest(),
+            immutable_index: authority.immutable_index(),
+            index_name: authority.index_name(),
+            old_state: authority.old_state(),
+            new_state: authority.new_state(),
+            final_bucket_refs: authority.final_bucket_refs(),
+            final_buckets,
+            max_ciphertext_bytes,
+            manifest_validation,
+        };
+        validate_owner_store_directory_identity(&self.directory, &self.store.root)?;
+        ensure_owner_store_has_no_legacy_pending(self.store)?;
+        let current = self.store.read_current_epoch()?;
+        let old = PrivateResultOramEpochState {
+            index_epoch: context.old_state.index_epoch,
+            root_hash: context.old_state.root_hash.clone(),
+        };
+        let new = PrivateResultOramEpochState {
+            index_epoch: context.new_state.index_epoch,
+            root_hash: context.new_state.root_hash.clone(),
+        };
+        if current == old {
+            return self
+                .verify_exact_old(context)
+                .map(PrivateResultOwnerStoreObservationV1::Old);
+        }
+        if current == new {
+            return self
+                .verify_exact_new(context)
+                .map(PrivateResultOwnerStoreObservationV1::New);
+        }
+        ensure_owner_store_has_no_legacy_pending(self.store)?;
+        if self.store.read_current_epoch()? != current {
+            return Err(owner_store_state_mismatch());
+        }
+        validate_owner_store_directory_identity(&self.directory, &self.store.root)?;
+        Ok(PrivateResultOwnerStoreObservationV1::Third)
+    }
+
     fn verify_exact_old<'lock>(
         &'lock self,
         context: PrivateResultOwnerStoreVerificationContextV1<'_>,

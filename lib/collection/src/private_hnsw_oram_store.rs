@@ -382,7 +382,23 @@ impl PrivateHnswOwnerExactNewStoreTokenV1<'_> {
     }
 }
 
-struct PrivateHnswOwnerStoreLockV1<'a> {
+pub(crate) enum PrivateHnswOwnerStoreObservationV1<'lock> {
+    Old(PrivateHnswOwnerExactOldStoreTokenV1<'lock>),
+    New(PrivateHnswOwnerExactNewStoreTokenV1<'lock>),
+    Third,
+}
+
+impl Debug for PrivateHnswOwnerStoreObservationV1<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Old(_) => "PrivateHnswOwnerStoreObservationV1::Old([redacted])",
+            Self::New(_) => "PrivateHnswOwnerStoreObservationV1::New([redacted])",
+            Self::Third => "PrivateHnswOwnerStoreObservationV1::Third",
+        })
+    }
+}
+
+pub(crate) struct PrivateHnswOwnerStoreLockV1<'a> {
     store: &'a PrivateHnswOramStore,
     directory: File,
 }
@@ -520,6 +536,14 @@ impl PrivateHnswOramStore {
                 directory,
             })
         }
+    }
+
+    pub(crate) fn with_owner_store_lock_v1<R>(
+        &self,
+        action: impl for<'lock> FnOnce(&'lock PrivateHnswOwnerStoreLockV1<'_>) -> CollectionResult<R>,
+    ) -> CollectionResult<R> {
+        let lock = self.lock_owner_store_v1()?;
+        action(&lock)
     }
 
     pub(crate) fn with_owner_exact_old_store_v1<R>(
@@ -2162,6 +2186,58 @@ impl PrivateHnswOramStore {
 }
 
 impl PrivateHnswOwnerStoreLockV1<'_> {
+    pub(crate) fn classify_owner_state_v1<'lock>(
+        &'lock self,
+        authority: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'_>,
+        max_ciphertext_bytes: usize,
+        manifest_validation: PrivateHnswManifestValidationContext<'_>,
+    ) -> CollectionResult<PrivateHnswOwnerStoreObservationV1<'lock>> {
+        let final_buckets = authority
+            .hnsw_final_buckets()
+            .ok_or_else(owner_store_state_mismatch)?;
+        let context = PrivateHnswOwnerStoreVerificationContextV1 {
+            journal_descriptor_digest: authority.journal_descriptor_digest(),
+            prepared_state_digest: authority.prepared_state_digest(),
+            immutable_manifest_digest: authority.immutable_manifest_digest(),
+            immutable_manifest: authority.immutable_manifest(),
+            immutable_index: authority.immutable_index(),
+            index_name: authority.index_name(),
+            old_state: authority.old_state(),
+            new_state: authority.new_state(),
+            final_bucket_refs: authority.final_bucket_refs(),
+            final_buckets,
+            max_ciphertext_bytes,
+            manifest_validation,
+        };
+        validate_owner_store_directory_identity(&self.directory, &self.store.root)?;
+        ensure_owner_store_has_no_legacy_pending(self.store)?;
+        let current = self.store.read_current_epoch()?;
+        let old = PrivateHnswOramEpochState {
+            index_epoch: context.old_state.index_epoch,
+            root_hash: context.old_state.root_hash.clone(),
+        };
+        let new = PrivateHnswOramEpochState {
+            index_epoch: context.new_state.index_epoch,
+            root_hash: context.new_state.root_hash.clone(),
+        };
+        if current == old {
+            return self
+                .verify_exact_old(context)
+                .map(PrivateHnswOwnerStoreObservationV1::Old);
+        }
+        if current == new {
+            return self
+                .verify_exact_new(context)
+                .map(PrivateHnswOwnerStoreObservationV1::New);
+        }
+        ensure_owner_store_has_no_legacy_pending(self.store)?;
+        if self.store.read_current_epoch()? != current {
+            return Err(owner_store_state_mismatch());
+        }
+        validate_owner_store_directory_identity(&self.directory, &self.store.root)?;
+        Ok(PrivateHnswOwnerStoreObservationV1::Third)
+    }
+
     fn verify_exact_old<'lock>(
         &'lock self,
         context: PrivateHnswOwnerStoreVerificationContextV1<'_>,

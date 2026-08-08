@@ -26,3 +26,9 @@ mod tests;
 
 pub mod profiling;
 pub mod update_workers;
+
+#[doc(hidden)]
+pub use private_oram_owner_store_adapter::{
+    PrivateOramOwnerRecoveryStoreDispositionV1, PrivateOramOwnerRecoveryStorePairResourcesV1,
+    classify_private_oram_owner_recovery_store_pair_v1,
+};

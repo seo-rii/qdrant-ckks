@@ -680,6 +680,14 @@ impl Debug for PrivateOramOwnerRecoveryPreparedBindingV1<'_> {
     }
 }
 
+impl PrivateOramOwnerRecoveryPreparedBindingV1<'_> {
+    /// Returns structural data only. The snapshot is untrusted outside this lock-scoped rebind and
+    /// cannot authorize a store write or terminal transition.
+    pub(crate) fn untrusted_snapshot_view(&self) -> &PrivateOramOwnerJournalSnapshotV1 {
+        self.store_binding.snapshot()
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct PrivateOramDurableOwnerPreparedTokenV1 {
     owner_peer_id: u64,
@@ -1071,6 +1079,20 @@ impl PrivateOramOwnerJournal {
         };
         let binding = recovery_prepared_binding(snapshot, projection, &root_lock)?;
         let output = action(&binding);
+        validate_open_directory_at_path(&root_file, &self.root)?;
+        Ok(output)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_exclusive_root_lock_test_v1<R>(
+        &self,
+        action: impl FnOnce() -> R,
+    ) -> Result<R, PrivateOramOwnerJournalError> {
+        #[cfg(not(target_os = "linux"))]
+        ensure_supported_platform()?;
+        let root_file = open_private_directory(&self.root)?;
+        let _root_lock = lock_private_journal_root(&root_file)?;
+        let output = action();
         validate_open_directory_at_path(&root_file, &self.root)?;
         Ok(output)
     }

@@ -4,11 +4,16 @@ use std::fmt::{self, Debug, Formatter};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use collection::operations::types::{CollectionError, CollectionResult};
 use collection::private_oram_owner_journal::{
     PrivateOramOwnerRecoveryIndexProjectionInputV1, PrivateOramOwnerRecoveryIndexProjectionV1,
     PrivateOramOwnerRecoveryProjectionV1,
 };
 use collection::shards::shard::PeerId;
+use collection::{
+    PrivateOramOwnerRecoveryStoreDispositionV1, PrivateOramOwnerRecoveryStorePairResourcesV1,
+    classify_private_oram_owner_recovery_store_pair_v1,
+};
 use data_encoding::BASE64URL_NOPAD;
 use fs_err as fs;
 use fs_err::{File, OpenOptions};
@@ -520,6 +525,16 @@ impl PrivateOramValidatedOwnerRecoveryAuthorityV1 {
             indexes,
         )
         .map_err(|_| PrivateOramMutationJournalError::Corrupt)
+    }
+
+    pub(super) fn classify_pair_recovery_stores_v1(
+        &self,
+        resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+    ) -> CollectionResult<PrivateOramOwnerRecoveryStoreDispositionV1> {
+        let projection = self.pair_recovery_projection().map_err(|_| {
+            CollectionError::bad_request("private ORAM owner recovery authority is invalid")
+        })?;
+        classify_private_oram_owner_recovery_store_pair_v1(&projection, resources)
     }
 }
 

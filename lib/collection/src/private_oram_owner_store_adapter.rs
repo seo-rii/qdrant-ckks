@@ -21,16 +21,17 @@ use qdrant_sec::{
 use crate::operations::types::{CollectionError, CollectionResult};
 use crate::private_hnsw_oram_store::{
     PrivateHnswOramStore, PrivateHnswOwnerExactNewStoreTokenV1,
-    PrivateHnswOwnerExactOldStoreTokenV1,
+    PrivateHnswOwnerExactOldStoreTokenV1, PrivateHnswOwnerStoreObservationV1,
 };
 use crate::private_oram_owner_journal::{
     PrivateOramDurableOwnerPreparedTokenV1, PrivateOramOwnerFinalBucketBatchV1,
     PrivateOramOwnerJournal, PrivateOramOwnerJournalIndexDescriptorV1,
-    PrivateOramOwnerJournalTerminalIndexStateV1, PrivateOramOwnerPreparedStoreBindingV1,
+    PrivateOramOwnerJournalSnapshotV1, PrivateOramOwnerJournalTerminalIndexStateV1,
+    PrivateOramOwnerRecoveryProjectionV1,
 };
 use crate::private_result_oram_store::{
     PrivateResultOramStore, PrivateResultOwnerExactNewStoreTokenV1,
-    PrivateResultOwnerExactOldStoreTokenV1,
+    PrivateResultOwnerExactOldStoreTokenV1, PrivateResultOwnerStoreObservationV1,
 };
 
 #[derive(Clone, Copy)]
@@ -70,6 +71,55 @@ impl Debug for PrivateOramOwnerStorePairContextV1<'_> {
             )
             .finish()
     }
+}
+
+/// Server-side resources used for a read-only recovery classification.
+///
+/// This value contains no parent consensus authority. Storage must pair it with a projection made
+/// from `PrivateOramValidatedOwnerRecoveryAuthorityV1` before invoking the classifier.
+#[doc(hidden)]
+#[derive(Clone, Copy)]
+pub struct PrivateOramOwnerRecoveryStorePairResourcesV1<'a> {
+    pub owner_journal: &'a PrivateOramOwnerJournal,
+    pub immutable_manifest: &'a PrivateOramImmutableManifestBundleV2,
+    pub mutation_bundle: &'a PrivateOramAppendMutationBundleV1,
+    pub signature_verification: PrivateOramSignatureVerification<'a>,
+    pub hnsw_store: &'a PrivateHnswOramStore,
+    pub hnsw_manifest_validation: PrivateHnswManifestValidationContext<'a>,
+    pub hnsw_max_ciphertext_bytes: usize,
+    pub result_store: &'a PrivateResultOramStore,
+    pub result_manifest_validation: PrivateResultOramManifestValidationContext<'a>,
+    pub result_max_ciphertext_bytes: usize,
+}
+
+impl Debug for PrivateOramOwnerRecoveryStorePairResourcesV1<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerRecoveryStorePairResourcesV1")
+            .field("owner_journal", &"[redacted]")
+            .field("immutable_manifest", &"[redacted]")
+            .field("mutation_bundle", &"[redacted]")
+            .field("signature_verification", &"[redacted]")
+            .field("hnsw_store", &"[redacted]")
+            .field("hnsw_manifest_validation", &"[redacted]")
+            .field("hnsw_max_ciphertext_bytes", &self.hnsw_max_ciphertext_bytes)
+            .field("result_store", &"[redacted]")
+            .field("result_manifest_validation", &"[redacted]")
+            .field(
+                "result_max_ciphertext_bytes",
+                &self.result_max_ciphertext_bytes,
+            )
+            .finish()
+    }
+}
+
+/// Read-only, non-authoritative observation of the paired canonical stores.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateOramOwnerRecoveryStoreDispositionV1 {
+    AllOld,
+    AllNew,
+    PartialNew,
+    ThirdState,
 }
 
 #[derive(Clone, Copy)]
@@ -225,11 +275,19 @@ pub(crate) fn with_private_oram_owner_exact_old_store_pair_v1<R>(
         PrivateOramOwnerExactOldStorePairV1<'hnsw, 'result>,
     ) -> CollectionResult<R>,
 ) -> CollectionResult<R> {
+    let static_pair = validate_static_pair_context(
+        context.owner_journal,
+        context.hnsw_store,
+        context.result_store,
+        context.immutable_manifest,
+        context.mutation_bundle,
+        context.signature_verification,
+    )?;
     let binding = context
         .owner_journal
         .bind_live_prepared_store_adapter_v1(context.prepared_token)
         .map_err(|_| invalid_authority())?;
-    let pair = validate_pair_context(context, &binding)?;
+    let pair = validate_child_pair_context(&static_pair, binding.snapshot())?;
     context.hnsw_store.with_owner_exact_old_store_v1(
         pair.hnsw,
         context.hnsw_max_ciphertext_bytes,
@@ -264,11 +322,19 @@ pub(crate) fn with_private_oram_owner_exact_new_store_pair_v1<R>(
         PrivateOramOwnerExactNewStorePairV1<'hnsw, 'result>,
     ) -> CollectionResult<R>,
 ) -> CollectionResult<R> {
+    let static_pair = validate_static_pair_context(
+        context.owner_journal,
+        context.hnsw_store,
+        context.result_store,
+        context.immutable_manifest,
+        context.mutation_bundle,
+        context.signature_verification,
+    )?;
     let binding = context
         .owner_journal
         .bind_live_prepared_store_adapter_v1(context.prepared_token)
         .map_err(|_| invalid_authority())?;
-    let pair = validate_pair_context(context, &binding)?;
+    let pair = validate_child_pair_context(&static_pair, binding.snapshot())?;
     context.hnsw_store.with_owner_exact_new_store_v1(
         pair.hnsw,
         context.hnsw_max_ciphertext_bytes,
@@ -297,58 +363,125 @@ pub(crate) fn with_private_oram_owner_exact_new_store_pair_v1<R>(
     )
 }
 
+/// Classifies the two canonical stores while holding HNSW, result, and child locks in that order.
+///
+/// The returned disposition is an inert observation. It does not authorize roll-forward, abort,
+/// finalize, or any other mutation.
+#[doc(hidden)]
+pub fn classify_private_oram_owner_recovery_store_pair_v1(
+    projection: &PrivateOramOwnerRecoveryProjectionV1,
+    resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+) -> CollectionResult<PrivateOramOwnerRecoveryStoreDispositionV1> {
+    let static_pair = validate_static_pair_context(
+        resources.owner_journal,
+        resources.hnsw_store,
+        resources.result_store,
+        resources.immutable_manifest,
+        resources.mutation_bundle,
+        resources.signature_verification,
+    )?;
+    resources.hnsw_store.with_owner_store_lock_v1(|hnsw_lock| {
+        resources
+            .result_store
+            .with_owner_store_lock_v1(|result_lock| {
+                resources
+                    .owner_journal
+                    .with_revalidated_recovery_prepared_v1(projection, |binding| {
+                        let pair = validate_child_pair_context(
+                            &static_pair,
+                            binding.untrusted_snapshot_view(),
+                        )?;
+                        let hnsw = hnsw_lock.classify_owner_state_v1(
+                            pair.hnsw,
+                            resources.hnsw_max_ciphertext_bytes,
+                            resources.hnsw_manifest_validation,
+                        )?;
+                        let result = result_lock.classify_owner_state_v1(
+                            pair.result,
+                            resources.result_max_ciphertext_bytes,
+                            resources.result_manifest_validation,
+                        )?;
+                        Ok(recovery_store_disposition(hnsw, result))
+                    })
+                    .map_err(|_| invalid_authority())?
+            })
+    })
+}
+
+fn recovery_store_disposition(
+    hnsw: PrivateHnswOwnerStoreObservationV1<'_>,
+    result: PrivateResultOwnerStoreObservationV1<'_>,
+) -> PrivateOramOwnerRecoveryStoreDispositionV1 {
+    match (hnsw, result) {
+        (
+            PrivateHnswOwnerStoreObservationV1::Old(_),
+            PrivateResultOwnerStoreObservationV1::Old(_),
+        ) => PrivateOramOwnerRecoveryStoreDispositionV1::AllOld,
+        (
+            PrivateHnswOwnerStoreObservationV1::New(_),
+            PrivateResultOwnerStoreObservationV1::New(_),
+        ) => PrivateOramOwnerRecoveryStoreDispositionV1::AllNew,
+        (
+            PrivateHnswOwnerStoreObservationV1::New(_),
+            PrivateResultOwnerStoreObservationV1::Old(_),
+        ) => PrivateOramOwnerRecoveryStoreDispositionV1::PartialNew,
+        _ => PrivateOramOwnerRecoveryStoreDispositionV1::ThirdState,
+    }
+}
+
 struct ValidatedStorePair<'a> {
     hnsw: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'a>,
     result: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'a>,
 }
 
-fn validate_pair_context<'a>(
-    context: PrivateOramOwnerStorePairContextV1<'a>,
-    binding: &'a PrivateOramOwnerPreparedStoreBindingV1,
-) -> CollectionResult<ValidatedStorePair<'a>> {
-    validate_pair_store_paths(
-        context.owner_journal,
-        context.hnsw_store,
-        context.result_store,
-    )?;
-    let manifest = &context.immutable_manifest.manifest;
-    let mutation = &context.mutation_bundle.mutation;
+struct ValidatedStaticPair<'a> {
+    manifest: &'a PrivateOramImmutableManifestV2,
+    mutation: &'a qdrant_sec::PrivateOramAppendMutationV1,
+    mutation_digest: String,
+}
+
+fn validate_static_pair_context<'a>(
+    owner_journal: &PrivateOramOwnerJournal,
+    hnsw_store: &PrivateHnswOramStore,
+    result_store: &PrivateResultOramStore,
+    immutable_manifest: &'a PrivateOramImmutableManifestBundleV2,
+    mutation_bundle: &'a PrivateOramAppendMutationBundleV1,
+    signature_verification: PrivateOramSignatureVerification<'a>,
+) -> CollectionResult<ValidatedStaticPair<'a>> {
+    validate_pair_store_paths(owner_journal, hnsw_store, result_store)?;
+    let manifest = &immutable_manifest.manifest;
+    let mutation = &mutation_bundle.mutation;
     validate_private_oram_immutable_manifest_v2_shape(manifest).map_err(|_| invalid_authority())?;
     validate_private_oram_immutable_manifest_v2_signature(
         manifest,
-        Some(&context.immutable_manifest.signature),
-        context.signature_verification,
+        Some(&immutable_manifest.signature),
+        signature_verification,
     )
     .map_err(|_| invalid_authority())?;
     validate_private_oram_append_mutation_v1_shape(mutation).map_err(|_| invalid_authority())?;
     validate_private_oram_append_mutation_v1_signature(
         mutation,
-        Some(&context.mutation_bundle.signature),
-        context.signature_verification,
+        Some(&mutation_bundle.signature),
+        signature_verification,
     )
     .map_err(|_| invalid_authority())?;
     validate_private_oram_signed_state_v2_signature(
         &mutation.old_state.state,
         Some(&mutation.old_state.signature),
-        context.signature_verification,
+        signature_verification,
     )
     .map_err(|_| invalid_authority())?;
     validate_private_oram_signed_state_v2_signature(
         &mutation.new_state.state,
         Some(&mutation.new_state.signature),
-        context.signature_verification,
+        signature_verification,
     )
     .map_err(|_| invalid_authority())?;
 
-    // The live Prepared token is the inductive authority for the full owner-prepare validation,
-    // including the transition and observed read transcript. This adapter rebinds that exact
-    // durable descriptor and independently verifies every signed object it projects to stores.
     let immutable_manifest_digest =
         private_oram_immutable_manifest_v2_digest(manifest).map_err(|_| invalid_authority())?;
     let mutation_digest =
         private_oram_append_mutation_v1_digest(mutation).map_err(|_| invalid_authority())?;
-    let snapshot = binding.snapshot();
-    let descriptor = &snapshot.descriptor;
     let old = &mutation.old_state.state;
     let new = &mutation.new_state.state;
     if immutable_manifest_digest != mutation.manifest_digest
@@ -357,22 +490,52 @@ fn validate_pair_context<'a>(
         || manifest.collection_id != mutation.collection_id
         || old.collection_id != mutation.collection_id
         || new.collection_id != mutation.collection_id
-        || descriptor.collection_id != mutation.collection_id
-        || descriptor.mutation_id != mutation.mutation_id
-        || descriptor.signed_mutation_digest != mutation_digest
-        || descriptor.writer_lease_digest != mutation.writer_lease_digest
-        || descriptor.writer_fence != mutation.writer_fence
         || mutation.layout_generation != old.layout_generation
         || mutation.layout_generation != new.layout_generation
         || manifest.owner_signing_key_id != mutation.owner_signing_key_id
         || old.owner_signing_key_id != mutation.owner_signing_key_id
         || new.owner_signing_key_id != mutation.owner_signing_key_id
-        || descriptor.indexes.len() != 2
-        || snapshot.final_buckets.len() != 2
         || manifest.indexes.len() != 2
         || old.indexes.len() != 2
         || new.indexes.len() != 2
         || mutation.writebacks.len() != 2
+        || manifest.indexes[0].kind() != PrivateOramIndexKindV2::Hnsw
+        || manifest.indexes[1].kind() != PrivateOramIndexKindV2::Result
+        || old.indexes[0].kind != PrivateOramIndexKindV2::Hnsw
+        || old.indexes[1].kind != PrivateOramIndexKindV2::Result
+        || new.indexes[0].kind != PrivateOramIndexKindV2::Hnsw
+        || new.indexes[1].kind != PrivateOramIndexKindV2::Result
+        || mutation.writebacks[0].kind != PrivateOramIndexKindV2::Hnsw
+        || mutation.writebacks[1].kind != PrivateOramIndexKindV2::Result
+    {
+        return Err(invalid_authority());
+    }
+
+    Ok(ValidatedStaticPair {
+        manifest,
+        mutation,
+        mutation_digest,
+    })
+}
+
+fn validate_child_pair_context<'a>(
+    static_pair: &'a ValidatedStaticPair<'_>,
+    snapshot: &'a PrivateOramOwnerJournalSnapshotV1,
+) -> CollectionResult<ValidatedStorePair<'a>> {
+    // The live Prepared token or recovery rebind is the inductive authority for the full
+    // owner-prepare validation. Store inspection inputs are derived only from that exact child.
+    let manifest = static_pair.manifest;
+    let mutation = static_pair.mutation;
+    let descriptor = &snapshot.descriptor;
+    let old = &mutation.old_state.state;
+    let new = &mutation.new_state.state;
+    if descriptor.collection_id != mutation.collection_id
+        || descriptor.mutation_id != mutation.mutation_id
+        || descriptor.signed_mutation_digest != static_pair.mutation_digest
+        || descriptor.writer_lease_digest != mutation.writer_lease_digest
+        || descriptor.writer_fence != mutation.writer_fence
+        || descriptor.indexes.len() != 2
+        || snapshot.final_buckets.len() != 2
     {
         return Err(invalid_authority());
     }
@@ -491,11 +654,13 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::private_hnsw_oram_store::PrivateHnswOramEpochState;
     use crate::private_oram_owner_journal::{
         PrivateOramOwnerFinalBucketBatchV1, PrivateOramOwnerFinalBucketIndexV1,
         PrivateOramOwnerJournalError, PrivateOramOwnerRecoveryIndexProjectionInputV1,
         PrivateOramOwnerRecoveryIndexProjectionV1, PrivateOramOwnerRecoveryProjectionV1,
     };
+    use crate::private_result_oram_store::PrivateResultOramEpochState;
 
     const COLLECTION_ID: &str = "collection-uuid-1";
     const HNSW_INDEX: &str = "text";
@@ -1065,6 +1230,116 @@ mod tests {
         }
     }
 
+    fn recovery_resources<'a>(
+        fixture: &'a PairFixture,
+    ) -> PrivateOramOwnerRecoveryStorePairResourcesV1<'a> {
+        PrivateOramOwnerRecoveryStorePairResourcesV1 {
+            owner_journal: &fixture.owner_journal,
+            immutable_manifest: &fixture.immutable_manifest,
+            mutation_bundle: &fixture.mutation_bundle,
+            signature_verification: PrivateOramSignatureVerification {
+                expected_key_id: OWNER_KEY,
+                public_key: &fixture.public_key,
+            },
+            hnsw_store: &fixture.hnsw_store,
+            hnsw_manifest_validation: PrivateHnswManifestValidationContext {
+                expected_collection_id: COLLECTION_ID,
+                expected_vector_name: HNSW_INDEX,
+                expected_key_id: HNSW_KEY,
+                expected_rk_id: HNSW_KEY,
+                min_rk_epoch: 7,
+                max_rk_epoch: 7,
+                expected_dim: 2,
+                expected_distance: DistanceKind::Cosine,
+                signature_verification: PrivateHnswSignatureVerification {
+                    expected_key_id: OWNER_KEY,
+                    public_key: &fixture.public_key,
+                },
+            },
+            hnsw_max_ciphertext_bytes: 4096,
+            result_store: &fixture.result_store,
+            result_manifest_validation: PrivateResultOramManifestValidationContext {
+                expected_collection_id: COLLECTION_ID,
+                expected_key_id: RESULT_KEY,
+                expected_rk_id: RESULT_KEY,
+                min_rk_epoch: 7,
+                max_rk_epoch: 7,
+                signature_verification: PrivateResultOramSignatureVerification {
+                    expected_key_id: OWNER_KEY,
+                    public_key: &fixture.public_key,
+                },
+            },
+            result_max_ciphertext_bytes: 4096,
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum RecoveryFixtureStoreState {
+        Old,
+        New,
+        Third,
+    }
+
+    fn set_hnsw_recovery_state(fixture: &PairFixture, state: RecoveryFixtureStoreState) {
+        let mutation = &fixture.mutation_bundle.mutation;
+        match state {
+            RecoveryFixtureStoreState::Old => {}
+            RecoveryFixtureStoreState::New => fixture
+                .hnsw_store
+                .apply_owner_exact_new_test_fixture_v1(
+                    &mutation.old_state.state.indexes[0],
+                    &mutation.new_state.state.indexes[0],
+                    &fixture.hnsw_final,
+                    3,
+                    4096,
+                )
+                .unwrap(),
+            RecoveryFixtureStoreState::Third => {
+                let old = fixture.hnsw_store.read_current_epoch().unwrap();
+                fixture
+                    .hnsw_store
+                    .compare_and_swap_epoch(
+                        &old,
+                        &PrivateHnswOramEpochState {
+                            index_epoch: old.index_epoch + 2,
+                            root_hash: digest(200),
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    fn set_result_recovery_state(fixture: &PairFixture, state: RecoveryFixtureStoreState) {
+        let mutation = &fixture.mutation_bundle.mutation;
+        match state {
+            RecoveryFixtureStoreState::Old => {}
+            RecoveryFixtureStoreState::New => fixture
+                .result_store
+                .apply_owner_exact_new_test_fixture_v1(
+                    &mutation.old_state.state.indexes[1],
+                    &mutation.new_state.state.indexes[1],
+                    &fixture.result_final,
+                    3,
+                    4096,
+                )
+                .unwrap(),
+            RecoveryFixtureStoreState::Third => {
+                let old = fixture.result_store.read_current_epoch().unwrap();
+                fixture
+                    .result_store
+                    .compare_and_swap_epoch(
+                        &old,
+                        &PrivateResultOramEpochState {
+                            index_epoch: old.index_epoch + 2,
+                            root_hash: digest(201),
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     fn recovery_projection(
         fixture: &PairFixture,
     ) -> Result<PrivateOramOwnerRecoveryProjectionV1, PrivateOramOwnerJournalError> {
@@ -1218,6 +1493,304 @@ mod tests {
             )
             .unwrap_err(),
             PrivateOramOwnerJournalError::InvalidInput("indexes")
+        );
+    }
+
+    #[test]
+    fn recovery_classifier_covers_all_store_state_combinations() {
+        use PrivateOramOwnerRecoveryStoreDispositionV1::{AllNew, AllOld, PartialNew, ThirdState};
+        use RecoveryFixtureStoreState::{New, Old, Third};
+
+        let cases = [
+            (Old, Old, AllOld),
+            (Old, New, ThirdState),
+            (Old, Third, ThirdState),
+            (New, Old, PartialNew),
+            (New, New, AllNew),
+            (New, Third, ThirdState),
+            (Third, Old, ThirdState),
+            (Third, New, ThirdState),
+            (Third, Third, ThirdState),
+        ];
+        for (hnsw, result, expected) in cases {
+            let fixture = pair_fixture();
+            set_hnsw_recovery_state(&fixture, hnsw);
+            set_result_recovery_state(&fixture, result);
+            let projection = recovery_projection(&fixture).unwrap();
+
+            let observed = classify_private_oram_owner_recovery_store_pair_v1(
+                &projection,
+                recovery_resources(&fixture),
+            )
+            .unwrap();
+
+            assert_eq!(observed, expected);
+            let rendered = format!("{projection:?} {:?}", recovery_resources(&fixture));
+            assert!(!rendered.contains(COLLECTION_ID));
+            assert!(!rendered.contains(&format!("\"{HNSW_INDEX}\"")));
+            assert!(!rendered.contains(RESULT_INDEX));
+            assert!(!rendered.contains(HNSW_KEY));
+            assert!(!rendered.contains(RESULT_KEY));
+            assert!(!rendered.contains(&digest(61)));
+        }
+    }
+
+    #[test]
+    fn recovery_classifier_errors_when_an_exact_pointer_has_corrupt_evidence() {
+        let manifest_fixture = pair_fixture();
+        let manifest_projection = recovery_projection(&manifest_fixture).unwrap();
+        let (manifest, signature) = manifest_fixture.hnsw_store.read_manifest().unwrap();
+        let mut substituted_manifest = manifest.clone();
+        substituted_manifest.key_id = "tenant-a/substituted-hnsw-rk".to_string();
+        manifest_fixture
+            .hnsw_store
+            .write_manifest(&substituted_manifest, &signature)
+            .unwrap();
+        assert!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &manifest_projection,
+                recovery_resources(&manifest_fixture),
+            )
+            .is_err()
+        );
+        manifest_fixture
+            .hnsw_store
+            .write_manifest(&manifest, &signature)
+            .unwrap();
+        assert_eq!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &manifest_projection,
+                recovery_resources(&manifest_fixture),
+            )
+            .unwrap(),
+            PrivateOramOwnerRecoveryStoreDispositionV1::AllOld
+        );
+
+        let commit_fixture = pair_fixture();
+        let commit_projection = recovery_projection(&commit_fixture).unwrap();
+        let current = commit_fixture.hnsw_store.read_current_epoch().unwrap();
+        let expected_new = &commit_fixture
+            .mutation_bundle
+            .mutation
+            .new_state
+            .state
+            .indexes[0];
+        commit_fixture
+            .hnsw_store
+            .compare_and_swap_epoch(
+                &current,
+                &PrivateHnswOramEpochState {
+                    index_epoch: expected_new.index_epoch,
+                    root_hash: expected_new.root_hash.clone(),
+                },
+            )
+            .unwrap();
+        assert!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &commit_projection,
+                recovery_resources(&commit_fixture),
+            )
+            .is_err()
+        );
+
+        let merkle_fixture = pair_fixture();
+        let merkle_projection = recovery_projection(&merkle_fixture).unwrap();
+        let leaves = vec![digest(210), digest(211), digest(212)];
+        let root = PrivateHnswOramStore::merkle_root_for_commitments(&leaves).unwrap();
+        merkle_fixture
+            .hnsw_store
+            .write_merkle_tree_from_commitments(11, root, leaves)
+            .unwrap();
+        assert!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &merkle_projection,
+                recovery_resources(&merkle_fixture),
+            )
+            .is_err()
+        );
+
+        let bucket_fixture = pair_fixture();
+        let bucket_projection = recovery_projection(&bucket_fixture).unwrap();
+        let (manifest, _) = bucket_fixture.hnsw_store.read_manifest().unwrap();
+        let substituted = hnsw_bucket(&manifest, 0, 11, 213);
+        bucket_fixture
+            .hnsw_store
+            .write_bucket(&substituted, 11, 3, 4096)
+            .unwrap();
+        assert!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &bucket_projection,
+                recovery_resources(&bucket_fixture),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn recovery_classifier_errors_when_result_exact_pointer_has_corrupt_evidence() {
+        let manifest_fixture = pair_fixture();
+        let manifest_projection = recovery_projection(&manifest_fixture).unwrap();
+        let (manifest, signature) = manifest_fixture.result_store.read_manifest().unwrap();
+        let mut substituted_manifest = manifest.clone();
+        substituted_manifest.key_id = "tenant-a/substituted-result-rk".to_string();
+        manifest_fixture
+            .result_store
+            .write_manifest(&substituted_manifest, &signature)
+            .unwrap();
+        assert!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &manifest_projection,
+                recovery_resources(&manifest_fixture),
+            )
+            .is_err()
+        );
+        manifest_fixture
+            .result_store
+            .write_manifest(&manifest, &signature)
+            .unwrap();
+        assert_eq!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &manifest_projection,
+                recovery_resources(&manifest_fixture),
+            )
+            .unwrap(),
+            PrivateOramOwnerRecoveryStoreDispositionV1::AllOld
+        );
+
+        let commit_fixture = pair_fixture();
+        let commit_projection = recovery_projection(&commit_fixture).unwrap();
+        let current = commit_fixture.result_store.read_current_epoch().unwrap();
+        let expected_new = &commit_fixture
+            .mutation_bundle
+            .mutation
+            .new_state
+            .state
+            .indexes[1];
+        commit_fixture
+            .result_store
+            .compare_and_swap_epoch(
+                &current,
+                &PrivateResultOramEpochState {
+                    index_epoch: expected_new.index_epoch,
+                    root_hash: expected_new.root_hash.clone(),
+                },
+            )
+            .unwrap();
+        assert!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &commit_projection,
+                recovery_resources(&commit_fixture),
+            )
+            .is_err()
+        );
+
+        let merkle_fixture = pair_fixture();
+        let merkle_projection = recovery_projection(&merkle_fixture).unwrap();
+        let leaves = vec![digest(220), digest(221), digest(222)];
+        let root = PrivateResultOramStore::merkle_root_for_commitments(&leaves).unwrap();
+        merkle_fixture
+            .result_store
+            .write_merkle_tree_from_commitments(11, root, leaves)
+            .unwrap();
+        assert!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &merkle_projection,
+                recovery_resources(&merkle_fixture),
+            )
+            .is_err()
+        );
+
+        let bucket_fixture = pair_fixture();
+        let bucket_projection = recovery_projection(&bucket_fixture).unwrap();
+        let (manifest, _) = bucket_fixture.result_store.read_manifest().unwrap();
+        let substituted = result_bucket(&manifest, 0, 11, 223);
+        bucket_fixture
+            .result_store
+            .write_bucket(&substituted, 11, 3, 4096)
+            .unwrap();
+        assert!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &bucket_projection,
+                recovery_resources(&bucket_fixture),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn recovery_classifier_rejects_hnsw_and_child_lock_contention() {
+        let fixture = pair_fixture();
+        let projection = recovery_projection(&fixture).unwrap();
+
+        fixture
+            .hnsw_store
+            .with_owner_store_lock_v1(|_| {
+                let error = classify_private_oram_owner_recovery_store_pair_v1(
+                    &projection,
+                    recovery_resources(&fixture),
+                )
+                .unwrap_err()
+                .to_string();
+                assert!(error.contains("another private HNSW ORAM owner store operation"));
+                assert!(!error.contains(COLLECTION_ID));
+                Ok(())
+            })
+            .unwrap();
+
+        fixture
+            .owner_journal
+            .with_exclusive_root_lock_test_v1(|| {
+                let error = classify_private_oram_owner_recovery_store_pair_v1(
+                    &projection,
+                    recovery_resources(&fixture),
+                )
+                .unwrap_err()
+                .to_string();
+                assert_eq!(
+                    error,
+                    "Bad request: private ORAM paired owner store authority is invalid"
+                );
+                assert!(!error.contains(COLLECTION_ID));
+            })
+            .unwrap();
+
+        assert_eq!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &projection,
+                recovery_resources(&fixture),
+            )
+            .unwrap(),
+            PrivateOramOwnerRecoveryStoreDispositionV1::AllOld
+        );
+    }
+
+    #[test]
+    fn recovery_classifier_releases_hnsw_when_result_lock_is_contended() {
+        let fixture = pair_fixture();
+        let projection = recovery_projection(&fixture).unwrap();
+
+        fixture
+            .result_store
+            .with_owner_store_lock_v1(|_| {
+                let error = classify_private_oram_owner_recovery_store_pair_v1(
+                    &projection,
+                    recovery_resources(&fixture),
+                )
+                .unwrap_err()
+                .to_string();
+                assert!(error.contains("another private result ORAM owner store operation"));
+                assert!(!error.contains(COLLECTION_ID));
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &projection,
+                recovery_resources(&fixture),
+            )
+            .unwrap(),
+            PrivateOramOwnerRecoveryStoreDispositionV1::AllOld
         );
     }
 
