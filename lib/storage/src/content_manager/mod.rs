@@ -13,6 +13,7 @@ pub mod consensus_manager;
 pub mod conversions;
 pub mod errors;
 pub mod private_oram_mutation_journal;
+mod private_oram_mutation_state_v2;
 pub mod private_oram_point_staging;
 pub mod shard_distribution;
 pub mod snapshots;
