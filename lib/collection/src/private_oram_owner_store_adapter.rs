@@ -4,6 +4,9 @@
 )]
 
 use std::fmt::{self, Debug, Formatter};
+use std::marker::PhantomData;
+use std::rc::Rc;
+use std::sync::Arc;
 
 use qdrant_sec::{
     PrivateHnswManifestValidationContext, PrivateOramAppendBucketRefV1,
@@ -17,22 +20,30 @@ use qdrant_sec::{
     validate_private_oram_immutable_manifest_v2_signature,
     validate_private_oram_signed_state_v2_signature,
 };
+use sha2::{Digest, Sha256};
 
 use crate::operations::types::{CollectionError, CollectionResult};
 use crate::private_hnsw_oram_store::{
     PrivateHnswOramStore, PrivateHnswOwnerExactNewStoreTokenV1,
-    PrivateHnswOwnerExactOldStoreTokenV1, PrivateHnswOwnerStoreObservationV1,
+    PrivateHnswOwnerExactOldStoreTokenV1, PrivateHnswOwnerRecoveryPhaseV1,
+    PrivateHnswOwnerStoreLockV1, PrivateHnswOwnerStoreObservationV1,
 };
 use crate::private_oram_owner_journal::{
     PrivateOramDurableOwnerPreparedTokenV1, PrivateOramOwnerFinalBucketBatchV1,
     PrivateOramOwnerJournal, PrivateOramOwnerJournalIndexDescriptorV1,
     PrivateOramOwnerJournalSnapshotV1, PrivateOramOwnerJournalTerminalIndexStateV1,
+    PrivateOramOwnerRecoveryExclusiveActionV1, PrivateOramOwnerRecoveryExclusiveBindingV1,
+    PrivateOramOwnerRecoveryExclusiveOutcomeV1, PrivateOramOwnerRecoveryExclusiveStateV1,
     PrivateOramOwnerRecoveryProjectionV1,
 };
 use crate::private_result_oram_store::{
     PrivateResultOramStore, PrivateResultOwnerExactNewStoreTokenV1,
-    PrivateResultOwnerExactOldStoreTokenV1, PrivateResultOwnerStoreObservationV1,
+    PrivateResultOwnerExactOldStoreTokenV1, PrivateResultOwnerRecoveryProgressV1,
+    PrivateResultOwnerStoreLockV1, PrivateResultOwnerStoreObservationV1,
 };
+
+const RECOVERY_TRANSACTION_IDENTITY_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-recovery-transaction/v1";
 
 #[derive(Clone, Copy)]
 pub(crate) struct PrivateOramOwnerStorePairContextV1<'a> {
@@ -120,6 +131,179 @@ pub enum PrivateOramOwnerRecoveryStoreDispositionV1 {
     AllNew,
     PartialNew,
     ThirdState,
+}
+
+#[derive(Debug)]
+struct PrivateOramOwnerRecoveryParentBridgeIdentityV1;
+
+/// Parent-journal endpoint retained by storage and used only while its exclusive lock is held.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct PrivateOramOwnerRecoveryParentBridgeV1 {
+    identity: Arc<PrivateOramOwnerRecoveryParentBridgeIdentityV1>,
+}
+
+impl Debug for PrivateOramOwnerRecoveryParentBridgeV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("PrivateOramOwnerRecoveryParentBridgeV1([redacted])")
+    }
+}
+
+/// Matching collection-side verifier for one parent-journal bridge instance.
+#[doc(hidden)]
+#[derive(Clone)]
+pub struct PrivateOramOwnerRecoveryParentVerifierV1 {
+    identity: Arc<PrivateOramOwnerRecoveryParentBridgeIdentityV1>,
+}
+
+impl Debug for PrivateOramOwnerRecoveryParentVerifierV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str("PrivateOramOwnerRecoveryParentVerifierV1([redacted])")
+    }
+}
+
+/// Creates process-local matching endpoints for one mutation-journal root.
+#[doc(hidden)]
+pub fn new_private_oram_owner_recovery_parent_bridge_v1() -> (
+    PrivateOramOwnerRecoveryParentBridgeV1,
+    PrivateOramOwnerRecoveryParentVerifierV1,
+) {
+    let identity = Arc::new(PrivateOramOwnerRecoveryParentBridgeIdentityV1);
+    (
+        PrivateOramOwnerRecoveryParentBridgeV1 {
+            identity: Arc::clone(&identity),
+        },
+        PrivateOramOwnerRecoveryParentVerifierV1 { identity },
+    )
+}
+
+/// Consensus-backed disposition captured by storage before entering child recovery.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateOramOwnerRecoveryParentDispositionV1 {
+    ObservedOldNeedsAbortDecision,
+    ExactOldAbortDecided,
+    ExactNew,
+}
+
+/// Structural parent values accepted only by a bridge endpoint retained inside storage.
+///
+/// This DTO is not authority. The adapter accepts only the lock-scoped capability minted from it.
+#[doc(hidden)]
+pub struct PrivateOramOwnerRecoveryParentInputV1 {
+    pub projection: PrivateOramOwnerRecoveryProjectionV1,
+    pub disposition: PrivateOramOwnerRecoveryParentDispositionV1,
+    pub authenticated_owner_peer_id: u64,
+    pub parent_descriptor_digest: String,
+    pub parent_owners_prepared_record_digest: String,
+    pub consensus_authority_record_digest: String,
+    pub reconciliation_authority_digest: String,
+}
+
+impl Debug for PrivateOramOwnerRecoveryParentInputV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerRecoveryParentInputV1")
+            .field("projection", &"[redacted]")
+            .field("disposition", &self.disposition)
+            .field(
+                "authenticated_owner_peer_id",
+                &self.authenticated_owner_peer_id,
+            )
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field("parent_owners_prepared_record_digest", &"[redacted]")
+            .field("consensus_authority_record_digest", &"[redacted]")
+            .field("reconciliation_authority_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+type ParentRecoveryLockBrand<'lock> = PhantomData<fn(&'lock mut ()) -> &'lock mut ()>;
+
+/// Opaque parent authority that cannot outlive the actual parent EX lock callback.
+#[doc(hidden)]
+pub struct PrivateOramOwnerRecoveryLiveParentV1<'lock> {
+    identity: Arc<PrivateOramOwnerRecoveryParentBridgeIdentityV1>,
+    input: PrivateOramOwnerRecoveryParentInputV1,
+    parent_lock_lifetime: ParentRecoveryLockBrand<'lock>,
+    not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+impl Debug for PrivateOramOwnerRecoveryLiveParentV1<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramOwnerRecoveryLiveParentV1")
+            .field("input", &self.input)
+            .field("parent_lock", &"[held]")
+            .finish()
+    }
+}
+
+impl PrivateOramOwnerRecoveryParentBridgeV1 {
+    /// Executes with an authority branded by the caller's actual parent-lock borrow.
+    ///
+    /// # Safety
+    ///
+    /// The caller must retain both endpoints privately in the exact parent mutation-journal
+    /// instance, hold that journal's pinned exclusive root lock for `'lock`, and build `input`
+    /// from the typed authority revalidated under that lock. Calling this with an unrelated
+    /// borrow or caller-constructed parent state can authorize irreversible canonical writes.
+    ///
+    /// Safe downstream code cannot mint this authority:
+    ///
+    /// ```compile_fail,E0133
+    /// use collection::{
+    ///     PrivateOramOwnerRecoveryParentBridgeV1, PrivateOramOwnerRecoveryParentInputV1,
+    /// };
+    ///
+    /// fn forge(
+    ///     bridge: &PrivateOramOwnerRecoveryParentBridgeV1,
+    ///     input: PrivateOramOwnerRecoveryParentInputV1,
+    /// ) {
+    ///     bridge.with_live_parent_v1(&(), input, |_| ());
+    /// }
+    /// ```
+    #[doc(hidden)]
+    pub unsafe fn with_live_parent_v1<'lock, T, R>(
+        &self,
+        parent_lock: &'lock T,
+        input: PrivateOramOwnerRecoveryParentInputV1,
+        action: impl FnOnce(&PrivateOramOwnerRecoveryLiveParentV1<'lock>) -> R,
+    ) -> R {
+        self.with_live_parent_unchecked_v1(parent_lock, input, action)
+    }
+
+    fn with_live_parent_unchecked_v1<'lock, T, R>(
+        &self,
+        _parent_lock: &'lock T,
+        input: PrivateOramOwnerRecoveryParentInputV1,
+        action: impl FnOnce(&PrivateOramOwnerRecoveryLiveParentV1<'lock>) -> R,
+    ) -> R {
+        let live = PrivateOramOwnerRecoveryLiveParentV1 {
+            identity: Arc::clone(&self.identity),
+            input,
+            parent_lock_lifetime: PhantomData,
+            not_send_or_sync: PhantomData,
+        };
+        action(&live)
+    }
+
+    #[cfg(test)]
+    fn with_test_live_parent_v1<'lock, T, R>(
+        &self,
+        parent_lock: &'lock T,
+        input: PrivateOramOwnerRecoveryParentInputV1,
+        action: impl FnOnce(&PrivateOramOwnerRecoveryLiveParentV1<'lock>) -> R,
+    ) -> R {
+        self.with_live_parent_unchecked_v1(parent_lock, input, action)
+    }
+}
+
+/// Durable child outcome. Storage exposes it only after revalidating the parent journal root/tip.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivateOramOwnerRecoveryPairOutcomeV1 {
+    ObservedOld,
+    AbortedOld,
+    Finalized,
 }
 
 #[derive(Clone, Copy)]
@@ -267,6 +451,403 @@ impl PrivateOramOwnerExactNewStorePairV1<'_, '_> {
             },
         ]
     }
+}
+
+type ChildRecoveryTransactionBrand<'child> = PhantomData<fn(&'child mut ()) -> &'child mut ()>;
+
+struct PrivateOramOwnerRecoveryTransitionBrandV1<'parent, 'child> {
+    identity: [u8; 32],
+    parent_lock_lifetime: ParentRecoveryLockBrand<'parent>,
+    child_lock_lifetime: ChildRecoveryTransactionBrand<'child>,
+    not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+struct PrivateOramOwnerRecoveryExactOldPairPermitV1<'brand, 'parent, 'child, 'hnsw, 'result> {
+    pair: PrivateOramOwnerExactOldStorePairV1<'hnsw, 'result>,
+    transition: &'brand PrivateOramOwnerRecoveryTransitionBrandV1<'parent, 'child>,
+    not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+impl PrivateOramOwnerRecoveryExactOldPairPermitV1<'_, '_, '_, '_, '_> {
+    fn terminal_index_states(&self) -> [PrivateOramOwnerJournalTerminalIndexStateV1; 2] {
+        let _ = self.transition.identity;
+        self.pair.terminal_index_states()
+    }
+}
+
+struct PrivateOramOwnerRecoveryExactNewPairPermitV1<'brand, 'parent, 'child, 'hnsw, 'result> {
+    pair: PrivateOramOwnerExactNewStorePairV1<'hnsw, 'result>,
+    transition: &'brand PrivateOramOwnerRecoveryTransitionBrandV1<'parent, 'child>,
+    not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+impl PrivateOramOwnerRecoveryExactNewPairPermitV1<'_, '_, '_, '_, '_> {
+    fn terminal_index_states(&self) -> [PrivateOramOwnerJournalTerminalIndexStateV1; 2] {
+        let _ = self.transition.identity;
+        self.pair.terminal_index_states()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PrivateOramOwnerRecoveryDecisionV1 {
+    ObserveOld,
+    AbortOld,
+    ReplayAbortOld,
+    RollForwardAndFinalize,
+    ReplayFinalized,
+}
+
+/// Entry permit created only after the parent, HNSW, and result locks are held in order.
+///
+/// The child journal consumes this value through its fixed recovery entry point; no caller can
+/// construct a child-first mutating callback.
+pub(crate) struct PrivateOramOwnerLockedRecoveryTransactionV1<
+    'resources,
+    'parent_lock,
+    'hnsw,
+    'result,
+> {
+    verifier: &'resources PrivateOramOwnerRecoveryParentVerifierV1,
+    parent: &'resources PrivateOramOwnerRecoveryLiveParentV1<'parent_lock>,
+    resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'resources>,
+    static_pair: ValidatedStaticPair<'resources>,
+    hnsw_lock: &'hnsw PrivateHnswOwnerStoreLockV1<'resources>,
+    result_lock: &'result PrivateResultOwnerStoreLockV1<'resources>,
+    not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+impl<'resources, 'parent_lock, 'hnsw, 'result>
+    PrivateOramOwnerLockedRecoveryTransactionV1<'resources, 'parent_lock, 'hnsw, 'result>
+{
+    pub(crate) fn recover_under_child_exclusive_v1<'child>(
+        self,
+        binding: &PrivateOramOwnerRecoveryExclusiveBindingV1<'child>,
+    ) -> CollectionResult<PrivateOramOwnerRecoveryExclusiveActionV1<'child>> {
+        validate_live_parent_bridge(self.verifier, self.parent)?;
+        let snapshot = binding.untrusted_snapshot_view();
+        let pair = validate_child_pair_context(&self.static_pair, snapshot)?;
+        validate_live_parent_child_context(self.parent, &self.static_pair, snapshot)?;
+        let transition = recovery_transition_brand(
+            self.parent,
+            binding,
+            recovery_transaction_identity(self.parent, &self.static_pair, snapshot),
+        );
+
+        // Both stores are classified before the first canonical mutation. The decision below is
+        // the complete cross-store phase lattice for v1 paired recovery.
+        let hnsw_phase = self.hnsw_lock.classify_owner_recovery_phase_v1(
+            pair.hnsw,
+            self.resources.hnsw_max_ciphertext_bytes,
+            self.resources.hnsw_manifest_validation,
+        )?;
+        let result_progress = self.result_lock.classify_owner_recovery_progress_v1(
+            pair.result,
+            self.resources.result_max_ciphertext_bytes,
+            self.resources.result_manifest_validation,
+        )?;
+        let decision = recovery_decision(
+            self.parent.input.disposition,
+            binding.state(),
+            hnsw_phase,
+            result_progress,
+        )?;
+
+        match decision {
+            PrivateOramOwnerRecoveryDecisionV1::ObserveOld => {
+                let permit = self.verify_exact_old_pair(pair, &transition)?;
+                let _ = permit.terminal_index_states();
+                Ok(binding.no_terminal_action())
+            }
+            PrivateOramOwnerRecoveryDecisionV1::AbortOld
+            | PrivateOramOwnerRecoveryDecisionV1::ReplayAbortOld => {
+                let permit = self.verify_exact_old_pair(pair, &transition)?;
+                let canonical = permit.terminal_index_states();
+                binding
+                    .abort_old_recovery_store_pair_action_v1(
+                        &snapshot.descriptor.descriptor_digest,
+                        &self.parent.input.parent_descriptor_digest,
+                        self.parent.input.authenticated_owner_peer_id,
+                        &self.parent.input.consensus_authority_record_digest,
+                        &self.parent.input.reconciliation_authority_digest,
+                        &canonical,
+                    )
+                    .map_err(|_| invalid_authority())
+            }
+            PrivateOramOwnerRecoveryDecisionV1::RollForwardAndFinalize => {
+                let hnsw = self.hnsw_lock.resume_owner_recovery_to_exact_new_v1(
+                    pair.hnsw,
+                    self.resources.hnsw_max_ciphertext_bytes,
+                    self.resources.hnsw_manifest_validation,
+                )?;
+                let result = self.result_lock.resume_owner_recovery_to_exact_new_v1(
+                    pair.result,
+                    self.resources.result_max_ciphertext_bytes,
+                    self.resources.result_manifest_validation,
+                )?;
+                let permit = PrivateOramOwnerRecoveryExactNewPairPermitV1 {
+                    pair: PrivateOramOwnerExactNewStorePairV1 { hnsw, result },
+                    transition: &transition,
+                    not_send_or_sync: PhantomData,
+                };
+                let canonical = permit.terminal_index_states();
+                binding
+                    .finalize_recovery_store_pair_action_v1(
+                        &snapshot.descriptor.descriptor_digest,
+                        &self.parent.input.parent_descriptor_digest,
+                        self.parent.input.authenticated_owner_peer_id,
+                        &self.parent.input.consensus_authority_record_digest,
+                        &self.parent.input.reconciliation_authority_digest,
+                        &canonical,
+                    )
+                    .map_err(|_| invalid_authority())
+            }
+            PrivateOramOwnerRecoveryDecisionV1::ReplayFinalized => {
+                let hnsw = self.hnsw_lock.verify_owner_exact_new_v1(
+                    pair.hnsw,
+                    self.resources.hnsw_max_ciphertext_bytes,
+                    self.resources.hnsw_manifest_validation,
+                )?;
+                let result = self.result_lock.verify_owner_exact_new_v1(
+                    pair.result,
+                    self.resources.result_max_ciphertext_bytes,
+                    self.resources.result_manifest_validation,
+                )?;
+                let permit = PrivateOramOwnerRecoveryExactNewPairPermitV1 {
+                    pair: PrivateOramOwnerExactNewStorePairV1 { hnsw, result },
+                    transition: &transition,
+                    not_send_or_sync: PhantomData,
+                };
+                let canonical = permit.terminal_index_states();
+                binding
+                    .finalize_recovery_store_pair_action_v1(
+                        &snapshot.descriptor.descriptor_digest,
+                        &self.parent.input.parent_descriptor_digest,
+                        self.parent.input.authenticated_owner_peer_id,
+                        &self.parent.input.consensus_authority_record_digest,
+                        &self.parent.input.reconciliation_authority_digest,
+                        &canonical,
+                    )
+                    .map_err(|_| invalid_authority())
+            }
+        }
+    }
+
+    fn verify_exact_old_pair<'brand, 'child>(
+        &'brand self,
+        pair: ValidatedStorePair<'resources>,
+        transition: &'brand PrivateOramOwnerRecoveryTransitionBrandV1<'parent_lock, 'child>,
+    ) -> CollectionResult<
+        PrivateOramOwnerRecoveryExactOldPairPermitV1<'brand, 'parent_lock, 'child, 'hnsw, 'result>,
+    > {
+        let hnsw = self.hnsw_lock.verify_owner_exact_old_v1(
+            pair.hnsw,
+            self.resources.hnsw_max_ciphertext_bytes,
+            self.resources.hnsw_manifest_validation,
+        )?;
+        let result = self.result_lock.verify_owner_exact_old_v1(
+            pair.result,
+            self.resources.result_max_ciphertext_bytes,
+            self.resources.result_manifest_validation,
+        )?;
+        Ok(PrivateOramOwnerRecoveryExactOldPairPermitV1 {
+            pair: PrivateOramOwnerExactOldStorePairV1 { hnsw, result },
+            transition,
+            not_send_or_sync: PhantomData,
+        })
+    }
+}
+
+/// Executes the full child transaction while storage still holds the matching parent EX lock.
+#[doc(hidden)]
+pub fn recover_private_oram_owner_store_pair_v1(
+    verifier: &PrivateOramOwnerRecoveryParentVerifierV1,
+    parent: &PrivateOramOwnerRecoveryLiveParentV1<'_>,
+    resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+) -> CollectionResult<PrivateOramOwnerRecoveryPairOutcomeV1> {
+    validate_live_parent_bridge(verifier, parent)?;
+    let static_pair = validate_static_pair_context(
+        resources.owner_journal,
+        resources.hnsw_store,
+        resources.result_store,
+        resources.immutable_manifest,
+        resources.mutation_bundle,
+        resources.signature_verification,
+    )?;
+    resources.hnsw_store.with_owner_store_lock_v1(|hnsw_lock| {
+        resources
+            .result_store
+            .with_owner_store_lock_v1(|result_lock| {
+                let transaction = PrivateOramOwnerLockedRecoveryTransactionV1 {
+                    verifier,
+                    parent,
+                    resources,
+                    static_pair,
+                    hnsw_lock,
+                    result_lock,
+                    not_send_or_sync: PhantomData,
+                };
+                resources
+                    .owner_journal
+                    .recover_revalidated_store_pair_exclusive_v1(
+                        &parent.input.projection,
+                        transaction,
+                    )
+                    .map(recovery_pair_outcome)
+            })
+    })
+}
+
+fn recovery_pair_outcome(
+    outcome: PrivateOramOwnerRecoveryExclusiveOutcomeV1,
+) -> PrivateOramOwnerRecoveryPairOutcomeV1 {
+    match outcome {
+        PrivateOramOwnerRecoveryExclusiveOutcomeV1::NoTerminal => {
+            PrivateOramOwnerRecoveryPairOutcomeV1::ObservedOld
+        }
+        PrivateOramOwnerRecoveryExclusiveOutcomeV1::Finalized(_) => {
+            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized
+        }
+        PrivateOramOwnerRecoveryExclusiveOutcomeV1::AbortedOld(_) => {
+            PrivateOramOwnerRecoveryPairOutcomeV1::AbortedOld
+        }
+    }
+}
+
+fn validate_live_parent_bridge(
+    verifier: &PrivateOramOwnerRecoveryParentVerifierV1,
+    parent: &PrivateOramOwnerRecoveryLiveParentV1<'_>,
+) -> CollectionResult<()> {
+    if !Arc::ptr_eq(&verifier.identity, &parent.identity) {
+        return Err(invalid_authority());
+    }
+    for digest in [
+        parent.input.parent_descriptor_digest.as_str(),
+        parent.input.parent_owners_prepared_record_digest.as_str(),
+        parent.input.consensus_authority_record_digest.as_str(),
+        parent.input.reconciliation_authority_digest.as_str(),
+    ] {
+        let decoded = data_encoding::BASE64URL_NOPAD
+            .decode(digest.as_bytes())
+            .map_err(|_| invalid_authority())?;
+        if decoded.len() != 32 {
+            return Err(invalid_authority());
+        }
+    }
+    Ok(())
+}
+
+fn validate_live_parent_child_context(
+    parent: &PrivateOramOwnerRecoveryLiveParentV1<'_>,
+    static_pair: &ValidatedStaticPair<'_>,
+    snapshot: &PrivateOramOwnerJournalSnapshotV1,
+) -> CollectionResult<()> {
+    if snapshot.descriptor.parent_descriptor_digest != parent.input.parent_descriptor_digest
+        || snapshot.descriptor.owner_peer_id != parent.input.authenticated_owner_peer_id
+        || snapshot.descriptor.signed_mutation_digest != static_pair.mutation_digest
+    {
+        return Err(invalid_authority());
+    }
+    Ok(())
+}
+
+fn recovery_decision(
+    parent: PrivateOramOwnerRecoveryParentDispositionV1,
+    child: PrivateOramOwnerRecoveryExclusiveStateV1,
+    hnsw: PrivateHnswOwnerRecoveryPhaseV1,
+    result: PrivateResultOwnerRecoveryProgressV1,
+) -> CollectionResult<PrivateOramOwnerRecoveryDecisionV1> {
+    use PrivateOramOwnerRecoveryDecisionV1 as Decision;
+    use PrivateOramOwnerRecoveryExclusiveStateV1 as Child;
+    use PrivateOramOwnerRecoveryParentDispositionV1 as Parent;
+
+    match (parent, child) {
+        (Parent::ObservedOldNeedsAbortDecision, Child::Prepared)
+            if hnsw == PrivateHnswOwnerRecoveryPhaseV1::S0
+                && result == PrivateResultOwnerRecoveryProgressV1::S0 =>
+        {
+            Ok(Decision::ObserveOld)
+        }
+        (Parent::ExactOldAbortDecided, Child::Prepared)
+            if hnsw == PrivateHnswOwnerRecoveryPhaseV1::S0
+                && result == PrivateResultOwnerRecoveryProgressV1::S0 =>
+        {
+            Ok(Decision::AbortOld)
+        }
+        (Parent::ExactOldAbortDecided, Child::AbortedOldReplay)
+            if hnsw == PrivateHnswOwnerRecoveryPhaseV1::S0
+                && result == PrivateResultOwnerRecoveryProgressV1::S0 =>
+        {
+            Ok(Decision::ReplayAbortOld)
+        }
+        (Parent::ExactNew, Child::Prepared) if prepared_exact_new_lattice(hnsw, result) => {
+            Ok(Decision::RollForwardAndFinalize)
+        }
+        (Parent::ExactNew, Child::FinalizedReplay)
+            if hnsw == PrivateHnswOwnerRecoveryPhaseV1::S4
+                && result == PrivateResultOwnerRecoveryProgressV1::S4 =>
+        {
+            Ok(Decision::ReplayFinalized)
+        }
+        _ => Err(invalid_authority()),
+    }
+}
+
+fn prepared_exact_new_lattice(
+    hnsw: PrivateHnswOwnerRecoveryPhaseV1,
+    result: PrivateResultOwnerRecoveryProgressV1,
+) -> bool {
+    match hnsw {
+        PrivateHnswOwnerRecoveryPhaseV1::S0
+        | PrivateHnswOwnerRecoveryPhaseV1::S1 { .. }
+        | PrivateHnswOwnerRecoveryPhaseV1::S2
+        | PrivateHnswOwnerRecoveryPhaseV1::S3 => result == PrivateResultOwnerRecoveryProgressV1::S0,
+        PrivateHnswOwnerRecoveryPhaseV1::S4 => true,
+    }
+}
+
+fn recovery_transaction_identity(
+    parent: &PrivateOramOwnerRecoveryLiveParentV1<'_>,
+    static_pair: &ValidatedStaticPair<'_>,
+    snapshot: &PrivateOramOwnerJournalSnapshotV1,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    push_recovery_identity_field(&mut hasher, RECOVERY_TRANSACTION_IDENTITY_DOMAIN);
+    hasher.update(parent.input.authenticated_owner_peer_id.to_be_bytes());
+    hasher.update([match parent.input.disposition {
+        PrivateOramOwnerRecoveryParentDispositionV1::ObservedOldNeedsAbortDecision => 1,
+        PrivateOramOwnerRecoveryParentDispositionV1::ExactOldAbortDecided => 2,
+        PrivateOramOwnerRecoveryParentDispositionV1::ExactNew => 3,
+    }]);
+    for field in [
+        parent.input.parent_descriptor_digest.as_bytes(),
+        parent.input.parent_owners_prepared_record_digest.as_bytes(),
+        parent.input.consensus_authority_record_digest.as_bytes(),
+        parent.input.reconciliation_authority_digest.as_bytes(),
+        static_pair.mutation_digest.as_bytes(),
+        snapshot.descriptor.descriptor_digest.as_bytes(),
+        snapshot.state.state_digest.as_bytes(),
+    ] {
+        push_recovery_identity_field(&mut hasher, field);
+    }
+    hasher.finalize().into()
+}
+
+fn recovery_transition_brand<'parent, 'child>(
+    _parent: &PrivateOramOwnerRecoveryLiveParentV1<'parent>,
+    _binding: &PrivateOramOwnerRecoveryExclusiveBindingV1<'child>,
+    identity: [u8; 32],
+) -> PrivateOramOwnerRecoveryTransitionBrandV1<'parent, 'child> {
+    PrivateOramOwnerRecoveryTransitionBrandV1 {
+        identity,
+        parent_lock_lifetime: PhantomData,
+        child_lock_lifetime: PhantomData,
+        not_send_or_sync: PhantomData,
+    }
+}
+
+fn push_recovery_identity_field(hasher: &mut Sha256, value: &[u8]) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value);
 }
 
 pub(crate) fn with_private_oram_owner_exact_old_store_pair_v1<R>(
@@ -657,8 +1238,9 @@ mod tests {
     use crate::private_hnsw_oram_store::PrivateHnswOramEpochState;
     use crate::private_oram_owner_journal::{
         PrivateOramOwnerFinalBucketBatchV1, PrivateOramOwnerFinalBucketIndexV1,
-        PrivateOramOwnerJournalError, PrivateOramOwnerRecoveryIndexProjectionInputV1,
-        PrivateOramOwnerRecoveryIndexProjectionV1, PrivateOramOwnerRecoveryProjectionV1,
+        PrivateOramOwnerJournalError, PrivateOramOwnerJournalPhaseV1,
+        PrivateOramOwnerRecoveryIndexProjectionInputV1, PrivateOramOwnerRecoveryIndexProjectionV1,
+        PrivateOramOwnerRecoveryProjectionV1,
     };
     use crate::private_result_oram_store::PrivateResultOramEpochState;
 
@@ -668,6 +1250,16 @@ mod tests {
     const HNSW_KEY: &str = "tenant-a/vector-rk";
     const RESULT_KEY: &str = "tenant-a/result-rk";
     const OWNER_KEY: &str = "tenant-a/private-oram-owner-v2";
+
+    static_assertions::assert_not_impl_any!(
+        PrivateOramOwnerRecoveryLiveParentV1<'static>: Send, Sync, Clone
+    );
+    static_assertions::assert_not_impl_any!(
+        PrivateOramOwnerLockedRecoveryTransactionV1<'static, 'static, 'static, 'static>:
+            Send,
+            Sync,
+            Clone
+    );
 
     struct PairFixture {
         _temp: TempDir,
@@ -1375,6 +1967,63 @@ mod tests {
         )
     }
 
+    fn recovery_parent_input(
+        fixture: &PairFixture,
+        disposition: PrivateOramOwnerRecoveryParentDispositionV1,
+    ) -> PrivateOramOwnerRecoveryParentInputV1 {
+        PrivateOramOwnerRecoveryParentInputV1 {
+            projection: recovery_projection(fixture).unwrap(),
+            disposition,
+            authenticated_owner_peer_id: 7,
+            parent_descriptor_digest: digest(61),
+            parent_owners_prepared_record_digest: digest(63),
+            consensus_authority_record_digest: digest(64),
+            reconciliation_authority_digest: digest(65),
+        }
+    }
+
+    fn recover_pair(
+        fixture: &PairFixture,
+        disposition: PrivateOramOwnerRecoveryParentDispositionV1,
+    ) -> CollectionResult<PrivateOramOwnerRecoveryPairOutcomeV1> {
+        let (bridge, verifier) = new_private_oram_owner_recovery_parent_bridge_v1();
+        let parent_lock = ();
+        bridge.with_test_live_parent_v1(
+            &parent_lock,
+            recovery_parent_input(fixture, disposition),
+            |parent| {
+                recover_private_oram_owner_store_pair_v1(
+                    &verifier,
+                    parent,
+                    recovery_resources(fixture),
+                )
+            },
+        )
+    }
+
+    fn write_historical_hnsw_commit(fixture: &PairFixture, epoch: u64) {
+        #[cfg(unix)]
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let path = fixture
+            .hnsw_store
+            .root_path()
+            .join("epochs")
+            .join(format!("{epoch:08}.commit"));
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "index_epoch": epoch,
+                "root_hash": digest(171),
+                "writeback_digest": digest(172),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
     #[test]
     fn pair_store_paths_reject_cross_journal_and_cross_collection_substitution() {
         let temp = TempDir::new().unwrap();
@@ -1937,6 +2586,293 @@ mod tests {
         assert_eq!(
             new_error,
             "Bad request: private result ORAM owner canonical store state does not match"
+        );
+    }
+
+    #[test]
+    fn paired_recovery_phase_lattice_is_explicit_and_directional() {
+        let hnsw_phases = [
+            PrivateHnswOwnerRecoveryPhaseV1::S0,
+            PrivateHnswOwnerRecoveryPhaseV1::S1 {
+                written_bucket_count: 1,
+            },
+            PrivateHnswOwnerRecoveryPhaseV1::S2,
+            PrivateHnswOwnerRecoveryPhaseV1::S3,
+            PrivateHnswOwnerRecoveryPhaseV1::S4,
+        ];
+        let result_phases = [
+            PrivateResultOwnerRecoveryProgressV1::S0,
+            PrivateResultOwnerRecoveryProgressV1::S1 { written_prefix: 1 },
+            PrivateResultOwnerRecoveryProgressV1::S2,
+            PrivateResultOwnerRecoveryProgressV1::S3,
+            PrivateResultOwnerRecoveryProgressV1::S4,
+        ];
+
+        for hnsw in hnsw_phases {
+            for result in result_phases {
+                let decision = recovery_decision(
+                    PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+                    PrivateOramOwnerRecoveryExclusiveStateV1::Prepared,
+                    hnsw,
+                    result,
+                );
+                let expected = match hnsw {
+                    PrivateHnswOwnerRecoveryPhaseV1::S0
+                    | PrivateHnswOwnerRecoveryPhaseV1::S1 { .. }
+                    | PrivateHnswOwnerRecoveryPhaseV1::S2
+                    | PrivateHnswOwnerRecoveryPhaseV1::S3 => {
+                        result == PrivateResultOwnerRecoveryProgressV1::S0
+                    }
+                    PrivateHnswOwnerRecoveryPhaseV1::S4 => true,
+                };
+                assert_eq!(decision.is_ok(), expected, "{hnsw:?} / {result:?}");
+            }
+        }
+
+        assert!(
+            recovery_decision(
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactOldAbortDecided,
+                PrivateOramOwnerRecoveryExclusiveStateV1::Prepared,
+                PrivateHnswOwnerRecoveryPhaseV1::S0,
+                PrivateResultOwnerRecoveryProgressV1::S0,
+            )
+            .is_ok()
+        );
+        assert!(
+            recovery_decision(
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactOldAbortDecided,
+                PrivateOramOwnerRecoveryExclusiveStateV1::AbortedOldReplay,
+                PrivateHnswOwnerRecoveryPhaseV1::S0,
+                PrivateResultOwnerRecoveryProgressV1::S0,
+            )
+            .is_ok()
+        );
+        assert!(
+            recovery_decision(
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+                PrivateOramOwnerRecoveryExclusiveStateV1::FinalizedReplay,
+                PrivateHnswOwnerRecoveryPhaseV1::S4,
+                PrivateResultOwnerRecoveryProgressV1::S4,
+            )
+            .is_ok()
+        );
+        assert!(
+            recovery_decision(
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+                PrivateOramOwnerRecoveryExclusiveStateV1::FinalizedReplay,
+                PrivateHnswOwnerRecoveryPhaseV1::S4,
+                PrivateResultOwnerRecoveryProgressV1::S3,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn paired_recovery_rolls_forward_both_stores_and_replays_finalized() {
+        let fixture = pair_fixture();
+        assert_eq!(
+            recover_pair(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            )
+            .unwrap(),
+            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized
+        );
+        let new = &fixture.mutation_bundle.mutation.new_state.state.indexes;
+        let hnsw = fixture.hnsw_store.read_current_epoch().unwrap();
+        let result = fixture.result_store.read_current_epoch().unwrap();
+        assert_eq!(
+            (hnsw.index_epoch, hnsw.root_hash.as_str()),
+            (new[0].index_epoch, new[0].root_hash.as_str())
+        );
+        assert_eq!(
+            (result.index_epoch, result.root_hash.as_str()),
+            (new[1].index_epoch, new[1].root_hash.as_str())
+        );
+        assert_eq!(
+            fixture
+                .owner_journal
+                .inspect_structural()
+                .unwrap()
+                .unwrap()
+                .terminal
+                .unwrap()
+                .phase,
+            PrivateOramOwnerJournalPhaseV1::Finalized
+        );
+
+        assert_eq!(
+            recover_pair(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            )
+            .unwrap(),
+            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized
+        );
+    }
+
+    #[test]
+    fn paired_finalized_replay_rejects_historical_commit_replacement() {
+        let fixture = pair_fixture();
+        assert_eq!(
+            recover_pair(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            )
+            .unwrap(),
+            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized
+        );
+        let terminal_before = fixture
+            .owner_journal
+            .inspect_structural()
+            .unwrap()
+            .unwrap()
+            .terminal
+            .unwrap();
+        write_historical_hnsw_commit(&fixture, 1);
+
+        assert!(
+            recover_pair(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fixture
+                .owner_journal
+                .inspect_structural()
+                .unwrap()
+                .unwrap()
+                .terminal
+                .unwrap(),
+            terminal_before
+        );
+    }
+
+    #[test]
+    fn paired_recovery_resumes_result_only_after_hnsw_is_exact_new() {
+        let fixture = pair_fixture();
+        set_hnsw_recovery_state(&fixture, RecoveryFixtureStoreState::New);
+
+        assert_eq!(
+            recover_pair(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            )
+            .unwrap(),
+            PrivateOramOwnerRecoveryPairOutcomeV1::Finalized
+        );
+        let new = &fixture.mutation_bundle.mutation.new_state.state.indexes;
+        let result = fixture.result_store.read_current_epoch().unwrap();
+        assert_eq!(
+            (result.index_epoch, result.root_hash),
+            (new[1].index_epoch, new[1].root_hash.clone())
+        );
+    }
+
+    #[test]
+    fn paired_recovery_rejects_result_first_before_hnsw_mutation() {
+        let fixture = pair_fixture();
+        set_result_recovery_state(&fixture, RecoveryFixtureStoreState::New);
+        let hnsw_before = fixture.hnsw_store.read_current_epoch().unwrap();
+
+        assert!(
+            recover_pair(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fixture.hnsw_store.read_current_epoch().unwrap(),
+            hnsw_before
+        );
+        assert!(
+            fixture
+                .owner_journal
+                .inspect_structural()
+                .unwrap()
+                .unwrap()
+                .terminal
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn paired_recovery_observes_then_aborts_and_replays_exact_old() {
+        let fixture = pair_fixture();
+        assert_eq!(
+            recover_pair(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ObservedOldNeedsAbortDecision,
+            )
+            .unwrap(),
+            PrivateOramOwnerRecoveryPairOutcomeV1::ObservedOld
+        );
+        assert!(
+            fixture
+                .owner_journal
+                .inspect_structural()
+                .unwrap()
+                .unwrap()
+                .terminal
+                .is_none()
+        );
+
+        for _ in 0..2 {
+            assert_eq!(
+                recover_pair(
+                    &fixture,
+                    PrivateOramOwnerRecoveryParentDispositionV1::ExactOldAbortDecided,
+                )
+                .unwrap(),
+                PrivateOramOwnerRecoveryPairOutcomeV1::AbortedOld
+            );
+        }
+        assert_eq!(
+            fixture
+                .owner_journal
+                .inspect_structural()
+                .unwrap()
+                .unwrap()
+                .terminal
+                .unwrap()
+                .phase,
+            PrivateOramOwnerJournalPhaseV1::AbortedOld
+        );
+    }
+
+    #[test]
+    fn paired_recovery_rejects_mismatched_parent_bridge_before_locks() {
+        let fixture = pair_fixture();
+        let (bridge, _) = new_private_oram_owner_recovery_parent_bridge_v1();
+        let (_, wrong_verifier) = new_private_oram_owner_recovery_parent_bridge_v1();
+        let parent_lock = ();
+        let result = bridge.with_test_live_parent_v1(
+            &parent_lock,
+            recovery_parent_input(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            ),
+            |parent| {
+                recover_private_oram_owner_store_pair_v1(
+                    &wrong_verifier,
+                    parent,
+                    recovery_resources(&fixture),
+                )
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(
+            fixture
+                .owner_journal
+                .inspect_structural()
+                .unwrap()
+                .unwrap()
+                .terminal
+                .is_none()
         );
     }
 }

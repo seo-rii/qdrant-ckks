@@ -32,6 +32,9 @@ use qdrant_sec::{
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::operations::types::{CollectionError, CollectionResult};
+use crate::private_oram_owner_store_adapter::PrivateOramOwnerLockedRecoveryTransactionV1;
+
 pub const PRIVATE_ORAM_OWNER_JOURNAL_DIR: &str = "private-oram-owner-v2";
 pub const PRIVATE_ORAM_OWNER_JOURNAL_DESCRIPTOR_VERSION: u16 = 1;
 pub const PRIVATE_ORAM_OWNER_JOURNAL_STATE_VERSION: u16 = 1;
@@ -753,6 +756,46 @@ impl<'lock> PrivateOramOwnerRecoveryExclusiveBindingV1<'lock> {
         })
     }
 
+    pub(crate) fn finalize_recovery_store_pair_action_v1(
+        &self,
+        expected_journal_descriptor_digest: &str,
+        parent_descriptor_digest: &str,
+        authenticated_owner_peer_id: u64,
+        consensus_authority_record_digest: &str,
+        reconciliation_authority_digest: &str,
+        canonical_index_states: &[PrivateOramOwnerJournalTerminalIndexStateV1],
+    ) -> Result<PrivateOramOwnerRecoveryExclusiveActionV1<'lock>, PrivateOramOwnerJournalError>
+    {
+        self.finalize_action(PrivateOramOwnerJournalFinalizeContextV1 {
+            expected_journal_descriptor_digest,
+            parent_descriptor_digest,
+            authenticated_owner_peer_id,
+            consensus_authority_record_digest,
+            reconciliation_authority_digest,
+            canonical_index_states,
+        })
+    }
+
+    pub(crate) fn abort_old_recovery_store_pair_action_v1(
+        &self,
+        expected_journal_descriptor_digest: &str,
+        parent_descriptor_digest: &str,
+        authenticated_owner_peer_id: u64,
+        consensus_authority_record_digest: &str,
+        reconciliation_authority_digest: &str,
+        canonical_index_states: &[PrivateOramOwnerJournalTerminalIndexStateV1],
+    ) -> Result<PrivateOramOwnerRecoveryExclusiveActionV1<'lock>, PrivateOramOwnerJournalError>
+    {
+        self.abort_old_action(PrivateOramOwnerJournalAbortOldContextV1 {
+            expected_journal_descriptor_digest,
+            parent_descriptor_digest,
+            authenticated_owner_peer_id,
+            consensus_authority_record_digest,
+            reconciliation_authority_digest,
+            canonical_index_states,
+        })
+    }
+
     fn terminal_action(
         &self,
         transition: TerminalTransition<'_>,
@@ -1260,7 +1303,20 @@ impl PrivateOramOwnerJournal {
     /// An already installed terminal is accepted structurally so an exact phase-specific replay
     /// can resolve a crash after publication. The callback must not treat that terminal as
     /// authority before the locked recorder compares the complete desired record.
-    pub(crate) fn with_revalidated_recovery_exclusive_v1<E>(
+    pub(crate) fn recover_revalidated_store_pair_exclusive_v1(
+        &self,
+        projection: &PrivateOramOwnerRecoveryProjectionV1,
+        transaction: PrivateOramOwnerLockedRecoveryTransactionV1<'_, '_, '_, '_>,
+    ) -> CollectionResult<PrivateOramOwnerRecoveryExclusiveOutcomeV1> {
+        self.with_revalidated_recovery_exclusive_v1(projection, |binding| {
+            transaction.recover_under_child_exclusive_v1(binding)
+        })
+        .map_err(|_| {
+            CollectionError::bad_request("private ORAM owner recovery child authority is invalid")
+        })?
+    }
+
+    fn with_revalidated_recovery_exclusive_v1<E>(
         &self,
         projection: &PrivateOramOwnerRecoveryProjectionV1,
         action: impl for<'lock> FnOnce(

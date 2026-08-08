@@ -24,6 +24,7 @@ fs-err = { workspace = true, features = ["debug"] }
 proptest = { workspace = true }
 ring = { workspace = true }
 rstest = { workspace = true }
+static_assertions = "1.1.0"
 tar = { workspace = true }
 approx = "0.5.1"
 collection = { path = ".", features = ["testing"] }

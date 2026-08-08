@@ -2,7 +2,6 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::fmt::{self, Debug, Formatter};
 use std::io::{self, Read, Write};
-use std::marker::PhantomData;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd as _;
 use std::path::{Path, PathBuf};
@@ -14,8 +13,12 @@ use collection::private_oram_owner_journal::{
 };
 use collection::shards::shard::PeerId;
 use collection::{
-    PrivateOramOwnerRecoveryStoreDispositionV1, PrivateOramOwnerRecoveryStorePairResourcesV1,
+    PrivateOramOwnerRecoveryPairOutcomeV1, PrivateOramOwnerRecoveryParentBridgeV1,
+    PrivateOramOwnerRecoveryParentDispositionV1, PrivateOramOwnerRecoveryParentInputV1,
+    PrivateOramOwnerRecoveryParentVerifierV1, PrivateOramOwnerRecoveryStoreDispositionV1,
+    PrivateOramOwnerRecoveryStorePairResourcesV1,
     classify_private_oram_owner_recovery_store_pair_v1,
+    new_private_oram_owner_recovery_parent_bridge_v1, recover_private_oram_owner_store_pair_v1,
 };
 use data_encoding::BASE64URL_NOPAD;
 use fs_err as fs;
@@ -547,7 +550,9 @@ impl PrivateOramValidatedOwnerRecoveryAuthorityV1 {
 /// this value deliberately does not retain the consensus read guard across filesystem work.
 pub(super) struct PrivateOramLiveOwnerRecoveryAuthorityV1<'lock> {
     authority: PrivateOramValidatedOwnerRecoveryAuthorityV1,
-    _parent_lock: PhantomData<&'lock PrivateOramMutationJournalLock>,
+    parent_lock: &'lock PrivateOramMutationJournalLock,
+    parent_bridge: &'lock PrivateOramOwnerRecoveryParentBridgeV1,
+    parent_verifier: &'lock PrivateOramOwnerRecoveryParentVerifierV1,
 }
 
 impl Debug for PrivateOramLiveOwnerRecoveryAuthorityV1<'_> {
@@ -562,11 +567,15 @@ impl Debug for PrivateOramLiveOwnerRecoveryAuthorityV1<'_> {
 impl<'lock> PrivateOramLiveOwnerRecoveryAuthorityV1<'lock> {
     fn new(
         authority: PrivateOramValidatedOwnerRecoveryAuthorityV1,
-        _parent_lock: &'lock PrivateOramMutationJournalLock,
+        parent_lock: &'lock PrivateOramMutationJournalLock,
+        parent_bridge: &'lock PrivateOramOwnerRecoveryParentBridgeV1,
+        parent_verifier: &'lock PrivateOramOwnerRecoveryParentVerifierV1,
     ) -> Self {
         Self {
             authority,
-            _parent_lock: PhantomData,
+            parent_lock,
+            parent_bridge,
+            parent_verifier,
         }
     }
 }
@@ -608,10 +617,53 @@ impl PrivateOramLiveOwnerRecoveryAuthorityV1<'_> {
         self.authority.mutation_bundle()
     }
 
-    pub(super) fn pair_recovery_projection(
+    fn recover_pair_v1(
         &self,
-    ) -> Result<PrivateOramOwnerRecoveryProjectionV1, PrivateOramMutationJournalError> {
-        self.authority.pair_recovery_projection()
+        resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+    ) -> CollectionResult<PrivateOramOwnerRecoveryPairOutcomeV1> {
+        let input = PrivateOramOwnerRecoveryParentInputV1 {
+            projection: self.authority.pair_recovery_projection().map_err(|_| {
+                CollectionError::bad_request("private ORAM owner recovery authority is invalid")
+            })?,
+            disposition: match self.authority.disposition() {
+                PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision => {
+                    PrivateOramOwnerRecoveryParentDispositionV1::ObservedOldNeedsAbortDecision
+                }
+                PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided => {
+                    PrivateOramOwnerRecoveryParentDispositionV1::ExactOldAbortDecided
+                }
+                PrivateOramMutationReconcileDispositionV1::ExactNew => {
+                    PrivateOramOwnerRecoveryParentDispositionV1::ExactNew
+                }
+            },
+            authenticated_owner_peer_id: self.authority.owner_peer_id(),
+            parent_descriptor_digest: self.authority.parent_descriptor_digest().to_string(),
+            parent_owners_prepared_record_digest: self
+                .authority
+                .parent_owners_prepared_record_digest()
+                .to_string(),
+            consensus_authority_record_digest: self
+                .authority
+                .consensus_authority_record_digest()
+                .to_string(),
+            reconciliation_authority_digest: self
+                .authority
+                .reconciliation_authority_digest()
+                .to_string(),
+        };
+        // SAFETY: this authority owns the matching private bridge endpoints, `parent_lock` is the
+        // pinned EX lock borrowed by `with_live_owner_recovery_authority_v1`, and `input` was
+        // rebuilt from typed consensus/lease authority under that same lock.
+        unsafe {
+            self.parent_bridge
+                .with_live_parent_v1(self.parent_lock, input, |parent| {
+                    recover_private_oram_owner_store_pair_v1(
+                        self.parent_verifier,
+                        parent,
+                        resources,
+                    )
+                })
+        }
     }
 }
 
@@ -666,6 +718,8 @@ pub struct PrivateOramMutationJournal {
     root: PathBuf,
     expected_owner_signing_key_id: String,
     owner_public_key: Vec<u8>,
+    owner_recovery_parent_bridge: PrivateOramOwnerRecoveryParentBridgeV1,
+    owner_recovery_parent_verifier: PrivateOramOwnerRecoveryParentVerifierV1,
 }
 
 impl Debug for PrivateOramMutationJournal {
@@ -674,6 +728,8 @@ impl Debug for PrivateOramMutationJournal {
             .field("root", &"[redacted]")
             .field("expected_owner_signing_key_id", &"[redacted]")
             .field("owner_public_key", &"[redacted]")
+            .field("owner_recovery_parent_bridge", &"[redacted]")
+            .field("owner_recovery_parent_verifier", &"[redacted]")
             .finish()
     }
 }
@@ -693,10 +749,14 @@ impl PrivateOramMutationJournal {
                 "signature_verification",
             ));
         }
+        let (owner_recovery_parent_bridge, owner_recovery_parent_verifier) =
+            new_private_oram_owner_recovery_parent_bridge_v1();
         Ok(Self {
             root: collection_path.join(PRIVATE_ORAM_MUTATION_JOURNAL_DIR),
             expected_owner_signing_key_id,
             owner_public_key,
+            owner_recovery_parent_bridge,
+            owner_recovery_parent_verifier,
         })
     }
 
@@ -856,6 +916,8 @@ impl PrivateOramMutationJournal {
         let live = PrivateOramLiveOwnerRecoveryAuthorityV1::new(
             build_owner_recovery_authority(&context, authenticated_owner_peer_id)?,
             &parent_lock,
+            &self.owner_recovery_parent_bridge,
+            &self.owner_recovery_parent_verifier,
         );
         let output = action(&live);
         drop(live);
@@ -866,6 +928,35 @@ impl PrivateOramMutationJournal {
         parent_lock.validate_root_identity()?;
         drop(parent_lock);
         Ok(output)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "D3-B3 paired recovery is wired before the dormant owner RPC bridge"
+    )]
+    pub(super) fn recover_live_owner_pair_v1(
+        &self,
+        reconcile_snapshot: &PrivateOramMutationReconcileSnapshotV1,
+        authenticated_owner_peer_id: PeerId,
+        resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+    ) -> Result<
+        CollectionResult<PrivateOramOwnerRecoveryPairOutcomeV1>,
+        PrivateOramMutationJournalError,
+    > {
+        let collection_path = resources
+            .hnsw_store
+            .root_path()
+            .parent()
+            .and_then(Path::parent)
+            .ok_or(PrivateOramMutationJournalError::Corrupt)?;
+        if self.root != collection_path.join(PRIVATE_ORAM_MUTATION_JOURNAL_DIR) {
+            return Err(PrivateOramMutationJournalError::Corrupt);
+        }
+        self.with_live_owner_recovery_authority_v1(
+            reconcile_snapshot,
+            authenticated_owner_peer_id,
+            |live| live.recover_pair_v1(resources),
+        )
     }
 
     pub fn mark_owners_prepared(

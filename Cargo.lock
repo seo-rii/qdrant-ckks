@@ -1402,6 +1402,7 @@ dependencies = [
  "siphasher 1.0.2",
  "smallvec",
  "sparse",
+ "static_assertions",
  "strum",
  "tar",
  "tempfile",

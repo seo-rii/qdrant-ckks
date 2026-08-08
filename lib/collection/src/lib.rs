@@ -29,6 +29,10 @@ pub mod update_workers;
 
 #[doc(hidden)]
 pub use private_oram_owner_store_adapter::{
+    PrivateOramOwnerRecoveryLiveParentV1, PrivateOramOwnerRecoveryPairOutcomeV1,
+    PrivateOramOwnerRecoveryParentBridgeV1, PrivateOramOwnerRecoveryParentDispositionV1,
+    PrivateOramOwnerRecoveryParentInputV1, PrivateOramOwnerRecoveryParentVerifierV1,
     PrivateOramOwnerRecoveryStoreDispositionV1, PrivateOramOwnerRecoveryStorePairResourcesV1,
     classify_private_oram_owner_recovery_store_pair_v1,
+    new_private_oram_owner_recovery_parent_bridge_v1, recover_private_oram_owner_store_pair_v1,
 };
