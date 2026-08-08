@@ -25,6 +25,7 @@ use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
+use super::consensus_manager::PrivateOramMutationReconcileSnapshotV1;
 use super::consensus_ops::{
     PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION, PRIVATE_ORAM_MUTATION_LEASE_SLOT_VERSION,
     PRIVATE_ORAM_MUTATION_RECEIPT_VERSION, PrivateOramConsensusCollectionIndexStateV2,
@@ -52,6 +53,8 @@ const MAX_OWNER_REQUIREMENTS: usize = 65_536;
 const PARENT_SYNC_ATTEMPTS: usize = 3;
 const DESCRIPTOR_DIGEST_DOMAIN: &[u8] = b"qdrant-sec/private-oram-mutation-parent-descriptor/v1";
 const STATE_DIGEST_DOMAIN: &[u8] = b"qdrant-sec/private-oram-mutation-parent-state/v1";
+const OWNER_RECOVERY_AUTHORITY_DIGEST_DOMAIN: &[u8] =
+    b"qdrant-sec/private-oram-owner-recovery-authority/v1";
 const POINT_ID_DIGEST_DOMAIN: &[u8] = b"qdrant-sec/private-oram-staged-point-id-digest/v1";
 
 #[derive(Error)]
@@ -365,6 +368,110 @@ impl PrivateOramValidatedMutationReconcileContextV1 {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct PrivateOramValidatedOwnerRecoveryIndexV1 {
+    requirement: PrivateOramMutationOwnerRequirementV1,
+    prepared: PrivateOramMutationOwnerPrepareEvidenceV1,
+}
+
+impl Debug for PrivateOramValidatedOwnerRecoveryIndexV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramValidatedOwnerRecoveryIndexV1")
+            .field("peer_id", &self.requirement.peer_id)
+            .field("kind", &self.requirement.kind)
+            .field("index_name", &"[redacted]")
+            .field("old_epoch", &self.requirement.old_epoch)
+            .field("new_epoch", &self.requirement.new_epoch)
+            .field("prepared_journal_digest", &"[redacted]")
+            .finish()
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "D3-B3 restart owner authority is consumed by the dormant owner RPC bridge"
+)]
+impl PrivateOramValidatedOwnerRecoveryIndexV1 {
+    pub(super) fn requirement(&self) -> &PrivateOramMutationOwnerRequirementV1 {
+        &self.requirement
+    }
+
+    pub(super) fn prepared(&self) -> &PrivateOramMutationOwnerPrepareEvidenceV1 {
+        &self.prepared
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct PrivateOramValidatedOwnerRecoveryAuthorityV1 {
+    owner_peer_id: PeerId,
+    disposition: PrivateOramMutationReconcileDispositionV1,
+    parent_descriptor_digest: String,
+    parent_lease_acquired_record_digest: String,
+    parent_owners_prepared_record_digest: String,
+    consensus_authority_record_digest: String,
+    reconciliation_authority_digest: String,
+    mutation_bundle: PrivateOramAppendMutationBundleV1,
+    indexes: Vec<PrivateOramValidatedOwnerRecoveryIndexV1>,
+}
+
+impl Debug for PrivateOramValidatedOwnerRecoveryAuthorityV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramValidatedOwnerRecoveryAuthorityV1")
+            .field("owner_peer_id", &self.owner_peer_id)
+            .field("disposition", &self.disposition)
+            .field("parent_descriptor_digest", &"[redacted]")
+            .field("parent_lease_acquired_record_digest", &"[redacted]")
+            .field("parent_owners_prepared_record_digest", &"[redacted]")
+            .field("consensus_authority_record_digest", &"[redacted]")
+            .field("reconciliation_authority_digest", &"[redacted]")
+            .field("mutation_bundle", &"[redacted]")
+            .field("index_count", &self.indexes.len())
+            .finish()
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "D3-B3 restart owner authority is consumed by the dormant owner RPC bridge"
+)]
+impl PrivateOramValidatedOwnerRecoveryAuthorityV1 {
+    pub(super) const fn owner_peer_id(&self) -> PeerId {
+        self.owner_peer_id
+    }
+
+    pub(super) const fn disposition(&self) -> PrivateOramMutationReconcileDispositionV1 {
+        self.disposition
+    }
+
+    pub(super) fn parent_descriptor_digest(&self) -> &str {
+        &self.parent_descriptor_digest
+    }
+
+    pub(super) fn parent_lease_acquired_record_digest(&self) -> &str {
+        &self.parent_lease_acquired_record_digest
+    }
+
+    pub(super) fn parent_owners_prepared_record_digest(&self) -> &str {
+        &self.parent_owners_prepared_record_digest
+    }
+
+    pub(super) fn consensus_authority_record_digest(&self) -> &str {
+        &self.consensus_authority_record_digest
+    }
+
+    pub(super) fn reconciliation_authority_digest(&self) -> &str {
+        &self.reconciliation_authority_digest
+    }
+
+    pub(super) fn mutation_bundle(&self) -> &PrivateOramAppendMutationBundleV1 {
+        &self.mutation_bundle
+    }
+
+    pub(super) fn indexes(&self) -> &[PrivateOramValidatedOwnerRecoveryIndexV1] {
+        &self.indexes
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PrivateOramValidatedPointStageParentPhaseV1 {
     OwnersPrepared,
@@ -543,7 +650,7 @@ impl PrivateOramMutationJournal {
         self.load_locked().map(Some)
     }
 
-    pub fn validated_reconcile_context(
+    fn validated_reconcile_context(
         &self,
         consensus_state: &PrivateOramConsensusCollectionStateV2,
         lease_slot: &PrivateOramMutationLeaseSlotV2,
@@ -599,6 +706,34 @@ impl PrivateOramMutationJournal {
             active_lease,
             disposition,
         })
+    }
+
+    #[allow(
+        dead_code,
+        reason = "D3-B3 coordinator consumes only an atomically captured consensus snapshot"
+    )]
+    pub(super) fn validated_reconcile_snapshot(
+        &self,
+        reconcile_snapshot: &PrivateOramMutationReconcileSnapshotV1,
+    ) -> Result<PrivateOramValidatedMutationReconcileContextV1, PrivateOramMutationJournalError>
+    {
+        self.validated_reconcile_context(
+            reconcile_snapshot.consensus_state(),
+            reconcile_snapshot.lease_slot(),
+        )
+    }
+
+    #[allow(
+        dead_code,
+        reason = "D3-B3 restart owner authority is consumed by the dormant owner RPC bridge"
+    )]
+    pub(super) fn validated_owner_recovery_authority(
+        &self,
+        reconcile_snapshot: &PrivateOramMutationReconcileSnapshotV1,
+        authenticated_owner_peer_id: PeerId,
+    ) -> Result<PrivateOramValidatedOwnerRecoveryAuthorityV1, PrivateOramMutationJournalError> {
+        let context = self.validated_reconcile_snapshot(reconcile_snapshot)?;
+        build_owner_recovery_authority(&context, authenticated_owner_peer_id)
     }
 
     pub fn mark_owners_prepared(
@@ -1398,7 +1533,28 @@ fn owners_prepared_record_digest(
     descriptor: &PrivateOramMutationJournalDescriptorV1,
     owner_prepares: &[PrivateOramMutationOwnerPrepareEvidenceV1],
 ) -> Result<String, PrivateOramMutationJournalError> {
-    let mut lease_acquired = PrivateOramMutationJournalStateV1 {
+    let lease_acquired_record_digest = lease_acquired_record_digest(descriptor)?;
+    let mut owners_prepared = PrivateOramMutationJournalStateV1 {
+        version: PRIVATE_ORAM_MUTATION_JOURNAL_VERSION,
+        sequence: PrivateOramMutationJournalPhaseV1::OwnersPrepared.sequence(),
+        phase: PrivateOramMutationJournalPhaseV1::OwnersPrepared,
+        previous_record_digest: Some(lease_acquired_record_digest),
+        owner_prepares: owner_prepares.to_vec(),
+        point_stage: None,
+        consensus: None,
+        remote_finalizations: Vec::new(),
+        local_finalizations: Vec::new(),
+        record_digest: String::new(),
+    };
+    owners_prepared.record_digest =
+        state_record_digest(&descriptor.descriptor_digest, &owners_prepared)?;
+    Ok(owners_prepared.record_digest)
+}
+
+fn lease_acquired_record_digest(
+    descriptor: &PrivateOramMutationJournalDescriptorV1,
+) -> Result<String, PrivateOramMutationJournalError> {
+    let lease_acquired = PrivateOramMutationJournalStateV1 {
         version: PRIVATE_ORAM_MUTATION_JOURNAL_VERSION,
         sequence: PrivateOramMutationJournalPhaseV1::LeaseAcquired.sequence(),
         phase: PrivateOramMutationJournalPhaseV1::LeaseAcquired,
@@ -1410,23 +1566,152 @@ fn owners_prepared_record_digest(
         local_finalizations: Vec::new(),
         record_digest: String::new(),
     };
-    lease_acquired.record_digest =
-        state_record_digest(&descriptor.descriptor_digest, &lease_acquired)?;
-    let mut owners_prepared = PrivateOramMutationJournalStateV1 {
-        version: PRIVATE_ORAM_MUTATION_JOURNAL_VERSION,
-        sequence: PrivateOramMutationJournalPhaseV1::OwnersPrepared.sequence(),
-        phase: PrivateOramMutationJournalPhaseV1::OwnersPrepared,
-        previous_record_digest: Some(lease_acquired.record_digest),
-        owner_prepares: owner_prepares.to_vec(),
-        point_stage: None,
-        consensus: None,
-        remote_finalizations: Vec::new(),
-        local_finalizations: Vec::new(),
-        record_digest: String::new(),
+    state_record_digest(&descriptor.descriptor_digest, &lease_acquired)
+}
+
+fn build_owner_recovery_authority(
+    context: &PrivateOramValidatedMutationReconcileContextV1,
+    authenticated_owner_peer_id: PeerId,
+) -> Result<PrivateOramValidatedOwnerRecoveryAuthorityV1, PrivateOramMutationJournalError> {
+    let snapshot = &context.snapshot;
+    if snapshot.state.phase.sequence()
+        < PrivateOramMutationJournalPhaseV1::OwnersPrepared.sequence()
+    {
+        return Err(PrivateOramMutationJournalError::InvalidTransition);
+    }
+
+    let indexes = snapshot
+        .descriptor
+        .owner_requirements
+        .iter()
+        .zip(&snapshot.state.owner_prepares)
+        .filter(|(requirement, _)| requirement.peer_id == authenticated_owner_peer_id)
+        .map(
+            |(requirement, prepared)| PrivateOramValidatedOwnerRecoveryIndexV1 {
+                requirement: requirement.clone(),
+                prepared: prepared.clone(),
+            },
+        )
+        .collect::<Vec<_>>();
+    if indexes.is_empty()
+        || indexes.len()
+            != snapshot
+                .descriptor
+                .mutation_bundle
+                .mutation
+                .writebacks
+                .len()
+    {
+        return Err(PrivateOramMutationJournalError::InvalidTransition);
+    }
+
+    let parent_lease_acquired_record_digest = lease_acquired_record_digest(&snapshot.descriptor)?;
+    let parent_owners_prepared_record_digest =
+        owners_prepared_record_digest(&snapshot.descriptor, &snapshot.state.owner_prepares)?;
+    let consensus_authority_record_digest = match context.disposition {
+        PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision
+        | PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided => {
+            context.active_lease.base_record_digest.clone()
+        }
+        PrivateOramMutationReconcileDispositionV1::ExactNew => {
+            let PrivateOramMutationLeasePhase::ConsensusCommitted {
+                committed_record_digest,
+                ..
+            } = &context.active_lease.phase
+            else {
+                return Err(PrivateOramMutationJournalError::InvalidTransition);
+            };
+            committed_record_digest.clone()
+        }
     };
-    owners_prepared.record_digest =
-        state_record_digest(&descriptor.descriptor_digest, &owners_prepared)?;
-    Ok(owners_prepared.record_digest)
+    let reconciliation_authority_digest = owner_recovery_authority_digest(
+        context,
+        authenticated_owner_peer_id,
+        &parent_lease_acquired_record_digest,
+        &parent_owners_prepared_record_digest,
+        &consensus_authority_record_digest,
+        &indexes,
+    )?;
+    Ok(PrivateOramValidatedOwnerRecoveryAuthorityV1 {
+        owner_peer_id: authenticated_owner_peer_id,
+        disposition: context.disposition,
+        parent_descriptor_digest: snapshot.descriptor.descriptor_digest.clone(),
+        parent_lease_acquired_record_digest,
+        parent_owners_prepared_record_digest,
+        consensus_authority_record_digest,
+        reconciliation_authority_digest,
+        mutation_bundle: snapshot.descriptor.mutation_bundle.clone(),
+        indexes,
+    })
+}
+
+fn owner_recovery_authority_digest(
+    context: &PrivateOramValidatedMutationReconcileContextV1,
+    authenticated_owner_peer_id: PeerId,
+    parent_lease_acquired_record_digest: &str,
+    parent_owners_prepared_record_digest: &str,
+    consensus_authority_record_digest: &str,
+    indexes: &[PrivateOramValidatedOwnerRecoveryIndexV1],
+) -> Result<String, PrivateOramMutationJournalError> {
+    let mut hasher = Sha256::new();
+    hasher.update(OWNER_RECOVERY_AUTHORITY_DIGEST_DOMAIN);
+    hash_digest(&mut hasher, &context.snapshot.descriptor.descriptor_digest)?;
+    hash_digest(&mut hasher, parent_lease_acquired_record_digest)?;
+    hash_digest(&mut hasher, parent_owners_prepared_record_digest)?;
+    hash_digest(&mut hasher, consensus_authority_record_digest)?;
+    hasher.update(authenticated_owner_peer_id.to_be_bytes());
+    hasher.update([match context.disposition {
+        PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision => 1,
+        PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided => 2,
+        PrivateOramMutationReconcileDispositionV1::ExactNew => 3,
+    }]);
+
+    let lease = &context.active_lease;
+    hasher.update(lease.generation.to_be_bytes());
+    hash_string(&mut hasher, &lease.collection_id)?;
+    hasher.update(lease.owner_peer_id.to_be_bytes());
+    hash_digest(&mut hasher, &lease.mutation_id)?;
+    hash_digest(&mut hasher, &lease.signed_mutation_digest)?;
+    hash_digest(&mut hasher, &lease.transition_digest)?;
+    hash_digest(&mut hasher, &lease.base_record_digest)?;
+    hasher.update(lease.base_state_sequence.to_be_bytes());
+    hash_digest(&mut hasher, &lease.writer_lease_digest)?;
+    hasher.update(lease.writer_fence.to_be_bytes());
+    hasher.update(lease.issued_at_unix.to_be_bytes());
+    match &lease.phase {
+        PrivateOramMutationLeasePhase::Preparing => hasher.update([1]),
+        PrivateOramMutationLeasePhase::AbortDecided => hasher.update([2]),
+        PrivateOramMutationLeasePhase::ConsensusCommitted {
+            committed_record_digest,
+            committed_state_sequence,
+            committed_signed_state_digest,
+            receipt_digest,
+        } => {
+            hasher.update([3]);
+            hash_digest(&mut hasher, committed_record_digest)?;
+            hasher.update(committed_state_sequence.to_be_bytes());
+            hash_digest(&mut hasher, committed_signed_state_digest)?;
+            hash_digest(&mut hasher, receipt_digest)?;
+        }
+    }
+
+    hash_len(&mut hasher, indexes.len())?;
+    for index in indexes {
+        let requirement = &index.requirement;
+        hash_owner_key(
+            &mut hasher,
+            requirement.peer_id,
+            requirement.kind,
+            &requirement.index_name,
+        )?;
+        hasher.update(requirement.old_epoch.to_be_bytes());
+        hasher.update(requirement.new_epoch.to_be_bytes());
+        hash_digest(&mut hasher, &requirement.old_root_hash)?;
+        hash_digest(&mut hasher, &requirement.new_root_hash)?;
+        hash_digest(&mut hasher, &requirement.writeback_digest)?;
+        hash_digest(&mut hasher, &index.prepared.prepared_journal_digest)?;
+    }
+    Ok(BASE64URL_NOPAD.encode(&hasher.finalize()))
 }
 
 pub(super) fn private_oram_point_id_digest(
@@ -2676,6 +2961,16 @@ mod tests {
         }
     }
 
+    fn reconcile_snapshot(
+        consensus_state: &PrivateOramConsensusCollectionStateV2,
+        lease: PrivateOramMutationLease,
+    ) -> PrivateOramMutationReconcileSnapshotV1 {
+        PrivateOramMutationReconcileSnapshotV1::from_parts_for_test(
+            consensus_state.clone(),
+            active_lease_slot(lease),
+        )
+    }
+
     #[test]
     fn parent_journal_persists_exact_seven_phase_progression() {
         let temp = tempfile::tempdir().unwrap();
@@ -2870,6 +3165,158 @@ mod tests {
                 .unwrap()
                 .disposition(),
             PrivateOramMutationReconcileDispositionV1::ExactNew
+        );
+    }
+
+    #[test]
+    fn owner_recovery_authority_binds_owner_and_is_stable_across_parent_progress() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(44, 170);
+        let journal = journal(&temp, &fixture);
+        let initial = begin(&journal, &fixture, &[11, 12]);
+        assert!(matches!(
+            journal.validated_owner_recovery_authority(
+                &reconcile_snapshot(&fixture.old_consensus, fixture.preparing_lease.clone()),
+                12,
+            ),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+        let prepares = owner_prepares(&initial);
+        journal.mark_owners_prepared(prepares.clone()).unwrap();
+        mark_no_server_point_stage(&journal);
+
+        let mut renewed_preparing = fixture.preparing_lease.clone();
+        renewed_preparing.expires_at_unix += 10;
+        renewed_preparing.renewal_revision += 1;
+        let observed_snapshot =
+            reconcile_snapshot(&fixture.old_consensus, renewed_preparing.clone());
+        let snapshot_debug = format!("{observed_snapshot:?}");
+        assert!(!snapshot_debug.contains(&fixture.mutation_bundle.mutation.collection_id));
+        assert!(!snapshot_debug.contains(&fixture.preparing_lease.base_record_digest));
+        let observed = journal
+            .validated_owner_recovery_authority(&observed_snapshot, 12)
+            .unwrap();
+        assert_eq!(observed.owner_peer_id(), 12);
+        assert_eq!(
+            observed.disposition(),
+            PrivateOramMutationReconcileDispositionV1::ObservedOldNeedsAbortDecision
+        );
+        assert_eq!(
+            observed.parent_descriptor_digest(),
+            initial.descriptor.descriptor_digest
+        );
+        assert_eq!(
+            observed.parent_lease_acquired_record_digest(),
+            initial.state.record_digest
+        );
+        assert_eq!(
+            observed.consensus_authority_record_digest(),
+            fixture.preparing_lease.base_record_digest
+        );
+        assert_eq!(observed.mutation_bundle(), &fixture.mutation_bundle);
+        assert_eq!(observed.indexes().len(), 1);
+        assert_eq!(observed.indexes()[0].requirement().peer_id, 12);
+        assert_eq!(observed.indexes()[0].prepared(), &prepares[1]);
+        assert_eq!(observed.reconciliation_authority_digest().len(), 43);
+        let coordinator_owner = journal
+            .validated_owner_recovery_authority(&observed_snapshot, 11)
+            .unwrap();
+        assert_ne!(
+            observed.reconciliation_authority_digest(),
+            coordinator_owner.reconciliation_authority_digest()
+        );
+        assert!(matches!(
+            journal.validated_owner_recovery_authority(&observed_snapshot, 13),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+
+        let mut abort_decided = renewed_preparing;
+        abort_decided.phase = PrivateOramMutationLeasePhase::AbortDecided;
+        let abort = journal
+            .validated_owner_recovery_authority(
+                &reconcile_snapshot(&fixture.old_consensus, abort_decided),
+                12,
+            )
+            .unwrap();
+        assert_eq!(
+            abort.disposition(),
+            PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided
+        );
+        assert_eq!(
+            abort.consensus_authority_record_digest(),
+            observed.consensus_authority_record_digest()
+        );
+        assert_ne!(
+            abort.reconciliation_authority_digest(),
+            observed.reconciliation_authority_digest()
+        );
+
+        let before_parent_progress = journal
+            .validated_owner_recovery_authority(
+                &reconcile_snapshot(&fixture.new_consensus, fixture.committed_lease.clone()),
+                12,
+            )
+            .unwrap();
+        let mut renewed_committed = fixture.committed_lease.clone();
+        renewed_committed.expires_at_unix += 20;
+        renewed_committed.renewal_revision += 1;
+        journal
+            .mark_consensus_committed(&renewed_committed, &fixture.new_consensus)
+            .unwrap();
+        let after_parent_progress = journal
+            .validated_owner_recovery_authority(
+                &reconcile_snapshot(&fixture.new_consensus, renewed_committed),
+                12,
+            )
+            .unwrap();
+        assert_eq!(
+            before_parent_progress.disposition(),
+            PrivateOramMutationReconcileDispositionV1::ExactNew
+        );
+        assert_eq!(
+            before_parent_progress.consensus_authority_record_digest(),
+            canonical_private_oram_consensus_state_record_digest(&fixture.new_consensus).unwrap()
+        );
+        assert_eq!(
+            before_parent_progress.parent_owners_prepared_record_digest(),
+            after_parent_progress.parent_owners_prepared_record_digest()
+        );
+        assert_eq!(
+            before_parent_progress.reconciliation_authority_digest(),
+            after_parent_progress.reconciliation_authority_digest()
+        );
+
+        let rendered = format!("{after_parent_progress:?}");
+        for secret in [
+            fixture.mutation_bundle.mutation.collection_id.as_str(),
+            fixture.mutation_bundle.mutation.mutation_id.as_str(),
+            observed.indexes()[0].requirement().index_name.as_str(),
+            after_parent_progress.reconciliation_authority_digest(),
+        ] {
+            assert!(!rendered.contains(secret));
+        }
+    }
+
+    #[test]
+    fn owner_recovery_authority_digest_has_known_answer() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(45, 180);
+        let journal = journal(&temp, &fixture);
+        let initial = begin(&journal, &fixture, &[11, 12]);
+        journal
+            .mark_owners_prepared(owner_prepares(&initial))
+            .unwrap();
+        mark_no_server_point_stage(&journal);
+        let authority = journal
+            .validated_owner_recovery_authority(
+                &reconcile_snapshot(&fixture.new_consensus, fixture.committed_lease.clone()),
+                12,
+            )
+            .unwrap();
+
+        assert_eq!(
+            authority.reconciliation_authority_digest(),
+            "fSOEGuuAWS9SgVu_oDuC1fcBIaZ-OXguisfs6bnnVAY"
         );
     }
 

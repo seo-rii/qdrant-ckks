@@ -118,6 +118,42 @@ pub struct CollectionsSnapshot {
     pub aliases: AliasMapping,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct PrivateOramMutationReconcileSnapshotV1 {
+    consensus_state: PrivateOramConsensusCollectionStateV2,
+    lease_slot: PrivateOramMutationLeaseSlotV2,
+}
+
+impl fmt::Debug for PrivateOramMutationReconcileSnapshotV1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramMutationReconcileSnapshotV1")
+            .field("consensus_state", &"[redacted]")
+            .field("lease_slot", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramMutationReconcileSnapshotV1 {
+    pub(super) fn consensus_state(&self) -> &PrivateOramConsensusCollectionStateV2 {
+        &self.consensus_state
+    }
+
+    pub(super) fn lease_slot(&self) -> &PrivateOramMutationLeaseSlotV2 {
+        &self.lease_slot
+    }
+
+    #[cfg(test)]
+    pub(super) fn from_parts_for_test(
+        consensus_state: PrivateOramConsensusCollectionStateV2,
+        lease_slot: PrivateOramMutationLeaseSlotV2,
+    ) -> Self {
+        Self {
+            consensus_state,
+            lease_slot,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct PrivateOramSnapshotState<'a> {
     pub incoming_epochs: &'a HashMap<String, PrivateOramConsensusEpoch>,
@@ -1189,6 +1225,22 @@ impl<C: CollectionContainer> ConsensusManager<C> {
         key: &PrivateOramMutationKey,
     ) -> Option<PrivateOramMutationLeaseSlotV2> {
         self.persistent.read().private_oram_mutation_lease_slot(key)
+    }
+
+    #[allow(
+        dead_code,
+        reason = "D3-B3 restart recovery consumes the paired state under one persistent read guard"
+    )]
+    /// Captures the collection state and mutation lease slot under one persistent read guard.
+    pub(super) fn private_oram_mutation_reconcile_snapshot(
+        &self,
+        key: &PrivateOramMutationKey,
+    ) -> Option<PrivateOramMutationReconcileSnapshotV1> {
+        let persistent = self.persistent.read();
+        Some(PrivateOramMutationReconcileSnapshotV1 {
+            consensus_state: persistent.private_oram_mutation_state(key)?,
+            lease_slot: persistent.private_oram_mutation_lease_slot(key)?,
+        })
     }
 
     pub fn private_oram_external_recovery(
