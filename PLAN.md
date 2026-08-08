@@ -1320,17 +1320,28 @@ Signed fields:
   terminal child, owner/parent/mutation/index/digest substitution과 callback 중 terminal publish를
   fail closed 하는 집중 test를 추가했다. Store lock을 child lock 안에서 취득하도록 유도하던
   draft bridge는 lock inversion을 피하기 위해 제거했다.
-- 남음(D3-B3-B3-AtomicClassifierRollForward): Recovery classifier는 기존 global lock order인
-  HNSW -> result -> child journal shared를 유지하면서 store별 `Old | New | Third`를 한 중첩
-  lock 구간에서 얻고 `Old+Old=AllOld`, `New+New=AllNew`, canonical write prefix인
-  `New+Old=PartialNew`, 그 밖의 조합과 검증 실패를 `ThirdState`로 분류해야 한다.
-  외부에 반환하는 classifier 결과는 non-authoritative observation이어야 한다. Partial-new는
-  storage-private typed parent authority를 계속 보유한 coordinator가 fixed roll-forward 뒤 같은
-  lock order로 전체 상태를 재검증해 `AllNew`가 된 경우에만 terminal evidence를 만들 수 있다.
-  Authority -> projection -> real child -> classifier integration test로 이 경계를 고정한다.
-  모든 V2 writer를 같은 store lock과 fd-relative pinned collection
-  namespace에 편입한 뒤 exact pair token을 module-private terminal recorder에 직접 소비시키는
-  bridge가 필요하다. Legacy HNSW/result pending
+- 완료(D3-B3-B3-ReadOnlyClassifier): Storage-private wrapper가
+  `&PrivateOramValidatedOwnerRecoveryAuthorityV1`에서 projection을 만들고 public-hidden
+  collection facade는 inert `AllOld | AllNew | PartialNew | ThirdState` observation만 반환한다.
+  Static signed/path validation 뒤 HNSW -> result -> child journal shared 순서로 lock을 잡고,
+  exact child의 untrusted structural view 안에서만 store authority를 파생한다. Store별 `Third`는
+  validated current epoch/root가 old/new 어느 쪽도 아닐 때만 허용한다. Exact old/new pointer가
+  manifest/commit/Merkle/bucket 검증에 실패하면 `Third`로 숨기지 않고 error로 fail closed 한다.
+  `Old+Old=AllOld`, `New+New=AllNew`, canonical prefix `New+Old=PartialNew`, 나머지는
+  `ThirdState`이며 3x3 matrix, 양쪽 store의 네 종류 corrupt evidence, HNSW/result/child-lock
+  contention과 error 뒤 lock release, debug redaction test를 추가했다. Store/child token과 lock
+  guard는 facade 밖으로 나오지 않는다.
+- 남음(D3-B3-B3-AtomicRollForwardTerminal): 현재 classifier 원자성은 같은 owner store lock을
+  지키는 cooperative caller에 한정된다. 모든 V2 writer를 같은 lock과 fd-relative pinned
+  namespace에 편입하기 전에는 production activation이 금지된다. Owned parent recovery authority는
+  read-only observation에는 충분하지만 mutation authority가 아니므로, roll-forward/terminal은
+  parent live revalidation을 포함한 `parent -> HNSW -> result -> child exclusive` transaction을
+  별도로 사용해야 한다. Shared child lock의 lock upgrade나 반환된 disposition 재사용은 금지한다.
+  Partial-new는 fixed HNSW-prefix roll-forward 뒤 같은 transaction에서 `AllNew`를 재검증한
+  경우에만 terminal evidence를 만들 수 있다. Authority -> projection -> real child -> real
+  pair classifier cross-crate integration test도 activation 전에 추가한다.
+  이 transaction에서 exact pair token을 module-private terminal recorder에 직접 소비시키는
+  bridge도 필요하다. Legacy HNSW/result pending
   journal은 digest domain, duplicate-bucket model과 signature contract가 달라 V2 authority나
   evidence로 재사용하지 않는다.
 - 남음(D3-B3-B3): HNSW/result owner record를 pair로 inspect하고 peer/parent requirement와

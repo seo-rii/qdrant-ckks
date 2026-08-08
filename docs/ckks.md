@@ -512,20 +512,40 @@ of the lock window. HNSW-only, terminal, reordered, foreign-owner, and
 substituted parent/mutation/index evidence fails before the callback; a terminal
 writer also cannot publish during the callback.
 
-This slice is still dormant and has no production caller or terminal call.
-Before production activation, restart must classify all-old, all-new,
-partial-new, and third-state outcomes in one nested HNSW -> result -> child
-shared-lock window, then roll a canonical partial-new prefix forward without
-exposing a mixed terminal state. The discarded child-first bridge is not used
-because it would invert the existing store-to-journal lock order. Every V2
-writer must also use the same store locks and an fd-relative pinned collection
-namespace. The classifier may expose only a non-authoritative disposition;
-roll-forward and terminal transitions must retain storage-private typed parent
-authority and revalidate all stores and the child under the same lock order.
-An authority-to-projection-to-real-child integration test must enforce that
-boundary. A terminal bridge must consume a reverified exact pair token directly
-and bind authenticated transport identity. No current production caller can
-mint store or terminal evidence from raw digest strings.
+The D3-B3-B3 slice now adds a dormant read-only four-state classifier. A
+storage-private wrapper takes `&PrivateOramValidatedOwnerRecoveryAuthorityV1`,
+projects its canonical pair, and calls a public-hidden collection facade that
+returns only inert `AllOld`, `AllNew`, `PartialNew`, or `ThirdState`. Static
+signed input and path validation precedes the fixed HNSW -> result -> child
+shared lock order. Store inspection authority is derived only from the exact
+child's explicitly untrusted structural view while all three locks remain held.
+`Old+Old` is all-old, `New+New` is all-new, and only the canonical HNSW-first
+`New+Old` prefix is partial-new. All other combinations are third-state.
+
+`Third` has a narrow meaning: a validated current epoch/root pointer matches
+neither expected old nor expected new. If a pointer matches old or new but its
+manifest, epoch commit, Merkle tree, or affected bucket evidence fails exact
+verification, classification returns an error instead of hiding corruption as
+third-state. Tests cover the complete 3x3 pair matrix, both stores' manifest,
+commit, Merkle, and bucket corruption, HNSW/result/child-lock contention and
+error-path lock release, and debug redaction. No store token, child capability,
+or lock guard crosses the facade.
+
+This path remains dormant and has no production caller or terminal call. Its
+lock-window consistency currently applies only to cooperative users of the
+owner store locks; existing V2 canonical writers must all join those locks and
+the fd-relative pinned namespace before activation. The discarded child-first
+bridge is not used because it would invert the store-to-journal lock order.
+The owned parent recovery value is sufficient for a non-authoritative read but
+not for mutation. Roll-forward and terminal publication require a separate
+live-parent transaction ordered parent -> HNSW -> result -> child exclusive.
+They must not upgrade the classifier's child shared lock or consume a returned
+disposition as authority. A canonical partial-new prefix must roll forward and
+reverify all-new inside that mutating transaction. A real cross-crate authority
+to projection to child and pair-classifier integration test remains an
+activation gate. The terminal bridge must also bind authenticated transport
+identity. No current production caller can mint store or terminal evidence from
+raw digest strings.
 
 The parent descriptor and current-state digest formats have known-answer
 tests. Journal files live below a private non-symlink directory, use bounded
@@ -563,10 +583,10 @@ D3-B3-B1 provides the server-safe owner-prepare validation contract, and the
 D3-B3-B2 slices provide the paired durable owner journal, dormant terminal
 record primitive, module-private canonical StoreInspector, and dormant live
 paired StoreAdapter without external evidence wiring. D3-B3-B3 adds the exact
-child Prepared rebind and storage-private canonical pair projection. None adds
-a dispatcher proposal method or public route. The atomic four-state store
-classifier, partial-new roll-forward, typed terminal adapter, owner RPC evidence,
-abort/finalize execution,
+child Prepared rebind, storage-private canonical pair projection, and dormant
+read-only four-state classifier. None adds a dispatcher proposal method or
+public route. Writer-wide locking, live parent mutation authority, partial-new
+roll-forward, typed terminal adapter, owner RPC evidence, abort/finalize execution,
 reconciliation-witness cleanup, state-aware search and lifecycle admission,
 and public APIs remain D3-B3/D4 gates. Normal Qdrant upsert and update APIs
 remain rejected throughout.
