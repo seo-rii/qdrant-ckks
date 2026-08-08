@@ -383,6 +383,31 @@ impl Debug for PrivateHnswOwnerStoreObservationV1<'_> {
     }
 }
 
+// Dormant V2 recovery states. S1 includes the full-prefix crash window before
+// the Merkle tree is published; no other bucket ordering is recoverable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrivateHnswOwnerRecoveryPhaseV1 {
+    S0,
+    S1 { written_bucket_count: usize },
+    S2,
+    S3,
+    S4,
+}
+
+struct PrivateHnswOwnerRecoveryEvidenceV1 {
+    phase: PrivateHnswOwnerRecoveryPhaseV1,
+    new_merkle_tree: PrivateHnswOramMerkleTree,
+}
+
+impl Debug for PrivateHnswOwnerRecoveryEvidenceV1 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateHnswOwnerRecoveryEvidenceV1")
+            .field("phase", &self.phase)
+            .field("new_merkle_tree", &self.new_merkle_tree)
+            .finish()
+    }
+}
+
 pub(crate) struct PrivateHnswOwnerStoreLockV1<'a> {
     store: &'a PrivateHnswOramStore,
     directory: File,
@@ -2651,6 +2676,326 @@ impl PrivateHnswOwnerStoreLockV1<'_> {
         Ok(PrivateHnswOwnerStoreObservationV1::Third)
     }
 
+    pub(crate) fn classify_owner_recovery_phase_v1(
+        &self,
+        authority: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'_>,
+        max_ciphertext_bytes: usize,
+        manifest_validation: PrivateHnswManifestValidationContext<'_>,
+    ) -> CollectionResult<PrivateHnswOwnerRecoveryPhaseV1> {
+        let context = owner_store_verification_context_from_authority(
+            authority,
+            max_ciphertext_bytes,
+            manifest_validation,
+        )?;
+        Ok(self.classify_owner_recovery_state_v1(context)?.phase)
+    }
+
+    pub(crate) fn resume_owner_recovery_to_exact_new_v1<'lock>(
+        &'lock self,
+        authority: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'_>,
+        max_ciphertext_bytes: usize,
+        manifest_validation: PrivateHnswManifestValidationContext<'_>,
+    ) -> CollectionResult<PrivateHnswOwnerExactNewStoreTokenV1<'lock>> {
+        let context = owner_store_verification_context_from_authority(
+            authority,
+            max_ciphertext_bytes,
+            manifest_validation,
+        )?;
+        self.resume_owner_recovery_context_to_exact_new_v1(context)
+    }
+
+    fn resume_owner_recovery_context_to_exact_new_v1<'lock>(
+        &'lock self,
+        context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
+    ) -> CollectionResult<PrivateHnswOwnerExactNewStoreTokenV1<'lock>> {
+        let mut evidence = self.classify_owner_recovery_state_v1(context)?;
+        let written_bucket_count = match evidence.phase {
+            PrivateHnswOwnerRecoveryPhaseV1::S0 => 0,
+            PrivateHnswOwnerRecoveryPhaseV1::S1 {
+                written_bucket_count,
+            } => written_bucket_count,
+            PrivateHnswOwnerRecoveryPhaseV1::S2
+            | PrivateHnswOwnerRecoveryPhaseV1::S3
+            | PrivateHnswOwnerRecoveryPhaseV1::S4 => context.final_buckets.len(),
+        };
+
+        if written_bucket_count < context.final_buckets.len() {
+            for bucket in &context.final_buckets[written_bucket_count..] {
+                self.write_owner_recovery_bucket_v1(context, bucket)?;
+            }
+            evidence = self.classify_owner_recovery_state_v1(context)?;
+        }
+
+        if evidence.phase
+            == (PrivateHnswOwnerRecoveryPhaseV1::S1 {
+                written_bucket_count: context.final_buckets.len(),
+            })
+        {
+            self.write_owner_recovery_merkle_tree_v1(context)?;
+            evidence = self.classify_owner_recovery_state_v1(context)?;
+        }
+
+        if evidence.phase == PrivateHnswOwnerRecoveryPhaseV1::S2 {
+            self.publish_owner_recovery_commit_v1(context)?;
+            evidence = self.classify_owner_recovery_state_v1(context)?;
+        }
+
+        if evidence.phase == PrivateHnswOwnerRecoveryPhaseV1::S3 {
+            self.publish_owner_recovery_current_v1(context)?;
+            evidence = self.classify_owner_recovery_state_v1(context)?;
+        }
+
+        if evidence.phase != PrivateHnswOwnerRecoveryPhaseV1::S4 {
+            return Err(owner_store_state_mismatch());
+        }
+        self.verify_exact_new(context)
+    }
+
+    fn classify_owner_recovery_state_v1(
+        &self,
+        context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
+    ) -> CollectionResult<PrivateHnswOwnerRecoveryEvidenceV1> {
+        validate_owner_store_directory_identity(&self.directory, &self.store.root)?;
+        ensure_owner_store_has_no_legacy_pending(self.store)?;
+
+        let (manifest, signature) = self.store.read_manifest()?;
+        validate_private_hnsw_oram_manifest(
+            &manifest,
+            Some(&signature),
+            context.manifest_validation,
+        )
+        .map_err(private_hnsw_oram_error)?;
+        validate_owner_store_context(&manifest, context, OwnerStorePhase::ExactOld)?;
+
+        let old = PrivateHnswOramEpochState {
+            index_epoch: context.old_state.index_epoch,
+            root_hash: context.old_state.root_hash.clone(),
+        };
+        let new = PrivateHnswOramEpochState {
+            index_epoch: context.new_state.index_epoch,
+            root_hash: context.new_state.root_hash.clone(),
+        };
+        let current = self.store.read_current_epoch()?;
+        if current != old && current != new {
+            return Err(owner_store_state_mismatch());
+        }
+
+        let tree = self.store.read_merkle_tree()?;
+        let tree_is_old = validate_merkle_tree_context(
+            &tree,
+            old.index_epoch,
+            &old.root_hash,
+            manifest.bucket_count,
+        )
+        .is_ok();
+        let tree_is_new = validate_merkle_tree_context(
+            &tree,
+            new.index_epoch,
+            &new.root_hash,
+            manifest.bucket_count,
+        )
+        .is_ok();
+        if tree_is_old == tree_is_new {
+            return Err(owner_store_state_mismatch());
+        }
+
+        validate_owner_store_epoch_directory(self.store, new.index_epoch)?;
+        let old_commit_kind = validate_owner_store_old_commit(self.store, &manifest, context)?;
+        let new_commit_exists = validate_owner_store_new_commit_if_present(self.store, context)?;
+
+        let (written_bucket_count, new_merkle_tree) = if tree_is_old {
+            let written_bucket_count =
+                classify_owner_recovery_bucket_prefix(self.store, &manifest, &tree, context)?;
+            let new_tree = owner_recovery_new_merkle_tree(&tree, context)?;
+            (written_bucket_count, new_tree)
+        } else {
+            read_owner_store_buckets(
+                self.store,
+                &manifest,
+                &tree,
+                context,
+                OwnerStorePhase::ExactNew,
+            )?;
+            (context.final_buckets.len(), tree.clone())
+        };
+
+        let phase = if current == old && tree_is_old && !new_commit_exists {
+            if written_bucket_count == 0 {
+                PrivateHnswOwnerRecoveryPhaseV1::S0
+            } else {
+                PrivateHnswOwnerRecoveryPhaseV1::S1 {
+                    written_bucket_count,
+                }
+            }
+        } else if current == old && tree_is_new && !new_commit_exists {
+            PrivateHnswOwnerRecoveryPhaseV1::S2
+        } else if current == old && tree_is_new && new_commit_exists {
+            PrivateHnswOwnerRecoveryPhaseV1::S3
+        } else if current == new && tree_is_new && new_commit_exists {
+            PrivateHnswOwnerRecoveryPhaseV1::S4
+        } else {
+            return Err(owner_store_state_mismatch());
+        };
+
+        ensure_owner_store_has_no_legacy_pending(self.store)?;
+        if self.store.read_manifest()? != (manifest.clone(), signature)
+            || self.store.read_current_epoch()? != current
+            || self.store.read_merkle_tree()? != tree
+            || validate_owner_store_old_commit(self.store, &manifest, context)? != old_commit_kind
+            || validate_owner_store_new_commit_if_present(self.store, context)? != new_commit_exists
+        {
+            return Err(owner_store_state_mismatch());
+        }
+        validate_owner_store_epoch_directory(self.store, new.index_epoch)?;
+        if tree_is_old {
+            if classify_owner_recovery_bucket_prefix(self.store, &manifest, &tree, context)?
+                != written_bucket_count
+            {
+                return Err(owner_store_state_mismatch());
+            }
+        } else {
+            read_owner_store_buckets(
+                self.store,
+                &manifest,
+                &tree,
+                context,
+                OwnerStorePhase::ExactNew,
+            )?;
+        }
+        validate_owner_store_directory_identity(&self.directory, &self.store.root)?;
+        Ok(PrivateHnswOwnerRecoveryEvidenceV1 {
+            phase,
+            new_merkle_tree,
+        })
+    }
+
+    fn write_owner_recovery_bucket_v1(
+        &self,
+        context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
+        bucket: &PrivateHnswOramBucket,
+    ) -> CollectionResult<()> {
+        let written_bucket_count = match self.classify_owner_recovery_state_v1(context)?.phase {
+            PrivateHnswOwnerRecoveryPhaseV1::S0 => 0,
+            PrivateHnswOwnerRecoveryPhaseV1::S1 {
+                written_bucket_count,
+            } => written_bucket_count,
+            _ => return Err(owner_store_state_mismatch()),
+        };
+        if context.final_buckets.get(written_bucket_count) != Some(bucket) {
+            return Err(owner_store_state_mismatch());
+        }
+        let (manifest, _) = self.store.read_manifest()?;
+        validate_bucket(
+            bucket,
+            context.new_state.index_epoch,
+            manifest.bucket_count,
+            context.max_ciphertext_bytes,
+        )?;
+        validate_bucket_ciphertext_fixed_size(bucket, &manifest)?;
+        validate_bucket_commitment_context(
+            &manifest,
+            context.new_state.index_epoch,
+            std::slice::from_ref(bucket),
+        )?;
+        write_json_atomic(
+            &self.store.root,
+            &self.store.temp_dir(),
+            &self.store.bucket_path(bucket.bucket_id),
+            bucket,
+        )?;
+        let expected_written_bucket_count = written_bucket_count
+            .checked_add(1)
+            .ok_or_else(owner_store_state_mismatch)?;
+        if self.classify_owner_recovery_state_v1(context)?.phase
+            != (PrivateHnswOwnerRecoveryPhaseV1::S1 {
+                written_bucket_count: expected_written_bucket_count,
+            })
+        {
+            return Err(owner_store_state_mismatch());
+        }
+        Ok(())
+    }
+
+    fn write_owner_recovery_merkle_tree_v1(
+        &self,
+        context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
+    ) -> CollectionResult<()> {
+        let evidence = self.classify_owner_recovery_state_v1(context)?;
+        if evidence.phase
+            != (PrivateHnswOwnerRecoveryPhaseV1::S1 {
+                written_bucket_count: context.final_buckets.len(),
+            })
+        {
+            return Err(owner_store_state_mismatch());
+        }
+        write_json_atomic(
+            &self.store.root,
+            &self.store.temp_dir(),
+            &self.store.merkle_nodes_path(),
+            &evidence.new_merkle_tree,
+        )?;
+        if self.classify_owner_recovery_state_v1(context)?.phase
+            != PrivateHnswOwnerRecoveryPhaseV1::S2
+        {
+            return Err(owner_store_state_mismatch());
+        }
+        Ok(())
+    }
+
+    fn publish_owner_recovery_commit_v1(
+        &self,
+        context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
+    ) -> CollectionResult<()> {
+        if self.classify_owner_recovery_state_v1(context)?.phase
+            != PrivateHnswOwnerRecoveryPhaseV1::S2
+        {
+            return Err(owner_store_state_mismatch());
+        }
+        write_json_atomic(
+            &self.store.root,
+            &self.store.temp_dir(),
+            &self.store.commit_epoch_path(context.new_state.index_epoch),
+            &PrivateHnswOramEpochCommit {
+                index_epoch: context.new_state.index_epoch,
+                root_hash: context.new_state.root_hash.clone(),
+                writeback_digest: Some(context.new_state.last_writeback_digest.clone()),
+            },
+        )?;
+        if self.classify_owner_recovery_state_v1(context)?.phase
+            != PrivateHnswOwnerRecoveryPhaseV1::S3
+        {
+            return Err(owner_store_state_mismatch());
+        }
+        Ok(())
+    }
+
+    fn publish_owner_recovery_current_v1(
+        &self,
+        context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
+    ) -> CollectionResult<()> {
+        if self.classify_owner_recovery_state_v1(context)?.phase
+            != PrivateHnswOwnerRecoveryPhaseV1::S3
+        {
+            return Err(owner_store_state_mismatch());
+        }
+        let new = PrivateHnswOramEpochState {
+            index_epoch: context.new_state.index_epoch,
+            root_hash: context.new_state.root_hash.clone(),
+        };
+        write_json_atomic(
+            &self.store.root,
+            &self.store.temp_dir(),
+            &self.store.current_epoch_path(),
+            &new,
+        )?;
+        if self.classify_owner_recovery_state_v1(context)?.phase
+            != PrivateHnswOwnerRecoveryPhaseV1::S4
+        {
+            return Err(owner_store_state_mismatch());
+        }
+        Ok(())
+    }
+
     fn verify_exact_old<'lock>(
         &'lock self,
         context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
@@ -2745,6 +3090,151 @@ impl PrivateHnswOwnerStoreLockV1<'_> {
                 &buckets,
             ),
         })
+    }
+}
+
+fn owner_store_verification_context_from_authority<'a>(
+    authority: PrivateOramOwnerIndexStoreInspectionAuthorityV1<'a>,
+    max_ciphertext_bytes: usize,
+    manifest_validation: PrivateHnswManifestValidationContext<'a>,
+) -> CollectionResult<PrivateHnswOwnerStoreVerificationContextV1<'a>> {
+    let final_buckets = authority
+        .hnsw_final_buckets()
+        .ok_or_else(owner_store_state_mismatch)?;
+    Ok(PrivateHnswOwnerStoreVerificationContextV1 {
+        journal_descriptor_digest: authority.journal_descriptor_digest(),
+        prepared_state_digest: authority.prepared_state_digest(),
+        immutable_manifest_digest: authority.immutable_manifest_digest(),
+        immutable_manifest: authority.immutable_manifest(),
+        immutable_index: authority.immutable_index(),
+        index_name: authority.index_name(),
+        old_state: authority.old_state(),
+        new_state: authority.new_state(),
+        final_bucket_refs: authority.final_bucket_refs(),
+        final_buckets,
+        max_ciphertext_bytes,
+        manifest_validation,
+    })
+}
+
+fn classify_owner_recovery_bucket_prefix(
+    store: &PrivateHnswOramStore,
+    manifest: &PrivateHnswOramManifest,
+    old_tree: &PrivateHnswOramMerkleTree,
+    context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
+) -> CollectionResult<usize> {
+    let max_bucket_file_bytes = max_bucket_file_bytes(context.max_ciphertext_bytes)?;
+    let mut written_bucket_count = 0;
+    let mut observed_old = false;
+    for (bucket_ref, final_bucket) in context.final_bucket_refs.iter().zip(context.final_buckets) {
+        let bucket: PrivateHnswOramBucket = read_json_private_file(
+            &store.bucket_path(bucket_ref.bucket_id),
+            max_bucket_file_bytes,
+        )?;
+        if bucket.bucket_id != bucket_ref.bucket_id {
+            return Err(owner_store_state_mismatch());
+        }
+        if bucket == *final_bucket {
+            if observed_old {
+                return Err(owner_store_state_mismatch());
+            }
+            validate_bucket(
+                &bucket,
+                context.new_state.index_epoch,
+                manifest.bucket_count,
+                context.max_ciphertext_bytes,
+            )?;
+            validate_bucket_ciphertext_fixed_size(&bucket, manifest)?;
+            validate_bucket_commitment_context(
+                manifest,
+                context.new_state.index_epoch,
+                std::slice::from_ref(&bucket),
+            )?;
+            written_bucket_count += 1;
+            continue;
+        }
+
+        observed_old = true;
+        validate_bucket_for_read(
+            &bucket,
+            context.old_state.index_epoch,
+            manifest.bucket_count,
+            context.max_ciphertext_bytes,
+        )?;
+        validate_bucket_ciphertext_fixed_size(&bucket, manifest)?;
+        validate_bucket_commitment_context(
+            manifest,
+            bucket.index_epoch,
+            std::slice::from_ref(&bucket),
+        )?;
+        let bucket_index =
+            usize::try_from(bucket.bucket_id).map_err(|_| owner_store_state_mismatch())?;
+        if old_tree.leaf_hashes.get(bucket_index) != Some(&bucket.bucket_commitment) {
+            return Err(owner_store_state_mismatch());
+        }
+    }
+    Ok(written_bucket_count)
+}
+
+fn owner_recovery_new_merkle_tree(
+    old_tree: &PrivateHnswOramMerkleTree,
+    context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
+) -> CollectionResult<PrivateHnswOramMerkleTree> {
+    let mut tree = old_tree.clone();
+    for bucket in context.final_buckets {
+        let bucket_index =
+            usize::try_from(bucket.bucket_id).map_err(|_| owner_store_state_mismatch())?;
+        let leaf = tree
+            .leaf_hashes
+            .get_mut(bucket_index)
+            .ok_or_else(owner_store_state_mismatch)?;
+        *leaf = bucket.bucket_commitment.clone();
+    }
+    tree.index_epoch = context.new_state.index_epoch;
+    tree.root_hash = context.new_state.root_hash.clone();
+    validate_merkle_tree(&tree)?;
+    Ok(tree)
+}
+
+fn validate_owner_store_old_commit(
+    store: &PrivateHnswOramStore,
+    manifest: &PrivateHnswOramManifest,
+    context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
+) -> CollectionResult<OwnerStoreCommitKind> {
+    match store.read_epoch_commit(context.old_state.index_epoch) {
+        Ok(commit)
+            if commit.root_hash == context.old_state.root_hash
+                && commit.writeback_digest.as_deref()
+                    == Some(context.old_state.last_writeback_digest.as_str()) =>
+        {
+            Ok(OwnerStoreCommitKind::DigestBound)
+        }
+        Err(CollectionError::NotFound { .. })
+            if manifest.index_epoch == context.old_state.index_epoch
+                && manifest.root_hash == context.old_state.root_hash =>
+        {
+            Ok(OwnerStoreCommitKind::InitialAnchor)
+        }
+        Ok(_) | Err(CollectionError::NotFound { .. }) => Err(owner_store_state_mismatch()),
+        Err(error) => Err(error),
+    }
+}
+
+fn validate_owner_store_new_commit_if_present(
+    store: &PrivateHnswOramStore,
+    context: PrivateHnswOwnerStoreVerificationContextV1<'_>,
+) -> CollectionResult<bool> {
+    match store.read_epoch_commit(context.new_state.index_epoch) {
+        Ok(commit)
+            if commit.root_hash == context.new_state.root_hash
+                && commit.writeback_digest.as_deref()
+                    == Some(context.new_state.last_writeback_digest.as_str()) =>
+        {
+            Ok(true)
+        }
+        Err(CollectionError::NotFound { .. }) => Ok(false),
+        Ok(_) => Err(owner_store_state_mismatch()),
+        Err(error) => Err(error),
     }
 }
 
@@ -2925,40 +3415,18 @@ fn validate_owner_store_epoch_commits(
 ) -> CollectionResult<OwnerStoreCommitKind> {
     match phase {
         OwnerStorePhase::ExactOld => {
-            match store.read_epoch_commit(context.new_state.index_epoch) {
-                Err(CollectionError::NotFound { .. }) => {}
-                Ok(_) => return Err(owner_store_state_mismatch()),
-                Err(error) => return Err(error),
+            if validate_owner_store_new_commit_if_present(store, context)? {
+                return Err(owner_store_state_mismatch());
             }
-            match store.read_epoch_commit(context.old_state.index_epoch) {
-                Ok(commit)
-                    if commit.root_hash == context.old_state.root_hash
-                        && commit.writeback_digest.as_deref()
-                            == Some(context.old_state.last_writeback_digest.as_str()) =>
-                {
-                    Ok(OwnerStoreCommitKind::DigestBound)
-                }
-                Err(CollectionError::NotFound { .. })
-                    if manifest.index_epoch == context.old_state.index_epoch
-                        && manifest.root_hash == context.old_state.root_hash =>
-                {
-                    Ok(OwnerStoreCommitKind::InitialAnchor)
-                }
-                Ok(_) | Err(CollectionError::NotFound { .. }) => Err(owner_store_state_mismatch()),
-                Err(error) => Err(error),
+            validate_owner_store_old_commit(store, manifest, context)
+        }
+        OwnerStorePhase::ExactNew => {
+            if validate_owner_store_new_commit_if_present(store, context)? {
+                Ok(OwnerStoreCommitKind::DigestBound)
+            } else {
+                Err(owner_store_state_mismatch())
             }
         }
-        OwnerStorePhase::ExactNew => match store.read_epoch_commit(context.new_state.index_epoch) {
-            Ok(commit)
-                if commit.root_hash == context.new_state.root_hash
-                    && commit.writeback_digest.as_deref()
-                        == Some(context.new_state.last_writeback_digest.as_str()) =>
-            {
-                Ok(OwnerStoreCommitKind::DigestBound)
-            }
-            Ok(_) | Err(CollectionError::NotFound { .. }) => Err(owner_store_state_mismatch()),
-            Err(error) => Err(error),
-        },
     }
 }
 
@@ -4146,6 +4614,7 @@ fn write_json_atomic<T: Serialize>(
         CollectionError::service_error("failed to sync private HNSW ORAM temp file")
     })?;
     drop(file);
+    sync_dir(temp_dir)?;
 
     fs::rename(&temp_path, target).map_err(|_| {
         let _ = fs::remove_file(&temp_path);
@@ -4153,6 +4622,9 @@ fn write_json_atomic<T: Serialize>(
     })?;
     if let Some(parent) = target.parent() {
         sync_dir(parent)?;
+    }
+    if target.parent() != Some(temp_dir) {
+        sync_dir(temp_dir)?;
     }
     Ok(())
 }
@@ -5517,6 +5989,188 @@ mod tests {
             max_ciphertext_bytes: 4096,
             manifest_validation: fixture_validation_context(public_key),
         }
+    }
+
+    struct OwnerRecoveryFixture {
+        store: PrivateHnswOramStore,
+        manifest: PrivateHnswOramManifest,
+        old_state: PrivateOramIndexStateV2,
+        new_state: PrivateOramIndexStateV2,
+        final_bucket_refs: Vec<PrivateOramAppendBucketRefV1>,
+        final_buckets: Vec<PrivateHnswOramBucket>,
+        journal_descriptor_digest: String,
+        prepared_state_digest: String,
+        immutable_manifest_digest: String,
+        immutable_manifest: PrivateOramImmutableManifestV2,
+        public_key: Vec<u8>,
+    }
+
+    impl OwnerRecoveryFixture {
+        fn new(temp: &TempDir) -> Self {
+            let key_pair = Ed25519KeyPair::from_seed_unchecked(&[61; 32]).unwrap();
+            let public_key = key_pair.public_key().as_ref().to_vec();
+            let (bundle, first_bucket, _, _) = fixture_owner_signed_commit_update(&key_pair);
+            let keys = fixture_client_keys();
+            let config = client_oram_config();
+            let plaintext_bucket = empty_private_hnsw_oram_plaintext_bucket(1, config).unwrap();
+            let encoded_bucket =
+                encode_private_hnsw_oram_bucket_plaintext(&plaintext_bucket, config).unwrap();
+            let second_bucket = seal_private_hnsw_oram_bucket(
+                &keys,
+                client_bucket_base_context().for_bucket(1, 43),
+                &encoded_bucket,
+            )
+            .unwrap();
+            let final_buckets = vec![first_bucket, second_bucket];
+            let mut commitments = bundle.bucket_commitments();
+            for bucket in &final_buckets {
+                commitments[usize::try_from(bucket.bucket_id).unwrap()] =
+                    bucket.bucket_commitment.clone();
+            }
+            let new_epoch = PrivateHnswOramEpochState {
+                index_epoch: 43,
+                root_hash: PrivateHnswOramStore::merkle_root_for_commitments(&commitments).unwrap(),
+            };
+            let store = fixture_store(temp);
+            store
+                .write_initial_upload_bundle_with_signature(
+                    &bundle,
+                    4096,
+                    fixture_validation_context(&public_key),
+                )
+                .unwrap();
+            let (old_state, new_state) = fixture_owner_states(&bundle.manifest, &new_epoch);
+            let final_bucket_refs = fixture_owner_bucket_refs(&final_buckets);
+            let immutable_manifest = fixture_owner_immutable_manifest(&bundle.manifest);
+            let immutable_manifest_digest =
+                private_oram_immutable_manifest_v2_digest(&immutable_manifest).unwrap();
+            Self {
+                store,
+                manifest: bundle.manifest,
+                old_state,
+                new_state,
+                final_bucket_refs,
+                final_buckets,
+                journal_descriptor_digest: root_hash(72),
+                prepared_state_digest: root_hash(73),
+                immutable_manifest_digest,
+                immutable_manifest,
+                public_key,
+            }
+        }
+
+        fn context(&self) -> PrivateHnswOwnerStoreVerificationContextV1<'_> {
+            fixture_owner_store_context(
+                &self.journal_descriptor_digest,
+                &self.prepared_state_digest,
+                &self.immutable_manifest_digest,
+                &self.immutable_manifest,
+                &self.old_state,
+                &self.new_state,
+                &self.final_bucket_refs,
+                &self.final_buckets,
+                &self.public_key,
+            )
+        }
+
+        fn seed_phase(&self, phase: PrivateHnswOwnerRecoveryPhaseV1) {
+            let written_bucket_count = match phase {
+                PrivateHnswOwnerRecoveryPhaseV1::S0 => 0,
+                PrivateHnswOwnerRecoveryPhaseV1::S1 {
+                    written_bucket_count,
+                } => written_bucket_count,
+                PrivateHnswOwnerRecoveryPhaseV1::S2
+                | PrivateHnswOwnerRecoveryPhaseV1::S3
+                | PrivateHnswOwnerRecoveryPhaseV1::S4 => self.final_buckets.len(),
+            };
+            for bucket in &self.final_buckets[..written_bucket_count] {
+                self.store
+                    .write_bucket(
+                        bucket,
+                        self.new_state.index_epoch,
+                        self.manifest.bucket_count,
+                        4096,
+                    )
+                    .unwrap();
+            }
+            if matches!(
+                phase,
+                PrivateHnswOwnerRecoveryPhaseV1::S2
+                    | PrivateHnswOwnerRecoveryPhaseV1::S3
+                    | PrivateHnswOwnerRecoveryPhaseV1::S4
+            ) {
+                self.store
+                    .write_merkle_commit(
+                        self.old_state.index_epoch,
+                        &self.old_state.root_hash,
+                        self.new_state.index_epoch,
+                        &self.new_state.root_hash,
+                        self.manifest.bucket_count,
+                        &self.final_buckets,
+                    )
+                    .unwrap();
+            }
+            if matches!(
+                phase,
+                PrivateHnswOwnerRecoveryPhaseV1::S3 | PrivateHnswOwnerRecoveryPhaseV1::S4
+            ) {
+                self.write_new_commit(PrivateHnswOramEpochCommit {
+                    index_epoch: self.new_state.index_epoch,
+                    root_hash: self.new_state.root_hash.clone(),
+                    writeback_digest: Some(self.new_state.last_writeback_digest.clone()),
+                });
+            }
+            if phase == PrivateHnswOwnerRecoveryPhaseV1::S4 {
+                self.write_current(&PrivateHnswOramEpochState {
+                    index_epoch: self.new_state.index_epoch,
+                    root_hash: self.new_state.root_hash.clone(),
+                });
+            }
+        }
+
+        fn write_new_commit(&self, commit: PrivateHnswOramEpochCommit) {
+            write_json_atomic(
+                &self.store.root,
+                &self.store.temp_dir(),
+                &self.store.commit_epoch_path(self.new_state.index_epoch),
+                &commit,
+            )
+            .unwrap();
+        }
+
+        fn write_current(&self, current: &PrivateHnswOramEpochState) {
+            write_json_atomic(
+                &self.store.root,
+                &self.store.temp_dir(),
+                &self.store.current_epoch_path(),
+                current,
+            )
+            .unwrap();
+        }
+    }
+
+    fn assert_owner_recovery_resumes_from_phase(expected: PrivateHnswOwnerRecoveryPhaseV1) {
+        let temp = TempDir::new().unwrap();
+        let fixture = OwnerRecoveryFixture::new(&temp);
+        fixture.seed_phase(expected);
+        let lock = fixture.store.lock_owner_store_v1().unwrap();
+        assert_eq!(
+            lock.classify_owner_recovery_state_v1(fixture.context())
+                .unwrap()
+                .phase,
+            expected
+        );
+        let token = lock
+            .resume_owner_recovery_context_to_exact_new_v1(fixture.context())
+            .unwrap();
+        assert_eq!(token.index_name(), "text");
+        assert_eq!(token.canonical_state_digest().len(), 43);
+        assert_eq!(
+            lock.classify_owner_recovery_state_v1(fixture.context())
+                .unwrap()
+                .phase,
+            PrivateHnswOwnerRecoveryPhaseV1::S4
+        );
     }
 
     fn client_node_block() -> PrivateHnswNodeBlockPlaintext {
@@ -8624,6 +9278,234 @@ mod tests {
         let rendered = err.to_string();
         assert!(rendered.contains("repeats a bucket"));
         assert!(!rendered.contains("2"), "{rendered}");
+    }
+
+    #[test]
+    fn owner_recovery_resumes_from_s0() {
+        assert_owner_recovery_resumes_from_phase(PrivateHnswOwnerRecoveryPhaseV1::S0);
+    }
+
+    #[test]
+    fn owner_recovery_resumes_from_s1_partial_prefix() {
+        assert_owner_recovery_resumes_from_phase(PrivateHnswOwnerRecoveryPhaseV1::S1 {
+            written_bucket_count: 1,
+        });
+    }
+
+    #[test]
+    fn owner_recovery_resumes_from_s1_full_prefix_before_merkle_publish() {
+        assert_owner_recovery_resumes_from_phase(PrivateHnswOwnerRecoveryPhaseV1::S1 {
+            written_bucket_count: 2,
+        });
+    }
+
+    #[test]
+    fn owner_recovery_resumes_from_s2() {
+        assert_owner_recovery_resumes_from_phase(PrivateHnswOwnerRecoveryPhaseV1::S2);
+    }
+
+    #[test]
+    fn owner_recovery_resumes_from_s3() {
+        assert_owner_recovery_resumes_from_phase(PrivateHnswOwnerRecoveryPhaseV1::S3);
+    }
+
+    #[test]
+    fn owner_recovery_resumes_idempotently_from_s4() {
+        assert_owner_recovery_resumes_from_phase(PrivateHnswOwnerRecoveryPhaseV1::S4);
+    }
+
+    #[test]
+    fn owner_recovery_publish_steps_require_exact_source_phase() {
+        let temp = TempDir::new().unwrap();
+        let fixture = OwnerRecoveryFixture::new(&temp);
+        let old_tree = fixture.store.read_merkle_tree().unwrap();
+        let lock = fixture.store.lock_owner_store_v1().unwrap();
+        lock.write_owner_recovery_merkle_tree_v1(fixture.context())
+            .unwrap_err();
+        assert_eq!(fixture.store.read_merkle_tree().unwrap(), old_tree);
+
+        let temp = TempDir::new().unwrap();
+        let fixture = OwnerRecoveryFixture::new(&temp);
+        fixture.seed_phase(PrivateHnswOwnerRecoveryPhaseV1::S1 {
+            written_bucket_count: fixture.final_buckets.len(),
+        });
+        let lock = fixture.store.lock_owner_store_v1().unwrap();
+        lock.publish_owner_recovery_commit_v1(fixture.context())
+            .unwrap_err();
+        assert!(matches!(
+            fixture
+                .store
+                .read_epoch_commit(fixture.new_state.index_epoch),
+            Err(CollectionError::NotFound { .. })
+        ));
+
+        let temp = TempDir::new().unwrap();
+        let fixture = OwnerRecoveryFixture::new(&temp);
+        fixture.seed_phase(PrivateHnswOwnerRecoveryPhaseV1::S2);
+        let old = fixture.store.read_current_epoch().unwrap();
+        let lock = fixture.store.lock_owner_store_v1().unwrap();
+        lock.publish_owner_recovery_current_v1(fixture.context())
+            .unwrap_err();
+        assert_eq!(fixture.store.read_current_epoch().unwrap(), old);
+    }
+
+    #[test]
+    fn owner_recovery_rejects_non_prefix_bucket_progress() {
+        let temp = TempDir::new().unwrap();
+        let fixture = OwnerRecoveryFixture::new(&temp);
+        let second = &fixture.final_buckets[1];
+        fixture
+            .store
+            .write_bucket(
+                second,
+                fixture.new_state.index_epoch,
+                fixture.manifest.bucket_count,
+                4096,
+            )
+            .unwrap();
+
+        let error = fixture
+            .store
+            .lock_owner_store_v1()
+            .unwrap()
+            .classify_owner_recovery_state_v1(fixture.context())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("canonical store state does not match"));
+        assert!(!error.contains(&second.ciphertext));
+    }
+
+    #[test]
+    fn owner_recovery_rejects_wrong_bucket_body_hash_and_commitment() {
+        for mutation in 0..3 {
+            let temp = TempDir::new().unwrap();
+            let fixture = OwnerRecoveryFixture::new(&temp);
+            let mut bucket = fixture.final_buckets[0].clone();
+            match mutation {
+                0 => bucket.ciphertext = fixture.final_buckets[1].ciphertext.clone(),
+                1 => bucket.ciphertext_sha256 = root_hash(89),
+                2 => bucket.bucket_commitment = root_hash(90),
+                _ => unreachable!(),
+            }
+            write_json_atomic(
+                &fixture.store.root,
+                &fixture.store.temp_dir(),
+                &fixture.store.bucket_path(bucket.bucket_id),
+                &bucket,
+            )
+            .unwrap();
+
+            let error = fixture
+                .store
+                .lock_owner_store_v1()
+                .unwrap()
+                .classify_owner_recovery_state_v1(fixture.context())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("ciphertext_sha256 mismatch")
+                    || error.contains("commitment context mismatch")
+                    || error.contains("newer than requested epoch")
+                    || error.contains("canonical store state does not match")
+            );
+            assert!(!error.contains(&bucket.ciphertext));
+            assert!(!error.contains(&bucket.ciphertext_sha256));
+            assert!(!error.contains(&bucket.bucket_commitment));
+        }
+    }
+
+    #[test]
+    fn owner_recovery_rejects_wrong_merkle_state() {
+        let temp = TempDir::new().unwrap();
+        let fixture = OwnerRecoveryFixture::new(&temp);
+        fixture.seed_phase(PrivateHnswOwnerRecoveryPhaseV1::S1 {
+            written_bucket_count: fixture.final_buckets.len(),
+        });
+        let mut tree = fixture.store.read_merkle_tree().unwrap();
+        tree.index_epoch = fixture.new_state.index_epoch;
+        tree.root_hash = fixture.new_state.root_hash.clone();
+        write_json_atomic(
+            &fixture.store.root,
+            &fixture.store.temp_dir(),
+            &fixture.store.merkle_nodes_path(),
+            &tree,
+        )
+        .unwrap();
+
+        let error = fixture
+            .store
+            .lock_owner_store_v1()
+            .unwrap()
+            .classify_owner_recovery_state_v1(fixture.context())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Merkle tree root_hash mismatch"));
+        assert!(!error.contains(&fixture.new_state.root_hash));
+    }
+
+    #[test]
+    fn owner_recovery_rejects_wrong_commit_state() {
+        let temp = TempDir::new().unwrap();
+        let fixture = OwnerRecoveryFixture::new(&temp);
+        fixture.seed_phase(PrivateHnswOwnerRecoveryPhaseV1::S2);
+        fixture.write_new_commit(PrivateHnswOramEpochCommit {
+            index_epoch: fixture.new_state.index_epoch,
+            root_hash: fixture.new_state.root_hash.clone(),
+            writeback_digest: Some(root_hash(91)),
+        });
+
+        let error = fixture
+            .store
+            .lock_owner_store_v1()
+            .unwrap()
+            .classify_owner_recovery_state_v1(fixture.context())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("canonical store state does not match"));
+        assert!(!error.contains(&fixture.new_state.root_hash));
+    }
+
+    #[test]
+    fn owner_recovery_rejects_invalid_current_transition() {
+        let temp = TempDir::new().unwrap();
+        let fixture = OwnerRecoveryFixture::new(&temp);
+        fixture.seed_phase(PrivateHnswOwnerRecoveryPhaseV1::S2);
+        fixture.write_current(&PrivateHnswOramEpochState {
+            index_epoch: fixture.new_state.index_epoch,
+            root_hash: fixture.new_state.root_hash.clone(),
+        });
+
+        let error = fixture
+            .store
+            .lock_owner_store_v1()
+            .unwrap()
+            .classify_owner_recovery_state_v1(fixture.context())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("canonical store state does not match"));
+        assert!(!error.contains(&fixture.new_state.root_hash));
+    }
+
+    #[test]
+    fn owner_recovery_rejects_legacy_pending_writeback() {
+        let temp = TempDir::new().unwrap();
+        let fixture = OwnerRecoveryFixture::new(&temp);
+        write_json_atomic(
+            &fixture.store.root,
+            &fixture.store.temp_dir(),
+            &fixture.store.pending_writeback_path(),
+            &serde_json::json!({"legacy": true}),
+        )
+        .unwrap();
+
+        let error = fixture
+            .store
+            .lock_owner_store_v1()
+            .unwrap()
+            .classify_owner_recovery_state_v1(fixture.context())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("rejects legacy pending writeback"));
     }
 
     #[test]
