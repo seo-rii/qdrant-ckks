@@ -574,17 +574,33 @@ never translated to V2 terminal state.
 Decision records are created only from a collection-state and lease-slot pair
 captured under one consensus read guard. The test-only visible-point validator
 additionally requires an exact non-Clone durable token, so structural
-`PointStageDurable` bytes alone are insufficient in that dormant path. The token
-is still a value snapshot, not a live store guard. Production activation must
-reopen and pin the staged child in the same authority window. The resulting
-non-Clone decision token binds the parent descriptor and the actual durable
-predecessor.
+`PointStageDurable` bytes alone are insufficient in that dormant path. The
+point-stage store now serializes prepare, load, and live reopen through an
+owner-only `stage.lock`, pins the root through a directory descriptor on Linux,
+and exposes the exact frame and durable token only inside a callback-scoped live
+authority. Unsupported platforms fail closed before that authority is created.
+The resulting non-Clone decision token binds the parent descriptor and the
+actual durable predecessor.
 Publishing `DecisionDurable` returns a different token bound to that record,
 and publishing `RemotesTerminal` returns another token bound to the immediate
 remote-terminal record. Thus no earlier token can skip a phase or authorize a
-later writer. Typed paired-owner outcomes remain mandatory, and an empty remote
-batch derives its kind from live decision authority rather than decoded disk
-state.
+later writer. Publishing `LocalTerminal` returns a non-Clone token bound to the
+exact sequence-6 record. That token can advance a no-server-point mutation to
+sequence 7. The visible-point receipt sink and its consuming callback remain
+test-only until an authenticated, freshness-bound all-replica publisher can
+mint the receipt. An exact sequence-7 retry validates the durable parent
+evidence before opening the disposable staged child, so cleanup or a lost
+response cannot make the same retry fail; different evidence is still rejected.
+Typed paired-owner outcomes remain mandatory, and an empty remote batch derives
+its kind from live decision authority rather than decoded disk state.
+
+The dormant V1 staged-point codec rejects `Some({})` and accepts `None` as the
+only canonical empty-payload representation because ordinary Qdrant storage
+normalizes an empty payload to no payload. This is a same-version narrowing and
+is allowed only because the provider and codec have never been production
+activated. Any deployment that imported pre-activation fixtures must discard
+or explicitly migrate them before activation; silently accepting such an
+artifact as current authority is forbidden.
 
 Every immutable record, including an unpointed successor, is structurally
 validated. Directory iteration stops after the eighth entry and rejects it,
@@ -598,20 +614,25 @@ minting entry points are test-only until typed live owner prepare evidence is
 connected. A consensus-persisted monotonic history watermark is required to
 detect rollback of an otherwise valid local prefix, and `active`,
 `state_records`, and `temp` must be pinned and accessed relative to directory
-descriptors. Positive local terminal integration, point publish/abort with
-all-replica readback, staged-child live reopening, cleanup, and typed lease
-clear are also activation gates.
+descriptors. Positive local terminal integration, point publish/abort with an
+exact all-active-replica roster and authenticated readback,
+compare-and-delete abort, point-write exclusion, cleanup, and typed lease clear
+are also activation gates. The raw receipt test path is not an activation
+substitute.
 
 The parent descriptor and current-state digest formats have known-answer
 tests. Journal files live below a private non-symlink directory, use bounded
 owner-only files and same-file checks, and redact identity and digest values
 from errors and debug output. State publication fsyncs the candidate, replaces
 the current file atomically, then fsyncs the parent directory. A failure that
-leaves the old file is definitive; a changed or unknown target and exhausted
-post-publish parent fsync are indeterminate. An exact retry can reconcile a
-candidate that was already exposed. The typed point-stage token proves the
-Prepared child point artifact, and the paired owner journal can now prove a
-structurally and durably installed Prepared artifact to crate-private callers.
+leaves the old file is definitive; a changed or unknown target, failed
+post-publish readback or root validation, and exhausted post-publish parent
+fsync are indeterminate. The same rule applies after publishing an immutable
+successor record or the staged-point `active` directory. An exact retry can
+reconcile a candidate that was already exposed. The typed point-stage token
+proves the Prepared child point artifact, and the paired owner journal can now
+prove a structurally and durably installed Prepared artifact to crate-private
+callers.
 It can also persist a terminal record once the future restart/terminal bridge
 consumes the live adapter's exact paired canonical-state authority. Parent owner
 prepare/finalize digests remain coordination evidence: child Prepared rebinding

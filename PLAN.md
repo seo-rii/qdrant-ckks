@@ -1376,13 +1376,29 @@ Signed fields:
   iteration cap, 256 MiB aggregate cap, race-growth bounded read를 통과해야 한다. Exact pending
   retry도 immutable publisher를 다시 실행해 records/temp directory fsync를 재확립한 뒤 pointer를
   전진시킨다.
+- 완료(D3-C2-PointResolutionWriter): Point-stage prepare/load/live reopen을 owner-only
+  `stage.lock`으로 직렬화하고 Linux directory FD에 root를 고정했다. Callback-scoped live authority
+  밖으로 frame/token을 이동할 수 없으며 unsupported platform은 authority 생성 전에 fail closed한다.
+  `LocalTerminal` writer는 exact sequence-6 record에 묶인 non-Clone token을 반환하고,
+  no-server-point path는 그 token만 소비해 sequence 7 `PointResolved`를 기록한다. Visible-point raw
+  receipt sink와 child-consuming callback은 test-only로 닫았다. Exact sequence-7 retry는 disposable
+  child가 이미 정리됐어도 durable parent evidence만으로 성공하고 다른 receipt는 거부한다. State
+  pointer, immutable successor record, point-stage active publish 뒤 readback/root/fsync 실패는 모두
+  `Indeterminate`로 분류한다. Empty payload는 dormant staged-frame V1에 production deployment 이력이
+  없다는 전제 아래 `None` 하나만 canonical하게 허용하며 pre-activation fixture는 activation 전에
+  폐기하거나 명시적으로 migration해야 한다.
 - 남음(D3-C2-ParentStateWriter): Positive local terminal은 실제 local paired recovery outcome과
   같은 coordinator transaction에서 기록하고, remote terminal은 authenticated peer identity를
   결합한 internal RPC evidence를 소비해야 한다. Typed live owner-prepare bridge가 없어서 raw
   OwnersPrepared writer, V2 point-stage parent mint, decision-authority mint는 production build에
-  노출하지 않는다. Point-stage live reopen/lock, consensus에 monotonic parent-history watermark를
-  넣는 rollback pin,
-  active/records/temp의 fd-relative namespace pinning, point resolved phase는 아직 activation gate다.
+  노출하지 않는다. Consensus에 monotonic parent-history watermark를 넣는 rollback pin과
+  active/records/temp의 fd-relative namespace pinning은 아직 activation gate다.
+- 남음(D3-C2-PointResolutionCoordinator): Visible point는 topology reservation 아래 exact
+  all-Active `(shard_id, peer_id)` roster를 전후로 고정하고 peer-authenticated InsertOnly publish와
+  exact semantic readback으로만 receipt authority를 만들어야 한다. Abort에는 WAL-atomic
+  compare-semantic-digest delete, ordinary point-write exclusion, roster freshness binding이 필요하다.
+  기존 public consistency update/retrieve는 replica failure와 provenance를 숨기므로 이 authority로
+  사용할 수 없다.
 - 남음(D3-B3-C): Exact new면 remote-before-local finalize와 point publish를 재개하고,
   `AbortDecided`면 remote/local owner와 point stage를 exact-old로 abort한다. Mutable child와
   point artifact를 durable cleanup한 뒤 parent를 immutable reconciliation witness로
