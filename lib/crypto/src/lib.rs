@@ -17,6 +17,7 @@ pub mod private_oram_append_owner_prepare;
 pub mod private_oram_append_result_transaction;
 pub mod private_oram_append_transaction;
 pub mod private_oram_mutation;
+pub mod private_oram_peer_recovery;
 pub mod private_oram_point_staging;
 pub mod private_oram_recovery;
 pub mod private_result_oram;
@@ -279,6 +280,25 @@ pub use private_oram_mutation::{
     validate_private_oram_immutable_manifest_v2_shape,
     validate_private_oram_immutable_manifest_v2_signature, validate_private_oram_signature_shape,
     validate_private_oram_signed_state_v2_shape, validate_private_oram_signed_state_v2_signature,
+};
+pub use private_oram_peer_recovery::{
+    PRIVATE_ORAM_PEER_RECOVERY_KEY_ID_DOMAIN, PRIVATE_ORAM_PEER_RECOVERY_PROTOCOL_VERSION,
+    PRIVATE_ORAM_PEER_RECOVERY_PUBLIC_KEY_VERSION,
+    PRIVATE_ORAM_PEER_RECOVERY_RESPONSE_SIGNATURE_DOMAIN,
+    PRIVATE_ORAM_PEER_RECOVERY_SIGNATURE_ALGORITHM, PRIVATE_ORAM_PEER_RECOVERY_SIGNATURE_VERSION,
+    PRIVATE_ORAM_PEER_RECOVERY_TERMINAL_EVIDENCE_DIGEST_DOMAIN, PrivateOramPeerRecoveryError,
+    PrivateOramPeerRecoveryPublicKeyV1, PrivateOramPeerRecoveryRequestV2,
+    PrivateOramPeerRecoverySignatureV2, PrivateOramPeerRecoveryTerminalIndexV2,
+    PrivateOramPeerRecoveryTerminalKindV2, PrivateOramPeerRecoveryTerminalV2,
+    VerifiedPrivateOramPeerRecoveryResponseV2, private_oram_peer_recovery_key_id,
+    private_oram_peer_recovery_public_key_v1, sign_private_oram_peer_recovery_response_v2,
+    try_private_oram_peer_recovery_response_signature_message_v2,
+    try_private_oram_peer_recovery_terminal_evidence_digest_v2,
+    validate_private_oram_peer_recovery_public_key_v1,
+    validate_private_oram_peer_recovery_request_v2_shape,
+    validate_private_oram_peer_recovery_response_signature_v2,
+    validate_private_oram_peer_recovery_signature_v2_shape,
+    validate_private_oram_peer_recovery_terminal_v2,
 };
 pub use private_oram_point_staging::{
     PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_DOMAIN, PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_BYTES,
