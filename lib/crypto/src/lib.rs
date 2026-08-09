@@ -180,6 +180,7 @@ pub use private_oram_activation_authority::{
     validate_private_oram_activation_authority_bundle_v1,
     validate_private_oram_activation_authority_manifest_v1_shape,
     validate_private_oram_activation_authority_public_key_v1,
+    validate_private_oram_activation_authority_signature_v1_shape,
     validate_private_oram_activation_authority_transition_v1,
 };
 pub use private_oram_append_checkpoint::{

@@ -658,7 +658,7 @@ pub fn validate_private_oram_activation_authority_bundle_v1(
             return Err(PrivateOramActivationAuthorityError::InvalidManifest);
         }
     }
-    validate_signature_shape(&bundle.signature)?;
+    validate_private_oram_activation_authority_signature_v1_shape(&bundle.signature)?;
     if bundle.manifest.authority_key_epoch != expected_authority.key_epoch
         || bundle.manifest.authority_key_id != expected_authority.key_id
         || bundle.signature.key_epoch != expected_authority.key_epoch
@@ -892,7 +892,7 @@ fn validate_peer_pins(
     Ok(())
 }
 
-fn validate_signature_shape(
+pub fn validate_private_oram_activation_authority_signature_v1_shape(
     signature: &PrivateOramActivationAuthoritySignatureV1,
 ) -> Result<(), PrivateOramActivationAuthorityError> {
     if signature.version != PRIVATE_ORAM_ACTIVATION_AUTHORITY_SIGNATURE_VERSION {
@@ -1907,11 +1907,21 @@ mod tests {
 
         let mut padded_signature = verified.bundle().clone();
         padded_signature.signature.sig.push('=');
-        assert!(validate_signature_shape(&padded_signature.signature).is_err());
+        assert!(
+            validate_private_oram_activation_authority_signature_v1_shape(
+                &padded_signature.signature
+            )
+            .is_err()
+        );
         let mut noncanonical_signature = verified.bundle().clone();
         noncanonical_signature.signature.sig =
             noncanonical_tail(&noncanonical_signature.signature.sig);
-        assert!(validate_signature_shape(&noncanonical_signature.signature).is_err());
+        assert!(
+            validate_private_oram_activation_authority_signature_v1_shape(
+                &noncanonical_signature.signature
+            )
+            .is_err()
+        );
     }
 
     #[test]
