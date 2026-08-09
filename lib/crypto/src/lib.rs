@@ -17,6 +17,7 @@ pub mod private_oram_append_owner_prepare;
 pub mod private_oram_append_result_transaction;
 pub mod private_oram_append_transaction;
 pub mod private_oram_mutation;
+pub mod private_oram_peer_activation;
 pub mod private_oram_peer_recovery;
 pub mod private_oram_point_staging;
 pub mod private_oram_recovery;
@@ -280,6 +281,21 @@ pub use private_oram_mutation::{
     validate_private_oram_immutable_manifest_v2_shape,
     validate_private_oram_immutable_manifest_v2_signature, validate_private_oram_signature_shape,
     validate_private_oram_signed_state_v2_shape, validate_private_oram_signed_state_v2_signature,
+};
+pub use private_oram_peer_activation::{
+    PRIVATE_ORAM_PEER_ACTIVATION_ACK_SIGNATURE_DOMAIN, PRIVATE_ORAM_PEER_ACTIVATION_CAPABILITY,
+    PRIVATE_ORAM_PEER_ACTIVATION_CONFIGURATION_DIGEST_DOMAIN,
+    PRIVATE_ORAM_PEER_ACTIVATION_PROTOCOL_VERSION, PrivateOramConsensusConfigurationV1,
+    PrivateOramPeerActivationAckV1, PrivateOramPeerActivationChallengeV1,
+    PrivateOramPeerActivationError, PrivateOramPeerActivationObservationV1,
+    PrivateOramPeerActivationSignatureV1, PrivateOramPeerActivationSignedAckV1,
+    private_oram_consensus_configuration_member_ids_v1, sign_private_oram_peer_activation_ack_v1,
+    try_private_oram_consensus_configuration_digest_v1,
+    try_private_oram_peer_activation_ack_signature_message_v1,
+    validate_private_oram_consensus_configuration_v1,
+    validate_private_oram_peer_activation_ack_signature_v1,
+    validate_private_oram_peer_activation_challenge_v1_shape,
+    validate_private_oram_peer_activation_observation_v1_shape,
 };
 pub use private_oram_peer_recovery::{
     PRIVATE_ORAM_PEER_RECOVERY_KEY_ID_DOMAIN, PRIVATE_ORAM_PEER_RECOVERY_PROTOCOL_VERSION,
