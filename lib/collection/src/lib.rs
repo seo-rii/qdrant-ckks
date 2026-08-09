@@ -12,6 +12,9 @@ pub mod optimizers_builder;
 pub mod private_hnsw_oram_store;
 pub mod private_oram_owner_journal;
 pub(crate) mod private_oram_owner_store_adapter;
+#[cfg(feature = "testing")]
+#[doc(hidden)]
+pub mod private_oram_owner_store_test_fixture;
 pub mod private_result_oram_store;
 pub mod problems;
 pub mod recommendations;
@@ -35,5 +38,6 @@ pub use private_oram_owner_store_adapter::{
     PrivateOramOwnerRecoveryStoreDispositionV1, PrivateOramOwnerRecoveryStorePairResourcesV1,
     PrivateOramOwnerRecoveryTerminalEvidenceV1, PrivateOramOwnerRecoveryTerminalIndexEvidenceV1,
     classify_private_oram_owner_recovery_store_pair_v1,
-    new_private_oram_owner_recovery_parent_bridge_v1, recover_private_oram_owner_store_pair_v1,
+    new_private_oram_owner_recovery_parent_bridge_v1,
+    recover_private_oram_owner_store_pair_then_v1, recover_private_oram_owner_store_pair_v1,
 };

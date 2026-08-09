@@ -1308,9 +1308,20 @@ impl PrivateOramOwnerJournal {
         projection: &PrivateOramOwnerRecoveryProjectionV1,
         transaction: PrivateOramOwnerLockedRecoveryTransactionV1<'_, '_, '_, '_>,
     ) -> CollectionResult<PrivateOramOwnerRecoveryExclusiveOutcomeV1> {
-        self.with_revalidated_recovery_exclusive_v1(projection, |binding| {
-            transaction.recover_under_child_exclusive_v1(binding)
-        })
+        self.recover_revalidated_store_pair_exclusive_then_v1(projection, transaction, Ok)
+    }
+
+    pub(crate) fn recover_revalidated_store_pair_exclusive_then_v1<R>(
+        &self,
+        projection: &PrivateOramOwnerRecoveryProjectionV1,
+        transaction: PrivateOramOwnerLockedRecoveryTransactionV1<'_, '_, '_, '_>,
+        continuation: impl FnOnce(PrivateOramOwnerRecoveryExclusiveOutcomeV1) -> CollectionResult<R>,
+    ) -> CollectionResult<R> {
+        self.with_revalidated_recovery_exclusive_then_v1(
+            projection,
+            |binding| transaction.recover_under_child_exclusive_v1(binding),
+            continuation,
+        )
         .map_err(|_| {
             CollectionError::bad_request("private ORAM owner recovery child authority is invalid")
         })?
@@ -1325,6 +1336,18 @@ impl PrivateOramOwnerJournal {
             -> Result<PrivateOramOwnerRecoveryExclusiveActionV1<'lock>, E>,
     ) -> Result<Result<PrivateOramOwnerRecoveryExclusiveOutcomeV1, E>, PrivateOramOwnerJournalError>
     {
+        self.with_revalidated_recovery_exclusive_then_v1(projection, action, Ok)
+    }
+
+    fn with_revalidated_recovery_exclusive_then_v1<E, R>(
+        &self,
+        projection: &PrivateOramOwnerRecoveryProjectionV1,
+        action: impl for<'lock> FnOnce(
+            &PrivateOramOwnerRecoveryExclusiveBindingV1<'lock>,
+        )
+            -> Result<PrivateOramOwnerRecoveryExclusiveActionV1<'lock>, E>,
+        continuation: impl FnOnce(PrivateOramOwnerRecoveryExclusiveOutcomeV1) -> Result<R, E>,
+    ) -> Result<Result<R, E>, PrivateOramOwnerJournalError> {
         #[cfg(not(target_os = "linux"))]
         ensure_supported_platform()?;
         if !path_entry_exists(&self.root)? {
@@ -1376,7 +1399,9 @@ impl PrivateOramOwnerJournal {
             }
             None => PrivateOramOwnerRecoveryExclusiveOutcomeV1::NoTerminal,
         };
-        Ok(Ok(outcome))
+        let output = continuation(outcome);
+        validate_open_directory_at_path(&root_file, &self.root)?;
+        Ok(output)
     }
 
     #[cfg(test)]
@@ -1393,7 +1418,7 @@ impl PrivateOramOwnerJournal {
         Ok(output)
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn prepare_store_adapter_test_fixture_v1(
         &self,
         mutation_bundle: &qdrant_sec::PrivateOramAppendMutationBundleV1,
@@ -5043,6 +5068,60 @@ mod tests {
         };
 
         assert_eq!(token, replayed);
+    }
+
+    #[test]
+    fn recovery_terminal_continuation_runs_before_child_lock_release() {
+        let fixture = fixture();
+        let desired = validated_fixture(132, true);
+        let projection = recovery_projection(&desired);
+        let descriptor_digest = desired.snapshot.descriptor.descriptor_digest.clone();
+        let parent_descriptor_digest = desired.snapshot.descriptor.parent_descriptor_digest.clone();
+        let consensus_authority_record_digest = digest(133);
+        let reconciliation_authority_digest = digest(134);
+        let canonical_index_states = canonical_index_states(&desired, 135);
+        fixture.journal.prepare_validated(desired).unwrap();
+        let context = PrivateOramOwnerJournalFinalizeContextV1 {
+            expected_journal_descriptor_digest: &descriptor_digest,
+            parent_descriptor_digest: &parent_descriptor_digest,
+            authenticated_owner_peer_id: 7,
+            consensus_authority_record_digest: &consensus_authority_record_digest,
+            reconciliation_authority_digest: &reconciliation_authority_digest,
+            canonical_index_states: &canonical_index_states,
+        };
+
+        let output = fixture
+            .journal
+            .with_revalidated_recovery_exclusive_then_v1(
+                &projection,
+                |binding| binding.finalize_action(context),
+                |outcome| {
+                    assert!(matches!(
+                        outcome,
+                        PrivateOramOwnerRecoveryExclusiveOutcomeV1::Finalized(_)
+                    ));
+                    assert_eq!(
+                        fixture.journal.inspect_structural().unwrap_err(),
+                        PrivateOramOwnerJournalError::ConcurrentMutation
+                    );
+                    Ok::<_, PrivateOramOwnerJournalError>(7_u8)
+                },
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(output, 7);
+        assert_eq!(
+            fixture
+                .journal
+                .inspect_structural()
+                .unwrap()
+                .unwrap()
+                .terminal
+                .unwrap()
+                .phase,
+            PrivateOramOwnerJournalPhaseV1::Finalized
+        );
     }
 
     #[test]

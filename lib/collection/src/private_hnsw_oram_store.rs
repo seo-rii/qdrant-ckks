@@ -708,7 +708,7 @@ impl PrivateHnswOramStore {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn apply_owner_exact_new_test_fixture_v1(
         &self,
         old: &PrivateOramIndexStateV2,

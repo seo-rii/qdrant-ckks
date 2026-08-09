@@ -610,6 +610,13 @@ enum PrivateOramOwnerRecoveryDecisionV1 {
     ReplayFinalized,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PrivateOramOwnerRecoveryFaultPointV1 {
+    AfterHnswPublication,
+    AfterResultPublication,
+}
+
 /// Entry permit created only after the parent, HNSW, and result locks are held in order.
 ///
 /// The child journal consumes this value through its fixed recovery entry point; no caller can
@@ -626,12 +633,27 @@ pub(crate) struct PrivateOramOwnerLockedRecoveryTransactionV1<
     static_pair: ValidatedStaticPair<'resources>,
     hnsw_lock: &'hnsw PrivateHnswOwnerStoreLockV1<'resources>,
     result_lock: &'result PrivateResultOwnerStoreLockV1<'resources>,
+    #[cfg(test)]
+    fault_point: Option<PrivateOramOwnerRecoveryFaultPointV1>,
     not_send_or_sync: PhantomData<Rc<()>>,
 }
 
 impl<'resources, 'parent_lock, 'hnsw, 'result>
     PrivateOramOwnerLockedRecoveryTransactionV1<'resources, 'parent_lock, 'hnsw, 'result>
 {
+    #[cfg(test)]
+    fn fail_at_test_checkpoint_v1(
+        &self,
+        checkpoint: PrivateOramOwnerRecoveryFaultPointV1,
+    ) -> CollectionResult<()> {
+        if self.fault_point == Some(checkpoint) {
+            return Err(CollectionError::service_error(
+                "injected private ORAM owner recovery checkpoint failure",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn recover_under_child_exclusive_v1<'child>(
         self,
         binding: &PrivateOramOwnerRecoveryExclusiveBindingV1<'child>,
@@ -692,10 +714,18 @@ impl<'resources, 'parent_lock, 'hnsw, 'result>
                     self.resources.hnsw_max_ciphertext_bytes,
                     self.resources.hnsw_manifest_validation,
                 )?;
+                #[cfg(test)]
+                self.fail_at_test_checkpoint_v1(
+                    PrivateOramOwnerRecoveryFaultPointV1::AfterHnswPublication,
+                )?;
                 let result = self.result_lock.resume_owner_recovery_to_exact_new_v1(
                     pair.result,
                     self.resources.result_max_ciphertext_bytes,
                     self.resources.result_manifest_validation,
+                )?;
+                #[cfg(test)]
+                self.fail_at_test_checkpoint_v1(
+                    PrivateOramOwnerRecoveryFaultPointV1::AfterResultPublication,
                 )?;
                 let permit = PrivateOramOwnerRecoveryExactNewPairPermitV1 {
                     pair: PrivateOramOwnerExactNewStorePairV1 { hnsw, result },
@@ -777,6 +807,51 @@ pub fn recover_private_oram_owner_store_pair_v1(
     parent: &PrivateOramOwnerRecoveryLiveParentV1<'_>,
     resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
 ) -> CollectionResult<PrivateOramOwnerRecoveryPairOutcomeV1> {
+    recover_private_oram_owner_store_pair_then_v1(verifier, parent, resources, Ok)
+}
+
+/// Executes a continuation after the child terminal is durable while every recovery lock remains
+/// held in canonical parent -> HNSW -> result -> child order.
+#[doc(hidden)]
+pub fn recover_private_oram_owner_store_pair_then_v1<R>(
+    verifier: &PrivateOramOwnerRecoveryParentVerifierV1,
+    parent: &PrivateOramOwnerRecoveryLiveParentV1<'_>,
+    resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+    continuation: impl FnOnce(PrivateOramOwnerRecoveryPairOutcomeV1) -> CollectionResult<R>,
+) -> CollectionResult<R> {
+    recover_private_oram_owner_store_pair_then_inner_v1(
+        verifier,
+        parent,
+        resources,
+        #[cfg(test)]
+        None,
+        continuation,
+    )
+}
+
+#[cfg(test)]
+fn recover_private_oram_owner_store_pair_at_fault_v1(
+    verifier: &PrivateOramOwnerRecoveryParentVerifierV1,
+    parent: &PrivateOramOwnerRecoveryLiveParentV1<'_>,
+    resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+    fault_point: PrivateOramOwnerRecoveryFaultPointV1,
+) -> CollectionResult<PrivateOramOwnerRecoveryPairOutcomeV1> {
+    recover_private_oram_owner_store_pair_then_inner_v1(
+        verifier,
+        parent,
+        resources,
+        Some(fault_point),
+        Ok,
+    )
+}
+
+fn recover_private_oram_owner_store_pair_then_inner_v1<R>(
+    verifier: &PrivateOramOwnerRecoveryParentVerifierV1,
+    parent: &PrivateOramOwnerRecoveryLiveParentV1<'_>,
+    resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+    #[cfg(test)] fault_point: Option<PrivateOramOwnerRecoveryFaultPointV1>,
+    continuation: impl FnOnce(PrivateOramOwnerRecoveryPairOutcomeV1) -> CollectionResult<R>,
+) -> CollectionResult<R> {
     validate_live_parent_bridge(verifier, parent)?;
     let static_pair = validate_static_pair_context(
         resources.owner_journal,
@@ -797,15 +872,17 @@ pub fn recover_private_oram_owner_store_pair_v1(
                     static_pair,
                     hnsw_lock,
                     result_lock,
+                    #[cfg(test)]
+                    fault_point,
                     not_send_or_sync: PhantomData,
                 };
                 resources
                     .owner_journal
-                    .recover_revalidated_store_pair_exclusive_v1(
+                    .recover_revalidated_store_pair_exclusive_then_v1(
                         &parent.input.projection,
                         transaction,
+                        |outcome| continuation(recovery_pair_outcome(outcome)),
                     )
-                    .map(recovery_pair_outcome)
             })
     })
 }
@@ -2162,6 +2239,29 @@ mod tests {
         )
     }
 
+    fn recover_pair_at_fault(
+        fixture: &PairFixture,
+        fault_point: PrivateOramOwnerRecoveryFaultPointV1,
+    ) -> CollectionResult<PrivateOramOwnerRecoveryPairOutcomeV1> {
+        let (bridge, verifier) = new_private_oram_owner_recovery_parent_bridge_v1();
+        let parent_lock = ();
+        bridge.with_test_live_parent_v1(
+            &parent_lock,
+            recovery_parent_input(
+                fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            ),
+            |parent| {
+                recover_private_oram_owner_store_pair_at_fault_v1(
+                    &verifier,
+                    parent,
+                    recovery_resources(fixture),
+                    fault_point,
+                )
+            },
+        )
+    }
+
     fn finalized_evidence(
         outcome: PrivateOramOwnerRecoveryPairOutcomeV1,
     ) -> PrivateOramOwnerRecoveryTerminalEvidenceV1 {
@@ -2897,6 +2997,57 @@ mod tests {
     }
 
     #[test]
+    fn paired_recovery_continuation_keeps_store_and_child_locks() {
+        let fixture = pair_fixture();
+        let (bridge, verifier) = new_private_oram_owner_recovery_parent_bridge_v1();
+        let parent_lock = ();
+        let output = bridge
+            .with_test_live_parent_v1(
+                &parent_lock,
+                recovery_parent_input(
+                    &fixture,
+                    PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+                ),
+                |parent| {
+                    recover_private_oram_owner_store_pair_then_v1(
+                        &verifier,
+                        parent,
+                        recovery_resources(&fixture),
+                        |outcome| {
+                            assert!(matches!(
+                                outcome,
+                                PrivateOramOwnerRecoveryPairOutcomeV1::Finalized(_)
+                            ));
+                            assert!(
+                                classify_private_oram_owner_recovery_store_pair_v1(
+                                    &recovery_projection(&fixture).unwrap(),
+                                    recovery_resources(&fixture),
+                                )
+                                .is_err()
+                            );
+                            assert!(fixture.owner_journal.inspect_structural().is_err());
+                            Ok(9_u8)
+                        },
+                    )
+                },
+            )
+            .unwrap();
+
+        assert_eq!(output, 9);
+        assert_eq!(
+            fixture
+                .owner_journal
+                .inspect_structural()
+                .unwrap()
+                .unwrap()
+                .terminal
+                .unwrap()
+                .phase,
+            PrivateOramOwnerJournalPhaseV1::Finalized
+        );
+    }
+
+    #[test]
     fn paired_finalized_replay_rejects_historical_commit_replacement() {
         let fixture = pair_fixture();
         let _ = finalized_evidence(
@@ -2932,6 +3083,84 @@ mod tests {
                 .unwrap(),
             terminal_before
         );
+    }
+
+    #[test]
+    fn paired_recovery_replays_fault_after_hnsw_publication() {
+        let fixture = pair_fixture();
+        assert!(matches!(
+            recover_pair_at_fault(
+                &fixture,
+                PrivateOramOwnerRecoveryFaultPointV1::AfterHnswPublication,
+            ),
+            Err(CollectionError::ServiceError { .. })
+        ));
+        assert_eq!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &recovery_projection(&fixture).unwrap(),
+                recovery_resources(&fixture),
+            )
+            .unwrap(),
+            PrivateOramOwnerRecoveryStoreDispositionV1::PartialNew
+        );
+        let child = fixture.owner_journal.inspect_structural().unwrap().unwrap();
+        assert_eq!(child.state.phase, PrivateOramOwnerJournalPhaseV1::Prepared);
+        assert!(child.terminal.is_none());
+
+        let recovered = finalized_evidence(
+            recover_pair(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            )
+            .unwrap(),
+        );
+        let replayed = finalized_evidence(
+            recover_pair(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            )
+            .unwrap(),
+        );
+        assert_eq!(replayed, recovered);
+    }
+
+    #[test]
+    fn paired_recovery_replays_fault_after_result_publication() {
+        let fixture = pair_fixture();
+        assert!(matches!(
+            recover_pair_at_fault(
+                &fixture,
+                PrivateOramOwnerRecoveryFaultPointV1::AfterResultPublication,
+            ),
+            Err(CollectionError::ServiceError { .. })
+        ));
+        assert_eq!(
+            classify_private_oram_owner_recovery_store_pair_v1(
+                &recovery_projection(&fixture).unwrap(),
+                recovery_resources(&fixture),
+            )
+            .unwrap(),
+            PrivateOramOwnerRecoveryStoreDispositionV1::AllNew
+        );
+        let child = fixture.owner_journal.inspect_structural().unwrap().unwrap();
+        assert_eq!(child.state.phase, PrivateOramOwnerJournalPhaseV1::Prepared);
+        assert!(child.terminal.is_none());
+
+        let recovered = finalized_evidence(
+            recover_pair(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            )
+            .unwrap(),
+        );
+        let replayed = finalized_evidence(
+            recover_pair(
+                &fixture,
+                PrivateOramOwnerRecoveryParentDispositionV1::ExactNew,
+            )
+            .unwrap(),
+        );
+        assert_eq!(replayed, recovered);
     }
 
     #[test]
