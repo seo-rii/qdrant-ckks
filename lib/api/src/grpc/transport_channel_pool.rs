@@ -135,6 +135,10 @@ impl TransportChannelPool {
         }
     }
 
+    pub fn tls_configured(&self) -> bool {
+        self.tls_config.is_some()
+    }
+
     async fn _init_pool_for_uri(&self, uri: Uri) -> Result<DynamicChannelPool, TonicError> {
         DynamicChannelPool::new(
             uri,

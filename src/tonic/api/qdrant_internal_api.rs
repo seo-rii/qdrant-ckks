@@ -15,6 +15,7 @@ use api::grpc::{
     InstallPrivateOramLiveReplicaResponse, PeerTelemetry, PreparePrivateOramWritebackRequest,
     PreparePrivateOramWritebackResponse, PrivateOramInstallChunk, PrivateOramReplicationEpochState,
     PrivateOramReplicationIndexKind, PrivateOramReplicationTransition,
+    RecoverPrivateOramMutationOwnerRequest, RecoverPrivateOramMutationOwnerResponse,
     RequestPrivateOramReshardingResumeRequest, RequestPrivateOramReshardingResumeResponse,
     RequestPrivateOramShardRecoveryRequest, RequestPrivateOramShardRecoveryResponse,
     WaitOnConsensusCommitRequest, WaitOnConsensusCommitResponse,
@@ -3241,6 +3242,40 @@ impl QdrantInternal for QdrantInternalService {
         self.complete_private_oram_writeback(request.into_inner(), true)
             .await
             .map(Response::new)
+    }
+
+    async fn recover_private_oram_mutation_owner(
+        &self,
+        request: Request<RecoverPrivateOramMutationOwnerRequest>,
+    ) -> Result<Response<RecoverPrivateOramMutationOwnerResponse>, Status> {
+        let request = request.into_inner();
+        if request.collection_name.is_empty()
+            || request.collection_name.len() > 255
+            || request.collection_id.is_empty()
+            || request.collection_id.len() > 255
+            || request.mutation_id.is_empty()
+            || request.mutation_id.len() > 255
+            || request.parent_descriptor_digest.len() != 43
+            || request.decision_record_digest.len() != 43
+            || request.vector_name.is_empty()
+            || request.vector_name.len() > 255
+            || request.signing_key_id.is_empty()
+            || request.signing_key_id.len() > 256
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM owner recovery request shape is invalid",
+            ));
+        }
+        if request.owner_peer_id != self.toc.this_peer_id
+            || request.coordinator_peer_id == request.owner_peer_id
+        {
+            return Err(Status::invalid_argument(
+                "private ORAM owner recovery target peer is invalid",
+            ));
+        }
+        Err(Status::failed_precondition(
+            "private ORAM paired owner recovery is not activated",
+        ))
     }
 
     async fn install_private_oram_index(

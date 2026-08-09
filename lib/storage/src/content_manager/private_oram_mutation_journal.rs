@@ -12,6 +12,7 @@ use collection::private_oram_owner_journal::{
     PrivateOramOwnerRecoveryIndexProjectionInputV1, PrivateOramOwnerRecoveryIndexProjectionV1,
     PrivateOramOwnerRecoveryProjectionV1,
 };
+use collection::shards::channel_service::PrivateOramTlsEndpointOwnerRecoveryResponse;
 use collection::shards::shard::PeerId;
 use collection::{
     PrivateOramOwnerRecoveryPairOutcomeV1, PrivateOramOwnerRecoveryParentBridgeV1,
@@ -57,8 +58,10 @@ use super::private_oram_mutation_state_v2::{
     PrivateOramMutationDecisionEvidenceV2 as RawPrivateOramMutationDecisionEvidenceV2,
     PrivateOramMutationDecisionKindV2 as ValidatedPrivateOramMutationDecisionKindV2,
     PrivateOramMutationJournalPhaseV2, PrivateOramMutationJournalStateV2,
+    PrivateOramMutationOwnerTerminalEvidenceV2, PrivateOramMutationOwnerTerminalIndexEvidenceV2,
+    PrivateOramMutationOwnerTerminalKindV2,
     PrivateOramMutationPointResolutionEvidenceV2 as RawPrivateOramMutationPointResolutionEvidenceV2,
-    record_digest_at_phase_v2,
+    private_oram_owner_terminal_evidence_v2_digest, record_digest_at_phase_v2,
 };
 #[cfg(test)]
 use super::private_oram_mutation_state_v2::{
@@ -467,6 +470,105 @@ pub(super) struct PrivateOramValidatedDecisionDurableV2 {
     evidence: RawPrivateOramMutationDecisionEvidenceV2,
     expected_descriptor_digest: String,
     decision_record_digest: String,
+}
+
+/// Structurally decoded endpoint evidence without logical peer authentication.
+///
+/// Production recovery must upgrade this claim with an owner-bound signature
+/// before any journal transition can consume it.
+pub(super) struct PrivateOramTlsEndpointOwnerTerminalClaimV2 {
+    kind: PrivateOramMutationOwnerTerminalKindV2,
+    evidence: PrivateOramMutationOwnerTerminalEvidenceV2,
+}
+
+impl Debug for PrivateOramTlsEndpointOwnerTerminalClaimV2 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramTlsEndpointOwnerTerminalClaimV2")
+            .field("owner_peer_id", &self.evidence.owner_peer_id)
+            .field("kind", &self.kind)
+            .field("evidence", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramTlsEndpointOwnerTerminalClaimV2 {
+    #[allow(
+        dead_code,
+        reason = "D3-C2 peer signatures upgrade this endpoint claim before RPC activation"
+    )]
+    pub(super) fn try_from_tls_endpoint(
+        bound: &PrivateOramTlsEndpointOwnerRecoveryResponse,
+    ) -> Result<Self, PrivateOramMutationJournalError> {
+        Self::try_from_wire_response(bound.peer_id(), bound.response())
+    }
+
+    fn try_from_wire_response(
+        endpoint_peer_id: PeerId,
+        response: &api::grpc::qdrant::RecoverPrivateOramMutationOwnerResponse,
+    ) -> Result<Self, PrivateOramMutationJournalError> {
+        use api::grpc::qdrant::{
+            PrivateOramMutationOwnerTerminalKind as WireTerminalKind,
+            PrivateOramReplicationIndexKind as WireIndexKind,
+        };
+
+        if response.owner_peer_id != endpoint_peer_id {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+        let kind = match WireTerminalKind::try_from(response.terminal_kind) {
+            Ok(WireTerminalKind::FinalizedNew) => {
+                PrivateOramMutationOwnerTerminalKindV2::FinalizedNew
+            }
+            Ok(WireTerminalKind::AbortedOld) => PrivateOramMutationOwnerTerminalKindV2::AbortedOld,
+            _ => return Err(PrivateOramMutationJournalError::InvalidTransition),
+        };
+        let indexes = response
+            .indexes
+            .iter()
+            .map(|index| {
+                let kind = match WireIndexKind::try_from(index.index_kind) {
+                    Ok(WireIndexKind::Hnsw) => PrivateOramIndexKindV2::Hnsw,
+                    Ok(WireIndexKind::Result) => PrivateOramIndexKindV2::Result,
+                    _ => return Err(PrivateOramMutationJournalError::InvalidTransition),
+                };
+                Ok(PrivateOramMutationOwnerTerminalIndexEvidenceV2 {
+                    kind,
+                    index_name: index.index_name.clone(),
+                    prepared_journal_digest: index.prepared_journal_digest.clone(),
+                    terminal_state_digest: index.terminal_state_digest.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            kind,
+            evidence: PrivateOramMutationOwnerTerminalEvidenceV2 {
+                owner_peer_id: response.owner_peer_id,
+                journal_descriptor_digest: response.journal_descriptor_digest.clone(),
+                prepared_state_digest: response.prepared_state_digest.clone(),
+                terminal_record_digest: response.terminal_record_digest.clone(),
+                parent_descriptor_digest: response.parent_descriptor_digest.clone(),
+                decision_authority_record_digest: response.decision_authority_record_digest.clone(),
+                reconciliation_authority_digest: response.reconciliation_authority_digest.clone(),
+                indexes,
+                terminal_evidence_digest: response.terminal_evidence_digest.clone(),
+            },
+        })
+    }
+
+    #[cfg(test)]
+    fn try_from_wire_response_for_test(
+        endpoint_peer_id: PeerId,
+        response: &api::grpc::qdrant::RecoverPrivateOramMutationOwnerResponse,
+    ) -> Result<Self, PrivateOramMutationJournalError> {
+        Self::try_from_wire_response(endpoint_peer_id, response)
+    }
+
+    #[cfg(test)]
+    fn from_evidence_for_test(
+        kind: PrivateOramMutationOwnerTerminalKindV2,
+        evidence: PrivateOramMutationOwnerTerminalEvidenceV2,
+    ) -> Self {
+        Self { kind, evidence }
+    }
 }
 
 impl Debug for PrivateOramValidatedDecisionDurableV2 {
@@ -3485,6 +3587,7 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
+    use super::writer_v2::PrivateOramMutationJournalStructuralSnapshotV2;
     use super::*;
     use crate::content_manager::consensus_ops::{
         PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION, PRIVATE_ORAM_MUTATION_RECEIPT_VERSION,
@@ -4236,6 +4339,31 @@ mod tests {
         (reconcile, remotes)
     }
 
+    fn prepare_no_server_decision_v2(
+        journal: &PrivateOramMutationJournal,
+        fixture: &Fixture,
+        owner_peer_ids: &[PeerId],
+    ) -> (
+        PrivateOramMutationJournalStructuralSnapshotV2,
+        PrivateOramValidatedDecisionDurableV2,
+    ) {
+        let initial = begin_v2(journal, fixture, owner_peer_ids);
+        journal
+            .mark_owners_prepared_v2(owner_prepares_v2(&initial))
+            .unwrap();
+        let parent = journal.validated_point_stage_parent_v2().unwrap();
+        journal
+            .mark_no_server_point_stage_durable_v2(&parent)
+            .unwrap();
+        let decision = journal
+            .validated_decision_for_v2_state(
+                &reconcile_snapshot(&fixture.new_consensus, fixture.committed_lease.clone()),
+                None,
+            )
+            .unwrap();
+        journal.mark_decision_durable_v2(&decision).unwrap()
+    }
+
     fn assert_pair_store_state(
         pair: &PrivateOramOwnerStorePairTestFixtureV1,
         state: &PrivateOramSignedStateV2,
@@ -4348,6 +4476,52 @@ mod tests {
         )
         .unwrap();
         evidence
+    }
+
+    fn wire_terminal_response(
+        kind: PrivateOramMutationOwnerTerminalKindV2,
+        evidence: &PrivateOramMutationOwnerTerminalEvidenceV2,
+    ) -> api::grpc::qdrant::RecoverPrivateOramMutationOwnerResponse {
+        use api::grpc::qdrant::{
+            PrivateOramMutationOwnerTerminalIndex, PrivateOramMutationOwnerTerminalKind,
+            PrivateOramReplicationIndexKind,
+        };
+
+        api::grpc::qdrant::RecoverPrivateOramMutationOwnerResponse {
+            owner_peer_id: evidence.owner_peer_id,
+            terminal_kind: match kind {
+                PrivateOramMutationOwnerTerminalKindV2::FinalizedNew => {
+                    PrivateOramMutationOwnerTerminalKind::FinalizedNew as i32
+                }
+                PrivateOramMutationOwnerTerminalKindV2::AbortedOld => {
+                    PrivateOramMutationOwnerTerminalKind::AbortedOld as i32
+                }
+            },
+            journal_descriptor_digest: evidence.journal_descriptor_digest.clone(),
+            prepared_state_digest: evidence.prepared_state_digest.clone(),
+            terminal_record_digest: evidence.terminal_record_digest.clone(),
+            parent_descriptor_digest: evidence.parent_descriptor_digest.clone(),
+            decision_authority_record_digest: evidence.decision_authority_record_digest.clone(),
+            reconciliation_authority_digest: evidence.reconciliation_authority_digest.clone(),
+            indexes: evidence
+                .indexes
+                .iter()
+                .map(|index| PrivateOramMutationOwnerTerminalIndex {
+                    index_kind: match index.kind {
+                        PrivateOramIndexKindV2::Hnsw => {
+                            PrivateOramReplicationIndexKind::Hnsw as i32
+                        }
+                        PrivateOramIndexKindV2::Result => {
+                            PrivateOramReplicationIndexKind::Result as i32
+                        }
+                    },
+                    index_name: index.index_name.clone(),
+                    prepared_journal_digest: index.prepared_journal_digest.clone(),
+                    terminal_state_digest: index.terminal_state_digest.clone(),
+                })
+                .collect(),
+            terminal_evidence_digest: evidence.terminal_evidence_digest.clone(),
+        }
     }
 
     fn v2_no_server_terminal_state(
@@ -4766,6 +4940,156 @@ mod tests {
             format!("{decision:?} {decision_durable:?} {remotes_terminal:?} {remotes:?}");
         assert!(!rendered.contains(&fixture.mutation_bundle.mutation.collection_id));
         assert!(!rendered.contains(&fixture.mutation_bundle.mutation.mutation_id));
+    }
+
+    #[test]
+    fn v2_remote_terminal_claims_require_exact_peer_set_and_replay_exactly() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(143, 250);
+        let journal = journal(&temp, &fixture);
+        let (decided, decision) = prepare_no_server_decision_v2(&journal, &fixture, &[11, 12]);
+        assert!(matches!(
+            journal.mark_remote_terminal_claims_v2_for_test(&decision, &[]),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+
+        let evidence = v2_terminal_evidence(
+            &decided.descriptor,
+            &decided.state,
+            12,
+            PrivateOramMutationOwnerTerminalKindV2::FinalizedNew,
+            60,
+        );
+        let wire = wire_terminal_response(
+            PrivateOramMutationOwnerTerminalKindV2::FinalizedNew,
+            &evidence,
+        );
+        let claim =
+            PrivateOramTlsEndpointOwnerTerminalClaimV2::try_from_wire_response_for_test(12, &wire)
+                .unwrap();
+        let (terminal, first_token) = journal
+            .mark_remote_terminal_claims_v2_for_test(&decision, &[claim])
+            .unwrap();
+        assert_eq!(
+            terminal.state.phase,
+            PrivateOramMutationJournalPhaseV2::RemotesTerminal
+        );
+        assert_eq!(
+            terminal.state.remote_terminals.as_ref().unwrap().owners[0],
+            evidence
+        );
+
+        let replay_claim =
+            PrivateOramTlsEndpointOwnerTerminalClaimV2::try_from_wire_response_for_test(12, &wire)
+                .unwrap();
+        let (replayed, replay_token) = journal
+            .mark_remote_terminal_claims_v2_for_test(&decision, &[replay_claim])
+            .unwrap();
+        assert_eq!(replayed, terminal);
+        assert_eq!(
+            replay_token.remotes_terminal_record_digest,
+            first_token.remotes_terminal_record_digest
+        );
+        let rendered = format!("{first_token:?} {replay_token:?}");
+        assert!(!rendered.contains(&evidence.terminal_record_digest));
+        assert!(!rendered.contains(&evidence.terminal_evidence_digest));
+    }
+
+    #[test]
+    fn v2_remote_terminal_claims_reject_identity_kind_digest_and_duplicates() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(144, 251);
+        let journal = journal(&temp, &fixture);
+        let (decided, decision) = prepare_no_server_decision_v2(&journal, &fixture, &[11, 12]);
+        let evidence = v2_terminal_evidence(
+            &decided.descriptor,
+            &decided.state,
+            12,
+            PrivateOramMutationOwnerTerminalKindV2::FinalizedNew,
+            70,
+        );
+        let wire = wire_terminal_response(
+            PrivateOramMutationOwnerTerminalKindV2::FinalizedNew,
+            &evidence,
+        );
+        assert!(matches!(
+            PrivateOramTlsEndpointOwnerTerminalClaimV2::try_from_wire_response_for_test(13, &wire),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+        let mut unspecified = wire.clone();
+        unspecified.terminal_kind = 0;
+        assert!(matches!(
+            PrivateOramTlsEndpointOwnerTerminalClaimV2::try_from_wire_response_for_test(
+                12,
+                &unspecified
+            ),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+
+        let mut tampered = evidence.clone();
+        tampered.terminal_evidence_digest = digest(200);
+        let tampered = PrivateOramTlsEndpointOwnerTerminalClaimV2::from_evidence_for_test(
+            PrivateOramMutationOwnerTerminalKindV2::FinalizedNew,
+            tampered,
+        );
+        assert!(matches!(
+            journal.mark_remote_terminal_claims_v2_for_test(&decision, &[tampered]),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+
+        let first = PrivateOramTlsEndpointOwnerTerminalClaimV2::from_evidence_for_test(
+            PrivateOramMutationOwnerTerminalKindV2::FinalizedNew,
+            evidence.clone(),
+        );
+        let second = PrivateOramTlsEndpointOwnerTerminalClaimV2::from_evidence_for_test(
+            PrivateOramMutationOwnerTerminalKindV2::FinalizedNew,
+            evidence.clone(),
+        );
+        assert!(matches!(
+            journal.mark_remote_terminal_claims_v2_for_test(&decision, &[first, second]),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+
+        let mut wrong_kind_evidence = evidence.clone();
+        wrong_kind_evidence.terminal_evidence_digest =
+            private_oram_owner_terminal_evidence_v2_digest(
+                &decided.descriptor.descriptor_digest,
+                PrivateOramMutationOwnerTerminalKindV2::AbortedOld,
+                &wrong_kind_evidence,
+            )
+            .unwrap();
+        let wrong_kind = PrivateOramTlsEndpointOwnerTerminalClaimV2::from_evidence_for_test(
+            PrivateOramMutationOwnerTerminalKindV2::AbortedOld,
+            wrong_kind_evidence,
+        );
+        assert!(matches!(
+            journal.mark_remote_terminal_claims_v2_for_test(&decision, &[wrong_kind]),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+
+        let local_evidence = v2_terminal_evidence(
+            &decided.descriptor,
+            &decided.state,
+            11,
+            PrivateOramMutationOwnerTerminalKindV2::FinalizedNew,
+            80,
+        );
+        let local = PrivateOramTlsEndpointOwnerTerminalClaimV2::from_evidence_for_test(
+            PrivateOramMutationOwnerTerminalKindV2::FinalizedNew,
+            local_evidence,
+        );
+        assert!(matches!(
+            journal.mark_remote_terminal_claims_v2_for_test(&decision, &[local]),
+            Err(PrivateOramMutationJournalError::InvalidTransition)
+        ));
+
+        let valid = PrivateOramTlsEndpointOwnerTerminalClaimV2::from_evidence_for_test(
+            PrivateOramMutationOwnerTerminalKindV2::FinalizedNew,
+            evidence,
+        );
+        journal
+            .mark_remote_terminal_claims_v2_for_test(&decision, &[valid])
+            .unwrap();
     }
 
     #[test]

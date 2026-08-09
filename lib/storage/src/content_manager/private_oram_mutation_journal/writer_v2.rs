@@ -8,13 +8,10 @@ use super::*;
 use crate::content_manager::private_oram_mutation_state_v2::{
     DecodedPrivateOramMutationStateUntrusted, PrivateOramMutationJournalPhaseV2,
     PrivateOramMutationJournalStateV2, PrivateOramMutationOwnerTerminalBatchV2,
-    PrivateOramMutationOwnerTerminalEvidenceV2, PrivateOramMutationOwnerTerminalIndexEvidenceV2,
-    PrivateOramMutationOwnerTerminalKindV2, PrivateOramMutationPointStageEvidenceV2,
-    canonical_private_oram_mutation_state_history_v2, decode_untrusted_private_oram_mutation_state,
-    initial_private_oram_mutation_state_v2, next_private_oram_mutation_state_v2,
-    private_oram_owner_terminal_evidence_v2_digest,
-    private_oram_point_stage_evidence_v2_from_durable_token, record_digest_at_phase_v2,
-    validate_private_oram_mutation_state_v2_structure,
+    PrivateOramMutationPointStageEvidenceV2, canonical_private_oram_mutation_state_history_v2,
+    decode_untrusted_private_oram_mutation_state, initial_private_oram_mutation_state_v2,
+    next_private_oram_mutation_state_v2, private_oram_point_stage_evidence_v2_from_durable_token,
+    record_digest_at_phase_v2, validate_private_oram_mutation_state_v2_structure,
 };
 
 const STATE_RECORDS_DIR: &str = "state_records";
@@ -356,6 +353,77 @@ impl PrivateOramMutationJournal {
                 evidence: decision.evidence.clone(),
                 expected_descriptor_digest: decision.expected_descriptor_digest.clone(),
                 decision_record_digest,
+            },
+        ))
+    }
+
+    #[cfg(test)]
+    pub(super) fn mark_remote_terminal_claims_v2_for_test(
+        &self,
+        decision: &PrivateOramValidatedDecisionDurableV2,
+        outcomes: &[PrivateOramTlsEndpointOwnerTerminalClaimV2],
+    ) -> Result<
+        (
+            PrivateOramMutationJournalStructuralSnapshotV2,
+            PrivateOramValidatedRemotesTerminalV2,
+        ),
+        PrivateOramMutationJournalError,
+    > {
+        let mut owners = outcomes
+            .iter()
+            .map(|outcome| {
+                let expected_digest = private_oram_owner_terminal_evidence_v2_digest(
+                    &decision.expected_descriptor_digest,
+                    outcome.kind,
+                    &outcome.evidence,
+                )?;
+                if outcome.evidence.terminal_evidence_digest != expected_digest {
+                    return Err(PrivateOramMutationJournalError::InvalidTransition);
+                }
+                Ok((outcome.kind, outcome.evidence.clone()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        owners.sort_unstable_by_key(|(_, evidence)| evidence.owner_peer_id);
+        if owners
+            .windows(2)
+            .any(|pair| pair[0].1.owner_peer_id == pair[1].1.owner_peer_id)
+        {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+        let kind = match decision.evidence.kind() {
+            ValidatedPrivateOramMutationDecisionKindV2::ExactNew => {
+                PrivateOramMutationOwnerTerminalKindV2::FinalizedNew
+            }
+            ValidatedPrivateOramMutationDecisionKindV2::ExactOldAbort => {
+                PrivateOramMutationOwnerTerminalKindV2::AbortedOld
+            }
+        };
+        if owners.iter().any(|(owner_kind, _)| *owner_kind != kind) {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+        let batch = PrivateOramMutationOwnerTerminalBatchV2 {
+            kind,
+            owners: owners.into_iter().map(|(_, evidence)| evidence).collect(),
+        };
+        let snapshot = self.mark_owner_terminal_batch_v2(
+            None,
+            PrivateOramMutationJournalPhaseV2::RemotesTerminal,
+            &decision.evidence,
+            &decision.expected_descriptor_digest,
+            &decision.decision_record_digest,
+            batch,
+        )?;
+        let remotes_terminal_record_digest = record_digest_at_phase_v2(
+            &snapshot.descriptor,
+            &snapshot.state,
+            PrivateOramMutationJournalPhaseV2::RemotesTerminal,
+        )?;
+        Ok((
+            snapshot,
+            PrivateOramValidatedRemotesTerminalV2 {
+                evidence: decision.evidence.clone(),
+                expected_descriptor_digest: decision.expected_descriptor_digest.clone(),
+                remotes_terminal_record_digest,
             },
         ))
     }
@@ -767,6 +835,26 @@ impl PrivateOramMutationJournal {
             kind,
             owners: owners.into_iter().map(|(_, evidence)| evidence).collect(),
         };
+        self.mark_owner_terminal_batch_v2(
+            lock,
+            phase,
+            decision,
+            expected_descriptor_digest,
+            expected_predecessor_record_digest,
+            batch,
+        )
+    }
+
+    fn mark_owner_terminal_batch_v2(
+        &self,
+        lock: Option<&PrivateOramMutationJournalLock>,
+        phase: PrivateOramMutationJournalPhaseV2,
+        decision: &RawPrivateOramMutationDecisionEvidenceV2,
+        expected_descriptor_digest: &str,
+        expected_predecessor_record_digest: &str,
+        batch: PrivateOramMutationOwnerTerminalBatchV2,
+    ) -> Result<PrivateOramMutationJournalStructuralSnapshotV2, PrivateOramMutationJournalError>
+    {
         let expected = batch.clone();
         let expected_decision = decision.clone();
         let verify_descriptor_digest = expected_descriptor_digest.to_string();

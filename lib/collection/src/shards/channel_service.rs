@@ -8,6 +8,7 @@ use api::grpc::qdrant::{
     CompletePrivateOramWritebackRequest, InstallPrivateOramIndexRequest,
     InstallPrivateOramIndexResponse, InstallPrivateOramLiveReplicaRequest,
     InstallPrivateOramLiveReplicaResponse, PreparePrivateOramWritebackRequest,
+    RecoverPrivateOramMutationOwnerRequest, RecoverPrivateOramMutationOwnerResponse,
     RequestPrivateOramReshardingResumeRequest, RequestPrivateOramReshardingResumeResponse,
     RequestPrivateOramShardRecoveryRequest, RequestPrivateOramShardRecoveryResponse,
     WaitOnConsensusCommitRequest,
@@ -27,6 +28,36 @@ use crate::shards::shard::PeerId;
 // Full-store validation and fsync can outlive the normal peer RPC deadline.
 const PRIVATE_ORAM_INSTALL_GRPC_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const PRIVATE_ORAM_INSTALL_RETRIES: usize = 1;
+const PRIVATE_ORAM_OWNER_RECOVERY_MAX_ENCODED_BYTES: usize = 64 * 1024;
+
+/// Owner-recovery evidence fetched from the URI currently assigned to a peer.
+///
+/// TLS authenticates the configured endpoint, not Qdrant's logical `PeerId`.
+/// Callers must verify owner-bound recovery evidence before using this response
+/// as mutation authority.
+pub struct PrivateOramTlsEndpointOwnerRecoveryResponse {
+    peer_id: PeerId,
+    response: RecoverPrivateOramMutationOwnerResponse,
+}
+
+impl std::fmt::Debug for PrivateOramTlsEndpointOwnerRecoveryResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrivateOramTlsEndpointOwnerRecoveryResponse")
+            .field("peer_id", &self.peer_id)
+            .field("response", &"[redacted]")
+            .finish()
+    }
+}
+
+impl PrivateOramTlsEndpointOwnerRecoveryResponse {
+    pub fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    pub fn response(&self) -> &RecoverPrivateOramMutationOwnerResponse {
+        &self.response
+    }
+}
 
 #[derive(Clone)]
 pub struct ChannelService {
@@ -198,6 +229,59 @@ impl ChannelService {
     ) -> CollectionResult<bool> {
         self.complete_private_oram_writeback(peer_id, request, true)
             .await
+    }
+
+    pub async fn recover_private_oram_mutation_owner(
+        &self,
+        peer_id: PeerId,
+        request: RecoverPrivateOramMutationOwnerRequest,
+    ) -> CollectionResult<PrivateOramTlsEndpointOwnerRecoveryResponse> {
+        let address = self
+            .id_to_address
+            .read()
+            .get(&peer_id)
+            .cloned()
+            .ok_or_else(|| CollectionError::service_error("Address for peer ID is not found."))?;
+        if !self.channel_pool.tls_configured() || address.scheme_str() != Some("https") {
+            return Err(CollectionError::service_error(
+                "private ORAM owner recovery requires a configured TLS endpoint",
+            ));
+        }
+        let response = self
+            .channel_pool
+            .with_channel_timeout(
+                &address,
+                |channel| {
+                    let mut client = QdrantInternalClient::new(channel)
+                        .max_decoding_message_size(PRIVATE_ORAM_OWNER_RECOVERY_MAX_ENCODED_BYTES);
+                    let request = request.clone();
+                    async move {
+                        client
+                            .recover_private_oram_mutation_owner(Request::new(request))
+                            .await
+                    }
+                },
+                None,
+                DEFAULT_RETRIES,
+            )
+            .await
+            .map_err(|_| {
+                CollectionError::service_error(format!(
+                    "private ORAM owner recovery failed on peer {peer_id}"
+                ))
+            })?
+            .into_inner();
+        if response.owner_peer_id != peer_id {
+            return Err(CollectionError::service_error(format!(
+                "private ORAM owner recovery identity mismatch on peer {peer_id}"
+            )));
+        }
+        if self.id_to_address.read().get(&peer_id) != Some(&address) {
+            return Err(CollectionError::service_error(format!(
+                "private ORAM owner recovery peer mapping changed on peer {peer_id}"
+            )));
+        }
+        Ok(PrivateOramTlsEndpointOwnerRecoveryResponse { peer_id, response })
     }
 
     pub async fn install_private_oram_index(
@@ -540,6 +624,43 @@ impl Default for ChannelService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn private_oram_owner_recovery_rejects_non_tls_peer_before_network() {
+        let service = ChannelService::default();
+        service
+            .id_to_address
+            .write()
+            .insert(7, Uri::from_static("http://peer.example.test:6335"));
+        let request = RecoverPrivateOramMutationOwnerRequest {
+            collection_name: "collection-name-sentinel".to_string(),
+            ..Default::default()
+        };
+
+        let error = service
+            .recover_private_oram_mutation_owner(7, request)
+            .await
+            .unwrap_err();
+        let rendered = error.to_string();
+        assert!(rendered.contains("requires a configured TLS endpoint"));
+        assert!(!rendered.contains("collection-name-sentinel"));
+        assert!(!rendered.contains("peer.example.test"));
+    }
+
+    #[test]
+    fn private_oram_tls_endpoint_owner_recovery_debug_redacts_evidence() {
+        let bound = PrivateOramTlsEndpointOwnerRecoveryResponse {
+            peer_id: 7,
+            response: RecoverPrivateOramMutationOwnerResponse {
+                terminal_record_digest: "terminal-digest-sentinel".to_string(),
+                ..Default::default()
+            },
+        };
+
+        let rendered = format!("{bound:?}");
+        assert!(rendered.contains("peer_id: 7"));
+        assert!(!rendered.contains("terminal-digest-sentinel"));
+    }
 
     #[test]
     fn peer_version_logs_omit_peer_urls_and_crypto_fingerprint_values() {
