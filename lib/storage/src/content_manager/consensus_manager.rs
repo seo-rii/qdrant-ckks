@@ -43,6 +43,7 @@ use crate::content_manager::consensus::consensus_wal::ConsensusOpWal;
 use crate::content_manager::consensus::entry_queue::EntryId;
 use crate::content_manager::consensus::operation_sender::OperationSender;
 use crate::content_manager::consensus::persistent::Persistent;
+use crate::content_manager::consensus::private_oram_activation_authority::PrivateOramActivationAuthorityStateV1;
 use crate::types::{
     ClusterInfo, ClusterStatus, ConsensusThreadStatus, MessageSendErrors, PeerAddressById,
     PeerInfo, PeerMetadataById, RaftInfo,
@@ -66,6 +67,8 @@ pub struct SnapshotData {
     pub metadata_by_id: PeerMetadataById,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cluster_metadata: HashMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_oram_activation_authority: Option<PrivateOramActivationAuthorityStateV1>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub private_oram_epochs: HashMap<String, PrivateOramConsensusEpoch>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -87,6 +90,10 @@ impl fmt::Debug for SnapshotData {
             .field("peer_address_count", &self.address_by_id.len())
             .field("peer_metadata_count", &self.metadata_by_id.len())
             .field("cluster_metadata_count", &self.cluster_metadata.len())
+            .field(
+                "has_private_oram_activation_authority",
+                &self.private_oram_activation_authority.is_some(),
+            )
             .field("private_oram_epoch_count", &self.private_oram_epochs.len())
             .field(
                 "private_oram_session_lease_count",
@@ -905,6 +912,7 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             address_by_id,
             metadata_by_id,
             cluster_metadata,
+            private_oram_activation_authority,
             private_oram_epochs,
             private_oram_session_leases,
             private_oram_layouts,
@@ -920,37 +928,35 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             &private_oram_external_recoveries,
             &private_oram_mutation_states,
             &private_oram_mutation_lease_slots,
+            private_oram_activation_authority.as_ref(),
         )?;
-        let (
-            current_private_oram_epochs,
-            current_private_oram_layouts,
-            current_private_oram_external_recoveries,
-            this_peer_id,
-        ) = {
-            let persistent = self.persistent.read();
-            (
-                persistent.private_oram_epochs.clone(),
-                persistent.private_oram_layouts.clone(),
-                persistent.private_oram_external_recoveries.clone(),
-                persistent.this_peer_id(),
-            )
-        };
+        let mut persistent = self.persistent.write();
+        let current_private_oram_epochs = persistent.private_oram_epochs.clone();
+        let current_private_oram_layouts = persistent.private_oram_layouts.clone();
+        let current_private_oram_external_recoveries =
+            persistent.private_oram_external_recoveries.clone();
+        let this_peer_id = persistent.this_peer_id();
         crate::content_manager::consensus::persistent::validate_private_oram_external_recovery_snapshot_transition_for_peer(
             &current_private_oram_external_recoveries,
             &private_oram_external_recoveries,
             this_peer_id,
         )?;
-        self.toc
-            .apply_collections_snapshot_with_private_oram_state(
-                collections_data,
-                PrivateOramSnapshotState {
-                    incoming_epochs: &private_oram_epochs,
-                    current_epochs: &current_private_oram_epochs,
-                    incoming_layouts: &private_oram_layouts,
-                    current_layouts: &current_private_oram_layouts,
-                },
-            )?;
-        self.persistent.write().update_from_snapshot(
+        persistent.validate_private_oram_activation_authority_for_snapshot(
+            private_oram_activation_authority.as_ref(),
+        )?;
+        if let Err(error) = self.toc.apply_collections_snapshot_with_private_oram_state(
+            collections_data,
+            PrivateOramSnapshotState {
+                incoming_epochs: &private_oram_epochs,
+                current_epochs: &current_private_oram_epochs,
+                incoming_layouts: &private_oram_layouts,
+                current_layouts: &current_private_oram_layouts,
+            },
+        ) {
+            persistent.fence_after_snapshot_side_effect_failure();
+            return Err(error);
+        }
+        if let Err(error) = persistent.update_from_snapshot(
             meta,
             address_by_id,
             metadata_by_id,
@@ -961,7 +967,12 @@ impl<C: CollectionContainer> ConsensusManager<C> {
             private_oram_external_recoveries,
             private_oram_mutation_states,
             private_oram_mutation_lease_slots,
-        )?;
+            private_oram_activation_authority,
+        ) {
+            persistent.fence_after_snapshot_side_effect_failure();
+            return Err(error);
+        }
+        drop(persistent);
 
         // Clear now obsolete WAL entries after persisting new Raft state
         // This way we prevent a crash due to an empty WAL if we crash right after clearing it,
@@ -1496,11 +1507,15 @@ impl<C: CollectionContainer> Storage for ConsensusManager<C> {
                 raft::StorageError::SnapshotTemporarilyUnavailable,
             ));
         }
+        persistent
+            .validate_private_oram_activation_authority_snapshot_source()
+            .map_err(raft_error_other)?;
         let data = SnapshotData {
             collections_data,
             address_by_id: persistent.peer_address_by_id(),
             metadata_by_id: persistent.peer_metadata_by_id(),
             cluster_metadata: persistent.cluster_metadata.clone(),
+            private_oram_activation_authority: persistent.private_oram_activation_authority.clone(),
             private_oram_epochs: persistent.private_oram_epochs.clone(),
             private_oram_session_leases: persistent.private_oram_session_leases.clone(),
             private_oram_layouts: persistent.private_oram_layouts.clone(),
@@ -1508,6 +1523,16 @@ impl<C: CollectionContainer> Storage for ConsensusManager<C> {
             private_oram_mutation_states: persistent.private_oram_mutation_states.clone(),
             private_oram_mutation_lease_slots: persistent.private_oram_mutation_lease_slots.clone(),
         };
+        Persistent::validate_private_oram_snapshot_state(
+            &data.private_oram_epochs,
+            &data.private_oram_session_leases,
+            &data.private_oram_layouts,
+            &data.private_oram_external_recoveries,
+            &data.private_oram_mutation_states,
+            &data.private_oram_mutation_lease_slots,
+            data.private_oram_activation_authority.as_ref(),
+        )
+        .map_err(raft_error_other)?;
 
         let raft_state = persistent.state();
 
@@ -1626,6 +1651,7 @@ mod tests {
     use crate::content_manager::consensus::entry_queue::EntryApplyProgressQueue;
     use crate::content_manager::consensus::operation_sender::OperationSender;
     use crate::content_manager::consensus::persistent::Persistent;
+    use crate::content_manager::consensus::private_oram_activation_authority::private_oram_activation_authority_fixture_v1_for_test;
     use crate::content_manager::consensus_ops::{
         CompareAndSwapPrivateOramEpoch, CompareAndSwapPrivateOramExternalRecovery,
         CompareAndSwapPrivateOramLayout, CompareAndSwapPrivateOramMutationLease,
@@ -2807,6 +2833,87 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_activation_authority_survives_snapshot_and_cannot_disappear() {
+        let (_, trust_anchor, bundle) = private_oram_activation_authority_fixture_v1_for_test();
+        let source_dir = Builder::new()
+            .prefix("private_oram_authority_raft_source")
+            .tempdir()
+            .unwrap();
+        let (source, _) = setup_storages(Vec::new(), source_dir.path());
+        {
+            let mut persistent = source.persistent.write();
+            let expected = persistent
+                .private_oram_activation_authority_at_read(&trust_anchor)
+                .unwrap();
+            persistent
+                .compare_and_swap_private_oram_activation_authority(
+                    expected,
+                    &bundle,
+                    &trust_anchor,
+                )
+                .unwrap();
+        }
+        let installed = source
+            .persistent
+            .read()
+            .private_oram_activation_authority
+            .clone()
+            .unwrap();
+        let snapshot = source.snapshot(0, 0).unwrap();
+        let snapshot_data: SnapshotData = snapshot.get_data().try_into().unwrap();
+        assert_eq!(
+            snapshot_data.private_oram_activation_authority.as_ref(),
+            Some(&installed),
+        );
+
+        let target_dir = Builder::new()
+            .prefix("private_oram_authority_raft_target")
+            .tempdir()
+            .unwrap();
+        let (target, _) = setup_storages(Vec::new(), target_dir.path());
+        target
+            .persistent
+            .read()
+            .configure_private_oram_activation_authority_trust_anchor(&trust_anchor)
+            .unwrap();
+        target.apply_snapshot(&snapshot).unwrap().unwrap();
+        assert_eq!(
+            target
+                .persistent
+                .read()
+                .private_oram_activation_authority
+                .as_ref(),
+            Some(&installed),
+        );
+        assert_eq!(
+            target
+                .persistent
+                .read()
+                .private_oram_activation_authority_at_read(&trust_anchor)
+                .unwrap()
+                .locator()
+                .unwrap(),
+            installed.locator(),
+        );
+
+        let mut rollback_data: SnapshotData = snapshot.get_data().try_into().unwrap();
+        rollback_data.private_oram_activation_authority = None;
+        let rollback = raft::eraftpb::Snapshot {
+            data: serde_cbor::to_vec(&rollback_data).unwrap(),
+            metadata: snapshot.metadata.clone(),
+        };
+        assert!(target.apply_snapshot(&rollback).is_err());
+        assert_eq!(
+            target
+                .persistent
+                .read()
+                .private_oram_activation_authority
+                .as_ref(),
+            Some(&installed),
+        );
+    }
+
+    #[test]
     fn private_oram_session_lease_survives_raft_snapshot_restore() {
         let source_dir = Builder::new()
             .prefix("private_oram_lease_raft_source")
@@ -3262,6 +3369,7 @@ mod tests {
                 address_by_id: Default::default(),
                 metadata_by_id: Default::default(),
                 cluster_metadata: Default::default(),
+                private_oram_activation_authority: None,
                 private_oram_epochs: std::collections::HashMap::from([(
                     "invalid-epoch-key".to_string(),
                     epoch,
@@ -3277,6 +3385,7 @@ mod tests {
                 address_by_id: Default::default(),
                 metadata_by_id: Default::default(),
                 cluster_metadata: Default::default(),
+                private_oram_activation_authority: None,
                 private_oram_epochs: Default::default(),
                 private_oram_session_leases: std::collections::HashMap::from([(
                     "invalid-lease-key".to_string(),
@@ -3292,6 +3401,7 @@ mod tests {
                 address_by_id: Default::default(),
                 metadata_by_id: Default::default(),
                 cluster_metadata: Default::default(),
+                private_oram_activation_authority: None,
                 private_oram_epochs: Default::default(),
                 private_oram_session_leases: Default::default(),
                 private_oram_layouts: std::collections::HashMap::from([(
@@ -3307,6 +3417,7 @@ mod tests {
                 address_by_id: Default::default(),
                 metadata_by_id: Default::default(),
                 cluster_metadata: Default::default(),
+                private_oram_activation_authority: None,
                 private_oram_epochs: Default::default(),
                 private_oram_session_leases: Default::default(),
                 private_oram_layouts: Default::default(),
@@ -3348,6 +3459,7 @@ mod tests {
             address_by_id: Default::default(),
             metadata_by_id: Default::default(),
             cluster_metadata: Default::default(),
+            private_oram_activation_authority: None,
             private_oram_epochs: Default::default(),
             private_oram_session_leases: Default::default(),
             private_oram_layouts: Default::default(),
@@ -3380,6 +3492,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("private_oram_external_recoveries");
+        legacy_value
+            .as_object_mut()
+            .unwrap()
+            .remove("private_oram_activation_authority");
 
         let decoded: SnapshotData = serde_json::from_value(legacy_value).unwrap();
         assert!(decoded.private_oram_epochs.is_empty());
@@ -3388,6 +3504,7 @@ mod tests {
         assert!(decoded.private_oram_external_recoveries.is_empty());
         assert!(decoded.private_oram_mutation_states.is_empty());
         assert!(decoded.private_oram_mutation_lease_slots.is_empty());
+        assert!(decoded.private_oram_activation_authority.is_none());
     }
 
     #[test]

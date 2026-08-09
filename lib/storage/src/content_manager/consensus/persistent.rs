@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::{cmp, fmt};
 
 #[cfg(not(unix))]
@@ -15,6 +15,11 @@ use fs_err as fs;
 use fs_err::File;
 use http::Uri;
 use parking_lot::RwLock;
+use qdrant_sec::{
+    PrivateOramActivationAuthorityBundleV1, PrivateOramActivationAuthorityTrustAnchorV1,
+    PrivateOramActivationRegistryExpectationV1,
+    validate_private_oram_activation_authority_bundle_v1,
+};
 use raft::RaftState;
 use raft::eraftpb::{ConfState, HardState, SnapshotMetadata};
 use serde::{Deserialize, Serialize};
@@ -25,6 +30,14 @@ use crate::content_manager::collection_meta_ops::{
     CollectionMetaOperations, ReshardingOperation, ShardTransferOperations,
 };
 use crate::content_manager::consensus::entry_queue::{EntryApplyProgressQueue, EntryId};
+use crate::content_manager::consensus::private_oram_activation_authority::{
+    PrivateOramActivationAuthorityCurrentAtReadV1, PrivateOramActivationAuthorityStateError,
+    PrivateOramActivationAuthorityStateV1, PrivateOramActivationAuthorityStoreInstanceId,
+    plan_private_oram_activation_authority_cas_v1,
+    validate_private_oram_activation_authority_snapshot_transition_v1,
+    validate_private_oram_activation_authority_state_v1_shape,
+    verify_private_oram_activation_authority_current_at_read_v1,
+};
 use crate::content_manager::consensus_ops::{
     ApplyPrivateOramMutation, CompareAndSwapPrivateOramEpoch,
     CompareAndSwapPrivateOramExternalRecovery, CompareAndSwapPrivateOramLayout,
@@ -68,6 +81,37 @@ const PRIVATE_ORAM_EXTERNAL_RECOVERY_LEASE_MAX_SECS: u64 = 3_600;
 const PRIVATE_ORAM_MUTATION_LEASE_MAX_SECS: u64 = 3_600;
 const PERSISTENT_PARENT_SYNC_ATTEMPTS: usize = 3;
 const PERSISTENT_SAVE_INDETERMINATE_MESSAGE: &str = "Raft persistent state durability is indeterminate; restart this peer before applying more consensus operations";
+
+fn validate_persisted_private_oram_activation_authority(
+    authority: Option<&PrivateOramActivationAuthorityStateV1>,
+    trust_anchor: Option<&PrivateOramActivationAuthorityTrustAnchorV1>,
+) -> Result<(), StorageError> {
+    let Some(authority) = authority else {
+        return Ok(());
+    };
+    validate_private_oram_activation_authority_state_v1_shape(authority).map_err(|_| {
+        StorageError::service_error("persisted private ORAM activation authority state is invalid")
+    })?;
+    let trust_anchor = trust_anchor.ok_or_else(|| {
+        StorageError::service_error(
+            "persisted private ORAM activation authority requires an external trust anchor",
+        )
+    })?;
+    validate_private_oram_activation_authority_bundle_v1(
+        authority.bundle(),
+        trust_anchor,
+        PrivateOramActivationRegistryExpectationV1::Anchored {
+            registry_generation: authority.registry_generation(),
+            manifest_digest: authority.manifest_digest(),
+        },
+    )
+    .map(|_| ())
+    .map_err(|_| {
+        StorageError::service_error(
+            "persisted private ORAM activation authority signature is invalid",
+        )
+    })
+}
 
 #[derive(Debug)]
 enum PersistentSaveError {
@@ -166,6 +210,8 @@ pub struct Persistent {
     pub peer_metadata_by_id: Arc<RwLock<PeerMetadataById>>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub cluster_metadata: HashMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) private_oram_activation_authority: Option<PrivateOramActivationAuthorityStateV1>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub private_oram_epochs: HashMap<String, PrivateOramConsensusEpoch>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -179,6 +225,13 @@ pub struct Persistent {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub private_oram_mutation_lease_slots: HashMap<String, PrivateOramMutationLeaseSlotV2>,
     pub this_peer_id: PeerId,
+    #[serde(skip)]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) private_oram_activation_authority_store_instance:
+        PrivateOramActivationAuthorityStoreInstanceId,
+    #[serde(skip)]
+    pub(crate) private_oram_activation_authority_trust_anchor:
+        OnceLock<PrivateOramActivationAuthorityTrustAnchorV1>,
     #[serde(skip)]
     pub path: PathBuf,
     /// Tracks if there are some unsaved changes due to the failure on save
@@ -213,6 +266,10 @@ impl fmt::Debug for Persistent {
                 &peer_crypto_fingerprint_count,
             )
             .field("cluster_metadata_keys", &cluster_metadata_keys)
+            .field(
+                "has_private_oram_activation_authority",
+                &self.private_oram_activation_authority.is_some(),
+            )
             .field("private_oram_epoch_count", &self.private_oram_epochs.len())
             .field(
                 "private_oram_session_lease_count",
@@ -253,6 +310,7 @@ impl Persistent {
         private_oram_external_recoveries: &HashMap<String, PrivateOramExternalRecoveryState>,
         private_oram_mutation_states: &HashMap<String, PrivateOramConsensusCollectionStateV2>,
         private_oram_mutation_lease_slots: &HashMap<String, PrivateOramMutationLeaseSlotV2>,
+        private_oram_activation_authority: Option<&PrivateOramActivationAuthorityStateV1>,
     ) -> Result<(), StorageError> {
         validate_private_oram_epoch_snapshot(private_oram_epochs)?;
         validate_private_oram_session_lease_snapshot(private_oram_session_leases)?;
@@ -270,7 +328,13 @@ impl Persistent {
             private_oram_epochs,
             private_oram_session_leases,
             private_oram_external_recoveries,
-        )
+        )?;
+        if let Some(authority) = private_oram_activation_authority {
+            validate_private_oram_activation_authority_state_v1_shape(authority).map_err(|_| {
+                StorageError::bad_request("private ORAM activation authority snapshot is invalid")
+            })?;
+        }
+        Ok(())
     }
 
     pub fn state(&self) -> &RaftState {
@@ -293,6 +357,7 @@ impl Persistent {
         new_private_oram_external_recoveries: HashMap<String, PrivateOramExternalRecoveryState>,
         new_private_oram_mutation_states: HashMap<String, PrivateOramConsensusCollectionStateV2>,
         new_private_oram_mutation_lease_slots: HashMap<String, PrivateOramMutationLeaseSlotV2>,
+        new_private_oram_activation_authority: Option<PrivateOramActivationAuthorityStateV1>,
     ) -> Result<(), StorageError> {
         validate_private_oram_epoch_snapshot(&new_private_oram_epochs)?;
         validate_private_oram_session_lease_snapshot(&new_private_oram_session_leases)?;
@@ -316,6 +381,15 @@ impl Persistent {
             &new_private_oram_external_recoveries,
             self.this_peer_id,
         )?;
+        self.validate_private_oram_activation_authority_for_snapshot(
+            new_private_oram_activation_authority.as_ref(),
+        )?;
+        let previous_state = self.state.clone();
+        let previous_latest_snapshot_meta = self.latest_snapshot_meta.clone();
+        let previous_apply_progress_queue = self.apply_progress_queue;
+        let previous_peer_address_by_id = self.peer_address_by_id.read().clone();
+        let previous_peer_metadata_by_id = self.peer_metadata_by_id.read().clone();
+        let previous_cluster_metadata = self.cluster_metadata.clone();
         let previous_private_oram_epochs = self.private_oram_epochs.clone();
         let previous_private_oram_session_leases = self.private_oram_session_leases.clone();
         let previous_private_oram_layouts = self.private_oram_layouts.clone();
@@ -324,6 +398,8 @@ impl Persistent {
         let previous_private_oram_mutation_states = self.private_oram_mutation_states.clone();
         let previous_private_oram_mutation_lease_slots =
             self.private_oram_mutation_lease_slots.clone();
+        let previous_private_oram_activation_authority =
+            self.private_oram_activation_authority.clone();
         // IF YOU ADD NEW DATA INTO `PERSISTENT` STATE, DON'T FORGET TO ALSO ADD IT INTO RAFT SNAPSHOT!
         let Self {
             state,
@@ -333,6 +409,7 @@ impl Persistent {
             peer_address_by_id,
             peer_metadata_by_id,
             cluster_metadata,
+            private_oram_activation_authority,
             private_oram_epochs,
             private_oram_session_leases,
             private_oram_layouts,
@@ -340,6 +417,8 @@ impl Persistent {
             private_oram_mutation_states,
             private_oram_mutation_lease_slots,
             this_peer_id: _,
+            private_oram_activation_authority_store_instance: _,
+            private_oram_activation_authority_trust_anchor: _,
             path: _,
             dirty: _,
             save_indeterminate: _,
@@ -357,6 +436,7 @@ impl Persistent {
         *peer_address_by_id.write() = address_by_id;
         *peer_metadata_by_id.write() = metadata_by_id;
         *cluster_metadata = new_cluster_metadata;
+        *private_oram_activation_authority = new_private_oram_activation_authority;
         *private_oram_epochs = new_private_oram_epochs;
         *private_oram_session_leases = new_private_oram_session_leases;
         *private_oram_layouts = new_private_oram_layouts;
@@ -372,6 +452,12 @@ impl Persistent {
         );
 
         self.save_or_rollback_on_definitive(move |persistent| {
+            persistent.state = previous_state;
+            persistent.latest_snapshot_meta = previous_latest_snapshot_meta;
+            persistent.apply_progress_queue = previous_apply_progress_queue;
+            *persistent.peer_address_by_id.write() = previous_peer_address_by_id;
+            *persistent.peer_metadata_by_id.write() = previous_peer_metadata_by_id;
+            persistent.cluster_metadata = previous_cluster_metadata;
             persistent.private_oram_epochs = previous_private_oram_epochs;
             persistent.private_oram_session_leases = previous_private_oram_session_leases;
             persistent.private_oram_layouts = previous_private_oram_layouts;
@@ -379,6 +465,8 @@ impl Persistent {
             persistent.private_oram_mutation_states = previous_private_oram_mutation_states;
             persistent.private_oram_mutation_lease_slots =
                 previous_private_oram_mutation_lease_slots;
+            persistent.private_oram_activation_authority =
+                previous_private_oram_activation_authority;
         })
     }
 
@@ -391,26 +479,68 @@ impl Persistent {
         reinit: bool,
         peer_id: Option<PeerId>,
     ) -> Result<Self, StorageError> {
+        Self::load_or_init_inner(storage_path, first_peer, reinit, peer_id, None)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn load_or_init_with_private_oram_activation_authority_trust_anchor(
+        storage_path: impl AsRef<Path>,
+        first_peer: bool,
+        reinit: bool,
+        peer_id: Option<PeerId>,
+        trust_anchor: &PrivateOramActivationAuthorityTrustAnchorV1,
+    ) -> Result<Self, StorageError> {
+        Self::load_or_init_inner(
+            storage_path,
+            first_peer,
+            reinit,
+            peer_id,
+            Some(trust_anchor),
+        )
+    }
+
+    fn load_or_init_inner(
+        storage_path: impl AsRef<Path>,
+        first_peer: bool,
+        reinit: bool,
+        peer_id: Option<PeerId>,
+        trust_anchor: Option<&PrivateOramActivationAuthorityTrustAnchorV1>,
+    ) -> Result<Self, StorageError> {
         fs::create_dir_all(storage_path.as_ref())?;
         let path_legacy = storage_path.as_ref().join(STATE_FILE_NAME_CBOR);
         let path_json = storage_path.as_ref().join(STATE_FILE_NAME);
-        let mut state = if path_json.exists() {
+        let (mut state, migrate_legacy) = if path_json.exists() {
             log::info!("Loading raft state from {}", path_json.display());
-            Self::load_json(path_json.clone())?
+            (Self::load_json(path_json.clone())?, false)
         } else if path_legacy.exists() {
             log::info!("Loading raft state from {}", path_legacy.display());
-            let mut state = Self::load(path_legacy)?;
-            // migrate to json
-            state.path = path_json.clone();
-            state.save()?;
-            state
+            (Self::load(path_legacy)?, true)
         } else {
             log::info!("Initializing new raft state at {}", path_json.display());
             if let Some(peer_id) = peer_id {
                 log::debug!("Using peer ID: {peer_id}");
             };
-            Self::init(path_json.clone(), first_peer, peer_id)?
+            (Self::init(path_json.clone(), first_peer, peer_id)?, false)
         };
+
+        if reinit && state.private_oram_activation_authority.is_some() {
+            return Err(StorageError::service_error(
+                "Raft reinitialization cannot discard a private ORAM activation authority; use a new storage namespace",
+            ));
+        }
+        match trust_anchor {
+            Some(trust_anchor) => {
+                state.configure_private_oram_activation_authority_trust_anchor(trust_anchor)?;
+            }
+            None => validate_persisted_private_oram_activation_authority(
+                state.private_oram_activation_authority.as_ref(),
+                None,
+            )?,
+        }
+        if migrate_legacy {
+            state.path = path_json.clone();
+            state.save()?;
+        }
 
         let state = if reinit {
             if first_peer {
@@ -434,10 +564,111 @@ impl Persistent {
             state
         };
 
+        if let Some(trust_anchor) = trust_anchor {
+            state.configure_private_oram_activation_authority_trust_anchor(trust_anchor)?;
+        }
+
         state.remove_unknown_peer_metadata()?;
 
         log::debug!("State: {state:?}");
         Ok(state)
+    }
+
+    pub(crate) fn configure_private_oram_activation_authority_trust_anchor(
+        &self,
+        trust_anchor: &PrivateOramActivationAuthorityTrustAnchorV1,
+    ) -> Result<(), StorageError> {
+        if let Some(pinned) = self.private_oram_activation_authority_trust_anchor.get() {
+            if pinned != trust_anchor {
+                return Err(StorageError::PreconditionFailed {
+                    description: "private ORAM activation authority trust anchor changed"
+                        .to_string(),
+                });
+            }
+            return validate_persisted_private_oram_activation_authority(
+                self.private_oram_activation_authority.as_ref(),
+                Some(pinned),
+            );
+        }
+        validate_persisted_private_oram_activation_authority(
+            self.private_oram_activation_authority.as_ref(),
+            Some(trust_anchor),
+        )?;
+        if self
+            .private_oram_activation_authority_trust_anchor
+            .set(trust_anchor.clone())
+            .is_err()
+            && self.private_oram_activation_authority_trust_anchor.get() != Some(trust_anchor)
+        {
+            return Err(StorageError::PreconditionFailed {
+                description: "private ORAM activation authority trust anchor changed".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn private_oram_activation_authority_trust_anchor(
+        &self,
+    ) -> Result<&PrivateOramActivationAuthorityTrustAnchorV1, StorageError> {
+        self.private_oram_activation_authority_trust_anchor
+            .get()
+            .ok_or_else(|| {
+                StorageError::service_error(
+                    "private ORAM activation authority requires an external trust anchor",
+                )
+            })
+    }
+
+    fn ensure_private_oram_activation_authority_durability_known(
+        &self,
+    ) -> Result<(), StorageError> {
+        if self.save_indeterminate.load(Ordering::Acquire) {
+            return Err(StorageError::service_error(
+                PERSISTENT_SAVE_INDETERMINATE_MESSAGE,
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn fence_after_snapshot_side_effect_failure(&self) {
+        self.dirty.store(true, Ordering::Release);
+        self.save_indeterminate.store(true, Ordering::Release);
+        log::error!(
+            "Raft snapshot side effects are indeterminate; stopping consensus until restart"
+        );
+    }
+
+    pub(crate) fn validate_private_oram_activation_authority_for_snapshot(
+        &self,
+        incoming: Option<&PrivateOramActivationAuthorityStateV1>,
+    ) -> Result<(), StorageError> {
+        if self.private_oram_activation_authority.is_none() && incoming.is_none() {
+            return Ok(());
+        }
+        self.ensure_private_oram_activation_authority_durability_known()?;
+        validate_private_oram_activation_authority_snapshot_transition_v1(
+            self.private_oram_activation_authority.as_ref(),
+            incoming,
+            self.private_oram_activation_authority_trust_anchor()?,
+        )
+        .map_err(|_| {
+            StorageError::bad_request(
+                "private ORAM activation authority snapshot transition is invalid",
+            )
+        })
+    }
+
+    pub(crate) fn validate_private_oram_activation_authority_snapshot_source(
+        &self,
+    ) -> Result<(), StorageError> {
+        if self.private_oram_activation_authority.is_none() {
+            return Ok(());
+        }
+        self.ensure_private_oram_activation_authority_durability_known()?;
+        validate_persisted_private_oram_activation_authority(
+            self.private_oram_activation_authority.as_ref(),
+            Some(self.private_oram_activation_authority_trust_anchor()?),
+        )
     }
 
     fn remove_unknown_peer_metadata(&self) -> Result<(), StorageError> {
@@ -551,6 +782,63 @@ impl Persistent {
         } else {
             self.cluster_metadata.remove(&key);
         }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn private_oram_activation_authority_at_read(
+        &self,
+        trust_anchor: &PrivateOramActivationAuthorityTrustAnchorV1,
+    ) -> Result<PrivateOramActivationAuthorityCurrentAtReadV1, StorageError> {
+        self.ensure_private_oram_activation_authority_durability_known()?;
+        self.configure_private_oram_activation_authority_trust_anchor(trust_anchor)?;
+        verify_private_oram_activation_authority_current_at_read_v1(
+            self.private_oram_activation_authority.as_ref(),
+            trust_anchor,
+            self.private_oram_activation_authority_store_instance,
+        )
+        .map_err(|_| {
+            StorageError::service_error(
+                "persisted private ORAM activation authority failed verification",
+            )
+        })
+    }
+
+    /// Dormant local CAS primitive. No consensus operation invokes it until mixed-version safety is
+    /// established, so successful return must not be treated as cluster-wide activation.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn compare_and_swap_private_oram_activation_authority(
+        &mut self,
+        expected: PrivateOramActivationAuthorityCurrentAtReadV1,
+        new_bundle: &PrivateOramActivationAuthorityBundleV1,
+        trust_anchor: &PrivateOramActivationAuthorityTrustAnchorV1,
+    ) -> Result<(), StorageError> {
+        self.ensure_private_oram_activation_authority_durability_known()?;
+        self.configure_private_oram_activation_authority_trust_anchor(trust_anchor)?;
+        let new_state = plan_private_oram_activation_authority_cas_v1(
+            self.private_oram_activation_authority.as_ref(),
+            expected,
+            new_bundle,
+            trust_anchor,
+            self.private_oram_activation_authority_store_instance,
+        )
+        .map_err(|error| match error {
+            PrivateOramActivationAuthorityStateError::PreconditionFailed => {
+                StorageError::PreconditionFailed {
+                    description: "private ORAM activation authority CAS precondition failed"
+                        .to_string(),
+                }
+            }
+            PrivateOramActivationAuthorityStateError::InvalidCandidate => {
+                StorageError::bad_request("private ORAM activation authority candidate is invalid")
+            }
+            _ => StorageError::service_error(
+                "persisted private ORAM activation authority failed verification",
+            ),
+        })?;
+        let previous = self.private_oram_activation_authority.replace(new_state);
+        self.save_or_rollback_on_definitive(move |persistent| {
+            persistent.private_oram_activation_authority = previous;
+        })
     }
 
     pub fn private_oram_epoch(
@@ -1693,6 +1981,7 @@ impl Persistent {
             peer_address_by_id: Default::default(),
             peer_metadata_by_id: Default::default(),
             cluster_metadata: Default::default(),
+            private_oram_activation_authority: None,
             private_oram_epochs: Default::default(),
             private_oram_session_leases: Default::default(),
             private_oram_layouts: Default::default(),
@@ -1700,6 +1989,8 @@ impl Persistent {
             private_oram_mutation_states: Default::default(),
             private_oram_mutation_lease_slots: Default::default(),
             this_peer_id,
+            private_oram_activation_authority_store_instance: Default::default(),
+            private_oram_activation_authority_trust_anchor: Default::default(),
             path,
             latest_snapshot_meta: Default::default(),
             dirty: AtomicBool::new(false),
@@ -1768,6 +2059,12 @@ impl Persistent {
         if self.save_indeterminate.load(Ordering::Acquire) {
             return Err(PersistentSaveError::Indeterminate);
         }
+
+        validate_persisted_private_oram_activation_authority(
+            self.private_oram_activation_authority.as_ref(),
+            self.private_oram_activation_authority_trust_anchor.get(),
+        )
+        .map_err(PersistentSaveError::Definitive)?;
 
         let result = self.persist_state_image(backend);
         match result {
@@ -3367,6 +3664,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
+    use crate::content_manager::consensus::private_oram_activation_authority::private_oram_activation_authority_fixture_v1_for_test;
     use crate::content_manager::consensus_ops::{
         PrivateOramLayoutIndexStateBinding, PrivateOramLayoutLeaseBinding,
         PrivateOramReshardingLayoutTransition, PrivateOramShardKeyLayoutChange,
@@ -3661,6 +3959,335 @@ mod tests {
     }
 
     #[test]
+    fn private_oram_activation_authority_cas_is_store_bound_stale_safe_and_persistent() {
+        let (_, trust_anchor, bundle) = private_oram_activation_authority_fixture_v1_for_test();
+        let first_dir = tempfile::tempdir().unwrap();
+        let second_dir = tempfile::tempdir().unwrap();
+        let mut first = Persistent::load_or_init(first_dir.path(), true, false, Some(7)).unwrap();
+        let second = Persistent::load_or_init(second_dir.path(), true, false, Some(9)).unwrap();
+
+        let foreign = second
+            .private_oram_activation_authority_at_read(&trust_anchor)
+            .unwrap();
+        assert!(foreign.is_empty());
+        assert!(
+            first
+                .compare_and_swap_private_oram_activation_authority(
+                    foreign,
+                    &bundle,
+                    &trust_anchor,
+                )
+                .is_err()
+        );
+        assert!(first.private_oram_activation_authority.is_none());
+
+        let stale = first
+            .private_oram_activation_authority_at_read(&trust_anchor)
+            .unwrap();
+        let expected = first
+            .private_oram_activation_authority_at_read(&trust_anchor)
+            .unwrap();
+        first
+            .compare_and_swap_private_oram_activation_authority(expected, &bundle, &trust_anchor)
+            .unwrap();
+        let installed = first.private_oram_activation_authority.clone().unwrap();
+        assert_eq!(installed.registry_generation(), 1);
+        assert!(
+            first
+                .compare_and_swap_private_oram_activation_authority(stale, &bundle, &trust_anchor,)
+                .is_err()
+        );
+
+        drop(first);
+        let missing_anchor_error = Persistent::load_or_init(first_dir.path(), true, false, Some(7))
+            .unwrap_err()
+            .to_string();
+        assert!(missing_anchor_error.contains("requires an external trust anchor"));
+        let reloaded =
+            Persistent::load_or_init_with_private_oram_activation_authority_trust_anchor(
+                first_dir.path(),
+                true,
+                false,
+                Some(7),
+                &trust_anchor,
+            )
+            .unwrap();
+        assert_eq!(
+            reloaded.private_oram_activation_authority.as_ref(),
+            Some(&installed),
+        );
+        let current = reloaded
+            .private_oram_activation_authority_at_read(&trust_anchor)
+            .unwrap();
+        assert_eq!(current.locator().unwrap(), installed.locator());
+    }
+
+    #[test]
+    fn private_oram_activation_authority_definitive_save_failure_rolls_back_memory() {
+        let (_, trust_anchor, bundle) = private_oram_activation_authority_fixture_v1_for_test();
+        let temp = tempfile::tempdir().unwrap();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        let expected = persistent
+            .private_oram_activation_authority_at_read(&trust_anchor)
+            .unwrap();
+        persistent.path = temp.path().join("missing-parent").join(STATE_FILE_NAME);
+
+        assert!(
+            persistent
+                .compare_and_swap_private_oram_activation_authority(
+                    expected,
+                    &bundle,
+                    &trust_anchor,
+                )
+                .is_err()
+        );
+        assert!(persistent.private_oram_activation_authority.is_none());
+    }
+
+    #[test]
+    fn private_oram_activation_authority_indeterminate_save_keeps_candidate_and_fences_peer() {
+        let (key_pair, trust_anchor, bundle) =
+            private_oram_activation_authority_fixture_v1_for_test();
+        let temp = tempfile::tempdir().unwrap();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        let expected = persistent
+            .private_oram_activation_authority_at_read(&trust_anchor)
+            .unwrap();
+        let candidate = plan_private_oram_activation_authority_cas_v1(
+            persistent.private_oram_activation_authority.as_ref(),
+            expected,
+            &bundle,
+            &trust_anchor,
+            persistent.private_oram_activation_authority_store_instance,
+        )
+        .unwrap();
+        let previous = persistent
+            .private_oram_activation_authority
+            .replace(candidate.clone());
+        let current_before_fence = persistent
+            .private_oram_activation_authority_at_read(&trust_anchor)
+            .unwrap();
+        let mut successor_manifest = candidate.manifest().clone();
+        successor_manifest.registry_generation += 1;
+        successor_manifest.parent_manifest_digest = Some(candidate.manifest_digest().to_string());
+        let successor = qdrant_sec::package_private_oram_activation_authority_manifest_v1(
+            &key_pair,
+            successor_manifest.authority_key_epoch,
+            successor_manifest,
+        )
+        .unwrap();
+
+        assert!(
+            persistent
+                .save_or_rollback_on_definitive_with_backend(
+                    &PublishFaultBackend {
+                        expose_candidate: false,
+                    },
+                    move |persistent| {
+                        persistent.private_oram_activation_authority = previous;
+                    },
+                )
+                .is_err()
+        );
+        assert_eq!(
+            persistent.private_oram_activation_authority.as_ref(),
+            Some(&candidate),
+        );
+        assert!(persistent.save_indeterminate.load(Ordering::Acquire));
+        assert!(persistent.save().is_err());
+        assert!(
+            persistent
+                .private_oram_activation_authority_at_read(&trust_anchor)
+                .is_err()
+        );
+        assert!(
+            persistent
+                .compare_and_swap_private_oram_activation_authority(
+                    current_before_fence,
+                    &successor,
+                    &trust_anchor,
+                )
+                .is_err()
+        );
+        assert_eq!(
+            persistent.private_oram_activation_authority.as_ref(),
+            Some(&candidate),
+        );
+    }
+
+    #[test]
+    fn private_oram_activation_authority_tamper_fails_closed_on_restart() {
+        let (_, trust_anchor, bundle) = private_oram_activation_authority_fixture_v1_for_test();
+        let temp = tempfile::tempdir().unwrap();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        let expected = persistent
+            .private_oram_activation_authority_at_read(&trust_anchor)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_activation_authority(expected, &bundle, &trust_anchor)
+            .unwrap();
+        let path = persistent.path.clone();
+        drop(persistent);
+
+        let mut encoded: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        encoded["private_oram_activation_authority"]["manifest_digest"] =
+            serde_json::json!("private-oram-authority-tamper-sentinel");
+        fs::write(&path, serde_json::to_vec_pretty(&encoded).unwrap()).unwrap();
+
+        let error = Persistent::load_or_init(temp.path(), true, false, Some(7))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("activation authority state is invalid"));
+        assert!(!error.contains("private-oram-authority-tamper-sentinel"));
+    }
+
+    #[test]
+    fn private_oram_activation_authority_restart_rejects_shape_valid_bad_signature() {
+        let (_, trust_anchor, bundle) = private_oram_activation_authority_fixture_v1_for_test();
+        let temp = tempfile::tempdir().unwrap();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        let expected = persistent
+            .private_oram_activation_authority_at_read(&trust_anchor)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_activation_authority(expected, &bundle, &trust_anchor)
+            .unwrap();
+        let path = persistent.path.clone();
+        drop(persistent);
+
+        let mut encoded: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        encoded["private_oram_activation_authority"]["bundle"]["manifest"]["required_binary_capability_digest"] =
+            serde_json::json!(BASE64URL_NOPAD.encode(&[73; 32]));
+        let tampered_bundle: PrivateOramActivationAuthorityBundleV1 =
+            serde_json::from_value(encoded["private_oram_activation_authority"]["bundle"].clone())
+                .unwrap();
+        encoded["private_oram_activation_authority"]["manifest_digest"] = serde_json::json!(
+            qdrant_sec::private_oram_activation_authority_manifest_digest_v1(
+                &tampered_bundle.manifest,
+            )
+            .unwrap()
+        );
+        encoded["private_oram_activation_authority"]["bundle"]["signature"]["sig"] =
+            serde_json::json!(BASE64URL_NOPAD.encode(&[74; 64]));
+        fs::write(&path, serde_json::to_vec_pretty(&encoded).unwrap()).unwrap();
+
+        let error = Persistent::load_or_init_with_private_oram_activation_authority_trust_anchor(
+            temp.path(),
+            true,
+            false,
+            Some(7),
+            &trust_anchor,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("activation authority signature is invalid"));
+    }
+
+    #[test]
+    fn private_oram_activation_authority_wrong_anchor_does_not_poison_anchor_pin() {
+        let (_, trust_anchor, bundle) = private_oram_activation_authority_fixture_v1_for_test();
+        let temp = tempfile::tempdir().unwrap();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        let expected = persistent
+            .private_oram_activation_authority_at_read(&trust_anchor)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_activation_authority(expected, &bundle, &trust_anchor)
+            .unwrap();
+        let path = persistent.path.clone();
+        drop(persistent);
+
+        let loaded = Persistent::load_json(path).unwrap();
+        let wrong_key = ring::signature::Ed25519KeyPair::from_seed_unchecked(&[91; 32]).unwrap();
+        let wrong_authority =
+            qdrant_sec::private_oram_activation_authority_public_key_v1(&wrong_key, 1).unwrap();
+        let wrong_anchor =
+            PrivateOramActivationAuthorityTrustAnchorV1::from_external_configuration(
+                wrong_authority,
+                trust_anchor.cluster_identity_digest().to_string(),
+                trust_anchor.cluster_first_voter_peer_id(),
+            )
+            .unwrap();
+
+        assert!(
+            loaded
+                .configure_private_oram_activation_authority_trust_anchor(&wrong_anchor)
+                .is_err()
+        );
+        assert!(
+            loaded
+                .private_oram_activation_authority_trust_anchor
+                .get()
+                .is_none()
+        );
+
+        loaded
+            .configure_private_oram_activation_authority_trust_anchor(&trust_anchor)
+            .unwrap();
+        assert_eq!(
+            loaded.private_oram_activation_authority_trust_anchor.get(),
+            Some(&trust_anchor),
+        );
+        assert!(
+            loaded
+                .private_oram_activation_authority_at_read(&trust_anchor)
+                .unwrap()
+                .locator()
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn private_oram_activation_authority_blocks_in_place_raft_reinit() {
+        let (_, trust_anchor, bundle) = private_oram_activation_authority_fixture_v1_for_test();
+        let temp = tempfile::tempdir().unwrap();
+        let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        let expected = persistent
+            .private_oram_activation_authority_at_read(&trust_anchor)
+            .unwrap();
+        persistent
+            .compare_and_swap_private_oram_activation_authority(expected, &bundle, &trust_anchor)
+            .unwrap();
+        drop(persistent);
+
+        let error = Persistent::load_or_init_with_private_oram_activation_authority_trust_anchor(
+            temp.path(),
+            false,
+            true,
+            None,
+            &trust_anchor,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("cannot discard a private ORAM activation authority"));
+        let reloaded =
+            Persistent::load_or_init_with_private_oram_activation_authority_trust_anchor(
+                temp.path(),
+                true,
+                false,
+                None,
+                &trust_anchor,
+            )
+            .unwrap();
+        assert!(reloaded.private_oram_activation_authority.is_some());
+    }
+
+    #[test]
+    fn private_oram_activation_authority_absence_is_legacy_serde_default() {
+        let persistent = Persistent::default();
+        let encoded = serde_json::to_value(&persistent).unwrap();
+        assert!(encoded.get("private_oram_activation_authority").is_none());
+        let decoded: Persistent = serde_json::from_value(encoded).unwrap();
+        assert!(decoded.private_oram_activation_authority.is_none());
+        assert_ne!(
+            decoded.private_oram_activation_authority_store_instance,
+            persistent.private_oram_activation_authority_store_instance,
+        );
+    }
+
+    #[test]
     fn persistent_debug_redacts_peer_and_cluster_metadata_values() {
         let mut peer_address_by_id = PeerAddressById::new();
         peer_address_by_id.insert(
@@ -3721,6 +4348,7 @@ mod tests {
             peer_address_by_id: Arc::new(RwLock::new(peer_address_by_id)),
             peer_metadata_by_id: Arc::new(RwLock::new(peer_metadata_by_id)),
             cluster_metadata,
+            private_oram_activation_authority: None,
             private_oram_epochs,
             private_oram_session_leases: Default::default(),
             private_oram_layouts,
@@ -3728,6 +4356,8 @@ mod tests {
             private_oram_mutation_states: Default::default(),
             private_oram_mutation_lease_slots: Default::default(),
             this_peer_id: 7,
+            private_oram_activation_authority_store_instance: Default::default(),
+            private_oram_activation_authority_trust_anchor: Default::default(),
             path: PathBuf::from("/tmp/qdrant-sec-persistent-state"),
             dirty: AtomicBool::new(false),
             save_indeterminate: AtomicBool::new(false),
@@ -4519,6 +5149,7 @@ mod tests {
             &HashMap::new(),
             &states,
             &genesis_slots,
+            None,
         )
         .unwrap();
 
@@ -4533,6 +5164,7 @@ mod tests {
             &HashMap::new(),
             &states,
             &abort_decided_slots,
+            None,
         )
         .unwrap();
 
@@ -4543,6 +5175,7 @@ mod tests {
             &HashMap::new(),
             &states,
             &HashMap::new(),
+            None,
         )
         .unwrap_err();
         assert!(missing_slot.to_string().contains("lease slot snapshot"));
@@ -4559,6 +5192,7 @@ mod tests {
             &HashMap::new(),
             &states,
             &genesis_slots,
+            None,
         )
         .unwrap_err();
         assert!(mixed_epoch.to_string().contains("mutation state snapshot"));
@@ -4571,6 +5205,7 @@ mod tests {
             &HashMap::new(),
             &states,
             &active_slots,
+            None,
         )
         .unwrap();
 
@@ -4584,6 +5219,7 @@ mod tests {
             &HashMap::new(),
             &states,
             &rogue_owner_slots,
+            None,
         )
         .unwrap_err();
         assert!(rogue_owner.to_string().contains("lease slot snapshot"));
@@ -4618,6 +5254,7 @@ mod tests {
             &HashMap::new(),
             &committed_states,
             &abort_decided_slots,
+            None,
         )
         .unwrap_err();
         assert!(
@@ -4637,6 +5274,7 @@ mod tests {
             &HashMap::new(),
             &committed_states,
             &committed_slots,
+            None,
         )
         .unwrap();
     }
@@ -5730,6 +6368,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 Default::default(),
+                None,
             )
             .unwrap_err()
             .to_string();
@@ -5759,6 +6398,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 Default::default(),
+                None,
             )
             .unwrap_err()
             .to_string();
@@ -6890,16 +7530,34 @@ mod tests {
         };
         let key_digest = private_oram_external_recovery_key_digest(&key);
         let mut persistent = Persistent::load_or_init(temp.path(), true, false, Some(7)).unwrap();
+        persistent.state.hard_state.term = 3;
+        persistent.state.hard_state.commit = 2;
+        persistent.latest_snapshot_meta = SnapshotMetadataSer { term: 3, index: 2 };
+        persistent.apply_progress_queue = EntryApplyProgressQueue::new(3, 5);
+        persistent
+            .peer_address_by_id
+            .write()
+            .insert(7, "http://127.0.0.1:6335".parse().unwrap());
+        persistent.cluster_metadata.insert(
+            "snapshot-rollback-sentinel".to_string(),
+            serde_json::json!(true),
+        );
         persistent
             .private_oram_external_recoveries
             .insert(key_digest.clone(), installing.clone());
         persistent.save().unwrap();
         persistent.path = temp.path().join("missing-parent").join("raft_state.json");
 
+        let incoming_meta = SnapshotMetadata {
+            conf_state: Some(ConfState::from((vec![9], vec![]))),
+            index: 8,
+            term: 9,
+        };
+
         assert!(
             persistent
                 .update_from_snapshot(
-                    &SnapshotMetadata::default(),
+                    &incoming_meta,
                     Default::default(),
                     Default::default(),
                     Default::default(),
@@ -6909,12 +7567,25 @@ mod tests {
                     HashMap::from([(key_digest, committed)]),
                     Default::default(),
                     Default::default(),
+                    None,
                 )
                 .is_err()
         );
         assert_eq!(
             persistent.private_oram_external_recovery(&key),
             Some(installing)
+        );
+        assert_eq!(persistent.state.hard_state.term, 3);
+        assert_eq!(persistent.state.hard_state.commit, 2);
+        assert_eq!(persistent.latest_snapshot_meta.term, 3);
+        assert_eq!(persistent.latest_snapshot_meta.index, 2);
+        assert_eq!(persistent.apply_progress_queue.current(), Some(3));
+        assert_eq!(persistent.peer_address_by_id.read().len(), 1);
+        assert_eq!(
+            persistent
+                .cluster_metadata
+                .get("snapshot-rollback-sentinel"),
+            Some(&serde_json::json!(true)),
         );
     }
 
@@ -6961,6 +7632,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 Default::default(),
+                None,
             )
             .unwrap_err();
         assert!(
@@ -6997,6 +7669,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 Default::default(),
+                None,
             )
             .unwrap_err();
         assert!(
@@ -7032,6 +7705,7 @@ mod tests {
                 Default::default(),
                 Default::default(),
                 Default::default(),
+                None,
             )
             .unwrap_err();
         assert!(
@@ -7087,7 +7761,7 @@ mod tests {
     }
 }
 
-#[derive(Serialize, Deserialize, Default, Debug)]
+#[derive(Clone, Serialize, Deserialize, Default, Debug)]
 pub struct SnapshotMetadataSer {
     pub term: u64,
     /// Aka: commit
