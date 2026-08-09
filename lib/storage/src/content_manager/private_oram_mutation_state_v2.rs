@@ -31,7 +31,7 @@ use super::private_oram_mutation_journal::{
     MAX_STATE_BYTES, PrivateOramMutationConsensusEvidenceV1,
     PrivateOramMutationJournalDescriptorV1, PrivateOramMutationJournalError,
     PrivateOramMutationJournalStateV1, PrivateOramMutationOwnerPrepareEvidenceV1,
-    PrivateOramMutationReconcileDispositionV1, expected_owner_recovery_authority_digest_v1,
+    PrivateOramMutationReconcileDispositionV1, expected_owner_recovery_authority_digest_v2,
     private_oram_point_id_digest, validate_consensus_evidence_shape, validate_owner_prepares,
     validate_state,
 };
@@ -925,9 +925,9 @@ fn validate_terminal_batch_v2(
     }
     for (owner, expected_peer_id) in batch.owners.iter().zip(expected_peers) {
         let (expected_consensus_authority, expected_reconciliation_authority) =
-            expected_owner_recovery_authority_digest_v1(
+            expected_owner_recovery_authority_digest_v2(
                 descriptor,
-                &state.owner_prepares,
+                state,
                 decision.decided_lease(),
                 decision.reconcile_disposition(),
                 expected_peer_id,
@@ -1338,6 +1338,25 @@ pub(super) fn canonical_private_oram_mutation_state_history_v2(
     source: &PrivateOramMutationJournalStateV2,
 ) -> Result<Vec<PrivateOramMutationJournalStateV2>, PrivateOramMutationJournalError> {
     canonical_state_chain_v2(descriptor, source)
+}
+
+pub(super) fn record_digest_at_phase_v2(
+    descriptor: &PrivateOramMutationJournalDescriptorV1,
+    state: &PrivateOramMutationJournalStateV2,
+    phase: PrivateOramMutationJournalPhaseV2,
+) -> Result<String, PrivateOramMutationJournalError> {
+    let history = canonical_state_chain_v2(descriptor, state)?;
+    let index = usize::try_from(
+        phase
+            .sequence()
+            .checked_sub(1)
+            .ok_or(PrivateOramMutationJournalError::Corrupt)?,
+    )
+    .map_err(|_| PrivateOramMutationJournalError::Corrupt)?;
+    history
+        .get(index)
+        .map(|predecessor| predecessor.record_digest.clone())
+        .ok_or(PrivateOramMutationJournalError::Corrupt)
 }
 
 #[cfg(test)]

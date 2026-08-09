@@ -21,6 +21,7 @@ proptest = { workspace = true }
 mockito = { workspace = true }
 env_logger = { workspace = true }
 ring = { workspace = true }
+collection = { path = "../collection", features = ["testing"] }
 
 [dependencies]
 ahash = { workspace = true }

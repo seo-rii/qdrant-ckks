@@ -13,7 +13,7 @@ use crate::content_manager::private_oram_mutation_state_v2::{
     canonical_private_oram_mutation_state_history_v2, decode_untrusted_private_oram_mutation_state,
     initial_private_oram_mutation_state_v2, next_private_oram_mutation_state_v2,
     private_oram_owner_terminal_evidence_v2_digest,
-    private_oram_point_stage_evidence_v2_from_durable_token,
+    private_oram_point_stage_evidence_v2_from_durable_token, record_digest_at_phase_v2,
     validate_private_oram_mutation_state_v2_structure,
 };
 
@@ -294,46 +294,8 @@ impl PrivateOramMutationJournal {
             snapshot.effective_state(),
             durable_point_stage,
         )?;
-        let active_lease =
-            validate_reconcile_lease_slot(&snapshot.descriptor, reconcile_snapshot.lease_slot())?;
-        let disposition = if reconcile_snapshot.consensus_state()
-            == &snapshot.descriptor.expected_consensus_old_state
-        {
-            match &active_lease.phase {
-                PrivateOramMutationLeasePhase::AbortDecided => {
-                    PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided
-                }
-                PrivateOramMutationLeasePhase::Preparing => {
-                    return Err(PrivateOramMutationJournalError::InvalidTransition);
-                }
-                PrivateOramMutationLeasePhase::ConsensusCommitted { .. } => {
-                    return Err(PrivateOramMutationJournalError::InvalidTransition);
-                }
-            }
-        } else if reconcile_snapshot.consensus_state()
-            == &expected_consensus_new_state(&snapshot.descriptor)?
-            && matches!(
-                &active_lease.phase,
-                PrivateOramMutationLeasePhase::ConsensusCommitted { .. }
-            )
-        {
-            PrivateOramMutationReconcileDispositionV1::ExactNew
-        } else {
-            return Err(PrivateOramMutationJournalError::InvalidTransition);
-        };
-        let evidence = build_validated_mutation_decision_evidence_v2(
-            &snapshot.descriptor,
-            &active_lease,
-            disposition,
-        )?;
-        for state in std::iter::once(&snapshot.state).chain(snapshot.pending_next.iter()) {
-            if state.phase.sequence()
-                >= PrivateOramMutationJournalPhaseV2::DecisionDurable.sequence()
-                && state.decision.as_ref() != Some(&evidence)
-            {
-                return Err(PrivateOramMutationJournalError::InvalidTransition);
-            }
-        }
+        let (_, _, evidence) =
+            validated_reconcile_decision_for_v2_snapshot(&snapshot, reconcile_snapshot)?;
         let effective = snapshot.effective_state();
         Ok(PrivateOramValidatedMutationDecisionV2 {
             evidence,
@@ -398,6 +360,7 @@ impl PrivateOramMutationJournal {
         ))
     }
 
+    #[cfg(test)]
     pub(super) fn mark_remotes_terminal_v2(
         &self,
         decision: &PrivateOramValidatedDecisionDurableV2,
@@ -410,6 +373,7 @@ impl PrivateOramMutationJournal {
         PrivateOramMutationJournalError,
     > {
         let snapshot = self.mark_owner_terminals_v2(
+            None,
             PrivateOramMutationJournalPhaseV2::RemotesTerminal,
             &decision.evidence,
             &decision.expected_descriptor_digest,
@@ -431,6 +395,7 @@ impl PrivateOramMutationJournal {
         ))
     }
 
+    #[cfg(test)]
     pub(super) fn mark_local_terminal_v2(
         &self,
         remotes: &PrivateOramValidatedRemotesTerminalV2,
@@ -442,7 +407,23 @@ impl PrivateOramMutationJournal {
         ),
         PrivateOramMutationJournalError,
     > {
+        self.mark_local_terminal_v2_with_lock(None, remotes, outcome)
+    }
+
+    fn mark_local_terminal_v2_with_lock(
+        &self,
+        lock: Option<&PrivateOramMutationJournalLock>,
+        remotes: &PrivateOramValidatedRemotesTerminalV2,
+        outcome: &PrivateOramValidatedOwnerRecoveryOutcomeV1,
+    ) -> Result<
+        (
+            PrivateOramMutationJournalStructuralSnapshotV2,
+            PrivateOramValidatedLocalTerminalV2,
+        ),
+        PrivateOramMutationJournalError,
+    > {
         let snapshot = self.mark_owner_terminals_v2(
+            lock,
             PrivateOramMutationJournalPhaseV2::LocalTerminal,
             &remotes.evidence,
             &remotes.expected_descriptor_digest,
@@ -462,6 +443,156 @@ impl PrivateOramMutationJournal {
                 local_terminal_record_digest,
             },
         ))
+    }
+
+    pub(super) fn recover_local_owner_and_mark_terminal_v2(
+        &self,
+        remotes: &PrivateOramValidatedRemotesTerminalV2,
+        reconcile_snapshot: &PrivateOramMutationReconcileSnapshotV1,
+        authenticated_local_owner_peer_id: PeerId,
+        resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+    ) -> Result<
+        (
+            PrivateOramMutationJournalStructuralSnapshotV2,
+            PrivateOramValidatedLocalTerminalV2,
+        ),
+        PrivateOramMutationJournalError,
+    > {
+        self.recover_local_owner_and_mark_terminal_v2_with(
+            remotes,
+            reconcile_snapshot,
+            authenticated_local_owner_peer_id,
+            resources,
+            |parent_lock, outcome| {
+                self.mark_local_terminal_v2_with_lock(Some(parent_lock), remotes, outcome)
+            },
+        )
+    }
+
+    fn recover_local_owner_and_mark_terminal_v2_with(
+        &self,
+        remotes: &PrivateOramValidatedRemotesTerminalV2,
+        reconcile_snapshot: &PrivateOramMutationReconcileSnapshotV1,
+        authenticated_local_owner_peer_id: PeerId,
+        resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+        publish_local_terminal: impl FnOnce(
+            &PrivateOramMutationJournalLock,
+            &PrivateOramValidatedOwnerRecoveryOutcomeV1,
+        ) -> Result<
+            (
+                PrivateOramMutationJournalStructuralSnapshotV2,
+                PrivateOramValidatedLocalTerminalV2,
+            ),
+            PrivateOramMutationJournalError,
+        >,
+    ) -> Result<
+        (
+            PrivateOramMutationJournalStructuralSnapshotV2,
+            PrivateOramValidatedLocalTerminalV2,
+        ),
+        PrivateOramMutationJournalError,
+    > {
+        self.validate_owner_recovery_resources_v1(&resources)?;
+        validate_private_directory(&self.root)?;
+        validate_private_directory(&self.temp_path())?;
+        let parent_lock = self.acquire_lock()?;
+        let root = parent_lock.pinned_root_path();
+        let snapshot = self.load_v2_locked_at_root(&root)?;
+        if snapshot.state.phase.sequence()
+            < PrivateOramMutationJournalPhaseV2::RemotesTerminal.sequence()
+        {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+        validate_remotes_terminal_token_v2(&snapshot.descriptor, &snapshot.state, remotes)?;
+        if authenticated_local_owner_peer_id != snapshot.descriptor.coordinator_peer_id {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+        let (active_lease, disposition, decision) =
+            validated_reconcile_decision_for_v2_snapshot(&snapshot, reconcile_snapshot)?;
+        if decision != remotes.evidence {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+        let authority = build_owner_recovery_authority_v2(
+            &snapshot.descriptor,
+            snapshot.effective_state(),
+            &active_lease,
+            disposition,
+            authenticated_local_owner_peer_id,
+        )?;
+        let live = PrivateOramLiveOwnerRecoveryAuthorityV1::new(
+            authority,
+            &parent_lock,
+            &self.owner_recovery_parent_bridge,
+            &self.owner_recovery_parent_verifier,
+        );
+        let resolved = live
+            .recover_pair_then_v1(resources, |outcome| {
+                publish_local_terminal(&parent_lock, &outcome)
+            })
+            .map_err(|_| PrivateOramMutationJournalError::Indeterminate)?;
+        drop(live);
+        let resolved = resolved.map_err(|_| PrivateOramMutationJournalError::Indeterminate)?;
+        let loaded = self
+            .load_v2_locked_at_root(&root)
+            .map_err(|_| PrivateOramMutationJournalError::Indeterminate)?;
+        if loaded != resolved.0 {
+            return Err(PrivateOramMutationJournalError::Indeterminate);
+        }
+        validate_local_terminal_token_v2(&loaded.descriptor, loaded.effective_state(), &resolved.1)
+            .map_err(|_| PrivateOramMutationJournalError::Indeterminate)?;
+        parent_lock
+            .validate_root_identity()
+            .map_err(|_| PrivateOramMutationJournalError::Indeterminate)?;
+        Ok(resolved)
+    }
+
+    #[cfg(test)]
+    pub(super) fn recover_local_owner_with_parent_terminal_failure_v2(
+        &self,
+        remotes: &PrivateOramValidatedRemotesTerminalV2,
+        reconcile_snapshot: &PrivateOramMutationReconcileSnapshotV1,
+        authenticated_local_owner_peer_id: PeerId,
+        resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+    ) -> Result<
+        (
+            PrivateOramMutationJournalStructuralSnapshotV2,
+            PrivateOramValidatedLocalTerminalV2,
+        ),
+        PrivateOramMutationJournalError,
+    > {
+        self.recover_local_owner_and_mark_terminal_v2_with(
+            remotes,
+            reconcile_snapshot,
+            authenticated_local_owner_peer_id,
+            resources,
+            |_, _| Err(PrivateOramMutationJournalError::InvalidTransition),
+        )
+    }
+
+    #[cfg(test)]
+    pub(super) fn recover_local_owner_with_post_parent_terminal_failure_v2(
+        &self,
+        remotes: &PrivateOramValidatedRemotesTerminalV2,
+        reconcile_snapshot: &PrivateOramMutationReconcileSnapshotV1,
+        authenticated_local_owner_peer_id: PeerId,
+        resources: PrivateOramOwnerRecoveryStorePairResourcesV1<'_>,
+    ) -> Result<
+        (
+            PrivateOramMutationJournalStructuralSnapshotV2,
+            PrivateOramValidatedLocalTerminalV2,
+        ),
+        PrivateOramMutationJournalError,
+    > {
+        self.recover_local_owner_and_mark_terminal_v2_with(
+            remotes,
+            reconcile_snapshot,
+            authenticated_local_owner_peer_id,
+            resources,
+            |parent_lock, outcome| {
+                self.mark_local_terminal_v2_with_lock(Some(parent_lock), remotes, outcome)?;
+                Err(PrivateOramMutationJournalError::InvalidTransition)
+            },
+        )
     }
 
     #[cfg(test)]
@@ -603,26 +734,12 @@ impl PrivateOramMutationJournal {
         let snapshot = self
             .load_v2()?
             .ok_or(PrivateOramMutationJournalError::Corrupt)?;
-        let state = snapshot.effective_state();
-        if state.phase.sequence() < PrivateOramMutationJournalPhaseV2::LocalTerminal.sequence() {
-            return Err(PrivateOramMutationJournalError::InvalidTransition);
-        }
-        Ok(PrivateOramValidatedLocalTerminalV2 {
-            evidence: state
-                .decision
-                .clone()
-                .ok_or(PrivateOramMutationJournalError::Corrupt)?,
-            expected_descriptor_digest: snapshot.descriptor.descriptor_digest.clone(),
-            local_terminal_record_digest: record_digest_at_phase_v2(
-                &snapshot.descriptor,
-                state,
-                PrivateOramMutationJournalPhaseV2::LocalTerminal,
-            )?,
-        })
+        validated_local_terminal_from_v2_snapshot(&snapshot)
     }
 
     fn mark_owner_terminals_v2(
         &self,
+        lock: Option<&PrivateOramMutationJournalLock>,
         phase: PrivateOramMutationJournalPhaseV2,
         decision: &RawPrivateOramMutationDecisionEvidenceV2,
         expected_descriptor_digest: &str,
@@ -665,9 +782,9 @@ impl PrivateOramMutationJournal {
             }
             _ => return Err(PrivateOramMutationJournalError::InvalidTransition),
         };
-        self.transition_v2(
-            phase,
-            move |descriptor, state| {
+        let verify_existing =
+            move |descriptor: &PrivateOramMutationJournalDescriptorV1,
+                  state: &PrivateOramMutationJournalStateV2| {
                 let existing = match phase {
                     PrivateOramMutationJournalPhaseV2::RemotesTerminal => {
                         state.remote_terminals.as_ref()
@@ -684,26 +801,32 @@ impl PrivateOramMutationJournal {
                     && existing == Some(&expected))
                 .then_some(())
                 .ok_or(PrivateOramMutationJournalError::InvalidTransition)
-            },
-            move |descriptor, current, next| {
-                if descriptor.descriptor_digest != update_descriptor_digest
-                    || current.record_digest != update_predecessor_record_digest
-                    || current.decision.as_ref() != Some(decision)
-                {
-                    return Err(PrivateOramMutationJournalError::InvalidTransition);
+            };
+        let update = move |descriptor: &PrivateOramMutationJournalDescriptorV1,
+                           current: &PrivateOramMutationJournalStateV2,
+                           next: &mut PrivateOramMutationJournalStateV2| {
+            if descriptor.descriptor_digest != update_descriptor_digest
+                || current.record_digest != update_predecessor_record_digest
+                || current.decision.as_ref() != Some(decision)
+            {
+                return Err(PrivateOramMutationJournalError::InvalidTransition);
+            }
+            match phase {
+                PrivateOramMutationJournalPhaseV2::RemotesTerminal => {
+                    next.remote_terminals = Some(batch);
                 }
-                match phase {
-                    PrivateOramMutationJournalPhaseV2::RemotesTerminal => {
-                        next.remote_terminals = Some(batch);
-                    }
-                    PrivateOramMutationJournalPhaseV2::LocalTerminal => {
-                        next.local_terminals = Some(batch);
-                    }
-                    _ => return Err(PrivateOramMutationJournalError::InvalidTransition),
+                PrivateOramMutationJournalPhaseV2::LocalTerminal => {
+                    next.local_terminals = Some(batch);
                 }
-                Ok(())
-            },
-        )
+                _ => return Err(PrivateOramMutationJournalError::InvalidTransition),
+            }
+            Ok(())
+        };
+        if let Some(lock) = lock {
+            self.transition_v2_locked(lock, phase, verify_existing, update)
+        } else {
+            self.transition_v2(phase, verify_existing, update)
+        }
     }
 
     fn mark_point_stage_durable_v2(
@@ -965,6 +1088,102 @@ fn validate_live_point_stage_v2(
     }
 }
 
+fn validated_reconcile_decision_for_v2_snapshot(
+    snapshot: &PrivateOramMutationJournalStructuralSnapshotV2,
+    reconcile_snapshot: &PrivateOramMutationReconcileSnapshotV1,
+) -> Result<
+    (
+        PrivateOramMutationLease,
+        PrivateOramMutationReconcileDispositionV1,
+        RawPrivateOramMutationDecisionEvidenceV2,
+    ),
+    PrivateOramMutationJournalError,
+> {
+    if snapshot.state.phase.sequence()
+        < PrivateOramMutationJournalPhaseV2::PointStageDurable.sequence()
+    {
+        return Err(PrivateOramMutationJournalError::InvalidTransition);
+    }
+    let active_lease =
+        validate_reconcile_lease_slot(&snapshot.descriptor, reconcile_snapshot.lease_slot())?;
+    let disposition = if reconcile_snapshot.consensus_state()
+        == &snapshot.descriptor.expected_consensus_old_state
+    {
+        match &active_lease.phase {
+            PrivateOramMutationLeasePhase::AbortDecided => {
+                PrivateOramMutationReconcileDispositionV1::ExactOldAbortDecided
+            }
+            PrivateOramMutationLeasePhase::Preparing
+            | PrivateOramMutationLeasePhase::ConsensusCommitted { .. } => {
+                return Err(PrivateOramMutationJournalError::InvalidTransition);
+            }
+        }
+    } else if reconcile_snapshot.consensus_state()
+        == &expected_consensus_new_state(&snapshot.descriptor)?
+        && matches!(
+            &active_lease.phase,
+            PrivateOramMutationLeasePhase::ConsensusCommitted { .. }
+        )
+    {
+        PrivateOramMutationReconcileDispositionV1::ExactNew
+    } else {
+        return Err(PrivateOramMutationJournalError::InvalidTransition);
+    };
+    let evidence = build_validated_mutation_decision_evidence_v2(
+        &snapshot.descriptor,
+        &active_lease,
+        disposition,
+    )?;
+    for state in std::iter::once(&snapshot.state).chain(snapshot.pending_next.iter()) {
+        if state.phase.sequence() >= PrivateOramMutationJournalPhaseV2::DecisionDurable.sequence()
+            && state.decision.as_ref() != Some(&evidence)
+        {
+            return Err(PrivateOramMutationJournalError::InvalidTransition);
+        }
+    }
+    Ok((active_lease, disposition, evidence))
+}
+
+fn validate_remotes_terminal_token_v2(
+    descriptor: &PrivateOramMutationJournalDescriptorV1,
+    state: &PrivateOramMutationJournalStateV2,
+    remotes: &PrivateOramValidatedRemotesTerminalV2,
+) -> Result<(), PrivateOramMutationJournalError> {
+    if state.phase.sequence() < PrivateOramMutationJournalPhaseV2::RemotesTerminal.sequence()
+        || descriptor.descriptor_digest != remotes.expected_descriptor_digest
+        || state.decision.as_ref() != Some(&remotes.evidence)
+        || record_digest_at_phase_v2(
+            descriptor,
+            state,
+            PrivateOramMutationJournalPhaseV2::RemotesTerminal,
+        )? != remotes.remotes_terminal_record_digest
+    {
+        return Err(PrivateOramMutationJournalError::InvalidTransition);
+    }
+    Ok(())
+}
+
+fn validated_local_terminal_from_v2_snapshot(
+    snapshot: &PrivateOramMutationJournalStructuralSnapshotV2,
+) -> Result<PrivateOramValidatedLocalTerminalV2, PrivateOramMutationJournalError> {
+    let state = snapshot.effective_state();
+    if state.phase.sequence() < PrivateOramMutationJournalPhaseV2::LocalTerminal.sequence() {
+        return Err(PrivateOramMutationJournalError::InvalidTransition);
+    }
+    Ok(PrivateOramValidatedLocalTerminalV2 {
+        evidence: state
+            .decision
+            .clone()
+            .ok_or(PrivateOramMutationJournalError::Corrupt)?,
+        expected_descriptor_digest: snapshot.descriptor.descriptor_digest.clone(),
+        local_terminal_record_digest: record_digest_at_phase_v2(
+            &snapshot.descriptor,
+            state,
+            PrivateOramMutationJournalPhaseV2::LocalTerminal,
+        )?,
+    })
+}
+
 fn validate_local_terminal_token_v2(
     descriptor: &PrivateOramMutationJournalDescriptorV1,
     state: &PrivateOramMutationJournalStateV2,
@@ -1035,25 +1254,6 @@ fn validate_point_resolution_candidate_v2(
         }
         _ => Err(PrivateOramMutationJournalError::InvalidTransition),
     }
-}
-
-fn record_digest_at_phase_v2(
-    descriptor: &PrivateOramMutationJournalDescriptorV1,
-    state: &PrivateOramMutationJournalStateV2,
-    phase: PrivateOramMutationJournalPhaseV2,
-) -> Result<String, PrivateOramMutationJournalError> {
-    let history = canonical_private_oram_mutation_state_history_v2(descriptor, state)?;
-    let index = usize::try_from(
-        phase
-            .sequence()
-            .checked_sub(1)
-            .ok_or(PrivateOramMutationJournalError::Corrupt)?,
-    )
-    .map_err(|_| PrivateOramMutationJournalError::Corrupt)?;
-    history
-        .get(index)
-        .map(|predecessor| predecessor.record_digest.clone())
-        .ok_or(PrivateOramMutationJournalError::Corrupt)
 }
 
 fn load_state_history_v2(
