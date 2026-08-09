@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use data_encoding::BASE64URL_NOPAD;
 use fs_err as fs;
 use fs_err::{File, OpenOptions};
+use fs4::fs_std::FileExt;
 use qdrant_sec::{
     PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_MAX_BYTES, PRIVATE_ORAM_STAGED_INSERT_FRAME_V1_VERSION,
     PrivateOramAppendMutationBundleV1, PrivateOramStagedInsertFrameV1,
@@ -42,6 +43,7 @@ pub const PRIVATE_ORAM_POINT_STAGE_STATE_VERSION: u16 = 1;
 
 const ACTIVE_DIR: &str = "active";
 const ACTIVE_TEMP_DIR: &str = "temp";
+const LOCK_FILE: &str = "stage.lock";
 const DESCRIPTOR_FILE: &str = "descriptor.bin";
 const FRAME_FILE: &str = "frame.bin";
 const STATE_FILE: &str = "state.bin";
@@ -176,6 +178,34 @@ pub struct PrivateOramDurablePointStageTokenV1 {
     parent_owners_prepared_record_digest: String,
 }
 
+/// Callback-scoped evidence that the exact staged frame remains installed under the held root
+/// lock. It is intentionally impossible to move this authority outside `with_live_stage`.
+pub(super) struct PrivateOramLivePointStageV1<'lock> {
+    stage: &'lock ValidatedPointStage,
+    durable: &'lock PrivateOramDurablePointStageTokenV1,
+    _lock: &'lock PrivateOramPointStageLock,
+}
+
+impl Debug for PrivateOramLivePointStageV1<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PrivateOramLivePointStageV1")
+            .field("frame", &"[redacted]")
+            .field("durable", &self.durable)
+            .field("lock", &"[held]")
+            .finish()
+    }
+}
+
+impl PrivateOramLivePointStageV1<'_> {
+    pub(super) fn frame(&self) -> &PrivateOramStagedInsertFrameV1 {
+        &self.stage.frame
+    }
+
+    pub(super) fn durable(&self) -> &PrivateOramDurablePointStageTokenV1 {
+        self.durable
+    }
+}
+
 impl Debug for PrivateOramDurablePointStageTokenV1 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PrivateOramDurablePointStageTokenV1")
@@ -265,6 +295,10 @@ impl PrivateOramPointStagingStore {
         }
     }
 
+    pub(super) fn belongs_to_collection(&self, collection_path: &Path) -> bool {
+        self.root == collection_path.join(PRIVATE_ORAM_POINT_STAGING_DIR)
+    }
+
     pub(super) fn prepare(
         &self,
         canonical_frame_bytes: &[u8],
@@ -294,6 +328,87 @@ impl PrivateOramPointStagingStore {
         self.load_bound(&parent)
     }
 
+    pub(super) fn with_live_stage<R>(
+        &self,
+        parent: &PrivateOramValidatedPointStageParentV1,
+        action: impl for<'lock> FnOnce(&PrivateOramLivePointStageV1<'lock>) -> R,
+    ) -> Result<R, PrivateOramPointStagingError> {
+        let parent = PointStageParentBinding::from_validated_parent(parent);
+        self.with_live_stage_bound(&parent, action)
+    }
+
+    /// Runs a terminal parent transition while the exact staged child remains locked.
+    ///
+    /// The child is disposable after a successful terminal transition, so this consuming form
+    /// validates the canonical root immediately before the callback and deliberately does not
+    /// turn later child cleanup or tampering into an error after the parent commit is durable.
+    #[cfg(test)]
+    pub(super) fn with_consumed_live_stage<R>(
+        &self,
+        parent: &PrivateOramValidatedPointStageParentV1,
+        action: impl for<'lock> FnOnce(&PrivateOramLivePointStageV1<'lock>) -> R,
+    ) -> Result<R, PrivateOramPointStagingError> {
+        let parent = PointStageParentBinding::from_validated_parent(parent);
+        self.with_consumed_live_stage_bound(&parent, action)
+    }
+
+    #[cfg(test)]
+    fn with_consumed_live_stage_bound<R>(
+        &self,
+        parent: &PointStageParentBinding,
+        action: impl for<'lock> FnOnce(&PrivateOramLivePointStageV1<'lock>) -> R,
+    ) -> Result<R, PrivateOramPointStagingError> {
+        if !path_entry_exists(&self.root).map_err(|_| PrivateOramPointStagingError::Io)? {
+            return Err(PrivateOramPointStagingError::Corrupt);
+        }
+        validate_private_directory_exact(&self.root)?;
+        let lock = self.acquire_lock()?;
+        let root = lock.pinned_root_path();
+        if Self::stable_root_entry_at(&root)? != StableRootEntry::Active {
+            return Err(PrivateOramPointStagingError::Corrupt);
+        }
+        let stage = Self::load_active_structural_at(&root)?;
+        stage.validate_parent(parent)?;
+        let durable = stage.durable_token();
+        lock.validate_root_identity()?;
+        Ok(action(&PrivateOramLivePointStageV1 {
+            stage: &stage,
+            durable: &durable,
+            _lock: &lock,
+        }))
+    }
+
+    fn with_live_stage_bound<R>(
+        &self,
+        parent: &PointStageParentBinding,
+        action: impl for<'lock> FnOnce(&PrivateOramLivePointStageV1<'lock>) -> R,
+    ) -> Result<R, PrivateOramPointStagingError> {
+        if !path_entry_exists(&self.root).map_err(|_| PrivateOramPointStagingError::Io)? {
+            return Err(PrivateOramPointStagingError::Corrupt);
+        }
+        validate_private_directory_exact(&self.root)?;
+        let lock = self.acquire_lock()?;
+        let root = lock.pinned_root_path();
+        if Self::stable_root_entry_at(&root)? != StableRootEntry::Active {
+            return Err(PrivateOramPointStagingError::Corrupt);
+        }
+        let stage = Self::load_active_structural_at(&root)?;
+        stage.validate_parent(parent)?;
+        let durable = stage.durable_token();
+        let output = action(&PrivateOramLivePointStageV1 {
+            stage: &stage,
+            durable: &durable,
+            _lock: &lock,
+        });
+        let reloaded = Self::load_active_structural_at(&root)?;
+        if !reloaded.exactly_matches(&stage) {
+            return Err(PrivateOramPointStagingError::Corrupt);
+        }
+        reloaded.validate_parent(parent)?;
+        lock.validate_root_identity()?;
+        Ok(output)
+    }
+
     fn prepare_bound(
         &self,
         canonical_frame_bytes: &[u8],
@@ -309,14 +424,18 @@ impl PrivateOramPointStagingStore {
         ensure_supported_platform()?;
         let desired = ValidatedPointStage::build(canonical_frame_bytes, parent)?;
         self.ensure_root()?;
-        let root_entry = self.stable_root_entry()?;
+        let lock = self.acquire_lock()?;
+        let root = lock.pinned_root_path();
+        let root_entry = Self::stable_root_entry_at(&root)?;
         if root_entry == StableRootEntry::Active {
-            let existing = self.load_active_structural()?;
+            let existing = Self::load_active_structural_at(&root)?;
             if !existing.exactly_matches(&desired) {
                 return Err(PrivateOramPointStagingError::ConcurrentStage);
             }
             existing.validate_parent(parent)?;
-            sync_private_directory(&self.root)
+            sync_private_directory(&root)
+                .map_err(|_| PrivateOramPointStagingError::Indeterminate)?;
+            lock.validate_root_identity()
                 .map_err(|_| PrivateOramPointStagingError::Indeterminate)?;
             return Ok(existing.into_output());
         }
@@ -326,7 +445,7 @@ impl PrivateOramPointStagingStore {
 
         let candidate = tempfile::Builder::new()
             .prefix(CANDIDATE_PREFIX)
-            .tempdir_in(&self.root)
+            .tempdir_in(&root)
             .map_err(|_| PrivateOramPointStagingError::Io)?;
         set_private_directory_permissions(candidate.path())
             .map_err(|_| PrivateOramPointStagingError::Io)?;
@@ -357,7 +476,7 @@ impl PrivateOramPointStagingStore {
         sync_private_directory(&candidate_temp).map_err(|_| PrivateOramPointStagingError::Io)?;
         sync_private_directory(candidate.path()).map_err(|_| PrivateOramPointStagingError::Io)?;
 
-        let root_file = open_private_directory(&self.root)?;
+        let root_file = open_private_directory(&root)?;
         let candidate_name = candidate
             .path()
             .file_name()
@@ -365,26 +484,29 @@ impl PrivateOramPointStagingStore {
         match rename_directory_noreplace(&root_file, candidate_name, OsStr::new(ACTIVE_DIR)) {
             Ok(()) => {
                 sync_open_directory(&root_file)
-                    .and_then(|()| validate_open_directory_at_path(&root_file, &self.root))
+                    .and_then(|()| validate_open_directory_at_path(&root_file, &root))
                     .map_err(|_| PrivateOramPointStagingError::Indeterminate)?;
-                let installed = self
-                    .load_active_structural()
+                let installed = Self::load_active_structural_at(&root)
                     .map_err(|_| PrivateOramPointStagingError::Indeterminate)?;
                 if !installed.exactly_matches(&desired) {
                     return Err(PrivateOramPointStagingError::Indeterminate);
                 }
                 installed.validate_parent(parent)?;
+                lock.validate_root_identity()
+                    .map_err(|_| PrivateOramPointStagingError::Indeterminate)?;
                 Ok(installed.into_output())
             }
             Err(PrivateOramPointStagingError::ConcurrentStage) => {
                 sync_open_directory(&root_file)
-                    .and_then(|()| validate_open_directory_at_path(&root_file, &self.root))
+                    .and_then(|()| validate_open_directory_at_path(&root_file, &root))
                     .map_err(|_| PrivateOramPointStagingError::Indeterminate)?;
-                let existing = self.load_active_structural()?;
+                let existing = Self::load_active_structural_at(&root)?;
                 if !existing.exactly_matches(&desired) {
                     return Err(PrivateOramPointStagingError::ConcurrentStage);
                 }
                 existing.validate_parent(parent)?;
+                lock.validate_root_identity()
+                    .map_err(|_| PrivateOramPointStagingError::Indeterminate)?;
                 Ok(existing.into_output())
             }
             Err(error) => Err(error),
@@ -411,7 +533,9 @@ impl PrivateOramPointStagingStore {
             };
         }
         validate_private_directory_exact(&self.root)?;
-        match self.stable_root_entry()? {
+        let lock = self.acquire_lock()?;
+        let root = lock.pinned_root_path();
+        let result = match Self::stable_root_entry_at(&root)? {
             StableRootEntry::Empty => {
                 if parent.expected_child_descriptor_digest.is_some() {
                     Err(PrivateOramPointStagingError::Corrupt)
@@ -420,11 +544,13 @@ impl PrivateOramPointStagingStore {
                 }
             }
             StableRootEntry::Active => {
-                let loaded = self.load_active_structural()?;
+                let loaded = Self::load_active_structural_at(&root)?;
                 loaded.validate_parent(parent)?;
                 Ok(Some(loaded.into_output()))
             }
-        }
+        }?;
+        lock.validate_root_identity()?;
+        Ok(result)
     }
 
     fn ensure_root(&self) -> Result<(), PrivateOramPointStagingError> {
@@ -432,9 +558,52 @@ impl PrivateOramPointStagingStore {
         validate_private_directory_exact(&self.root)
     }
 
-    fn stable_root_entry(&self) -> Result<StableRootEntry, PrivateOramPointStagingError> {
-        validate_private_directory_exact(&self.root)?;
-        let names = directory_entry_names(&self.root)?;
+    fn acquire_lock(&self) -> Result<PrivateOramPointStageLock, PrivateOramPointStagingError> {
+        #[cfg(not(target_os = "linux"))]
+        ensure_supported_platform()?;
+        let root = open_pinned_point_stage_directory(&self.root)?;
+        let lock_path = root.pinned_path(&self.root).join(LOCK_FILE);
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create(true);
+        #[cfg(unix)]
+        {
+            use fs_err::os::unix::fs::OpenOptionsExt as _;
+            options
+                .mode(0o600)
+                .custom_flags(nix::libc::O_CLOEXEC | nix::libc::O_NOFOLLOW);
+        }
+        let file = options
+            .open(&lock_path)
+            .map_err(|_| PrivateOramPointStagingError::Io)?;
+        validate_lock_file_metadata(
+            &file
+                .metadata()
+                .map_err(|_| PrivateOramPointStagingError::Io)?,
+        )?;
+        FileExt::lock_exclusive(file.file()).map_err(|_| PrivateOramPointStagingError::Io)?;
+        let current =
+            fs::symlink_metadata(&lock_path).map_err(|_| PrivateOramPointStagingError::Corrupt)?;
+        validate_lock_file_metadata(&current)?;
+        ensure_same_inode(
+            &file
+                .metadata()
+                .map_err(|_| PrivateOramPointStagingError::Corrupt)?,
+            &current,
+        )?;
+        file.sync_all()
+            .map_err(|_| PrivateOramPointStagingError::Io)?;
+        root.validate_at_path(&self.root)?;
+        sync_open_directory(&root.directory)?;
+        Ok(PrivateOramPointStageLock {
+            _file: file,
+            root,
+            root_path: self.root.clone(),
+        })
+    }
+
+    fn stable_root_entry_at(root: &Path) -> Result<StableRootEntry, PrivateOramPointStagingError> {
+        validate_private_directory_exact(root)?;
+        let names = directory_entry_names(root)?;
         let mut has_active = false;
         for name in names {
             if name == OsStr::new(ACTIVE_DIR) {
@@ -445,7 +614,11 @@ impl PrivateOramPointStagingStore {
             } else if is_candidate_name(&name) {
                 // A process crash can strand an unpublished sibling candidate. It is never
                 // adopted or removed here; only the non-replacing `active` install is canonical.
-                validate_private_directory_exact(&self.root.join(name))?;
+                validate_private_directory_exact(&root.join(name))?;
+            } else if name == OsStr::new(LOCK_FILE) {
+                let metadata = fs::symlink_metadata(root.join(name))
+                    .map_err(|_| PrivateOramPointStagingError::Corrupt)?;
+                validate_lock_file_metadata(&metadata)?;
             } else {
                 return Err(PrivateOramPointStagingError::Corrupt);
             }
@@ -457,8 +630,10 @@ impl PrivateOramPointStagingStore {
         })
     }
 
-    fn load_active_structural(&self) -> Result<ValidatedPointStage, PrivateOramPointStagingError> {
-        let active = self.root.join(ACTIVE_DIR);
+    fn load_active_structural_at(
+        root: &Path,
+    ) -> Result<ValidatedPointStage, PrivateOramPointStagingError> {
+        let active = root.join(ACTIVE_DIR);
         let active_before = private_directory_identity(&active)?;
         validate_active_entry_set(&active)?;
         let temp = active.join(ACTIVE_TEMP_DIR);
@@ -686,18 +861,22 @@ impl ValidatedPointStage {
         PrivateOramPointStageSnapshotV1,
         PrivateOramDurablePointStageTokenV1,
     ) {
-        let token = PrivateOramDurablePointStageTokenV1::from_validated_stage(
-            &self.descriptor,
-            &self.frame,
-            self.point_semantic_digest,
-            self.point_id,
-        );
+        let token = self.durable_token();
         let snapshot = PrivateOramPointStageSnapshotV1 {
             descriptor: self.descriptor,
             state: self.state,
             frame: self.frame,
         };
         (snapshot, token)
+    }
+
+    fn durable_token(&self) -> PrivateOramDurablePointStageTokenV1 {
+        PrivateOramDurablePointStageTokenV1::from_validated_stage(
+            &self.descriptor,
+            &self.frame,
+            self.point_semantic_digest.clone(),
+            self.point_id.clone(),
+        )
     }
 }
 
@@ -1010,6 +1189,62 @@ struct DirectoryIdentity {
     length: u64,
 }
 
+struct PinnedPointStageDirectory {
+    directory: File,
+}
+
+impl PinnedPointStageDirectory {
+    fn pinned_path(&self, fallback: &Path) -> PathBuf {
+        #[cfg(target_os = "linux")]
+        {
+            let _ = fallback;
+            PathBuf::from("/proc/self/fd")
+                .join(self.directory.file().as_raw_fd().to_string())
+                .join(".")
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            fallback.to_path_buf()
+        }
+    }
+
+    fn validate_at_path(&self, path: &Path) -> Result<(), PrivateOramPointStagingError> {
+        let opened = self
+            .directory
+            .metadata()
+            .map_err(|_| PrivateOramPointStagingError::Corrupt)?;
+        validate_directory_metadata(&opened)?;
+        let current =
+            fs::symlink_metadata(path).map_err(|_| PrivateOramPointStagingError::Corrupt)?;
+        validate_directory_metadata(&current)?;
+        ensure_same_inode(&opened, &current)
+    }
+}
+
+struct PrivateOramPointStageLock {
+    _file: File,
+    root: PinnedPointStageDirectory,
+    root_path: PathBuf,
+}
+
+impl PrivateOramPointStageLock {
+    fn pinned_root_path(&self) -> PathBuf {
+        self.root.pinned_path(&self.root_path)
+    }
+
+    fn validate_root_identity(&self) -> Result<(), PrivateOramPointStagingError> {
+        self.root.validate_at_path(&self.root_path)
+    }
+}
+
+fn open_pinned_point_stage_directory(
+    path: &Path,
+) -> Result<PinnedPointStageDirectory, PrivateOramPointStagingError> {
+    Ok(PinnedPointStageDirectory {
+        directory: open_private_directory(path)?,
+    })
+}
+
 fn private_directory_identity(
     path: &Path,
 ) -> Result<DirectoryIdentity, PrivateOramPointStagingError> {
@@ -1065,6 +1300,25 @@ fn validate_file_metadata(
     max_bytes: u64,
 ) -> Result<(), PrivateOramPointStagingError> {
     if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > max_bytes {
+        return Err(PrivateOramPointStagingError::Corrupt);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        if metadata.uid() != nix::unistd::Uid::effective().as_raw()
+            || metadata.permissions().mode() & 0o7777 != 0o600
+            || metadata.nlink() != 1
+        {
+            return Err(PrivateOramPointStagingError::Corrupt);
+        }
+    }
+    Ok(())
+}
+
+fn validate_lock_file_metadata(
+    metadata: &std::fs::Metadata,
+) -> Result<(), PrivateOramPointStagingError> {
+    if !metadata.file_type().is_file() || metadata.len() != 0 {
         return Err(PrivateOramPointStagingError::Corrupt);
     }
     #[cfg(unix)]
@@ -1625,7 +1879,7 @@ mod tests {
         );
         assert_eq!(
             directory_entry_names(&fixture.store.root).unwrap(),
-            [ACTIVE_DIR]
+            [ACTIVE_DIR, LOCK_FILE]
                 .into_iter()
                 .map(std::ffi::OsString::from)
                 .collect()
@@ -1654,6 +1908,60 @@ mod tests {
             .prepare_bound(&fixture.frame_bytes, &advanced_parent)
             .unwrap();
         assert_eq!(advanced_replay, first);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_stage_is_callback_scoped_and_revalidates_exact_bytes() {
+        let fixture = fixture(23);
+        let (prepared, durable) = prepare(&fixture);
+        let observed = fixture
+            .store
+            .with_live_stage_bound(&fixture.parent, |live| {
+                let rendered = format!("{live:?}");
+                assert!(!rendered.contains(&fixture.parent.mutation_bundle.mutation.collection_id));
+                assert!(!rendered.contains(&live.frame().mutation_id));
+                (
+                    live.durable().child_descriptor_digest().to_string(),
+                    live.frame().target_shard_ids.clone(),
+                )
+            })
+            .unwrap();
+        assert_eq!(observed.0, durable.child_descriptor_digest());
+        assert_eq!(observed.0, prepared.descriptor.descriptor_digest);
+        assert_eq!(observed.1, durable.target_shard_ids());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_stage_rejects_root_path_replacement_after_callback() {
+        let fixture = fixture(24);
+        prepare(&fixture);
+        let moved = fixture.collection.join("moved-point-staging");
+        let result = fixture.store.with_live_stage_bound(&fixture.parent, |_| {
+            fs::rename(&fixture.store.root, &moved).unwrap();
+            fs::create_dir(&fixture.store.root).unwrap();
+            set_private_directory_permissions(&fixture.store.root).unwrap();
+        });
+        assert_eq!(result.unwrap_err(), PrivateOramPointStagingError::Corrupt);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn consumed_live_stage_does_not_reclassify_a_completed_parent_action() {
+        let fixture = fixture(25);
+        prepare(&fixture);
+        let moved = fixture.collection.join("consumed-point-staging");
+        let output = fixture
+            .store
+            .with_consumed_live_stage_bound(&fixture.parent, |_| {
+                fs::rename(&fixture.store.root, &moved).unwrap();
+                fs::create_dir(&fixture.store.root).unwrap();
+                set_private_directory_permissions(&fixture.store.root).unwrap();
+                7_u8
+            })
+            .unwrap();
+        assert_eq!(output, 7);
     }
 
     #[cfg(target_os = "linux")]

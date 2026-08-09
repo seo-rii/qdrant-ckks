@@ -598,6 +598,11 @@ fn encode_point(
     match &point.payload {
         None => encoder.push_u8(OPTIONAL_NONE_TAG),
         Some(payload) => {
+            // This dormant codec has never been production-activated. Reserve one canonical wire
+            // form now because Qdrant normalizes an empty stored payload to no payload.
+            if payload.is_empty() {
+                return Err(PrivateOramStagingError::InvalidField("payload"));
+            }
             encoder.push_u8(OPTIONAL_SOME_TAG)?;
             let mut json_context = JsonEncodeContext { value_count: 0 };
             validate_json_position(0, &mut json_context.value_count)?;
@@ -642,7 +647,10 @@ fn decode_point(
         OPTIONAL_SOME_TAG => {
             let mut json_context = JsonDecodeContext { value_count: 0 };
             match decode_json_value(decoder, 0, &mut json_context)? {
-                Value::Object(payload) => Some(payload),
+                Value::Object(payload) if !payload.is_empty() => Some(payload),
+                Value::Object(_) => {
+                    return Err(PrivateOramStagingError::NonCanonicalEncoding);
+                }
                 _ => {
                     return Err(PrivateOramStagingError::MalformedEncoding("payload"));
                 }
@@ -1684,6 +1692,13 @@ mod tests {
         assert_eq!(
             encode_private_oram_staged_insert_frame_v1(&frame),
             Err(PrivateOramStagingError::InvalidField("writer_fence"))
+        );
+
+        let mut frame = known_answer_frame();
+        frame.point.payload = Some(Map::new());
+        assert_eq!(
+            encode_private_oram_staged_insert_frame_v1(&frame),
+            Err(PrivateOramStagingError::InvalidField("payload"))
         );
 
         let mut frame = known_answer_frame();
