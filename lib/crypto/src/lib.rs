@@ -10,6 +10,7 @@ pub mod openfhe;
 pub mod payload;
 pub mod private_hnsw_client;
 pub mod private_hnsw_oram;
+pub mod private_oram_activation_authority;
 pub mod private_oram_append_checkpoint;
 pub mod private_oram_append_client;
 pub mod private_oram_append_finalizer;
@@ -152,6 +153,34 @@ pub use private_hnsw_oram::{
     validate_private_hnsw_oram_read_paths_signature,
     validate_private_hnsw_oram_upload_bundle as validate_server_private_hnsw_oram_upload_bundle,
     validate_private_hnsw_oram_upload_bundle_with_signature as validate_server_private_hnsw_oram_upload_bundle_with_signature,
+};
+pub use private_oram_activation_authority::{
+    PRIVATE_ORAM_ACTIVATION_AUTHORITY_KEY_ID_DOMAIN,
+    PRIVATE_ORAM_ACTIVATION_AUTHORITY_MANIFEST_SIGNATURE_DOMAIN,
+    PRIVATE_ORAM_ACTIVATION_AUTHORITY_MANIFEST_VERSION,
+    PRIVATE_ORAM_ACTIVATION_AUTHORITY_PUBLIC_KEY_VERSION,
+    PRIVATE_ORAM_ACTIVATION_AUTHORITY_SIGNATURE_ALGORITHM,
+    PRIVATE_ORAM_ACTIVATION_AUTHORITY_SIGNATURE_VERSION,
+    PRIVATE_ORAM_ACTIVATION_CLUSTER_IDENTITY_DIGEST_DOMAIN,
+    PRIVATE_ORAM_ACTIVATION_PEER_URI_DIGEST_DOMAIN, PrivateOramActivationAuthorityBundleV1,
+    PrivateOramActivationAuthorityError, PrivateOramActivationAuthorityManifestV1,
+    PrivateOramActivationAuthorityPublicKeyV1, PrivateOramActivationAuthoritySignatureV1,
+    PrivateOramActivationAuthorityTrustAnchorV1, PrivateOramActivationPeerPinV1,
+    PrivateOramActivationPeerUriSchemeV1, PrivateOramActivationRegistryExpectationV1,
+    VerifiedSignedPrivateOramActivationAuthorityManifestV1,
+    package_private_oram_activation_authority_manifest_v1,
+    private_oram_activation_authority_key_id_v1,
+    private_oram_activation_authority_manifest_digest_v1,
+    private_oram_activation_authority_public_key_v1,
+    private_oram_activation_signer_from_signed_manifest_for_challenge_v1,
+    sign_private_oram_activation_authority_manifest_v1,
+    try_private_oram_activation_authority_manifest_signature_message_v1,
+    try_private_oram_activation_cluster_identity_digest_v1,
+    try_private_oram_activation_peer_uri_digest_v1,
+    validate_private_oram_activation_authority_bundle_v1,
+    validate_private_oram_activation_authority_manifest_v1_shape,
+    validate_private_oram_activation_authority_public_key_v1,
+    validate_private_oram_activation_authority_transition_v1,
 };
 pub use private_oram_append_checkpoint::{
     PrivateOramAppendCheckpointError, PrivateOramAppendPairedCheckpointDeltaV2,
