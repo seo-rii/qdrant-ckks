@@ -78,6 +78,7 @@ use super::private_oram_point_staging::{
     reason = "D3-C2 V2 writer remains dormant until the recovery coordinator is activated"
 )]
 mod writer_v2;
+pub(in crate::content_manager) use writer_v2::PrivateOramMutationJournalStructuralSnapshotV2;
 
 pub const PRIVATE_ORAM_MUTATION_JOURNAL_DIR: &str = "private_oram_mutations";
 pub const PRIVATE_ORAM_MUTATION_JOURNAL_VERSION: u16 = 1;
@@ -3589,6 +3590,14 @@ mod tests {
 
     use super::writer_v2::PrivateOramMutationJournalStructuralSnapshotV2;
     use super::*;
+    use crate::content_manager::consensus::private_oram_mutation_watermark::{
+        PrivateOramMutationParentWatermarkExpectationV2, PrivateOramMutationParentWatermarkV2,
+        derive_private_oram_mutation_parent_watermark_expectation_v2,
+        replace_private_oram_mutation_parent_watermark_record_for_test,
+        validate_private_oram_mutation_parent_watermark_v2_cas_transition,
+        validate_private_oram_mutation_parent_watermark_v2_shape,
+        validate_private_oram_mutation_parent_watermark_v2_snapshot_transition,
+    };
     use crate::content_manager::consensus_ops::{
         PRIVATE_ORAM_CONSENSUS_COLLECTION_STATE_VERSION, PRIVATE_ORAM_MUTATION_RECEIPT_VERSION,
         PrivateOramConsensusCollectionIndexStateV2, PrivateOramConsensusEpoch,
@@ -4530,20 +4539,33 @@ mod tests {
         decision_kind: PrivateOramMutationDecisionKindV2,
         target_phase: PrivateOramMutationJournalPhaseV2,
     ) -> PrivateOramMutationJournalStateV2 {
+        v2_no_server_terminal_state_for_descriptor(
+            &initial.descriptor,
+            fixture,
+            decision_kind,
+            target_phase,
+        )
+    }
+
+    fn v2_no_server_terminal_state_for_descriptor(
+        descriptor: &PrivateOramMutationJournalDescriptorV1,
+        fixture: &Fixture,
+        decision_kind: PrivateOramMutationDecisionKindV2,
+        target_phase: PrivateOramMutationJournalPhaseV2,
+    ) -> PrivateOramMutationJournalStateV2 {
         assert!(
             target_phase.sequence()
                 >= PrivateOramMutationJournalPhaseV2::DecisionDurable.sequence()
         );
-        assert_eq!(initial.descriptor.owner_requirements.len(), 1);
+        assert_eq!(descriptor.owner_requirements.len(), 1);
 
         let mut prepared = empty_v2_state(PrivateOramMutationJournalPhaseV2::OwnersPrepared);
-        prepared.owner_prepares = owner_prepares(initial);
+        prepared.owner_prepares = owner_prepares_for_descriptor(descriptor);
         let prepared =
-            canonical_private_oram_mutation_state_v2_for_test(&initial.descriptor, &prepared)
-                .unwrap();
+            canonical_private_oram_mutation_state_v2_for_test(descriptor, &prepared).unwrap();
         let decision = match decision_kind {
             PrivateOramMutationDecisionKindV2::ExactNew => exact_new_decision_v2_for_test(
-                &initial.descriptor,
+                descriptor,
                 &fixture.committed_lease,
                 &fixture.new_consensus,
             )
@@ -4552,7 +4574,7 @@ mod tests {
                 let mut abort_decided = fixture.preparing_lease.clone();
                 abort_decided.phase = PrivateOramMutationLeasePhase::AbortDecided;
                 exact_old_abort_decision_v2_for_test(
-                    &initial.descriptor,
+                    descriptor,
                     &abort_decided,
                     &fixture.old_consensus,
                 )
@@ -4584,9 +4606,9 @@ mod tests {
         }
         if target_phase.sequence() >= PrivateOramMutationJournalPhaseV2::LocalTerminal.sequence() {
             let terminal = v2_terminal_evidence(
-                &initial.descriptor,
+                descriptor,
                 &state,
-                initial.descriptor.coordinator_peer_id,
+                descriptor.coordinator_peer_id,
                 terminal_kind,
                 211,
             );
@@ -4597,7 +4619,7 @@ mod tests {
         }
         if target_phase == PrivateOramMutationJournalPhaseV2::PointResolved {
             let local_terminal = canonical_private_oram_mutation_state_v2_for_test(
-                &initial.descriptor,
+                descriptor,
                 &PrivateOramMutationJournalStateV2 {
                     phase: PrivateOramMutationJournalPhaseV2::LocalTerminal,
                     sequence: PrivateOramMutationJournalPhaseV2::LocalTerminal.sequence(),
@@ -4613,7 +4635,24 @@ mod tests {
                 },
             );
         }
-        canonical_private_oram_mutation_state_v2_for_test(&initial.descriptor, &state).unwrap()
+        canonical_private_oram_mutation_state_v2_for_test(descriptor, &state).unwrap()
+    }
+
+    fn v2_parent_watermark_expectation(
+        journal: &PrivateOramMutationJournal,
+        fixture: &Fixture,
+        decision_kind: PrivateOramMutationDecisionKindV2,
+        target_phase: PrivateOramMutationJournalPhaseV2,
+    ) -> PrivateOramMutationParentWatermarkExpectationV2 {
+        let initial = begin_v2(journal, fixture, &[11]);
+        let state = v2_no_server_terminal_state_for_descriptor(
+            &initial.descriptor,
+            fixture,
+            decision_kind,
+            target_phase,
+        );
+        let snapshot = initial.with_effective_state_for_test(state).unwrap();
+        derive_private_oram_mutation_parent_watermark_expectation_v2(&snapshot).unwrap()
     }
 
     fn v2_visible_point_resolved_state(
@@ -6409,6 +6448,220 @@ mod tests {
             assert!(!rendered.contains("collection-uuid-1"));
             assert!(!rendered.contains("secret-index"));
             assert!(!rendered.contains(&fixture.mutation_bundle.mutation.mutation_id));
+        }
+    }
+
+    #[test]
+    fn v2_parent_watermark_candidate_binds_the_complete_canonical_prefix() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(78, 91);
+        let journal = journal(&temp, &fixture);
+        let initial = begin_v2(&journal, &fixture, &[11]);
+        let state = v2_no_server_terminal_state_for_descriptor(
+            &initial.descriptor,
+            &fixture,
+            PrivateOramMutationDecisionKindV2::ExactNew,
+            PrivateOramMutationJournalPhaseV2::PointResolved,
+        );
+        let snapshot = initial
+            .with_effective_state_for_test(state.clone())
+            .unwrap();
+        let expectation =
+            derive_private_oram_mutation_parent_watermark_expectation_v2(&snapshot).unwrap();
+        let watermark = expectation.watermark();
+
+        validate_private_oram_mutation_parent_watermark_v2_shape(watermark).unwrap();
+        assert_eq!(
+            watermark.lease_generation(),
+            fixture.preparing_lease.generation
+        );
+        assert_eq!(watermark.mutation_id(), fixture.preparing_lease.mutation_id);
+        assert_eq!(
+            watermark.descriptor_digest(),
+            initial.descriptor.descriptor_digest
+        );
+        assert_eq!(watermark.sequence(), 7);
+        assert_eq!(watermark.phase_sequence(), 7);
+        assert_eq!(
+            watermark.record_digest(),
+            Some(state.record_digest.as_str())
+        );
+        assert_eq!(
+            watermark.watermark_digest(),
+            "70gzCOToIDSA8rDqFcWPjYFALrGpI9BAHiV8e0D62PE",
+        );
+
+        let rendered = format!("{watermark:?}");
+        let encoded = serde_json::to_value(watermark).unwrap();
+        for field in [
+            "collection_id_digest",
+            "mutation_id",
+            "signed_mutation_digest",
+            "transition_digest",
+            "base_record_digest",
+            "writer_lease_digest",
+            "descriptor_digest",
+            "watermark_digest",
+        ] {
+            let secret = encoded[field].as_str().unwrap();
+            assert!(!rendered.contains(secret));
+        }
+        assert!(!rendered.contains(&format!(
+            "lease_generation: {}",
+            fixture.preparing_lease.generation
+        )));
+        assert!(!rendered.contains(&format!(
+            "writer_fence: {}",
+            fixture.preparing_lease.writer_fence
+        )));
+        assert!(!rendered.contains(&format!(
+            "owner_peer_id: {}",
+            fixture.preparing_lease.owner_peer_id
+        )));
+        assert!(!rendered.contains(&state.record_digest));
+    }
+
+    #[test]
+    fn v2_parent_watermark_transitions_reject_skip_rollback_fork_and_cross_mutation() {
+        let temp = tempfile::tempdir().unwrap();
+        let first_fixture = fixture(79, 93);
+        let first_journal = journal(&temp, &first_fixture);
+        let watermark_at = |phase| {
+            v2_parent_watermark_expectation(
+                &first_journal,
+                &first_fixture,
+                PrivateOramMutationDecisionKindV2::ExactNew,
+                phase,
+            )
+        };
+        let decision = watermark_at(PrivateOramMutationJournalPhaseV2::DecisionDurable);
+        let remotes = watermark_at(PrivateOramMutationJournalPhaseV2::RemotesTerminal);
+        let resolved = watermark_at(PrivateOramMutationJournalPhaseV2::PointResolved);
+
+        validate_private_oram_mutation_parent_watermark_v2_cas_transition(
+            decision.watermark(),
+            decision.watermark(),
+            &decision,
+        )
+        .unwrap();
+        validate_private_oram_mutation_parent_watermark_v2_cas_transition(
+            decision.watermark(),
+            remotes.watermark(),
+            &remotes,
+        )
+        .unwrap();
+        assert!(
+            validate_private_oram_mutation_parent_watermark_v2_cas_transition(
+                decision.watermark(),
+                resolved.watermark(),
+                &resolved,
+            )
+            .is_err()
+        );
+        validate_private_oram_mutation_parent_watermark_v2_snapshot_transition(
+            Some(decision.watermark()),
+            Some(resolved.watermark()),
+            Some(&resolved),
+        )
+        .unwrap();
+        assert!(
+            validate_private_oram_mutation_parent_watermark_v2_snapshot_transition(
+                Some(resolved.watermark()),
+                Some(decision.watermark()),
+                Some(&decision),
+            )
+            .is_err()
+        );
+        let forged_suffix = replace_private_oram_mutation_parent_watermark_record_for_test(
+            remotes.watermark().clone(),
+            PrivateOramMutationJournalPhaseV2::RemotesTerminal.sequence(),
+            digest(253),
+        )
+        .unwrap();
+        assert!(
+            validate_private_oram_mutation_parent_watermark_v2_cas_transition(
+                decision.watermark(),
+                &forged_suffix,
+                &remotes,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_private_oram_mutation_parent_watermark_v2_snapshot_transition(
+                Some(decision.watermark()),
+                Some(&forged_suffix),
+                Some(&remotes),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_private_oram_mutation_parent_watermark_v2_snapshot_transition(
+                None,
+                Some(decision.watermark()),
+                Some(&decision),
+            )
+            .is_err()
+        );
+
+        let other_temp = tempfile::tempdir().unwrap();
+        let other_fixture = fixture(80, 95);
+        let other_journal = journal(&other_temp, &other_fixture);
+        let other = v2_parent_watermark_expectation(
+            &other_journal,
+            &other_fixture,
+            PrivateOramMutationDecisionKindV2::ExactNew,
+            PrivateOramMutationJournalPhaseV2::RemotesTerminal,
+        );
+        assert!(
+            validate_private_oram_mutation_parent_watermark_v2_snapshot_transition(
+                Some(decision.watermark()),
+                Some(other.watermark()),
+                Some(&other),
+            )
+            .is_err()
+        );
+
+        assert!(
+            validate_private_oram_mutation_parent_watermark_v2_snapshot_transition(
+                Some(decision.watermark()),
+                None,
+                None,
+            )
+            .is_err()
+        );
+        validate_private_oram_mutation_parent_watermark_v2_snapshot_transition(None, None, None)
+            .unwrap();
+    }
+
+    #[test]
+    fn v2_parent_watermark_serde_rejects_unknown_tampered_and_oversized_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let fixture = fixture(81, 97);
+        let journal = journal(&temp, &fixture);
+        let expectation = v2_parent_watermark_expectation(
+            &journal,
+            &fixture,
+            PrivateOramMutationDecisionKindV2::ExactOldAbort,
+            PrivateOramMutationJournalPhaseV2::PointResolved,
+        );
+        let watermark = expectation.watermark();
+        let mut encoded = serde_json::to_value(watermark).unwrap();
+        encoded["unknown"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<PrivateOramMutationParentWatermarkV2>(encoded).is_err());
+
+        let mut tampered = serde_json::to_value(watermark).unwrap();
+        tampered["history"][0]["record_digest"] = serde_json::json!(digest(252));
+        let tampered = serde_json::from_value(tampered).unwrap();
+        assert!(validate_private_oram_mutation_parent_watermark_v2_shape(&tampered).is_err());
+
+        let encoded = serde_json::to_value(watermark).unwrap();
+        let entry = encoded["history"][0].clone();
+        for entry_count in [8, 1_024] {
+            let mut oversized = encoded.clone();
+            oversized["history"] = serde_json::Value::Array(vec![entry.clone(); entry_count]);
+            assert!(
+                serde_json::from_value::<PrivateOramMutationParentWatermarkV2>(oversized).is_err()
+            );
         }
     }
 

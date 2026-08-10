@@ -30,7 +30,7 @@ struct PrivateOramMutationJournalFormatV2 {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub(super) struct PrivateOramMutationJournalStructuralSnapshotV2 {
+pub(in crate::content_manager) struct PrivateOramMutationJournalStructuralSnapshotV2 {
     pub(super) descriptor: PrivateOramMutationJournalDescriptorV1,
     pub(super) state: PrivateOramMutationJournalStateV2,
     pending_next: Option<PrivateOramMutationJournalStateV2>,
@@ -47,8 +47,27 @@ impl Debug for PrivateOramMutationJournalStructuralSnapshotV2 {
 }
 
 impl PrivateOramMutationJournalStructuralSnapshotV2 {
-    fn effective_state(&self) -> &PrivateOramMutationJournalStateV2 {
+    pub(in crate::content_manager) fn validated_descriptor(
+        &self,
+    ) -> &PrivateOramMutationJournalDescriptorV1 {
+        &self.descriptor
+    }
+
+    pub(in crate::content_manager) fn effective_state(&self) -> &PrivateOramMutationJournalStateV2 {
         self.pending_next.as_ref().unwrap_or(&self.state)
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_effective_state_for_test(
+        &self,
+        state: PrivateOramMutationJournalStateV2,
+    ) -> Result<Self, PrivateOramMutationJournalError> {
+        validate_private_oram_mutation_state_v2_structure(&self.descriptor, &state)?;
+        Ok(Self {
+            descriptor: self.descriptor.clone(),
+            state,
+            pending_next: None,
+        })
     }
 
     #[cfg(test)]

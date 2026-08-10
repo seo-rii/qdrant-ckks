@@ -74,7 +74,7 @@ impl PrivateOramMutationJournalPhaseV2 {
         }
     }
 
-    const fn from_sequence(sequence: u64) -> Option<Self> {
+    pub(super) const fn from_sequence(sequence: u64) -> Option<Self> {
         match sequence {
             1 => Some(Self::LeaseAcquired),
             2 => Some(Self::OwnersPrepared),
