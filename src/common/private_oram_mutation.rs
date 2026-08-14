@@ -63,9 +63,8 @@ use storage::content_manager::private_oram_mutation_journal::{
     encode_private_oram_owner_recovery_capsule_install_receipt_v2,
     encode_private_oram_owner_recovery_capsule_package_v2,
 };
-use storage::dispatcher::Dispatcher;
 use storage::dispatcher::{
-    PrivateOramMutationAdmissionFailureClassV2, PrivateOramMutationAdmissionOutcomeV2,
+    Dispatcher, PrivateOramMutationAdmissionFailureClassV2, PrivateOramMutationAdmissionOutcomeV2,
 };
 use storage::rbac::{Access, AccessRequirements};
 

@@ -1125,12 +1125,11 @@ fn ensure_same_inode(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
     use std::os::unix::fs::{PermissionsExt as _, symlink};
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
-    use std::thread;
     use std::time::{Duration, Instant};
+    use std::{fs, thread};
 
     use data_encoding::BASE64URL_NOPAD;
     use qdrant_sec::{

@@ -84,7 +84,6 @@ use crate::content_manager::consensus::private_oram_mutation_cleanup::authority:
     private_oram_mutation_outer_binding_digest_v2,
     validate_private_oram_mutation_authority_state_v2,
 };
-use crate::content_manager::consensus::private_oram_mutation_cleanup::decode_private_oram_mutation_cleanup_expectation_v2;
 use crate::content_manager::consensus::private_oram_mutation_cleanup::floor_store::{
     PrivateOramMutationFloorStoreV2, PrivateOramMutationLocalFloorCheckpointV2,
     plan_private_oram_mutation_local_floor_checkpoint_v2,
@@ -99,6 +98,7 @@ use crate::content_manager::consensus::private_oram_mutation_cleanup::format::{
 use crate::content_manager::consensus::private_oram_mutation_cleanup::owner_checkpoint::PrivateOramOwnerCheckpointTableV1;
 use crate::content_manager::consensus::private_oram_mutation_cleanup::{
     PrivateOramMutationCleanupLifecycleV2, PrivateOramMutationClearedPendingArchivePermitV2,
+    decode_private_oram_mutation_cleanup_expectation_v2,
     private_oram_mutation_admission_request_digest_v2, private_oram_mutation_lease_state_digest_v2,
 };
 use crate::content_manager::consensus::private_oram_mutation_recovery_capsules::{

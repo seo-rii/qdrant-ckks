@@ -107,9 +107,8 @@ use super::private_oram_mutation_state_v2::{
 use super::private_oram_mutation_state_v2::{
     PrivateOramPointResolutionOutcomeV2, PrivateOramPointResolutionReceiptV2,
 };
-use super::private_oram_point_staging::PrivateOramPointStagingStore;
 use super::private_oram_point_staging::{
-    PrivateOramDurablePointStageTokenV1, PrivateOramPointStagingError,
+    PrivateOramDurablePointStageTokenV1, PrivateOramPointStagingError, PrivateOramPointStagingStore,
 };
 
 #[allow(

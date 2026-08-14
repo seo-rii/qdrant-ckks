@@ -92,11 +92,9 @@ use crate::content_manager::consensus::private_oram_mutation_cleanup::authority:
 use crate::content_manager::consensus::private_oram_mutation_cleanup::format::PrivateOramMutationFormatFloorV2;
 use crate::content_manager::consensus::private_oram_mutation_cleanup::owner_checkpoint::private_oram_owner_checkpoint_reservation_binding_v1;
 use crate::content_manager::consensus::private_oram_mutation_cleanup::{
-    PrivateOramMutationCleanupExpectationV2, PrivateOramRaftApplyLocatorV2,
+    PrivateOramMutationCleanupExpectationV2, PrivateOramMutationCleanupLifecycleV2,
+    PrivateOramMutationClearedPendingArchivePermitV2, PrivateOramRaftApplyLocatorV2,
     encode_private_oram_mutation_cleanup_expectation_v2,
-};
-use crate::content_manager::consensus::private_oram_mutation_cleanup::{
-    PrivateOramMutationCleanupLifecycleV2, PrivateOramMutationClearedPendingArchivePermitV2,
 };
 use crate::content_manager::consensus::private_oram_mutation_recovery_capsules::{
     PrivateOramMutationRecoveryCapsulesReadyExpectationV2,

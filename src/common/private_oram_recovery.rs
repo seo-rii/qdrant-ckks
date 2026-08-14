@@ -52,8 +52,9 @@ use storage::content_manager::snapshots::private_oram_external_recovery::{
 use storage::content_manager::snapshots::recover::{
     SnapshotConfigValidator, verify_private_oram_external_recovery_snapshot,
 };
-use storage::content_manager::toc::PrivateOramExternalRecoveryCollectionInstallGuard;
-use storage::content_manager::toc::TableOfContent;
+use storage::content_manager::toc::{
+    PrivateOramExternalRecoveryCollectionInstallGuard, TableOfContent,
+};
 use storage::dispatcher::Dispatcher;
 use storage::rbac::{Access, AccessRequirements};
 

@@ -4,6 +4,7 @@ use std::io::{self, Write};
 use std::os::fd::{AsRawFd as _, FromRawFd as _};
 #[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStrExt as _;
+
 use tempfile::NamedTempFile;
 
 #[cfg(test)]
